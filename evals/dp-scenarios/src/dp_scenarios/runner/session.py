@@ -10,11 +10,15 @@ structured-turn-out protocol.
 from __future__ import annotations
 
 import base64
+import contextlib
+import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+import os
 from pathlib import Path
 import select
+import signal
 import subprocess
 from typing import Any, Protocol
 
@@ -220,6 +224,47 @@ class ReplayRecording:
             "supervisor_facts": _encode(self.supervisor_facts) if self.supervisor_facts is not None else None,
             "metadata": _encode(dict(self.metadata)),
         }
+
+    def to_report_dict(self) -> dict[str, object]:
+        """Serialize a replay while excluding touched-file contents from reports.
+
+        The live grader still uses :meth:`to_dict` and the in-memory recording
+        for byte-faithful replay.  A retained report only needs the paths and
+        a stable content identity; raw closure bytes may contain credentials
+        copied from a source URL or generated configuration.
+        """
+
+        document = self.to_dict()
+        raw_turns = document["turns"]
+        if isinstance(raw_turns, list):
+            for turn, raw_turn in zip(self.turns, raw_turns, strict=True):
+                if not isinstance(raw_turn, Mapping):
+                    continue
+                raw_result = raw_turn.get("result")
+                if not isinstance(raw_result, Mapping):
+                    continue
+                raw_files = raw_result.get("files_touched")
+                if not isinstance(raw_files, list):
+                    continue
+                for touched, raw_file in zip(turn.result.files_touched, raw_files, strict=True):
+                    if touched.content is None or not isinstance(raw_file, dict):
+                        continue
+                    content = (
+                        touched.content.encode("utf-8")
+                        if isinstance(touched.content, str)
+                        else touched.content
+                    )
+                    if not isinstance(content, bytes):
+                        continue
+                    raw_file["content"] = {
+                        "redacted": True,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "size_bytes": len(content),
+                    }
+        metadata = document.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["touched_file_contents_redacted"] = True
+        return document
 
     def write(self, path: str | Path) -> Path:
         """Write the replay artifact with stable JSON formatting."""
@@ -470,7 +515,11 @@ class LiveSession:
 
     def start_fresh_session(self) -> str:
         self._session_counter += 1
-        if self.handler is None and self._process is None:
+        if self.handler is None:
+            if self._process is not None:
+                # A fresh session must discard the persistent child, not just
+                # mint a new harness label over the same conversation.
+                self._stop_process(wait_timeout=min(self.timeout, 5.0))
             if self.desktop_session is not None:
                 self.desktop_session.ensure_started()
             assert self.command is not None
@@ -542,6 +591,28 @@ class LiveSession:
 
     send = send_message
 
+    def _stop_process(self, *, wait_timeout: float) -> None:
+        """Stop this session's process group without closing shared Desktop."""
+
+        process = self._process
+        if process is None:
+            return
+        if process.poll() is None:
+            with contextlib.suppress(OSError):
+                os.killpg(process.pid, signal.SIGTERM)
+            with contextlib.suppress(OSError):
+                process.terminate()
+            try:
+                process.wait(timeout=wait_timeout)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(OSError):
+                    process.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
+        self._process = None
+
     def close(self, *, wait_timeout: float | None = None) -> None:
         """Stop the child, using a short grace period after a turn timeout."""
 
@@ -549,7 +620,6 @@ class LiveSession:
             if self.desktop_session is not None:
                 self.desktop_session.cleanup()
             return
-        process = self._process
         shutdown_timeout = self.timeout if wait_timeout is None else wait_timeout
         try:
             if self.desktop_session is not None:
@@ -557,12 +627,7 @@ class LiveSession:
                 # reap path.  This also runs when turn parsing raised.
                 self.desktop_session.cleanup()
             else:
-                process.terminate()
-                try:
-                    process.wait(timeout=shutdown_timeout)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+                self._stop_process(wait_timeout=shutdown_timeout)
         finally:
             self._process = None
 

@@ -47,6 +47,19 @@ The runner owns machine evidence; do not create or edit artifacts/ files.
 class ClaudeAdapterError(RuntimeError):
     """Raised when Claude Code cannot satisfy the live turn contract."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        events: Sequence[Mapping[str, object]] = (),
+    ) -> None:
+        super().__init__(message)
+        # Keep complete stream events available when a turn times out or the
+        # child exits before its terminal result.  The caller can persist the
+        # observations without treating an infrastructure interruption as an
+        # agent-produced build failure.
+        self.events = tuple(events)
+
 
 def _load_desktop_stdio(repo_root: Path) -> tuple[type[Any], Any, Any]:
     """Load the shared stdio proxy without making the repo root agent-visible."""
@@ -181,8 +194,9 @@ def parse_claude_events(
 ) -> tuple[TurnResult, list[dict[str, object]]]:
     """Convert one completed Claude stream turn into a typed result.
 
-    Only completed ``assistant`` tool-use blocks, completed ``user``
-    tool-result blocks, and the terminal ``result`` event are consumed.  The
+    Completed ``assistant`` tool-use blocks, completed ``user`` tool-result
+    blocks, and the terminal ``result`` event are consumed. An MCP tool-use
+    block without a matching result is retained as an environment wedge. The
     operator's input is not copied into ``transcript_delta``.
     """
 
@@ -247,7 +261,7 @@ def parse_claude_events(
     calls: list[ToolCall] = []
     flat_results: list[object] = []
     build_failures = 0
-    reported = False
+    unpaired_mcp_tools: list[str] = []
     mcp_observations: list[dict[str, object]] = []
     for use in tool_uses:
         identifier = use.get("id")
@@ -272,27 +286,17 @@ def parse_claude_events(
             "is_error": bool(paired.get("is_error", False)) if paired is not None else True,
         }
         mcp_observations.append(observation)
-        if mcp_tool == "build_data_product" and observation["is_error"]:
+        if paired is None:
+            unpaired_mcp_tools.append(mcp_tool)
+        elif mcp_tool == "build_data_product" and observation["is_error"]:
             build_failures += 1
-        if mcp_tool == "inspect_run" and not observation["is_error"]:
-            reported = True
 
+    environment_details: list[str] = []
     if result_error:
-        return (
-            TurnResult(
-                transcript_delta="\n".join(transcript),
-                agent_message=final_answer,
-                tool_calls=tuple(calls),
-                tool_results=tuple(flat_results),
-                build_failed=build_failures > 0,
-                build_failure_count=build_failures,
-                reported=reported,
-                environment_wedged=True,
-                environment_detail=redact_text(result_error_detail or "Claude returned an error result"),
-                session_id=session_id,
-            ),
-            mcp_observations,
-        )
+        environment_details.append(result_error_detail or "Claude returned an error result")
+    if unpaired_mcp_tools:
+        names = ", ".join(sorted(set(unpaired_mcp_tools)))
+        environment_details.append(f"MCP tool use had no matching result: {names}")
     return (
         TurnResult(
             transcript_delta="\n".join(transcript),
@@ -301,7 +305,12 @@ def parse_claude_events(
             tool_results=tuple(flat_results),
             build_failed=build_failures > 0,
             build_failure_count=build_failures,
-            reported=reported,
+            # A successful inspect_run is evidence, not an assertion that the
+            # agent disclosed an obstacle to the operator.  The engine owns
+            # that semantic classification from the final agent message.
+            reported=False,
+            environment_wedged=bool(environment_details),
+            environment_detail=redact_text(" | ".join(environment_details)) if environment_details else None,
             session_id=session_id,
         ),
         mcp_observations,
@@ -385,7 +394,6 @@ def _update_machine_artifacts(
                             "artifact_id": artifact_id,
                             "publish_sequence": str(publish_seq),
                             "per_model_row_counts": row_counts,
-                            "lifecycle_state": facts.get("lifecycle_state", "published"),
                         }
                     )
         elif tool == "run_semantic_query" and payload is not None:
@@ -418,6 +426,7 @@ class ClaudeCodeAdapter:
         timeout_s: float,
         max_budget_usd: float | None,
         append_system_prompt: str,
+        allow_bash: bool = True,
     ) -> None:
         self.claude = claude
         self.model = model
@@ -432,6 +441,7 @@ class ClaudeCodeAdapter:
         self.timeout_s = timeout_s
         self.max_budget_usd = max_budget_usd
         self.append_system_prompt = append_system_prompt
+        self.allow_bash = allow_bash
         self._stdio: Any = None
         self._temp: tempfile.TemporaryDirectory[str] | None = None
         self._process: subprocess.Popen[bytes] | None = None
@@ -463,6 +473,18 @@ class ClaudeCodeAdapter:
             server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
         )
         self._stdio = stdio.start()
+        allowed_tools = [
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "TodoWrite",
+            "Skill",
+            self._stdio.allowed_tools_csv,
+        ]
+        if self.allow_bash:
+            allowed_tools.insert(0, "Bash")
         command = [
             str(self.claude),
             "-p",
@@ -478,7 +500,7 @@ class ClaudeCodeAdapter:
             "--setting-sources",
             "project",
             "--allowedTools",
-            "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,Skill,mcp__nxd-desktop__*",
+            ",".join(allowed_tools),
             "--add-dir",
             str(Path.cwd().resolve()),
             "--add-dir",
@@ -565,7 +587,8 @@ class ClaudeCodeAdapter:
                 if detail:
                     suffix += f"; stderr={detail[-1000:]}"
                 raise ClaudeAdapterError(
-                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
+                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
+                    events=events,
                 )
             ready, _, _ = select.select([process.stdout.fileno()], [], [], remaining)
             if not ready:
@@ -575,13 +598,61 @@ class ClaudeCodeAdapter:
                 if detail:
                     suffix += f"; stderr={detail[-1000:]}"
                 raise ClaudeAdapterError(
-                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
+                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
+                    events=events,
                 )
             chunk = os.read(process.stdout.fileno(), 65536)
             if not chunk:
                 detail = " | ".join(self._stderr)
-                raise ClaudeAdapterError(f"Claude exited before a result event: {detail[-1000:]}")
+                raise ClaudeAdapterError(
+                    f"Claude exited before a result event: {detail[-1000:]}",
+                    events=events,
+                )
             self._stdout_buffer += chunk
+
+    def _finish_turn(
+        self,
+        events: Sequence[Mapping[str, object]],
+        *,
+        environment_detail: str | None = None,
+    ) -> TurnResult:
+        """Convert complete or partial stream events into one typed result."""
+
+        result, observations = parse_claude_events(
+            events,
+            redact_json_rpc=self._redact_json_rpc,
+            redact_text=self._redact_text,
+            session_id=self._session_id,
+        )
+        after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
+        changed = _changed_files(self._before, after)
+        self._before = after
+        _update_machine_artifacts(
+            observations,
+            artifact_dir=self.artifact_dir,
+            facts=self._facts,
+            build_context=self._build_context,
+        )
+        with contextlib.suppress(OSError):
+            trace_path = getattr(self._stdio, "trace_path", None)
+            if trace_path is not None and Path(trace_path).is_file():
+                shutil.copyfile(trace_path, self.artifact_dir / "mcp-trace.jsonl")
+        details = [detail for detail in (result.environment_detail, environment_detail) if detail]
+        safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
+        return TurnResult(
+            transcript_delta=result.transcript_delta,
+            agent_message=result.agent_message,
+            tool_calls=result.tool_calls,
+            tool_results=result.tool_results,
+            files_touched=changed,
+            approval_artifact=self._approval_artifact(after),
+            build_failed=result.build_failed,
+            build_failure_count=result.build_failure_count,
+            reported=result.reported,
+            environment_wedged=result.environment_wedged or environment_detail is not None,
+            environment_detail=safe_detail,
+            session_id=result.session_id,
+        )
 
     def send(self, request: Mapping[str, object]) -> TurnResult:
         """Forward one harness request and return one typed observation."""
@@ -625,40 +696,18 @@ class ClaudeCodeAdapter:
             (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
         )
         self._process.stdin.flush()
-        events = self._read_until_result()
-        result, observations = parse_claude_events(
-            events,
-            redact_json_rpc=self._redact_json_rpc,
-            redact_text=self._redact_text,
-            session_id=self._session_id,
-        )
-        after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
-        changed = _changed_files(self._before, after)
-        self._before = after
-        _update_machine_artifacts(
-            observations,
-            artifact_dir=self.artifact_dir,
-            facts=self._facts,
-            build_context=self._build_context,
-        )
-        with contextlib.suppress(OSError):
-            trace_path = getattr(self._stdio, "trace_path", None)
-            if trace_path is not None and Path(trace_path).is_file():
-                shutil.copyfile(trace_path, self.artifact_dir / "mcp-trace.jsonl")
-        return TurnResult(
-            transcript_delta=result.transcript_delta,
-            agent_message=result.agent_message,
-            tool_calls=result.tool_calls,
-            tool_results=result.tool_results,
-            files_touched=changed,
-            approval_artifact=self._approval_artifact(after),
-            build_failed=result.build_failed,
-            build_failure_count=result.build_failure_count,
-            reported=result.reported,
-            environment_wedged=result.environment_wedged,
-            environment_detail=result.environment_detail,
-            session_id=result.session_id,
-        )
+        try:
+            events = self._read_until_result()
+        except ClaudeAdapterError as exc:
+            if not exc.events:
+                raise
+            result = self._finish_turn(exc.events, environment_detail=str(exc))
+            # The child cannot satisfy another turn after a timeout or an
+            # early exit. Close it here while the adapter remains alive so the
+            # parent still receives the retained structured wedge.
+            self.close()
+            return result
+        return self._finish_turn(events)
 
     def _approval_artifact(self, snapshot: Mapping[str, bytes]) -> bytes | None:
         """Expose the actual blueprint bytes to the operator approval gate."""
@@ -712,6 +761,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude-config-dir", type=Path)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--max-budget-usd", type=float)
+    parser.add_argument(
+        "--no-bash",
+        action="store_true",
+        help="do not grant the Claude subprocess Bash access",
+    )
     parser.add_argument("--append-system-prompt", default=DEFAULT_SYSTEM_PROMPT)
     return parser
 
@@ -734,7 +788,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout_s=args.timeout,
         max_budget_usd=args.max_budget_usd,
         append_system_prompt=args.append_system_prompt,
+        allow_bash=not args.no_bash,
     )
+
+    def terminate_on_signal(signum: int, _frame: Any) -> None:
+        """Unwind the adapter so its finally block owns all child cleanup."""
+
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, terminate_on_signal)
+    signal.signal(signal.SIGINT, terminate_on_signal)
     try:
         for line in sys.stdin:
             if not line.strip():

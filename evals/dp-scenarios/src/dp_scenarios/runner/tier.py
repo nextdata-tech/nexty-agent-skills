@@ -30,7 +30,6 @@ from dp_scenarios.grading import (
     gate_build,
     gate_capability,
     gate_construction,
-    gate_follow_up,
     gate_honesty,
     gate_intake,
     gate_narrowing,
@@ -41,7 +40,7 @@ from dp_scenarios.grading import (
 from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import sentinel_byte_scan
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
-from dp_scenarios.grading.statistics import RepeatabilityReport, RepeatabilityTier
+from dp_scenarios.grading.statistics import RepeatabilityReport
 from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
@@ -174,7 +173,7 @@ class ScenarioRun:
             },
         }
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self, *, report_safe: bool = False) -> dict[str, object]:
         """Serialize scored fields, efficiency, and manifest separately."""
 
         result = self.scored_dict()
@@ -187,7 +186,11 @@ class ScenarioRun:
             "observed_wall_clock_seconds": self.wall_clock_seconds,
         }
         result["manifest"] = self.manifest.to_dict()
-        result["replay_recording"] = self.replay_recording.to_dict()
+        result["replay_recording"] = (
+            self.replay_recording.to_report_dict()
+            if report_safe
+            else self.replay_recording.to_dict()
+        )
         result["ledger_path"] = self.ledger_path
         result["fixture_dir"] = self.fixture_dir
         return result
@@ -201,10 +204,10 @@ class ScenarioSummary:
     repeatability: RepeatabilityReport
     runs: tuple[ScenarioRun, ...]
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self, *, report_safe: bool = False) -> dict[str, object]:
         result: dict[str, object] = {
             "scenario_id": self.scenario_id,
-            "runs": [run.as_dict() for run in self.runs],
+            "runs": [run.as_dict(report_safe=report_safe) for run in self.runs],
             "repeatability": {
                 "tier": self.repeatability.tier.value,
                 "required_epochs": self.repeatability.required_epochs,
@@ -250,11 +253,11 @@ class TierResult:
 
         return self.canary.blocking and not self.scenarios
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self, *, report_safe: bool = False) -> dict[str, object]:
         return {
             "verdict": self.verdict,
             "canary": self.canary.to_dict(),
-            "scenarios": [summary.as_dict() for summary in self.scenarios],
+            "scenarios": [summary.as_dict(report_safe=report_safe) for summary in self.scenarios],
             "wall_clock_seconds": self.wall_clock_seconds,
             "blocked_reason": list(self.blocked_reason),
             "clean_tier_means": (

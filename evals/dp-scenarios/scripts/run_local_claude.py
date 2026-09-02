@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -69,12 +69,32 @@ def _resolve_executable(explicit: Path | None, name: str) -> Path:
         if discovered is None:
             raise TierError(f"{name} was not found on PATH; pass an explicit executable path")
         candidate = Path(discovered)
-    if not candidate:
-        raise TierError(f"{name} was not found; pass an explicit --{name.replace('_', '-')}-path")
     candidate = candidate.resolve()
     if not candidate.is_file() or not candidate.stat().st_mode & 0o111:
         raise TierError(f"{name} is not an executable file: {candidate}")
     return candidate
+
+
+def _adapter_timeout(turn_timeout: float) -> float:
+    """Leave room for the adapter to retain a structured timeout result."""
+
+    if turn_timeout <= 0:
+        raise TierError("turn timeout must be positive")
+    return turn_timeout * 0.9
+
+
+def _agent_environment(
+    base: Mapping[str, str],
+    *,
+    allow_host_home: bool,
+) -> dict[str, str]:
+    """Build the disposable agent environment, with host-home opt-in explicit."""
+
+    environment = dict(base)
+    if allow_host_home:
+        host_home = str(Path.home())
+        environment.update({"HOME": host_home, "USERPROFILE": host_home})
+    return environment
 
 
 def _default_desktop_python() -> Path:
@@ -92,6 +112,32 @@ def _select_scenarios(all_scenarios: Sequence[Scenario], selected: Sequence[str]
     return tuple(scenario for scenario in all_scenarios if scenario.id in selected_set)
 
 
+def _configure_scenarios(
+    all_scenarios: Sequence[Scenario],
+    selected: Sequence[str],
+    epochs: int,
+) -> tuple[Scenario, ...]:
+    """Apply CLI selection and make one-epoch runs explicitly demonstrated-once."""
+
+    if epochs < 1:
+        raise TierError("--epochs must be positive")
+    return tuple(
+        replace(
+            scenario,
+            repeatability=replace(
+                scenario.repeatability,
+                epochs=epochs,
+                tier=(
+                    RepeatabilityTier.DEMONSTRATED_ONCE
+                    if epochs == 1
+                    else scenario.repeatability.tier
+                ),
+            ),
+        )
+        for scenario in _select_scenarios(all_scenarios, selected)
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the local runner CLI parser."""
 
@@ -104,7 +150,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-host-home",
         action="store_true",
-        help="allow the Claude subprocess to use the host HOME for its credential store",
+        help=(
+            "give the entire Claude agent process the real host HOME, including "
+            "access to host config and credential files"
+        ),
+    )
+    parser.add_argument(
+        "--allow-host-home-bash",
+        action="store_true",
+        help="also grant Bash when --allow-host-home is set; shell access can reach the host HOME",
     )
     parser.add_argument("--model", default="sonnet", help="Claude Code model alias")
     parser.add_argument("--effort", default="medium", choices=("low", "medium", "high", "xhigh", "max"))
@@ -122,27 +176,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the local-only live tier and retain its reports."""
 
     args = build_parser().parse_args(argv)
-    if args.epochs < 1:
-        raise TierError("--epochs must be positive")
     if args.turn_timeout <= 0:
         raise TierError("--turn-timeout must be positive")
+    if args.allow_host_home_bash and not args.allow_host_home:
+        raise TierError("--allow-host-home-bash requires --allow-host-home")
     repo_root = REPO_ROOT
-    scenarios = _select_scenarios(load_scenarios(SCENARIO_ROOT), args.scenario)
-    scenarios = tuple(
-        replace(
-            scenario,
-            repeatability=replace(
-                scenario.repeatability,
-                epochs=args.epochs,
-                tier=(
-                    RepeatabilityTier.DEMONSTRATED_ONCE
-                    if args.epochs == 1
-                    else scenario.repeatability.tier
-                ),
-            ),
-        )
-        for scenario in scenarios
-    )
+    scenarios = _configure_scenarios(load_scenarios(SCENARIO_ROOT), args.scenario, args.epochs)
     supervisor = resolve_supervisor(args.supervisor)
     desktop_python = (args.desktop_python or _default_desktop_python()).expanduser().resolve()
     if not desktop_python.is_file() or not desktop_python.stat().st_mode & 0o111:
@@ -190,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "repo-root": str(repo_root),
         "desktop-supervisor": str(supervisor),
         "desktop-python": str(desktop_python),
-        "timeout": str(args.turn_timeout),
+        "timeout": str(_adapter_timeout(args.turn_timeout)),
     }
     if claude_config_dir is not None:
         adapter_kwargs["claude-config-dir"] = str(claude_config_dir)
@@ -203,15 +242,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = [sys.executable, "-m", ADAPTER_MODULE]
         for key, value in adapter_kwargs.items():
             command.extend((f"--{key}", value))
+        if args.allow_host_home and not args.allow_host_home_bash:
+            command.append("--no-bash")
         command.extend(("--fixture-dir", str(environment.fixture_dir), "--artifact-dir", str(environment.base_dir / "artifacts")))
-        agent_environment = dict(environment.agent_environment)
-        if args.allow_host_home:
-            # This is an explicit developer opt-in for a real Claude.ai run.
-            # Keep XDG state, fixtures, NXD state, and evidence under the
-            # disposable trial home while exposing the host HOME lookup needed
-            # by Claude Code's macOS credential store.
-            host_home = str(Path.home())
-            agent_environment.update({"HOME": host_home, "USERPROFILE": host_home})
+        agent_environment = _agent_environment(
+            environment.agent_environment,
+            allow_host_home=args.allow_host_home,
+        )
         return LiveSession(
             command,
             environment=agent_environment,

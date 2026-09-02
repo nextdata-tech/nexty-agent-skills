@@ -94,9 +94,14 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 ```
 
 Use `--allow-host-home` only when the host credential store is required for the
-authenticated local run. This entrypoint is intentionally not a hosted CI
-workflow yet; CI runs the deterministic harness and replay tests, while live
-Claude/Desktop qualification remains a developer-controlled local operation.
+authenticated local run. This gives the entire Claude agent process the real
+host `HOME`, including any host configuration and credential files that its
+tools can reach. The runner therefore removes Bash from the allowed tool set
+in this mode. Add `--allow-host-home-bash` only when the scenario genuinely
+needs shell access and you accept that broader exposure. This entrypoint is
+intentionally not a hosted CI workflow yet; CI runs the deterministic harness
+and replay tests, while live Claude/Desktop qualification remains a
+developer-controlled local operation.
 
 ## Layout
 
