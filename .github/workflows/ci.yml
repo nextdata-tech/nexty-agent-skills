@@ -139,8 +139,9 @@ jobs:
         id: nxd-source
         working-directory: nxd
         run: |
-          test "$(git rev-parse HEAD)" = "bb5fa1e3ab4ca381edc8e309449e77639e9ff8af"
-          git rev-parse HEAD
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "bb5fa1e3ab4ca381edc8e309449e77639e9ff8af"
+          echo "$source_sha"
           field_mapper_tree_sha="$(git rev-parse HEAD:components/nxd_py/data_product/nxd/experimental/field_mapper)"
           echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
       - name: Resolve NXD Python artifact
@@ -151,18 +152,22 @@ jobs:
           FIELD_MAPPER_TREE_SHA: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
         run: |
           set -euo pipefail
-          artifact_name="nxd-py-linux-x86_64-$FIELD_MAPPER_TREE_SHA"
+          artifact_prefix="nxd-py-linux-x86_64-$FIELD_MAPPER_TREE_SHA-"
           # NXD_DISPATCH_PAT needs contents:read and actions:read on
           # nextdata-tech/nxd for this cross-repository lookup.
+          # The producer appends source and run identity after this prefix, so
+          # resolve the newest unexpired main artifact without relying on a
+          # name that can collide across source commits.
           if ! artifacts="$(gh api \
-            "repos/nextdata-tech/nxd/actions/artifacts?name=$artifact_name&per_page=100")"; then
+            --paginate --slurp "repos/nextdata-tech/nxd/actions/artifacts?per_page=100")"; then
             echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
             exit 1
           fi
-          artifact="$(jq -c '
-            [.artifacts[]
+          artifact="$(jq -c --arg artifact_prefix "$artifact_prefix" '
+            [.[].artifacts[]
               | select(.expired == false)
-              | select(.workflow_run.head_branch == "main")]
+              | select(.workflow_run.head_branch == "main")
+              | select(.name | startswith($artifact_prefix))]
             | sort_by(.created_at)
             | .[-1] // empty
           ' <<< "$artifacts")"
@@ -172,7 +177,7 @@ jobs:
           fi
           run_id="$(jq -r '.workflow_run.id // empty' <<< "$artifact")"
           resolved_name="$(jq -r '.name // empty' <<< "$artifact")"
-          if [ -z "$run_id" ] || [ "$resolved_name" != "$artifact_name" ]; then
+          if [ -z "$run_id" ] || [[ "$resolved_name" != "$artifact_prefix"* ]]; then
             echo "The resolved NXD artifact has no valid workflow run or name" >&2
             exit 1
           fi
@@ -193,14 +198,18 @@ jobs:
         id: artifact-manifest
         env:
           FIELD_MAPPER_TREE_SHA: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          ARTIFACT_RUN_ID: ${{ steps.nxd-artifact.outputs.run_id }}
         run: |
           set -euo pipefail
           manifest="nxd-artifact/manifest.json"
           test -f "$manifest"
           jq -e \
             --arg field_mapper_tree_sha "$FIELD_MAPPER_TREE_SHA" \
+            --arg artifact_run_id "$ARTIFACT_RUN_ID" \
             '(.schema == "nxd-py-artifact-v1")
              and (.repository == "nextdata-tech/nxd")
+             and (.source_sha // "" | test("^[0-9a-f]{40}$"))
+             and (.workflow_run_id == $artifact_run_id)
              and (.field_mapper_tree_sha == $field_mapper_tree_sha)
              and (.platform == "linux-x86_64")
              and (.python == "3.11")
