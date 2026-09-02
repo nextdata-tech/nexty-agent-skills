@@ -65,6 +65,79 @@ def _report_passes(report: Mapping[str, Any]) -> bool:
     return True
 
 
+def _negative_verdict_report(
+    report: Mapping[str, Any],
+    claims: Any,
+    *,
+    probe_id: str,
+) -> Mapping[str, Any]:
+    """Trim expected not-reached stages before the normal negative verdict.
+
+    The supervisor reports downstream stages as ``skip`` after an expected
+    unsupported construct fails compilation. ``aggregate_verdict`` must keep
+    treating skips as blocking for ordinary reports, so the negative-control
+    protocol admits this one bounded shape only after proving that the first
+    non-pass stage is the claimed unsupported failure and every later stage is
+    skipped because execution could not reach it.
+    """
+
+    claim_values = tuple(claim for claim in claims.claims if claim.probe_id == probe_id)
+    if (
+        report.get("outcome") != "fail"
+        or not claim_values
+        or any(claim.direction != "documented-unsupported" for claim in claim_values)
+    ):
+        return report
+    expected_codes = {claim.expected_finding_code for claim in claim_values}
+    stages = report.get("stages")
+    if not isinstance(stages, list) or not stages:
+        return report
+
+    first_non_pass = None
+    for index, stage in enumerate(stages):
+        if not isinstance(stage, Mapping):
+            return report
+        checks = stage.get("checks")
+        if not isinstance(checks, list):
+            return report
+        statuses = [check.get("status") for check in checks if isinstance(check, Mapping)]
+        if stage.get("status") != "pass" or any(status != "pass" for status in statuses):
+            first_non_pass = index
+            break
+    if first_non_pass is None:
+        return report
+
+    failure_stage = stages[first_non_pass]
+    if failure_stage.get("status") != "fail":
+        return report
+    failure_checks = failure_stage.get("checks", [])
+    if not any(
+        isinstance(check, Mapping)
+        and check.get("status") == "fail"
+        and check.get("code") in expected_codes
+        for check in failure_checks
+    ):
+        return report
+    if any(
+        isinstance(check, Mapping)
+        and check.get("status") in {"warn", "fail"}
+        and check.get("code") not in expected_codes
+        for check in failure_checks
+    ):
+        return report
+
+    for stage in stages[first_non_pass + 1 :]:
+        if stage.get("status") != "skip":
+            return report
+        checks = stage.get("checks", [])
+        if any(not isinstance(check, Mapping) or check.get("status") != "skip" for check in checks):
+            return report
+
+    trimmed = dict(report)
+    trimmed["stages"] = stages[: first_non_pass + 1]
+    return trimmed
+
+
 def _run_negative_control(
     closure: Path,
     spec: Mapping[str, Any],
@@ -163,8 +236,13 @@ def check_claims(
         probe_entry = preflight.to_dict()
         if built is not None:
             build_results.append(built.to_dict())
+        verdict_report = (
+            _negative_verdict_report(report, document, probe_id=current_probe_id)
+            if spec.get("negative_control") is not None
+            else report
+        )
         probe_verdict = aggregate_verdict(
-            report,
+            verdict_report,
             document,
             probe_id=current_probe_id,
             extraction_drift=extracted.drift,

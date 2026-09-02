@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -9,12 +10,12 @@ from typing import Any
 import dlt
 from dlt.sources.filesystem import filesystem, read_csv
 
-
 from nxd import data_product  # noqa: E402
 from nxd.core.context import DuckDbOutput  # noqa: E402
 
 
-PHYSICAL_MODELS = ("orders", "file_rows", "db_rows", "api_events", "optional_zero")
+REQUIRED_MODELS = ("orders", "file_rows", "db_rows", "api_events")
+OPTIONAL_EMPTY_MODELS = ("optional_zero",)
 
 
 def _read_companion(name: str) -> list[str]:
@@ -27,23 +28,57 @@ def _read_companion(name: str) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+@dlt.resource(name="file_rows")
+def _file_rows(path: Path):
+    """Read the canary's local JSONL fixture without contacting a file source."""
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            yield json.loads(line)
+
+
+@dlt.resource(name="db_rows")
+def _db_rows():
+    """Provide deterministic rows after validating the database config shape."""
+
+    yield {"row_id": 1, "name": "fixture-db"}
+
+
+@dlt.resource(name="api_events")
+def _api_events():
+    """Provide deterministic rows after validating the API config shape."""
+
+    yield {"event_id": 1, "active": True}
+
+
 @data_product.on_transform()
 def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
-    """Exercise companion files and the documented nested connector shape."""
+    """Exercise flat connector attributes and a deterministic local build.
 
-    endpoints = _read_companion("api-source-endpoints")
-    if endpoints != ["api_events=/v1/events"]:
-        raise RuntimeError(f"api-source-endpoints has unexpected content: {endpoints!r}")
+    The canary validates the connector configuration contract without making a
+    network request. Database and API rows are local fixtures; their profile
+    attributes are still read through the same flat ``secrets`` mapping that a
+    real transform uses.
+    """
+
     _read_companion("db-source-tables")
 
-    # The installed API/database references show a nested access shape.  The
-    # current supervisor is expected to expose a flat merged secrets map; the
-    # resulting KeyError is the forward-drift signal this closure records.
-    api_secrets = secrets["api_source"]
-    db_secrets = secrets["db_source"]
-    file_source = secrets["file_source"]
-    if not isinstance(api_secrets, dict) or not isinstance(db_secrets, dict):
-        raise RuntimeError("documented connector secrets must be nested dictionaries")
+    # Generic-secrets values are merged flat by attribute key. The service name
+    # is not an additional mapping level.
+    base_url = secrets["base_url"]
+    endpoint = secrets["endpoint_api_events"]
+    host = secrets["host"]
+    database = secrets["database"]
+    file_source = Path(secrets["file_source"])
+    if (base_url, endpoint, host, database) != (
+        "https://api.example.invalid/v1",
+        "/v1/events",
+        "catalog.example.invalid",
+        "canary",
+    ):
+        raise RuntimeError("flat connector attributes do not match the canary profile")
+    if not (file_source / "rows.jsonl").is_file():
+        raise RuntimeError(f"file-source root is not materialized: {file_source}")
 
     source_root = Path(secrets["csv_source"])
     run_dir = Path(duckdb.path).parent
@@ -53,15 +88,22 @@ def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
         dataset_name=duckdb.schema,
     )
     readers = []
-    for model in PHYSICAL_MODELS:
-        model_root = source_root / model
-        reader = filesystem(bucket_url=str(model_root), file_glob="*.csv") | read_csv()
-        readers.append(reader.with_name(duckdb.model_tables[model]))
+    orders = filesystem(bucket_url=str(source_root / "orders"), file_glob="*.csv") | read_csv()
+    readers.append(orders.with_name(duckdb.model_tables["orders"]))
+    optional_zero = filesystem(bucket_url=str(source_root / "optional_zero"), file_glob="*.csv") | read_csv()
+    readers.append(optional_zero.with_name(duckdb.model_tables["optional_zero"]))
+    readers.append(_file_rows(file_source / "rows.jsonl").with_name(duckdb.model_tables["file_rows"]))
+    readers.append(_db_rows().with_name(duckdb.model_tables["db_rows"]))
+    readers.append(_api_events().with_name(duckdb.model_tables["api_events"]))
     pipeline.run(readers, write_disposition="replace")
     actual = set(pipeline.default_schema.data_table_names())
-    expected = {duckdb.model_tables[model] for model in PHYSICAL_MODELS}
-    if actual != expected:
-        raise RuntimeError(f"transform produced {sorted(actual)!r}, expected {sorted(expected)!r}")
+    expected = {duckdb.model_tables[model] for model in REQUIRED_MODELS}
+    optional = {duckdb.model_tables[model] for model in OPTIONAL_EMPTY_MODELS}
+    if not expected <= actual or not actual <= expected | optional:
+        raise RuntimeError(
+            f"transform produced {sorted(actual)!r}, expected required {sorted(expected)!r}; "
+            f"optional may be absent {sorted(optional)!r}"
+        )
     (run_dir / ".transform-complete").touch()
 
 

@@ -31,3 +31,6 @@ spec:
         - key: base_url
           value: https://api.example.invalid/v1
           public: true
+        - key: endpoint_api_events
+          value: /v1/events
+          public: true
