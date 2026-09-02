@@ -158,19 +158,32 @@ jobs:
           # The producer appends source and run identity after this prefix, so
           # resolve the newest unexpired main artifact without relying on a
           # name that can collide across source commits.
-          if ! artifacts="$(gh api \
-            --paginate --slurp "repos/nextdata-tech/nxd/actions/artifacts?per_page=100")"; then
+          # Resolve through recent NXD main workflow runs instead of paginating
+          # the entire artifact catalog, which contains hundreds of thousands
+          # of historical artifacts.
+          if ! workflow_runs="$(gh api \
+            "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?branch=main&per_page=20")"; then
             echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
             exit 1
           fi
-          artifact="$(jq -c --arg artifact_prefix "$artifact_prefix" '
-            [.[].artifacts[]
-              | select(.expired == false)
-              | select(.workflow_run.head_branch == "main")
-              | select(.name | startswith($artifact_prefix))]
-            | sort_by(.created_at)
-            | .[-1] // empty
-          ' <<< "$artifacts")"
+          artifact=''
+          while IFS= read -r run_id; do
+            if ! run_artifacts="$(gh api \
+              "repos/nextdata-tech/nxd/actions/runs/$run_id/artifacts?per_page=100")"; then
+              echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
+              exit 1
+            fi
+            artifact="$(jq -c --arg artifact_prefix "$artifact_prefix" '
+              [.artifacts[]
+                | select(.expired == false)
+                | select(.name | startswith($artifact_prefix))]
+              | sort_by(.created_at)
+              | .[-1] // empty
+            ' <<< "$run_artifacts")"
+            if [ -n "$artifact" ]; then
+              break
+            fi
+          done < <(jq -r '.workflow_runs[] | select(.head_branch == "main") | .id' <<< "$workflow_runs")
           if [ -z "$artifact" ]; then
             echo "No unexpired main-branch NXD artifact found for $FIELD_MAPPER_TREE_SHA" >&2
             exit 1
