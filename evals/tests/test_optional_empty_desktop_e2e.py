@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,17 +70,34 @@ output = nxd.spec.data_product_output().model(models.aggregate)
 def test_checker_stop_reaps_recorded_supervisor_and_semantic_groups(tmp_path: Path) -> None:
     data_dir = tmp_path / "state"
     data_dir.mkdir()
+    same_group_pid_file = tmp_path / "same-group-child.pid"
     supervisor = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+        [
+            sys.executable,
+            "-c",
+            "import os, pathlib, sys, time; "
+            "child = os.fork(); "
+            "pathlib.Path(sys.argv[1]).write_text(str(child)) if child else None; "
+            "time.sleep(30)",
+            str(same_group_pid_file),
+        ],
+        start_new_session=True,
     )
     semantic = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
     )
+    for _ in range(20):
+        if same_group_pid_file.exists():
+            break
+        time.sleep(0.05)
+    same_group_child_pid = int(same_group_pid_file.read_text(encoding="utf-8"))
     (data_dir / "supervisor.pid").write_text(str(supervisor.pid), encoding="utf-8")
     (data_dir / "semantic.pid").write_text(str(semantic.pid), encoding="utf-8")
     try:
         fact = CHECKER._stop("/usr/bin/false", data_dir, supervisor)
         assert supervisor.poll() is not None
+        assert not CHECKER._process_group_alive(supervisor.pid)
+        assert not CHECKER._pid_alive(same_group_child_pid)
         assert semantic.poll() is not None
         assert fact.startswith("teardown_complete")
     finally:

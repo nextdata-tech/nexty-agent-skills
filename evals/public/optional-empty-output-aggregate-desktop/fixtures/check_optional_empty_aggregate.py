@@ -243,20 +243,24 @@ def _serve(
         raise
 
 
-def _reap(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        return
+def _reap(proc: subprocess.Popen[str], pgid: int | None = None) -> bool:
+    """Reap the direct child and sweep its captured process group."""
+    if pgid is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+        except OSError:
+            pgid = None
+    if pgid is not None:
+        _signal_process_group(pgid, signal.SIGTERM)
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
-        with contextlib.suppress(OSError, ProcessLookupError):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        if pgid is not None:
+            _signal_process_group(pgid, signal.SIGKILL)
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=10)
+    group_reaped = pgid is None or _reap_process_group(pgid, already_signalled=True)
+    return proc.poll() is not None and group_reaped
 
 
 def _pid_alive(pid: int) -> bool:
@@ -273,31 +277,52 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _reap_process_group(pid: int) -> bool:
-    if not _pid_alive(pid):
-        return True
-    signal_sent = False
+def _signal_process_group(pgid: int, sig: signal.Signals) -> bool:
     try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-        signal_sent = True
+        os.killpg(pgid, sig)
     except OSError:
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGTERM)
-            signal_sent = True
+        return False
+    return True
+
+
+def _process_group_alive(pgid: int) -> bool:
+    proc_root = Path("/proc")
+    if proc_root.is_dir():
+        found_process = False
+        for stat_path in proc_root.glob("[0-9]*/stat"):
+            try:
+                stat = stat_path.read_text(encoding="utf-8")
+                fields = stat[stat.rfind(")") + 2 :].split()
+                found_process = True
+                if len(fields) >= 3 and fields[2] == str(pgid) and fields[0] != "Z":
+                    return True
+            except (OSError, ValueError):
+                continue
+        if found_process:
+            return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _reap_process_group(pgid: int, *, already_signalled: bool = False) -> bool:
+    if not _process_group_alive(pgid):
+        return True
+    signal_sent = already_signalled or _signal_process_group(pgid, signal.SIGTERM)
     deadline = time.monotonic() + 5
-    while _pid_alive(pid) and time.monotonic() < deadline:
+    while _process_group_alive(pgid) and time.monotonic() < deadline:
         time.sleep(0.1)
-    if _pid_alive(pid):
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-            signal_sent = True
-        except OSError:
-            with contextlib.suppress(OSError):
-                os.kill(pid, signal.SIGKILL)
-                signal_sent = True
-    # A successfully signalled pid cannot continue running.  It may remain as
-    # a zombie until its parent reaps it, but that is not a surviving service.
-    return signal_sent or not _pid_alive(pid)
+    if _process_group_alive(pgid):
+        signal_sent = _signal_process_group(pgid, signal.SIGKILL) or signal_sent
+    # A successfully signalled group cannot continue running. It may retain
+    # zombie entries until their parent reaps them, but no service survives.
+    return signal_sent or not _process_group_alive(pgid)
 
 
 def _recorded_pids(data_dir: Path) -> set[int]:
@@ -316,6 +341,10 @@ def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
     stop_status = "ok"
     recorded_pids = _recorded_pids(data_dir)
     try:
+        supervisor_pgid = os.getpgid(proc.pid)
+    except OSError:
+        supervisor_pgid = proc.pid
+    try:
         stopped = subprocess.run(
             [supervisor, "stop", "--data-dir", str(data_dir)],
             capture_output=True,
@@ -327,13 +356,11 @@ def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
     except (OSError, subprocess.SubprocessError) as exc:
         stop_status = f"stop_error_{type(exc).__name__}"
     finally:
-        # Reap our direct child through Popen first; kill(0) otherwise sees
-        # its short-lived zombie state while the parent still owns the wait.
-        # A non-zero stop status is recorded, but process-group liveness is the
-        # teardown decision because stop may race an already-exited controller.
-        _reap(proc)
+        # Foreground stop may return 1 when its controller already exited; the
+        # captured group sweep is authoritative for same-group survivors.
+        supervisor_reaped = _reap(proc, supervisor_pgid)
         reaped = {
-            pid: proc.poll() is not None
+            pid: supervisor_reaped
             if pid == proc.pid
             else _reap_process_group(pid)
             for pid in recorded_pids
