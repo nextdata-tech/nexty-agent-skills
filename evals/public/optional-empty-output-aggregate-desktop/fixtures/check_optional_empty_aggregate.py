@@ -327,8 +327,17 @@ def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
     except (OSError, subprocess.SubprocessError) as exc:
         stop_status = f"stop_error_{type(exc).__name__}"
     finally:
-        reaped = {pid: _reap_process_group(pid) for pid in recorded_pids}
+        # Reap our direct child through Popen first; kill(0) otherwise sees
+        # its short-lived zombie state while the parent still owns the wait.
+        # A non-zero stop status is recorded, but process-group liveness is the
+        # teardown decision because stop may race an already-exited controller.
         _reap(proc)
+        reaped = {
+            pid: proc.poll() is not None
+            if pid == proc.pid
+            else _reap_process_group(pid)
+            for pid in recorded_pids
+        }
     survivors = [pid for pid, complete in reaped.items() if not complete]
     if proc.poll() is None or survivors:
         return f"teardown_incomplete ({stop_status}; survivors={survivors})"
