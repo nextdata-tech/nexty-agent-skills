@@ -50,7 +50,7 @@ def make_manifest(**overrides: object) -> Manifest:
         "operator_script_hash": "operator-1",
         "turn_budget": 20,
         "grant_fixture_hash": "not-applicable",
-        "scenario_id": "grain-trap",
+        "scenario_id": "parent-child-grain-trap",
         "tier": "smoke",
         "trial_index": 1,
         "canary_claims_hash": "canary-1",
@@ -67,7 +67,7 @@ def make_manifest(**overrides: object) -> Manifest:
 def make_row(**overrides: object) -> LedgerRow:
     values: dict[str, object] = {
         "run_id": "run-1",
-        "scenario_id": "grain-trap",
+        "scenario_id": "parent-child-grain-trap",
         "turn": 1,
         "phase": 1,
         "phase_status": "executed",

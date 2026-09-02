@@ -20,10 +20,10 @@ The smoke tier contains three scenarios, run in the order each declares through
    `nxd-desktop-supervisor check` and one real build. A DRIFT verdict **gates the
    tier**: running the rest against known guidance-vs-runtime drift just
    re-measures the canary's finding at far higher cost.
-2. **zero-row-output.** A valid resource that materializes no rows.
+2. **zero-row-optional-output.** A valid resource that materializes no rows.
    Manufacturing a placeholder row fails; so does relaxing the checks that
    still guard required outputs.
-3. **grain-trap.** Seeded parent/child data where a naive join fans the
+3. **parent-child-grain-trap.** Seeded parent/child data where a naive join fans the
    parent amount out across children. Both answers are fixed numbers under the
    seed, and reconciliation is against a fixture ground-truth control total —
    internal self-consistency is not enough, because self-consistent wrong numbers
@@ -74,6 +74,30 @@ from `--knob-plan`, using either this outer shape or its inner `scenarios` objec
 Workflow switching remains a programmatic control because its replacement
 transport and endpoint observation must be supplied by the caller. A CLI plan
 that declares one is rejected rather than silently running with the switch off.
+
+### Local live qualification
+
+The local-only live entrypoint runs the selected scenario through Claude Code,
+the installed `nxd-desktop` MCP server, and the job-loop skills. Each trial
+gets a disposable home, fixture, skill-pack staging area, and evidence
+directory; the report and replay artifacts are retained under `--output-dir`
+or a printed temporary directory.
+
+For example, after authenticating Claude Code and installing the desktop
+runtime:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario zero-row-optional-output \
+  --epochs 1 \
+  --output-dir /tmp/dp-scenarios-local-run
+```
+
+Use `--allow-host-home` only when the host credential store is required for the
+authenticated local run. This entrypoint is intentionally not a hosted CI
+workflow yet; CI runs the deterministic harness and replay tests, while live
+Claude/Desktop qualification remains a developer-controlled local operation.
+
 ## Layout
 
 | Path | Contents |

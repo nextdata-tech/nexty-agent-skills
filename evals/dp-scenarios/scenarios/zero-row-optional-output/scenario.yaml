@@ -1,5 +1,5 @@
 version: 1
-id: zero-row-output
+id: zero-row-optional-output
 tier: smoke
 run_order: 1
 fixture:

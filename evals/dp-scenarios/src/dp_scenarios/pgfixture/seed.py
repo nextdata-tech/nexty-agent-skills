@@ -97,7 +97,7 @@ def _lookup_rows(line_items: Frame) -> tuple[Mapping[str, Any], ...]:
 def seed_inventory(seed: int, work_dir: str | Path) -> SeededData:
     """Materialize deterministic rotation-scenario rows and gold data under ``work_dir``.
 
-    ``generate_dataset`` owns the grain-trap source, orphan-FK defect, and
+    ``generate_dataset`` owns the parent-child-grain-trap source, orphan-FK defect, and
     reference implementation.  The additional negative-quantity injector is
     deliberately applied to typed rows after CSV generation, so the data sent
     to Postgres is the exact in-memory source described by this result.
@@ -142,7 +142,7 @@ def seed_inventory(seed: int, work_dir: str | Path) -> SeededData:
         gold_files[path.name] = json.loads(path.read_text(encoding="utf-8"))
     gold_value = gold_files.get("grain_trap_by_region.json")
     if not isinstance(gold_value, list) or not gold_value:
-        raise ValueError("synthgen did not emit a non-empty grain-trap gold row-set")
+        raise ValueError("synthgen did not emit a non-empty parent-child-grain-trap gold row-set")
 
     tables = MappingProxyType(
         {

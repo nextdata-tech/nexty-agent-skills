@@ -1,5 +1,5 @@
 version: 1
-id: grain-trap
+id: parent-child-grain-trap
 tier: smoke
 run_order: 2
 fixture:

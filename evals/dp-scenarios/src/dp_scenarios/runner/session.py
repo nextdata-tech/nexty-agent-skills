@@ -514,7 +514,17 @@ class LiveSession:
         self._process.stdin.flush()
         ready, _, _ = select.select([self._process.stdout], [], [], self.timeout)
         if not ready:
-            raise SessionError(f"live session exceeded the {self.timeout:.3f}s turn timeout")
+            detail = f"live session exceeded the {self.timeout:.3f}s turn timeout"
+            # Return a structured wedge so RecordingSession and TierRunner can
+            # persist the partial replay, ledger, and final report. Raising
+            # here loses the completed earlier turns and makes a live timeout
+            # look like a graded failure instead of an infrastructure crash.
+            self.close(wait_timeout=min(self.timeout, 5.0))
+            return TurnResult(
+                environment_wedged=True,
+                environment_detail=detail,
+                session_id=f"live-session-{self._session_counter}",
+            )
         line = self._process.stdout.readline()
         if not line:
             stderr = self._process.stderr.read() if self._process.stderr is not None else ""
@@ -532,12 +542,15 @@ class LiveSession:
 
     send = send_message
 
-    def close(self) -> None:
+    def close(self, *, wait_timeout: float | None = None) -> None:
+        """Stop the child, using a short grace period after a turn timeout."""
+
         if self._process is None:
             if self.desktop_session is not None:
                 self.desktop_session.cleanup()
             return
         process = self._process
+        shutdown_timeout = self.timeout if wait_timeout is None else wait_timeout
         try:
             if self.desktop_session is not None:
                 # DesktopStdioSession owns the process group and its bounded
@@ -546,7 +559,7 @@ class LiveSession:
             else:
                 process.terminate()
                 try:
-                    process.wait(timeout=self.timeout)
+                    process.wait(timeout=shutdown_timeout)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)

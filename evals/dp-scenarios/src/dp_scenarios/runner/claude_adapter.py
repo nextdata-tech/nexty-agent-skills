@@ -1,0 +1,772 @@
+"""Bridge the dp-scenarios transport to a local Claude Code session.
+
+The tier runner speaks a small JSONL protocol whose response is a typed
+``TurnResult``.  Claude Code speaks stream-json and exposes the real Desktop
+MCP server through a private stdio config.  This module is the deliberately
+thin adapter between those contracts.  It never infers supervisor facts from
+assistant prose.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import contextlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from collections import deque
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
+
+
+DEFAULT_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
+
+Work only in the current workspace. The generated fixture is available at the
+path named by NXD_EVAL_FIXTURE_DIR. Keep the authored data-product closure in
+the workspace's closure/ directory and keep any blueprint at the workspace
+root. Use the nxd-desktop MCP tools for self-check, build, serving, inspection,
+and governed queries; do not invoke nxd-desktop-supervisor from Bash. Follow
+the installed Nexty skills and answer the operator directly after each turn.
+The runner owns machine evidence; do not create or edit artifacts/ files.
+"""
+
+
+class ClaudeAdapterError(RuntimeError):
+    """Raised when Claude Code cannot satisfy the live turn contract."""
+
+
+def _load_desktop_stdio(repo_root: Path) -> tuple[type[Any], Any, Any]:
+    """Load the shared stdio proxy without making the repo root agent-visible."""
+
+    module_path = (repo_root / "evals" / "desktop_stdio.py").resolve()
+    if not module_path.is_file():
+        raise ClaudeAdapterError(f"shared Desktop stdio module does not exist: {module_path}")
+    spec = importlib.util.spec_from_file_location("dp_scenarios_desktop_stdio", module_path)
+    if spec is None or spec.loader is None:
+        raise ClaudeAdapterError(f"could not load shared Desktop stdio module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.DesktopStdioSession, module.redact_json_rpc, module.redact_text
+
+
+def _text_from_content(content: object) -> str:
+    """Extract text blocks from Claude's tool-result content shape."""
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, Mapping) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return str(content)
+
+
+def _decode_tool_content(content: object) -> object:
+    """Decode JSON MCP text while retaining non-JSON tool output as text."""
+
+    text = _text_from_content(content).strip()
+    if not text:
+        return ""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _json_safe(value: object, redact_json_rpc: Any) -> object:
+    """Convert a stream value to report-safe JSON without retaining secrets."""
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, Path):
+        return str(value)
+    return redact_json_rpc(value)
+
+
+def _mcp_name(name: object) -> str | None:
+    """Return the server tool name for an allowed nxd-desktop call."""
+
+    if not isinstance(name, str) or not name.startswith("mcp__nxd-desktop__"):
+        return None
+    return name.removeprefix("mcp__nxd-desktop__")
+
+
+def _payload_from_call(call: Mapping[str, object]) -> object:
+    """Read the structured MCP payload from one paired Claude tool result."""
+
+    if "content" in call:
+        return call.get("content")
+    result = call.get("result")
+    if not isinstance(result, Mapping):
+        return None
+    return result.get("content")
+
+
+def _snapshot_workspace(workspace: Path, *, artifact_dir: Path) -> dict[str, bytes]:
+    """Snapshot small, contained agent files while excluding runner evidence."""
+
+    snapshot: dict[str, bytes] = {}
+    skip_names = {
+        "artifacts",
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "incoming",
+        "query-results.json",
+        "supervisor-facts.json",
+        "mcp-trace.jsonl",
+    }
+    workspace = workspace.resolve()
+    artifact_dir = artifact_dir.resolve()
+    for candidate in sorted(workspace.rglob("*")):
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        try:
+            relative = candidate.relative_to(workspace)
+            resolved = candidate.resolve()
+        except ValueError:
+            continue
+        if any(part in skip_names for part in relative.parts):
+            continue
+        if resolved == artifact_dir or artifact_dir in resolved.parents:
+            continue
+        try:
+            content = candidate.read_bytes()
+        except OSError:
+            continue
+        # A scenario closure is small. Skipping an unexpectedly large file is
+        # safer than copying arbitrary local data into a replay artifact.
+        if len(content) > 2 * 1024 * 1024:
+            continue
+        snapshot[relative.as_posix()] = content
+    return snapshot
+
+
+def _changed_files(before: Mapping[str, bytes], after: Mapping[str, bytes]) -> tuple[TouchedFile, ...]:
+    """Return only changed files as relative replay-safe observations."""
+
+    return tuple(
+        TouchedFile(path, after[path])
+        for path in sorted(after)
+        if before.get(path) != after[path]
+    )
+
+
+def parse_claude_events(
+    events: Sequence[Mapping[str, object]],
+    *,
+    redact_json_rpc: Any,
+    redact_text: Any,
+    session_id: str,
+) -> tuple[TurnResult, list[dict[str, object]]]:
+    """Convert one completed Claude stream turn into a typed result.
+
+    Only completed ``assistant`` tool-use blocks, completed ``user``
+    tool-result blocks, and the terminal ``result`` event are consumed.  The
+    operator's input is not copied into ``transcript_delta``.
+    """
+
+    tool_uses: list[dict[str, object]] = []
+    tool_results: dict[str, dict[str, object]] = {}
+    transcript: list[str] = []
+    final_answer = ""
+    result_error = False
+    result_error_detail: str | None = None
+
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "assistant":
+            message = event.get("message")
+            blocks = message.get("content", []) if isinstance(message, Mapping) else []
+            if not isinstance(blocks, Sequence) or isinstance(blocks, (str, bytes, bytearray)):
+                continue
+            for block in blocks:
+                if not isinstance(block, Mapping):
+                    continue
+                if block.get("type") == "text" and isinstance(block.get("text"), str):
+                    text = block["text"].strip()
+                    if text:
+                        transcript.append("[assistant] " + redact_text(text))
+                elif block.get("type") == "tool_use" and isinstance(block.get("name"), str):
+                    tool_uses.append(
+                        {
+                            "id": block.get("id"),
+                            "name": block["name"],
+                            "input": block.get("input", {}),
+                        }
+                    )
+                    transcript.append(
+                        "[tool_use:" + block["name"] + "] " + redact_text(json.dumps(block.get("input", {}), sort_keys=True, default=str))
+                    )
+        elif event_type == "user":
+            message = event.get("message")
+            blocks = message.get("content", []) if isinstance(message, Mapping) else []
+            if not isinstance(blocks, Sequence) or isinstance(blocks, (str, bytes, bytearray)):
+                continue
+            for block in blocks:
+                if not isinstance(block, Mapping) or block.get("type") != "tool_result":
+                    continue
+                identifier = block.get("tool_use_id")
+                if not isinstance(identifier, str):
+                    continue
+                decoded = _decode_tool_content(block.get("content", ""))
+                record = {
+                    "tool_use_id": identifier,
+                    "is_error": bool(block.get("is_error", False)),
+                    "content": _json_safe(decoded, redact_json_rpc),
+                }
+                tool_results[identifier] = record
+                transcript.append("[tool_result] " + redact_text(json.dumps(record["content"], default=str)))
+        elif event_type == "result":
+            raw_answer = event.get("result", "")
+            final_answer = redact_text(raw_answer if isinstance(raw_answer, str) else str(raw_answer))
+            result_error = bool(event.get("is_error", False))
+            if result_error:
+                result_error_detail = final_answer or "Claude returned an error result"
+
+    calls: list[ToolCall] = []
+    flat_results: list[object] = []
+    build_failures = 0
+    reported = False
+    mcp_observations: list[dict[str, object]] = []
+    for use in tool_uses:
+        identifier = use.get("id")
+        paired = tool_results.get(identifier) if isinstance(identifier, str) else None
+        result_value = paired
+        calls.append(
+            ToolCall(
+                str(use["name"]),
+                _json_safe(use.get("input", {}), redact_json_rpc),
+                result_value,
+            )
+        )
+        if paired is not None:
+            flat_results.append(paired)
+        mcp_tool = _mcp_name(use.get("name"))
+        if mcp_tool is None:
+            continue
+        observation = {
+            "tool": mcp_tool,
+            "arguments": use.get("input", {}),
+            "result": _payload_from_call(paired) if paired is not None else None,
+            "is_error": bool(paired.get("is_error", False)) if paired is not None else True,
+        }
+        mcp_observations.append(observation)
+        if mcp_tool == "build_data_product" and observation["is_error"]:
+            build_failures += 1
+        if mcp_tool == "inspect_run" and not observation["is_error"]:
+            reported = True
+
+    if result_error:
+        return (
+            TurnResult(
+                transcript_delta="\n".join(transcript),
+                agent_message=final_answer,
+                tool_calls=tuple(calls),
+                tool_results=tuple(flat_results),
+                build_failed=build_failures > 0,
+                build_failure_count=build_failures,
+                reported=reported,
+                environment_wedged=True,
+                environment_detail=redact_text(result_error_detail or "Claude returned an error result"),
+                session_id=session_id,
+            ),
+            mcp_observations,
+        )
+    return (
+        TurnResult(
+            transcript_delta="\n".join(transcript),
+            agent_message=final_answer,
+            tool_calls=tuple(calls),
+            tool_results=tuple(flat_results),
+            build_failed=build_failures > 0,
+            build_failure_count=build_failures,
+            reported=reported,
+            session_id=session_id,
+        ),
+        mcp_observations,
+    )
+
+
+def _mapping_payload(value: object) -> Mapping[str, object] | None:
+    """Return an inner MCP JSON object when the result is one."""
+
+    return value if isinstance(value, Mapping) else None
+
+
+def _write_json(path: Path, value: object) -> None:
+    """Write a small runner-owned JSON artifact atomically."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _update_machine_artifacts(
+    observations: Sequence[Mapping[str, object]],
+    *,
+    artifact_dir: Path,
+    facts: dict[str, object],
+    build_context: dict[str, object],
+) -> None:
+    """Derive query/fact artifacts only from structured MCP results."""
+
+    latest_query: Mapping[str, object] | None = None
+    for observation in observations:
+        tool = observation.get("tool")
+        payload = _mapping_payload(observation.get("result"))
+        if observation.get("is_error"):
+            continue
+        if tool == "build_data_product" and payload is not None:
+            for key in ("run_id", "artifact_id", "workflow"):
+                if key in payload:
+                    build_context[key] = payload[key]
+            arguments = observation.get("arguments")
+            if isinstance(arguments, Mapping) and isinstance(arguments.get("workflow"), str):
+                build_context["workflow"] = arguments["workflow"]
+        elif tool == "inspect_run" and payload is not None:
+            run = payload.get("run")
+            if isinstance(run, Mapping):
+                if run.get("run_id") == build_context.get("run_id"):
+                    lifecycle = run.get("lifecycle", run.get("status"))
+                    if isinstance(lifecycle, str) and lifecycle:
+                        facts["lifecycle_state"] = lifecycle
+        elif tool == "list_data_products" and payload is not None:
+            products = payload.get("products")
+            if not isinstance(products, Sequence) or isinstance(products, (str, bytes, bytearray)):
+                continue
+            for product in products:
+                if not isinstance(product, Mapping):
+                    continue
+                workflow = build_context.get("workflow")
+                if workflow is not None and product.get("workflow") != workflow:
+                    continue
+                if build_context.get("run_id") and product.get("run_id") != build_context.get("run_id"):
+                    continue
+                row_counts: dict[str, str] = {}
+                models = product.get("models")
+                if isinstance(models, Sequence) and not isinstance(models, (str, bytes, bytearray)):
+                    for model in models:
+                        if not isinstance(model, Mapping):
+                            continue
+                        dataset = model.get("dataset")
+                        table = model.get("table")
+                        count = model.get("row_count")
+                        if isinstance(dataset, str) and dataset and isinstance(table, str) and table and isinstance(count, int) and not isinstance(count, bool):
+                            row_counts[f"{dataset}.{table}"] = str(count)
+                publish_seq = product.get("publish_seq")
+                run_id = product.get("run_id", build_context.get("run_id"))
+                artifact_id = product.get("artifact_id", build_context.get("artifact_id"))
+                if isinstance(run_id, str) and run_id and isinstance(artifact_id, str) and artifact_id and isinstance(publish_seq, int) and not isinstance(publish_seq, bool) and row_counts:
+                    facts.update(
+                        {
+                            "run_id": run_id,
+                            "artifact_id": artifact_id,
+                            "publish_sequence": str(publish_seq),
+                            "per_model_row_counts": row_counts,
+                            "lifecycle_state": facts.get("lifecycle_state", "published"),
+                        }
+                    )
+        elif tool == "run_semantic_query" and payload is not None:
+            rows = payload.get("rows")
+            if isinstance(rows, list) and all(isinstance(row, Mapping) for row in rows):
+                latest_query = {"rows": [dict(row) for row in rows]}
+    if latest_query is not None:
+        _write_json(artifact_dir / "query-results.json", latest_query)
+    required = {"run_id", "artifact_id", "publish_sequence", "per_model_row_counts", "lifecycle_state"}
+    if required.issubset(facts) and isinstance(facts.get("per_model_row_counts"), Mapping) and facts["per_model_row_counts"]:
+        _write_json(artifact_dir / "supervisor-facts.json", facts)
+
+
+class ClaudeCodeAdapter:
+    """One long-lived Claude Code process plus one isolated Desktop MCP server."""
+
+    def __init__(
+        self,
+        *,
+        claude: Path,
+        model: str,
+        effort: str,
+        plugin_dir: Path,
+        repo_root: Path,
+        fixture_dir: Path,
+        artifact_dir: Path,
+        desktop_supervisor: Path,
+        desktop_python: Path,
+        claude_config_dir: Path | None,
+        timeout_s: float,
+        max_budget_usd: float | None,
+        append_system_prompt: str,
+    ) -> None:
+        self.claude = claude
+        self.model = model
+        self.effort = effort
+        self.plugin_dir = plugin_dir
+        self.repo_root = repo_root
+        self.fixture_dir = fixture_dir
+        self.artifact_dir = artifact_dir
+        self.desktop_supervisor = desktop_supervisor
+        self.desktop_python = desktop_python
+        self.claude_config_dir = claude_config_dir
+        self.timeout_s = timeout_s
+        self.max_budget_usd = max_budget_usd
+        self.append_system_prompt = append_system_prompt
+        self._stdio: Any = None
+        self._temp: tempfile.TemporaryDirectory[str] | None = None
+        self._process: subprocess.Popen[bytes] | None = None
+        self._stderr: deque[str] = deque(maxlen=200)
+        self._stderr_thread: threading.Thread | None = None
+        # Claude Code validates --session-id as a UUID.  The scenario/epoch
+        # identity lives in the harness manifest and report, so the Claude
+        # transport only needs a fresh valid session identifier here.
+        self._session_id = str(uuid.uuid4())
+        self._stdout_buffer = b""
+        self._before: dict[str, bytes] = {}
+        self._facts: dict[str, object] = {}
+        self._build_context: dict[str, object] = {}
+        self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
+
+    def start(self) -> None:
+        """Start the private MCP config and Claude process."""
+
+        if self._process is not None:
+            return
+        for path, label in ((self.claude, "claude"), (self.plugin_dir, "plugin directory"), (self.desktop_supervisor, "desktop supervisor"), (self.desktop_python, "desktop Python")):
+            if not path.exists():
+                raise ClaudeAdapterError(f"{label} does not exist: {path}")
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
+        state_dir = Path(self._temp.name) / "desktop-state"
+        stdio = self._desktop_stdio_type(
+            [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
+            server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
+        )
+        self._stdio = stdio.start()
+        command = [
+            str(self.claude),
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--session-id",
+            self._session_id,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            self.model,
+            "--setting-sources",
+            "project",
+            "--allowedTools",
+            "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,Skill,mcp__nxd-desktop__*",
+            "--add-dir",
+            str(Path.cwd().resolve()),
+            "--add-dir",
+            str(self.fixture_dir.resolve()),
+            "--plugin-dir",
+            str(self.plugin_dir.resolve()),
+            "--mcp-config",
+            str(self._stdio.config_path),
+            "--strict-mcp-config",
+            "--permission-mode",
+            "acceptEdits",
+            "--no-session-persistence",
+            "--append-system-prompt",
+            self.append_system_prompt,
+        ]
+        if self.effort:
+            command.extend(("--effort", self.effort))
+        if self.max_budget_usd is not None:
+            command.extend(("--max-budget-usd", str(self.max_budget_usd)))
+        environment = dict(os.environ)
+        if self.claude_config_dir is not None:
+            environment["CLAUDE_CONFIG_DIR"] = str(self.claude_config_dir)
+        self._process = subprocess.Popen(
+            command,
+            cwd=Path.cwd(),
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            start_new_session=True,
+        )
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
+        self._before = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
+
+    def _drain_stderr(self) -> None:
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            self._stderr.append(line.decode("utf-8", errors="replace").rstrip())
+
+    def _stop_process(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        if process.poll() is None:
+            with contextlib.suppress(OSError):
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
+        self._process = None
+
+    def _read_until_result(self) -> list[Mapping[str, object]]:
+        process = self._process
+        if process is None or process.stdout is None:
+            raise ClaudeAdapterError("Claude process is not running")
+        deadline = time.monotonic() + self.timeout_s
+        events: list[Mapping[str, object]] = []
+        while True:
+            while b"\n" in self._stdout_buffer:
+                raw_line, _, self._stdout_buffer = self._stdout_buffer.partition(b"\n")
+                line = raw_line.decode("utf-8", errors="replace")
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(value, Mapping):
+                    continue
+                events.append(value)
+                if value.get("type") == "result":
+                    return events
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                detail = " | ".join(self._stderr)
+                state = process.poll()
+                suffix = f"; exit_code={state}"
+                if detail:
+                    suffix += f"; stderr={detail[-1000:]}"
+                raise ClaudeAdapterError(
+                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
+                )
+            ready, _, _ = select.select([process.stdout.fileno()], [], [], remaining)
+            if not ready:
+                detail = " | ".join(self._stderr)
+                state = process.poll()
+                suffix = f"; exit_code={state}"
+                if detail:
+                    suffix += f"; stderr={detail[-1000:]}"
+                raise ClaudeAdapterError(
+                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
+                )
+            chunk = os.read(process.stdout.fileno(), 65536)
+            if not chunk:
+                detail = " | ".join(self._stderr)
+                raise ClaudeAdapterError(f"Claude exited before a result event: {detail[-1000:]}")
+            self._stdout_buffer += chunk
+
+    def send(self, request: Mapping[str, object]) -> TurnResult:
+        """Forward one harness request and return one typed observation."""
+
+        if self._process is None:
+            self.start()
+        assert self._process is not None and self._process.stdin is not None
+        message = request.get("message")
+        if not isinstance(message, Mapping):
+            raise ClaudeAdapterError("turn request has no message object")
+        text = str(message.get("text", ""))
+        attachment_paths: list[str] = []
+        attachments = message.get("attachments", [])
+        if isinstance(attachments, Sequence) and not isinstance(attachments, (str, bytes, bytearray)):
+            incoming = Path.cwd() / "incoming"
+            for index, attachment in enumerate(attachments, start=1):
+                if not isinstance(attachment, Mapping):
+                    raise ClaudeAdapterError("turn attachment is not an object")
+                encoded = attachment.get("content")
+                if not isinstance(encoded, Mapping) or not isinstance(encoded.get("__bytes__"), str):
+                    raise ClaudeAdapterError("turn attachment content is not encoded bytes")
+                try:
+                    content = base64.b64decode(encoded["__bytes__"], validate=True)
+                except (ValueError, base64.binascii.Error) as exc:
+                    raise ClaudeAdapterError("turn attachment content is not valid base64") from exc
+                name = Path(str(attachment.get("name", f"attachment-{index}"))).name or f"attachment-{index}"
+                target = incoming / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+                attachment_paths.append(target.relative_to(Path.cwd()).as_posix())
+        if attachment_paths:
+            text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
+        payload = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            },
+        }
+        self._process.stdin.write(
+            (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        )
+        self._process.stdin.flush()
+        events = self._read_until_result()
+        result, observations = parse_claude_events(
+            events,
+            redact_json_rpc=self._redact_json_rpc,
+            redact_text=self._redact_text,
+            session_id=self._session_id,
+        )
+        after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
+        changed = _changed_files(self._before, after)
+        self._before = after
+        _update_machine_artifacts(
+            observations,
+            artifact_dir=self.artifact_dir,
+            facts=self._facts,
+            build_context=self._build_context,
+        )
+        with contextlib.suppress(OSError):
+            trace_path = getattr(self._stdio, "trace_path", None)
+            if trace_path is not None and Path(trace_path).is_file():
+                shutil.copyfile(trace_path, self.artifact_dir / "mcp-trace.jsonl")
+        return TurnResult(
+            transcript_delta=result.transcript_delta,
+            agent_message=result.agent_message,
+            tool_calls=result.tool_calls,
+            tool_results=result.tool_results,
+            files_touched=changed,
+            approval_artifact=self._approval_artifact(after),
+            build_failed=result.build_failed,
+            build_failure_count=result.build_failure_count,
+            reported=result.reported,
+            environment_wedged=result.environment_wedged,
+            environment_detail=result.environment_detail,
+            session_id=result.session_id,
+        )
+
+    def _approval_artifact(self, snapshot: Mapping[str, bytes]) -> bytes | None:
+        """Expose the actual blueprint bytes to the operator approval gate."""
+
+        candidates = (
+            "dp-blueprint.approved.md",
+            "dp-blueprint.md",
+            "dp-spec.md",
+            "closure/dp-blueprint.approved.md",
+        )
+        for name in candidates:
+            if name in snapshot:
+                return snapshot[name]
+        return None
+
+    def close(self) -> None:
+        """Terminate Claude and its Desktop MCP process group."""
+
+        self._stop_process()
+        if self._stdio is not None:
+            with contextlib.suppress(Exception):
+                self._stdio.cleanup()
+            self._stdio = None
+        if self._temp is not None:
+            self._temp.cleanup()
+            self._temp = None
+
+
+def _write_result(value: TurnResult) -> None:
+    """Emit exactly one harness response line."""
+
+    from dp_scenarios.runner.session import turn_result_to_dict
+
+    sys.stdout.write(json.dumps({"result": turn_result_to_dict(value)}, ensure_ascii=False, sort_keys=True) + "\n")
+    sys.stdout.flush()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the adapter CLI parser."""
+
+    parser = argparse.ArgumentParser(description="Bridge dp-scenarios to local Claude Code")
+    parser.add_argument("--claude", type=Path, required=True)
+    parser.add_argument("--model", default="sonnet")
+    parser.add_argument("--effort", default="medium")
+    parser.add_argument("--plugin-dir", type=Path, required=True)
+    parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--fixture-dir", type=Path, required=True)
+    parser.add_argument("--artifact-dir", type=Path, required=True)
+    parser.add_argument("--desktop-supervisor", type=Path, required=True)
+    parser.add_argument("--desktop-python", type=Path, required=True)
+    parser.add_argument("--claude-config-dir", type=Path)
+    parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument("--max-budget-usd", type=float)
+    parser.add_argument("--append-system-prompt", default=DEFAULT_SYSTEM_PROMPT)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Serve the JSONL adapter until the parent closes stdin."""
+
+    args = build_parser().parse_args(argv)
+    adapter = ClaudeCodeAdapter(
+        claude=args.claude.expanduser().resolve(),
+        model=args.model,
+        effort=args.effort,
+        plugin_dir=args.plugin_dir.expanduser().resolve(),
+        repo_root=args.repo_root.expanduser().resolve(),
+        fixture_dir=args.fixture_dir.expanduser().resolve(),
+        artifact_dir=args.artifact_dir.expanduser().resolve(),
+        desktop_supervisor=args.desktop_supervisor.expanduser().resolve(),
+        desktop_python=args.desktop_python.expanduser().resolve(),
+        claude_config_dir=args.claude_config_dir.expanduser().resolve() if args.claude_config_dir is not None else None,
+        timeout_s=args.timeout,
+        max_budget_usd=args.max_budget_usd,
+        append_system_prompt=args.append_system_prompt,
+    )
+    try:
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            try:
+                request = json.loads(line)
+                if not isinstance(request, Mapping):
+                    raise ClaudeAdapterError("request must be a JSON object")
+                _write_result(adapter.send(request))
+            except (ClaudeAdapterError, OSError, ValueError) as exc:
+                _write_result(
+                    TurnResult(
+                        environment_wedged=True,
+                        environment_detail=str(exc),
+                        session_id=adapter._session_id,
+                    )
+                )
+                return 1
+    finally:
+        adapter.close()
+    return 0
+
+
+__all__ = [
+    "ClaudeAdapterError",
+    "ClaudeCodeAdapter",
+    "DEFAULT_SYSTEM_PROMPT",
+    "build_parser",
+    "main",
+    "parse_claude_events",
+]
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess
+    raise SystemExit(main())
