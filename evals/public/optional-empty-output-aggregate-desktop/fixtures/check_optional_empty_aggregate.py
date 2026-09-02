@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import contextlib
 import hashlib
@@ -97,6 +98,47 @@ def _catalog_dimensions(models: list[Any]) -> list[str]:
         for dimension in model.get("dimensions", []) or []
         if isinstance(dimension, dict) and isinstance(dimension.get("name"), str)
     ]
+
+
+def _semantic_view_names(source: str) -> set[str]:
+    names: set[str] = set()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return names
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "semantic_view"
+            for call in ast.walk(value)
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names.update(target.id for target in targets if isinstance(target, ast.Name))
+    return names
+
+
+def _output_model_names(source: str) -> set[str]:
+    names: set[str] = set()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return names
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "model"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
+            continue
+        names.add(node.args[0].id)
+    return names
 
 
 def _kv(text: str) -> dict[str, str]:
@@ -208,21 +250,23 @@ def _reap(proc: subprocess.Popen[str]) -> None:
 
 
 def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
-    stop_error = ""
+    stop_status = "ok"
     try:
-        subprocess.run(
+        stopped = subprocess.run(
             [supervisor, "stop", "--data-dir", str(data_dir)],
             capture_output=True,
             text=True,
             timeout=60,
         )
+        if stopped.returncode != 0:
+            stop_status = f"stop_exit_{stopped.returncode}"
     except (OSError, subprocess.SubprocessError) as exc:
-        stop_error = str(exc)
+        stop_status = f"stop_error_{type(exc).__name__}"
     finally:
         _reap(proc)
     if proc.poll() is None:
-        return "process_group_reap_incomplete" + (f": {stop_error}" if stop_error else "")
-    return "process_group_reaped" + (f": stop reported {stop_error}" if stop_error else "")
+        return f"process_group_reap_incomplete ({stop_status})"
+    return f"process_group_reaped ({stop_status})"
 
 
 def _verify(definition: Path) -> dict[str, Any]:
@@ -242,7 +286,8 @@ def _verify(definition: Path) -> dict[str, Any]:
         raise CheckFailure("private mapper seam was imported")
     if ".model(reviews)" not in spec or ".promise(reviews)" in spec:
         raise CheckFailure("optional review output is wired with the wrong contract")
-    if "semantic_view(" not in models:
+    view_names = _semantic_view_names(models)
+    if not view_names or not view_names & _output_model_names(spec):
         raise CheckFailure("aggregate semantic view is missing")
     if "Agg.COUNT" not in models or 'orders.field("*")' not in models:
         raise CheckFailure("aggregate view is not a COUNT(*) metric")
@@ -337,6 +382,11 @@ def _verify(definition: Path) -> dict[str, Any]:
                 "aggregate_rows": actual,
                 "compiler_execution": "deferred follow-up",
             }
+        except Exception as exc:
+            raise CheckFailure(
+                f"{exc}; supervisor stdout={_log_tail(log_dir / 'stdout.log')} "
+                f"stderr={_log_tail(log_dir / 'stderr.log')}"
+            ) from exc
         finally:
             teardown = _stop(supervisor, data_dir, proc)
             shutil.rmtree(log_dir, ignore_errors=True)
