@@ -69,3 +69,23 @@ def test_an_actually_unfired_plant_still_says_so() -> None:
 
     assert record.disposition is QualificationDisposition.OBSERVED
     assert record.reasons == ("required_plant_not_fired",)
+
+
+def test_an_ungraded_gate_with_no_findings_still_names_a_reason() -> None:
+    """The fallback branch: ungraded, but nothing said why.
+
+    A gate can be marked ungraded while carrying no findings -- a check that
+    returned an unrecognized shape is the realistic case. Returning an empty
+    reason tuple there would hand a reader a run voided for no stated cause,
+    which is the same silence the reason derivation exists to remove. The
+    fallback must name something, and it must not borrow the unfired-plant
+    wording, which would be a claim nothing checked.
+    """
+
+    score = _score(GateResult("follow-up", False, 0, (), examined=False, ungraded=True))
+
+    record = qualify_run(score, replay_status="verified", generated_operator=False)
+
+    assert record.disposition is QualificationDisposition.OBSERVED
+    assert record.reasons == ("run_ungraded",)
+    assert "required_difficulty_not_fired" not in record.reasons
