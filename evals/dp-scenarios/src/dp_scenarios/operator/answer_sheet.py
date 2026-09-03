@@ -62,6 +62,62 @@ def _string(value: object, location: str) -> str:
     return value
 
 
+def script_turn_text(turn: object) -> str:
+    """Return the operator text a declared script turn carries.
+
+    A turn is either a plain string or a mapping that also declares the
+    reply-substitution switch ``ScriptTurn`` already understands.  The
+    mapping form is what lets a scenario mark an ask that a matcher reply
+    must never replace; without it the switch exists in the engine but is
+    unreachable from scenario data.
+    """
+
+    if isinstance(turn, str):
+        return turn
+    if isinstance(turn, Mapping):
+        text = turn.get("text", turn.get("message"))
+        if isinstance(text, str):
+            return text
+    raise AnswerSheetError("a script turn must be a string or a mapping declaring text")
+
+
+def _script_turns(value: object, location: str) -> tuple[str | Mapping[str, object], ...]:
+    """Validate declared operator turns, accepting the ScriptTurn mapping form."""
+
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise AnswerSheetError(f"{location} must be a list of turns")
+    result: list[str | Mapping[str, object]] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str):
+            if not item.strip():
+                raise AnswerSheetError(f"{location}[{index}] must be a non-empty string")
+            result.append(item)
+            continue
+        if not isinstance(item, Mapping):
+            raise AnswerSheetError(f"{location}[{index}] must be a string or a mapping")
+        allowed = {"text", "message", "substitute_reply", "use_reply"}
+        unknown = sorted(str(name) for name in set(item) - allowed)
+        if unknown:
+            raise AnswerSheetError(f"{location}[{index}] contains unknown key(s): {', '.join(unknown)}")
+        # Mirror ScriptTurn.from_value's rules exactly. A declaration this
+        # validator accepts but ScriptTurn later rejects would fail deep in a
+        # run rather than at load, which is the opposite of fail-closed.
+        if "text" in item and "message" in item:
+            raise AnswerSheetError(f"{location}[{index}] declares both text and message")
+        if "substitute_reply" in item and "use_reply" in item:
+            raise AnswerSheetError(f"{location}[{index}] declares both substitute_reply and use_reply")
+        text = item.get("text", item.get("message"))
+        if not isinstance(text, str) or not text.strip():
+            raise AnswerSheetError(f"{location}[{index}].text must be a non-empty string")
+        switch = item.get("substitute_reply", item.get("use_reply", True))
+        if not isinstance(switch, bool):
+            raise AnswerSheetError(f"{location}[{index}].substitute_reply must be a boolean")
+        result.append(dict(item))
+    if not result:
+        raise AnswerSheetError(f"{location} must not be empty")
+    return tuple(result)
+
+
 def _strings(value: object, location: str, *, allow_empty: bool = False) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise AnswerSheetError(f"{location} must be a list of strings")
@@ -123,7 +179,7 @@ class AnswerSheet:
     version: int
     scenario_id: str
     opening_message: str
-    turns: tuple[str, ...]
+    turns: tuple[str | Mapping[str, object], ...]
     source_answers: Mapping[str, str]
     decision_answers: Mapping[str, DecisionAnswer]
     status_answers: Mapping[str, str]
@@ -215,7 +271,7 @@ class AnswerSheet:
             "version": self.version,
             "scenario_id": self.scenario_id,
             "opening_message": self.opening_message,
-            "turns": list(self.turns),
+            "turns": [dict(turn) if isinstance(turn, Mapping) else turn for turn in self.turns],
             "source_answers": dict(self.source_answers),
             "decision_answers": {
                 key: value.to_mapping() for key, value in self.decision_answers.items()
@@ -295,8 +351,8 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         raise AnswerSheetError(
             "answer_sheet.opening_message contains forbidden term(s): " + ", ".join(leaked)
         )
-    turns = _strings(raw["turns"], "answer_sheet.turns")
-    if turns[0] != opening:
+    turns = _script_turns(raw["turns"], "answer_sheet.turns")
+    if script_turn_text(turns[0]) != opening:
         raise AnswerSheetError("answer_sheet.turns[0] must equal opening_message")
     # ground_truth is optional; when absent, no fact is ever consulted and the
     # legacy unmatched-question behavior is preserved exactly.  When present,

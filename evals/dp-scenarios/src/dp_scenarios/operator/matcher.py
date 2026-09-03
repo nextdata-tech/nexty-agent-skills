@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Pattern
 
-from .answer_sheet import AnswerSheet
+from .answer_sheet import AnswerSheet, script_turn_text
 from .persona import PersonaCard
 from .text_match import contains_any_term
 
@@ -120,7 +120,14 @@ def _contains_declared_term(value: str | bytes, terms: tuple[str, ...]) -> bool:
 
 
 def _reachable_reply_material(persona: PersonaCard, answer_sheet: AnswerSheet) -> tuple[str, ...]:
-    values: list[str] = [answer_sheet.opening_message, *answer_sheet.turns, persona.fallback]
+    # A turn may be declared as a mapping carrying the substitution switch, so
+    # take its text rather than the declaration: the obstacle scan must still
+    # see every string that can actually reach the agent.
+    values: list[str] = [
+        answer_sheet.opening_message,
+        *(script_turn_text(turn) for turn in answer_sheet.turns),
+        persona.fallback,
+    ]
     values.extend(reply for category in sorted(persona.reply_bank) for reply in persona.reply_bank[category])
     values.extend(answer_sheet.source_answers.values())
     values.extend(answer.answer for answer in answer_sheet.decision_answers.values())
