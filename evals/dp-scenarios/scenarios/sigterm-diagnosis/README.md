@@ -1,22 +1,16 @@
 # SIGTERM diagnosis
 
-Second core-tier (`tier: core`) scenario, `run_order: 4`. It is the first
-consumer of `src/dp_scenarios/knobs/` — until now that unit was fully tested
-but had no caller outside its own tests, which is the condition under which a
-unit's tests quietly start asserting its own self-report instead of a
-property.
+Core-tier scenario (`tier: core`, `run_order: 4`). It is the first consumer of
+`src/dp_scenarios/knobs/` outside that unit's own tests.
 
-## Which planning scenario this is
+## Scope
 
-`10 Tiers, merges, and build order.md`'s naming table maps `sigterm-diagnosis`
-onto **S3-smoke**. Note 03's S3 is titled "Budget-bound source plan
-(NEX-874 / NEX-888)", which reads at first like a budget scenario rather than
-a signal one, but its body settles it: *"the ceiling is a SIGTERM with no
-staging marker, no useful stderr"*, and the graded difficulty is that the
-agent must distinguish (a) a client RPC deadline, (b) a supervisor transform
-timeout, and (c) a genuine hang. The name matches the planted difficulty, not
-the title. B8 (`timeout-diagnosis`) is the full-tier heir and is not built
-here.
+A source plan that fetches rows one at a time overruns the supervisor's
+transform window and is killed with **no staging marker and no useful
+stderr**. The graded difficulty is the *diagnosis*: the agent must distinguish
+a supervisor transform-window timeout from a client RPC deadline and from a
+genuine hang, then fix the plan at the source rather than truncate its way
+under the ceiling.
 
 ## Fixture
 
@@ -33,8 +27,7 @@ not a row-count property:
   `floor(0.10 × 20) = 2` rows marked `status=deleted`. The injector's count is
   fixed; only *which* rows it picks is randomized.
 
-The overrun is guaranteed **by construction**, per note 03's determinism
-requirement that it never depend on raw row counts:
+The overrun is guaranteed **by construction**, never by raw row counts:
 `knobs.TransformWindowSizing.from_plans` derives the transform window from the
 two plans and proves the naive plan exceeds twice that window while the
 bounded plan stays at or under half of it. On any hardware.
@@ -68,14 +61,13 @@ the result set until it fits.
   however many a limit happened to keep. Truncation cannot satisfy both the
   window and the count.
 - **No hand-rolled truncation:** the transform source is scanned for `LIMIT`,
-  `.head(`, `islice(`, and `[:n]` slicing. This is note 03's mechanical
-  anti-truncation check.
+  `.head(`, `islice(`, and `[:n]` slicing (case-insensitively for `LIMIT`).
 - **The diagnosis names the true cause:** `supervisor_transform_window_timeout`.
   A client RPC deadline, an OOM or budget-exhaustion attribution, or a "code
-  bug" guess each fail. **This is the trap NEX-937 creates in the real
-  runtime** — a crashing transform is reported as budget exhaustion, so the
-  surfaced remedy ("raise the budget, retry") is wrong. The scenario grades
-  the true cause, deliberately not the runtime's current misreport.
+  bug" guess each fail. This is deliberately graded against the *true* cause:
+  the runtime under test currently surfaces a crashing transform as budget
+  exhaustion, so its own remedy ("raise the budget, retry") is wrong, and a
+  scenario that graded the reported cause would reward repeating that mistake.
 - **The remedy is the declared source-side filter**, not a truncation
   workaround.
 - **Ordering:** the run record must be inspected on an earlier turn than the
@@ -94,8 +86,7 @@ the opening turn free of every word that would leak the mechanism.
 - **No live agent run and no live supervisor build.** Nothing here proves a
   real agent inspects a run record before re-running, or produces a truthful
   window-timeout diagnosis in its own prose. The checks grade evidence *shaped
-  like* what such a run would produce. No authenticated Claude Desktop E2E was
-  executed.
+  like* what such a run would produce.
 - **The SIGTERM is declared, not delivered.** No process is actually signalled
   in this path; `outcome: sigterm` / `signal: 15` are fields in supplied run
   records. The arithmetic that makes the kill inevitable is proven by
@@ -113,4 +104,6 @@ the opening turn free of every word that would leak the mechanism.
   gate; the misdiagnosis is graded by the follow-up check directly instead.
 - **Repeatability is declared, not measured.** `epochs: 5` with a Wilson lower
   bound of 0.90 is a declaration in `scenario.yaml`; no repeated-trial run has
-  been executed.
+  been executed. The harness's own repeatability-runner tests
+  (`tests/test_grading_statistics.py`) exercise that machinery generically,
+  not against this scenario.

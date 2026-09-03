@@ -39,9 +39,7 @@ for what it covers and what it does not.
 `scenarios/credential-rotation/` (`tier: core`, `run_order: 3`) is the first
 caller of `src/dp_scenarios/pgfixture/`: a disposable, owned Postgres
 container with a command-stepped credential rotation, graded against
-connection-level evidence rather than the fixture's own narrative. Its README
-also records the B5/B10 naming decision the planning notes leave
-contradictory.
+connection-level evidence rather than the fixture's own narrative.
 
 `scenarios/sigterm-diagnosis/` (`tier: core`, `run_order: 4`) is the first
 caller of `src/dp_scenarios/knobs/`. The graded difficulty is the *diagnosis*,
@@ -53,9 +51,9 @@ exceeds twice the window while the bounded plan stays under half — never by
 row counts.
 
 `scenarios/restart-and-switch/` (`tier: core`, `run_order: 5`) is the first
-caller of `src/dp_scenarios/mockrest/` outside its own unit tests: an
-attempt-keyed, no-stderr bind fault paired with a scripted restart and
-workflow switch. The agent must distinguish serving-down from build-broken,
+caller of `src/dp_scenarios/knobs/broker.py` and `knobs/workflow.py` outside
+their own unit tests: an attempt-keyed, no-stderr bind fault paired with a
+scripted restart and workflow switch. The agent must distinguish serving-down from build-broken,
 cite build-phase evidence for any unhealthy-build claim, and change the plan
 rather than retry until lucky.
 
@@ -68,14 +66,14 @@ run on every change.
 
 ### Approval boundary
 
-T0 does not qualify the job-loop's prose-first authoring lifecycle. In particular,
+The smoke tier does not qualify the job-loop's prose-first authoring lifecycle. In particular,
 it does not require a vague opening prompt to produce an approved
 `dp-blueprint.md` (called `dp-spec.md` in older material), nor does it run an
 independent user-presence approval gate before materialization. The job-loop skill
 and closure validators define that artifact contract; this harness records only
 the scripted scenario phases and the artifacts available to its smoke gates.
 Mapper approval is a separate supervisor admission boundary and is not reproduced
-by the T0 operator.
+by the smoke-tier operator.
 
 ### Runtime control plans
 
