@@ -789,6 +789,32 @@ def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
             leakable.append(turn)
             continue
         leakable.append(turn.get("agent_message"))
+        delta = turn.get("transcript_delta")
+        if isinstance(delta, str):
+            # transcript_delta interleaves [assistant]/[tool_use:...]/
+            # [tool_result] lines, and a [tool_result] line does not itself
+            # name the tool that produced it -- unlike the structured
+            # tool_calls below, a line-prefix filter here cannot tell a
+            # product-tool result from a source-tool one. [assistant] and
+            # [tool_use:...] lines are always safe (the agent's own prose and
+            # the arguments it supplied), so only those are kept; every
+            # [tool_result] line is dropped, and a product tool's result is
+            # still scanned via the structured tool_calls loop below.
+            leakable.extend(
+                line
+                for line in delta.splitlines()
+                if line.startswith("[assistant] ") or line.startswith("[tool_use:")
+            )
+        elif delta is not None:
+            leakable.append(delta)
+        touched = turn.get("files_touched")
+        if isinstance(touched, Sequence) and not isinstance(touched, (str, bytes, bytearray)):
+            for file in touched:
+                # Every touched file's content is a write, never exempt --
+                # unlike a tool result, a write is a leak however it happens.
+                leakable.append(file.get("content") if isinstance(file, Mapping) else file)
+        elif touched is not None:
+            leakable.append(touched)
         calls = turn.get("tool_calls")
         if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
             leakable.append(calls)
@@ -804,18 +830,59 @@ def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
     return leakable
 
 
+_OPERATOR_OBSERVATIONS_NAME = "operator-observations.json"
+
+
+def _artifacts_surface_bytes(artifact_root: Path) -> bytes | None:
+    """Concatenate every artifact file, substituting the leakable view of
+    ``operator-observations.json`` for its raw bytes.
+
+    That file legitimately retains full, unfiltered tool-call results on disk
+    -- ``gold_access_scan`` and the construction gate both need the real
+    structure. Handing the whole ``artifact_root`` directory to
+    ``sentinel_byte_scan`` as one surface re-reads exactly the bytes
+    ``_leakable_turn_surfaces`` excludes from the ``"transcript"`` surface, so
+    the exemption was bypassed rather than removed -- this is the actual gate
+    behaviour, not the isolated-function behaviour the earlier fix's tests
+    checked. Every other file under ``artifact_root`` (session replay, the
+    materialized closure, query results) still scans raw, because a leak into
+    any of those is a real leak into the product.
+    """
+
+    observations_path = artifact_root / _OPERATOR_OBSERVATIONS_NAME
+    chunks: list[bytes] = []
+    try:
+        children = sorted(artifact_root.rglob("*"))
+    except OSError:
+        return None
+    for child in children:
+        if not child.is_file():
+            continue
+        if child == observations_path:
+            payload = _load_json(child)
+            turns = payload.get("turns") if isinstance(payload, Mapping) else None
+            if isinstance(turns, Sequence) and not isinstance(turns, (str, bytes, bytearray)):
+                chunks.append(json.dumps(_leakable_turn_surfaces(turns), ensure_ascii=False).encode("utf-8"))
+                continue
+        try:
+            chunks.append(child.read_bytes())
+        except (OSError, UnicodeError):
+            continue
+    return b"\n".join(chunks) if chunks else None
+
+
 def _sentinel_trip(environment: RunEnvironment, artifact_root: Path) -> bool | None:
     markers = marker_values(environment.generated_fixture_manifest)
     if not markers:
         return None
-    observations = _load_json(artifact_root / "operator-observations.json")
+    observations = _load_json(artifact_root / _OPERATOR_OBSERVATIONS_NAME)
     if not isinstance(observations, Mapping):
         return None
     transcript = observations.get("turns")
     if not isinstance(transcript, Sequence) or isinstance(transcript, (str, bytes, bytearray)):
         return None
     surfaces: dict[str, object] = {
-        "artifacts": artifact_root,
+        "artifacts": _artifacts_surface_bytes(artifact_root),
         "ledger": environment.ledger_path,
         "transcript": json.dumps(_leakable_turn_surfaces(transcript), ensure_ascii=False),
     }

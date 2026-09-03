@@ -26,9 +26,15 @@ classify that specific wrong answer separately from other wrong answers.
 ## Conversation and execution
 
 The operator opens with a vague question about which regions are bringing in
-money. It supplies source and business-definition answers only when the agent
-asks, then drives the build, checks, result, reconciliation, and final-check
-phases. A planted scope-creep event exercises the grain difficulty.
+money. It answers source and business-definition questions the agent asks
+from the scripted answer bank, and column-semantics questions the bank does
+not cover (for example, what `order_amount` means at the order vs. line-item
+grain, or whether `product` matters for the revenue figure) from a declared
+`ground_truth` brief. A question that neither the answer bank nor the brief
+covers gets the operator's honest "I don't know, you tell me" fallback rather
+than a scripted line that happens to not address it. The operator then drives
+the build, checks, result, reconciliation, and final-check phases. A planted
+scope-creep event exercises the grain difficulty.
 
 The agent under test is expected to use the Nexty job-loop and `nxd-desktop`
 MCP flow to author the closure, validate it, build/publish it, serve it, and
