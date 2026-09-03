@@ -12,12 +12,15 @@ turns:
   - Please continue with the source review.
   - text: Can you tell me exactly how long each deal has been sitting in its current stage?
     substitute_reply: false
-  # Phase 3 is the earliest phase whose ledger vocabulary admits
-  # spec_approved. Without a transmitted approval the intake gate can only
-  # ever report intake_spec_approval_missing, which is what the first live
-  # runs of this package did.
+  # approval: true declares that transmitting this turn IS the operator
+  # approving the spec, so the spec_approved ledger row is minted from what
+  # the operator sent. Without it the row depended on the agent echoing the
+  # word "approved" on some later turn, and a live run in which the agent
+  # asked at the natural moment and then said "Building it now." recorded
+  # intake_spec_approval_missing.
   - text: That looks good to me -- approved. Go ahead and build it.
     substitute_reply: false
+    approval: true
   - Please continue with the build.
   - The build is ready.
   - text: Show me which deals moved recently, and be upfront about anything you can't actually tell me.

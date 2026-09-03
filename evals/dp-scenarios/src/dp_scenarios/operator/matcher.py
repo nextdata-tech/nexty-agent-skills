@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Pattern
 
@@ -47,6 +47,17 @@ class MatchResult:
     matched: bool = True
     obstacle_question: bool = False
     ground_truth: bool = False
+    approval_requested: bool = False
+    """Whether the agent solicited approval, orthogonally to ``category``.
+
+    Agents present a spec and ask a factual question in the same breath --
+    "Please approve the blueprint. Also, what does updatedAt mean on a deal?"
+    Making approval a first-match *category* stole exactly those messages from
+    the source/decision/ground-truth lookup, so the operator answered a stock
+    approval line instead of the fact it knows, precisely when the fact
+    mattered most. The solicitation is therefore recorded as a flag on
+    whatever category actually resolves the reply.
+    """
 
     @property
     def matched_rule_id(self) -> str:
@@ -79,24 +90,19 @@ DEFAULT_OBSTACLE_TERMS = (
     "secret",
 )
 
+# The unambiguous solicitation verbs. This is read as an orthogonal flag on
+# every result (see MatchResult.approval_requested), not as a category that
+# outranks the factual lookups. "looks good" is deliberately absent: it is
+# ordinary conversational filler ("the data looks good so far") and reading it
+# as a request for sign-off is a false positive far more often than not.
+APPROVAL_REQUEST_PATTERN = re.compile(r"\b(approve[sd]?|approval|sign\s*off)\b", re.IGNORECASE)
+
 _RULES = (
-    # An explicit solicitation of approval is classified before the source
-    # vocabulary. _RULES is first-match-wins, and the source pattern's nouns
-    # (source, data, field, record, ...) appear in almost any approval request
-    # a data-product agent writes -- "reply approved to lock in the spec, then
-    # I'll land the source data" is an approval request that the source rule
-    # swallowed. In a real live run that made APPROVAL_REQUEST unreachable, so
-    # no spec_approved ledger row was ever written and the intake gate could
-    # not pass no matter what the agent did.
-    #
-    # Only the unambiguous verbs are promoted. "proceed" stays below the source
-    # rule because it is common in genuine source questions ("shall I proceed
-    # -- which table is authoritative?"), where the source reading is right.
-    _Rule(
-        "approval.request",
-        Category.APPROVAL_REQUEST,
-        re.compile(r"\b(approve[sd]?|approval|sign\s*off|looks\s+good)\b", re.IGNORECASE),
-    ),
+    # _RULES is first-match-wins and the factual rules come first on purpose.
+    # Whether the agent also asked for approval is carried alongside the
+    # category, so a message that both presents a spec and asks a real
+    # question is still answered from the source bank, the decision bank, or
+    # the ground-truth brief.
     _Rule(
         "source.question",
         Category.SOURCE_QUESTION,
@@ -107,6 +113,13 @@ _RULES = (
     ),
     _Rule(
         "approval.request",
+        Category.APPROVAL_REQUEST,
+        APPROVAL_REQUEST_PATTERN,
+    ),
+    # Weaker, more ambiguous approval vocabulary, kept under its own rule id so
+    # a transcript reader can tell which of the two fired.
+    _Rule(
+        "approval.proceed",
         Category.APPROVAL_REQUEST,
         re.compile(r"\b(proceed|publish|ship)\b", re.IGNORECASE),
     ),
@@ -221,11 +234,22 @@ class MatcherBank:
         if _contains_term(message, self.question_obstacle_terms):
             raise MatcherError("the generated operator surface contains an obstacle term")
 
+    @staticmethod
+    def _with_approval_flag(result: MatchResult, message: str) -> MatchResult:
+        """Attach the orthogonal solicitation flag to an already-chosen result."""
+
+        if result.approval_requested or not APPROVAL_REQUEST_PATTERN.search(message):
+            return result
+        return replace(result, approval_requested=True)
+
     def classify(self, message: str) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 
         if not isinstance(message, str):
             raise TypeError("agent message must be a string")
+        return self._with_approval_flag(self._classify(message), message)
+
+    def _classify(self, message: str) -> MatchResult:
         is_question = "?" in message or bool(re.match(r"\s*(who|what|where|when|why|how|can|could|should|is|are|do|does)\b", message, re.IGNORECASE))
         decision = self.answer_sheet.answer_for_decision(message)
         if decision is not None:
@@ -251,6 +275,9 @@ class MatcherBank:
     def reply_for(self, message: str) -> MatchResult:
         """Classify one message and choose its fixed reply."""
 
+        return self._with_approval_flag(self._reply_for(message), message)
+
+    def _reply_for(self, message: str) -> MatchResult:
         classified = self.classify(message)
         if classified.category is Category.OTHER:
             return classified
@@ -351,6 +378,7 @@ def classify_and_reply(
 
 
 __all__ = [
+    "APPROVAL_REQUEST_PATTERN",
     "Category",
     "DEFAULT_OBSTACLE_TERMS",
     "MatchResult",

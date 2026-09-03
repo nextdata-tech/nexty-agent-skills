@@ -109,27 +109,68 @@ def test_scenarios_without_a_brief_keep_their_source_answers() -> None:
     assert result.reply == scenario.answer_sheet.source_answers["source"]
 
 
-def test_an_explicit_approval_request_is_not_swallowed_by_the_source_vocabulary() -> None:
-    """_RULES is first-match-wins and the source pattern is very broad.
+def test_a_message_that_asks_for_approval_and_a_fact_is_still_answered_from_the_brief() -> None:
+    """Approval is an orthogonal flag, never a category that outranks a lookup.
 
-    Almost any approval a data-product agent asks for mentions a source noun
-    ("reply approved and I'll land the source data"), so the source rule used
-    to classify it SOURCE_QUESTION. APPROVAL_REQUEST was then unreachable in
-    practice, no spec_approved ledger row was ever written, and the intake
-    gate reported intake_spec_approval_missing no matter what the agent did.
+    Agents present a spec and ask a real question in the same message --
+    precisely when the brief matters most. Promoting the approval verbs to a
+    first-match category stole exactly those messages: ``reply_for``'s
+    APPROVAL_REQUEST branch has no brief lookup, so the operator returned its
+    stock approval line instead of the fact it actually holds.
     """
+
+    sheet = _sheet(
+        ground_truth={"endpoint_location": {"terms": ["endpoint"], "fact": ENDPOINT_FACT}}
+    )
+    bank = _bank(sheet)
+
+    result = bank.reply_for("Please approve the blueprint. Also, where does the endpoint live?")
+
+    assert result.reply == ENDPOINT_FACT
+    assert result.ground_truth is True
+    assert result.approval_requested is True
+
+
+def test_an_approval_solicitation_is_recorded_even_when_another_category_wins() -> None:
+    """The solicitation itself is never lost, whichever rule resolves the reply."""
 
     bank = _bank(_sheet())
     message = "Reply approved to lock in the spec, then I will land the source data."
-    assert bank.classify(message).category is Category.APPROVAL_REQUEST
+
+    result = bank.classify(message)
+
+    assert result.category is Category.SOURCE_QUESTION
+    assert result.approval_requested is True
+    assert bank.reply_for(message).approval_requested is True
+
+
+def test_looks_good_is_not_read_as_a_request_for_sign_off() -> None:
+    """A "looks good" is conversational filler, not a solicitation of approval."""
+
+    bank = _bank(_sheet())
+
+    result = bank.classify("Which endpoint should I use? The data looks good so far.")
+
+    assert result.approval_requested is False
+    assert result.category is not Category.APPROVAL_REQUEST
+
+
+def test_the_weaker_approval_vocabulary_reports_its_own_rule_id() -> None:
+    """A transcript reader must be able to tell the two approval rules apart."""
+
+    bank = _bank(_sheet())
+
+    strong = bank.classify("Please sign off on the spec.")
+    weak = bank.classify("Shall I proceed?")
+
+    assert strong.rule_id == "approval.request"
+    assert weak.rule_id == "approval.proceed"
+    assert strong.rule_id != weak.rule_id
+    assert weak.approval_requested is False
 
 
 def test_proceed_still_reads_as_a_source_question_when_a_source_noun_is_present() -> None:
-    """Only the unambiguous approval verbs are promoted above the source rule.
-
-    "proceed" is common in genuine source questions, where the source reading
-    is the right one, so it stays below.
-    """
+    """The source rule is first, so a source noun outranks the weak verbs."""
 
     bank = _bank(_sheet())
     message = "Shall I proceed -- which table is the authoritative source?"
