@@ -18,6 +18,7 @@ from typing import Pattern
 
 from .answer_sheet import AnswerSheet
 from .persona import PersonaCard
+from .text_match import contains_any_term
 
 
 class MatcherError(ValueError):
@@ -106,17 +107,7 @@ _RULES = (
 
 
 def _contains_term(message: str, terms: tuple[str, ...]) -> bool:
-    lowered = message.casefold()
-    for term in terms:
-        if not term:
-            continue
-        candidate = term.casefold()
-        if any(character.isspace() for character in candidate):
-            if candidate in lowered:
-                return True
-        elif re.search(r"(?<!\w)" + re.escape(candidate) + r"(?!\w)", lowered):
-            return True
-    return False
+    return contains_any_term(message, terms)
 
 
 def _contains_declared_term(value: str | bytes, terms: tuple[str, ...]) -> bool:

@@ -373,3 +373,64 @@ def test_ground_truth_key_absent_defaults_to_empty_and_round_trips() -> None:
     plain = sheet()
     assert plain.ground_truth == {}  # type: ignore[union-attr]
     assert plain.to_mapping()["ground_truth"] == {}  # type: ignore[union-attr]
+
+
+def test_ground_truth_generic_single_word_term_does_not_match_inside_a_longer_word() -> None:
+    """Word-boundary matching, not substring: 'column'/'value' must not fire on 'columns'/'values'.
+
+    Regression for a confidently irrelevant answer: before word-boundary
+    matching, both declared terms of ``value_column`` were satisfied by their
+    plurals alone, so a general inventory question about a scenario with no
+    real "value column" question would still get a scripted answer.
+    """
+
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    result = bank.reply_for("What columns and values are recognized in the export?")
+
+    assert result.ground_truth is False
+    assert result.rule_id != "ground_truth.value_column"
+
+
+def test_ground_truth_exact_whole_word_terms_still_match() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    result = bank.reply_for("What does the value column represent?")
+
+    assert result.rule_id == "ground_truth.value_column"
+    assert result.ground_truth is True
+
+
+def test_ground_truth_selection_uses_sorted_fact_ids_for_repeatable_selection() -> None:
+    """When two facts' term sets both match, the lower fact_id (sorted first) wins.
+
+    Mirrors ``test_answer_maps_use_sorted_keys_for_repeatable_selection`` for
+    source/status/decision answers, which had no ground_truth arm.
+    """
+
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["ground_truth"] = {
+        "zeta_fact": {"terms": ["overlap"], "fact": "Zeta wins if selection were unsorted."},
+        "alpha_fact": {"terms": ["overlap"], "fact": "Alpha is the correct sorted-first answer."},
+    }
+    populated = answer_sheet_from_mapping(raw)
+
+    result = populated.answer_for_ground_truth("Please explain the overlap case.")  # type: ignore[union-attr]
+
+    assert result == ("alpha_fact", "Alpha is the correct sorted-first answer.")
+
+
+def test_ground_truth_fact_text_reaches_to_mapping_for_script_hashing() -> None:
+    """The fact string must be part of the material operator_script_hash hashes.
+
+    Without this, a regression dropping or constant-folding ``fact`` in
+    ``GroundTruthFact.to_mapping`` would make two scenario variants differing
+    only in ground-truth wording hash identically.
+    """
+
+    populated = sheet_with_ground_truth()
+
+    mapping = populated.to_mapping()["ground_truth"]  # type: ignore[union-attr]
+
+    assert mapping["value_column"]["fact"] == "The value column is the recognized dollar amount for that line."
+    assert mapping["pii_policy"]["fact"] == "customer_email and salary are dropped entirely, never masked."

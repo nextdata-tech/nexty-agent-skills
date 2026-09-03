@@ -15,6 +15,8 @@ from typing import Any
 
 import yaml
 
+from .text_match import term_present
+
 
 class AnswerSheetError(ValueError):
     """Raised when an answer sheet is incomplete or violates intake rules."""
@@ -177,13 +179,19 @@ class AnswerSheet:
 
         Returns ``None`` — never a guess — when no fact's full term set is
         present, including when no ``ground_truth`` brief was declared at
-        all (an empty mapping has nothing to iterate).
+        all (an empty mapping has nothing to iterate). Each declared term is
+        matched on a whole-word boundary (multi-word terms use substring
+        containment), the same discipline the matcher applies to obstacle
+        terms, so a generic word cannot fire on a longer word that merely
+        contains it (``product`` must not match ``production``, ``column``
+        must not match ``columns``) and produce a confidently irrelevant
+        answer.
         """
 
         lowered = question.casefold()
         for fact_id in sorted(self.ground_truth):
             fact = self.ground_truth[fact_id]
-            if all(term.casefold() in lowered for term in fact.terms):
+            if all(term_present(term, lowered) for term in fact.terms):
                 return fact_id, fact.fact
         return None
 
