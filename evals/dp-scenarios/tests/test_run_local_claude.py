@@ -14,6 +14,10 @@ from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.scenario import RepeatabilitySpec, load_scenarios
 
 
+# The adapter resolves evals/desktop_stdio.py relative to --repo-root, so
+# the root must be derived from this file, not from the working directory:
+# CI runs pytest from evals/dp-scenarios, where Path(".") has no evals/.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 SCENARIO_ROOT = Path(__file__).resolve().parents[1] / "scenarios"
 SCRIPT = Path(__file__).parents[1] / "scripts/run_local_claude.py"
 
@@ -110,7 +114,7 @@ def test_host_home_without_bash_reaches_claude_as_a_denial(
         [
             "--claude", "/usr/bin/true",
             "--plugin-dir", ".",
-            "--repo-root", ".",
+            "--repo-root", str(REPO_ROOT),
             "--fixture-dir", ".",
             "--artifact-dir", ".",
             "--desktop-supervisor", "/usr/bin/true",
@@ -123,7 +127,7 @@ def test_host_home_without_bash_reaches_claude_as_a_denial(
         model="test",
         effort="low",
         plugin_dir=Path("."),
-        repo_root=Path("."),
+        repo_root=REPO_ROOT,
         fixture_dir=Path("."),
         artifact_dir=Path("."),
         desktop_supervisor=Path("/usr/bin/true"),
