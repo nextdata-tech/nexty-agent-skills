@@ -40,6 +40,8 @@ class FollowUpContext:
 
 Handler = Callable[["object", object, Mapping[str, object], FollowUpContext], Mapping[str, object]]
 SettingsValidator = Callable[[Mapping[str, object]], None]
+PlantEvidenceValidator = Callable[[frozenset[str], Mapping[str, object]], None]
+FixtureGoldValidator = Callable[[Mapping[str, object], Mapping[str, Path]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +53,13 @@ class FollowUpKind:
     handler: Handler
     certification_gold: Mapping[str, str] = field(default_factory=dict)
     validate_settings: SettingsValidator | None = None
+    # Loader-time cross-checks. ``None`` means this kind declares no such
+    # check -- a real choice, made visibly in the kind's own module, rather
+    # than the invisible early return in the loader that it replaces. A kind
+    # that declares gold nothing compares is how an ungraded gold artifact
+    # shipped once already.
+    validate_plant_evidence: PlantEvidenceValidator | None = None
+    validate_fixture_gold: FixtureGoldValidator | None = None
 
 
 _REGISTRY: dict[str, FollowUpKind] = {}
@@ -91,7 +100,9 @@ def registered_names() -> frozenset[str]:
 def _discover() -> None:
     """Import every sibling module so each one registers its kind."""
 
-    for module in pkgutil.iter_modules([str(Path(__file__).parent)]):
+    # ``__path__`` rather than a filesystem path: the latter is import-loader
+    # specific and finds nothing under zipimport.
+    for module in pkgutil.iter_modules(__path__):
         if module.name.startswith("_"):
             continue
         importlib.import_module(f"{__name__}.{module.name}")

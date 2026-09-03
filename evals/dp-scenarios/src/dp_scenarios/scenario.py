@@ -22,11 +22,9 @@ from . import followups
 from .followups import FollowUpContext, FollowUpError
 from .support import (
     _MISSING,
-    _count_rows,
     _manifest_row_counts,
     _mapping,
     _read_document,
-    _required_flag,
     _string,
     _unknown,
     ScenarioError,
@@ -44,16 +42,6 @@ from .grading.statistics import RepeatabilityTier, repeatability_plan
 from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
 from .operator.answer_sheet import AnswerSheet, load_answer_sheet
 from .synthgen import GenerationResult, generate_dataset, get_dataset
-
-
-
-
-
-
-
-
-
-
 
 
 def _strings(value: object, location: str, *, allow_empty: bool = False) -> tuple[str, ...]:
@@ -598,9 +586,6 @@ class Scenario:
     fired_plants_check = check_fired_plants
 
 
-
-
-
 ScenarioDeclaration = Scenario
 
 
@@ -632,7 +617,6 @@ _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",
 }
-
 
 
 def _canonical_hash(value: object) -> str:
@@ -689,19 +673,6 @@ def _validate_plants(
     missing_events = sorted(required - planted)
     if missing_events:
         raise ScenarioError("required_plants must be backed by planted event(s): " + ", ".join(missing_events))
-
-
-def _validate_plant_evidence(required: frozenset[str], gates: Mapping[str, GateSpec]) -> None:
-    if gates["follow-up"].kind != "optional_required_outputs":
-        return
-    raw = gates["follow-up"].settings.get("plant_evidence")
-    evidence = _mapping(raw, "follow-up.plant_evidence")
-    missing = sorted(required - set(evidence))
-    if missing:
-        raise ScenarioError("follow-up.plant_evidence is missing required plant(s): " + ", ".join(missing))
-    unknown = sorted(set(evidence) - required)
-    if unknown:
-        raise ScenarioError("follow-up.plant_evidence contains unknown plant(s): " + ", ".join(unknown))
 
 
 def _parse_coverage(value: object, fixture_variant: str) -> Mapping[str, str]:
@@ -938,9 +909,9 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("operator.sentinel must be text or null")
     obstacle_terms = _strings(operator_raw["obstacle_terms"], "operator.obstacle_terms", allow_empty=True)
     gates = _parse_gates(raw["gates"])
-    _validate_plant_evidence(required_plants, gates)
+    _run_kind_hook(gates, "validate_plant_evidence", required_plants, gates["follow-up"].settings)
     gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
-    _validate_fixture_gold(gates["follow-up"].kind, gates["follow-up"].settings, gold)
+    _run_kind_hook(gates, "validate_fixture_gold", gates["follow-up"].settings, gold)
     _validate_certification_gold(repeatability, gates["follow-up"].kind, gold)
     script = OperatorScript.from_components(
         persona,
@@ -1016,51 +987,22 @@ def select_tier(scenarios: Sequence[Scenario], tier: str) -> tuple[Scenario, ...
     return selected
 
 
+def _run_kind_hook(gates: Mapping[str, "GateSpec"], hook_name: str, *args: object) -> None:
+    """Invoke one of a follow-up kind's optional loader hooks.
 
+    These two checks -- required_plants against declared plant evidence, and
+    fixture-gold internal consistency -- used to be functions in this module
+    that returned early unless the kind was ``optional_required_outputs``.
+    That left a new kind with no cross-validation at all, silently and by
+    default, which is how a declared-but-ungraded gold artifact shipped once
+    already. A kind now says what it wants checked; ``None`` still means "no
+    cross-check", but it is a visible declaration in the kind's own module
+    rather than an invisible early return here.
+    """
 
-
-
-
-
-
-
-def _declared_required(settings: Mapping[str, object]) -> dict[str, bool]:
-    resources = _mapping(settings.get("resources"), "follow-up.resources")
-    return {
-        str(resource): _required_flag(value, f"follow-up.resources.{resource}")
-        for resource, value in resources.items()
-    }
-
-
-
-
-
-
-
-
-def _validate_fixture_gold(
-    follow_up_kind: str,
-    settings: Mapping[str, object],
-    gold: Mapping[str, Path],
-) -> None:
-    """Validate fixture-side consistency before any run can be graded."""
-
-    if follow_up_kind != "optional_required_outputs":
-        return
-    try:
-        counts = json.loads(gold["counts"].read_text(encoding="utf-8"))
-        diagnostics = json.loads(gold["diagnostics"].read_text(encoding="utf-8"))
-        expected_counts = _count_rows(counts)
-        expected_diagnostics = _diagnostic_rows(diagnostics)
-    except (KeyError, OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ScenarioError(f"optional-output gold could not be loaded: {exc}") from exc
-    expected_required = {
-        row["resource"]: row["required"] for row in expected_diagnostics
-    }
-    if _declared_required(settings) != expected_required:
-        raise ScenarioError("optional-output diagnostics gold requiredness disagrees with follow-up.resources")
-    if set(expected_counts) != set(expected_required):
-        raise ScenarioError("optional-output count and diagnostics gold resource sets disagree")
+    hook = getattr(followups.get(gates["follow-up"].kind), hook_name)
+    if hook is not None:
+        hook(*args)
 
 
 def _validate_certification_gold(
@@ -1077,26 +1019,6 @@ def _validate_certification_gold(
             raise ScenarioError(
                 f"certification gate {gate} requires scoreable gold artifact {artifact!r}"
             )
-
-
-
-
-def _diagnostic_rows(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        raise ScenarioError("diagnostic gold must be a list of rows")
-    result: list[dict[str, object]] = []
-    for row in value:
-        if (
-            not isinstance(row, Mapping)
-            or not isinstance(row.get("resource"), str)
-            or isinstance(row.get("row_count"), bool)
-            or not isinstance(row.get("row_count"), int)
-            or row["row_count"] < 0
-            or not isinstance(row.get("required"), bool)
-        ):
-            raise ScenarioError("diagnostic gold rows require resource, integer row_count, and boolean required")
-        result.append(dict(row))
-    return result
 
 
 def _naive_rows(value: object) -> list[dict[str, object]] | None:

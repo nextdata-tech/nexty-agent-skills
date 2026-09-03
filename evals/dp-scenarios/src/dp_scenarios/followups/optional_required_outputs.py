@@ -7,6 +7,7 @@ and so does relaxing the checks that still guard required outputs.
 from __future__ import annotations
 
 import csv
+import json
 
 from collections.abc import Mapping
 from pathlib import Path
@@ -164,6 +165,68 @@ def _validate_settings(settings: Mapping[str, object]) -> None:
             )
 
 
+def _validate_plant_evidence(required: frozenset[str], settings: Mapping[str, object]) -> None:
+    """Every required plant must have declared evidence, and no evidence may
+    name a plant the scenario does not require."""
+
+    raw = settings.get("plant_evidence")
+    evidence = _mapping(raw, "follow-up.plant_evidence")
+    missing = sorted(required - set(evidence))
+    if missing:
+        raise ScenarioError("follow-up.plant_evidence is missing required plant(s): " + ", ".join(missing))
+    unknown = sorted(set(evidence) - required)
+    if unknown:
+        raise ScenarioError("follow-up.plant_evidence contains unknown plant(s): " + ", ".join(unknown))
+
+
+def _validate_fixture_gold(
+    settings: Mapping[str, object],
+    gold: Mapping[str, Path],
+) -> None:
+    """Validate fixture-side consistency before any run can be graded."""
+
+    try:
+        counts = json.loads(gold["counts"].read_text(encoding="utf-8"))
+        diagnostics = json.loads(gold["diagnostics"].read_text(encoding="utf-8"))
+        expected_counts = _count_rows(counts)
+        expected_diagnostics = _diagnostic_rows(diagnostics)
+    except (KeyError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ScenarioError(f"optional-output gold could not be loaded: {exc}") from exc
+    expected_required = {
+        row["resource"]: row["required"] for row in expected_diagnostics
+    }
+    if _declared_required(settings) != expected_required:
+        raise ScenarioError("optional-output diagnostics gold requiredness disagrees with follow-up.resources")
+    if set(expected_counts) != set(expected_required):
+        raise ScenarioError("optional-output count and diagnostics gold resource sets disagree")
+
+
+def _declared_required(settings: Mapping[str, object]) -> dict[str, bool]:
+    resources = _mapping(settings.get("resources"), "follow-up.resources")
+    return {
+        str(resource): _required_flag(value, f"follow-up.resources.{resource}")
+        for resource, value in resources.items()
+    }
+
+
+def _diagnostic_rows(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ScenarioError("diagnostic gold must be a list of rows")
+    result: list[dict[str, object]] = []
+    for row in value:
+        if (
+            not isinstance(row, Mapping)
+            or not isinstance(row.get("resource"), str)
+            or isinstance(row.get("row_count"), bool)
+            or not isinstance(row.get("row_count"), int)
+            or row["row_count"] < 0
+            or not isinstance(row.get("required"), bool)
+        ):
+            raise ScenarioError("diagnostic gold rows require resource, integer row_count, and boolean required")
+        result.append(dict(row))
+    return result
+
+
 KIND = register(
     FollowUpKind(
         name="optional_required_outputs",
@@ -171,5 +234,7 @@ KIND = register(
         handler=check,
         certification_gold={"build": "counts", "query": "answer"},
         validate_settings=_validate_settings,
+        validate_plant_evidence=_validate_plant_evidence,
+        validate_fixture_gold=_validate_fixture_gold,
     )
 )

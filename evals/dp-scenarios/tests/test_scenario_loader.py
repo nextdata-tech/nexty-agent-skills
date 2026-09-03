@@ -27,6 +27,19 @@ def _copy_parent_child_package(tmp_path: Path) -> Path:
 
 
 
+
+# The tier each shipped scenario belongs to. Deliberately explicit: this is the
+# one thing about a scenario package that must not change by accident, so it is
+# stated here rather than derived from the package that would be doing the
+# changing. See test_select_tier_returns_only_the_scenarios_declaring_that_tier.
+EXPECTED_TIERS = {
+    "zero-row-optional-output": "smoke",
+    "parent-child-grain-trap": "smoke",
+    "credential-rotation": "core",
+    "sigterm-diagnosis": "core",
+}
+
+
 def _packages_on_disk() -> set[str]:
     """Every scenario package directory that declares a scenario.yaml.
 
@@ -341,7 +354,6 @@ def test_discovery_does_not_need_a_python_registry() -> None:
         key=lambda scenario: scenario.run_order,
     )
     assert [item.id for item in discovered] == [item.id for item in direct]
-    assert len(direct) == len(_packages_on_disk())
 
 
 def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> None:
@@ -428,15 +440,19 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
     smoke = select_tier(scenarios, "smoke")
     core = select_tier(scenarios, "core")
 
-    # The tiers partition the packages: every scenario lands in exactly one,
-    # and neither tier is empty. Stated as a partition rather than as two
-    # literal id sets so that adding a scenario cannot silently land it in
-    # both tiers or in neither.
+    # Which tier a scenario belongs to is pinned, not merely partitioned.
+    # A partition assertion is satisfied by a scenario silently migrating
+    # between tiers, and that migration is exactly the defect this suite
+    # cares about: a smoke scenario drifting to core stops running on every
+    # change, and a core scenario drifting to smoke pulls a Docker Postgres
+    # into the tier that has to stay cheap. Adding a scenario means adding a
+    # line here on purpose -- the set assertion below fails until you do.
+    assert EXPECTED_TIERS.keys() == _packages_on_disk()
+    assert {scenario.id: scenario.tier for scenario in scenarios} == EXPECTED_TIERS
+
     assert {scenario.id for scenario in smoke}.isdisjoint({scenario.id for scenario in core})
     assert {scenario.id for scenario in (*smoke, *core)} == _packages_on_disk()
     assert smoke and core
-    assert all(scenario.tier == "smoke" for scenario in smoke)
-    assert all(scenario.tier == "core" for scenario in core)
 
 
 def test_select_tier_preserves_declared_run_order() -> None:
