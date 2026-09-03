@@ -420,7 +420,6 @@ class RunEnvironment:
                 error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
             raise
 
-        generated_manifest = generation.manifest
         effective_run_id = self.run_id or f"{self.scenario.id}-trial-{self.trial_index}"
         if not isinstance(effective_run_id, str) or not effective_run_id:
             raise EnvironmentError("run_id must be a non-empty string")

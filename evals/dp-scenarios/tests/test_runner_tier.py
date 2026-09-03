@@ -18,12 +18,11 @@ from dp_scenarios.grading import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
-from dp_scenarios.ledger import SupervisorFacts, fixture_dir_hash
+from dp_scenarios.ledger import fixture_dir_hash
 from dp_scenarios.operator import (
     EventSchedule,
     OperatorEngine,
     OperatorScript,
-    StaticSupervisorRecordReader,
     event_from_mapping,
 )
 from dp_scenarios.operator.persona import load_persona
