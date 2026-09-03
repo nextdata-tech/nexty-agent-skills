@@ -38,7 +38,6 @@ from dp_scenarios.runner import (
     TierRunner,
 )
 from dp_scenarios.runner.session import LiveSession, SessionError
-from dp_scenarios.runner import tier as tier_module
 from dp_scenarios.runner.tier import run_drift_canary
 from dp_scenarios.scenario import FixtureSpec, load_scenario
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping

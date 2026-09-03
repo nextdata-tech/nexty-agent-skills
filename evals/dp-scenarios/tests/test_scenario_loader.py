@@ -8,8 +8,9 @@ import shutil
 import pytest
 import yaml
 
+from dp_scenarios import followups
 from dp_scenarios.grading import GATE_PHASES
-from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios
+from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios, select_tier
 from dp_scenarios.synthgen import get_dataset
 
 
@@ -26,6 +27,39 @@ def _copy_parent_child_package(tmp_path: Path) -> Path:
     return root / "parent-child-grain-trap"
 
 
+
+
+# The tier each shipped scenario belongs to. Deliberately explicit: this is the
+# one thing about a scenario package that must not change by accident, so it is
+# stated here rather than derived from the package that would be doing the
+# changing. See test_select_tier_returns_only_the_scenarios_declaring_that_tier.
+EXPECTED_TIERS = {
+    "zero-row-optional-output": "smoke",
+    "parent-child-grain-trap": "smoke",
+    "credential-rotation": "core",
+    "sigterm-diagnosis": "core",
+}
+
+
+def _packages_on_disk() -> set[str]:
+    """Every scenario package directory that declares a scenario.yaml.
+
+    Derived rather than enumerated: a hardcoded list of scenario ids is one
+    shared edit point per new scenario, which is exactly what makes two
+    scenarios authored in parallel conflict over a file they otherwise do not
+    share. The property worth asserting is that discovery finds what is on
+    disk, not that it finds a list someone remembered to update.
+    """
+
+    return {
+        package.name
+        for package in SCENARIO_ROOT.iterdir()
+        if package.is_dir()
+        and not package.name.startswith("_")
+        and (package / "scenario.yaml").is_file()
+    }
+
+
 def _copy_zero_row_package(tmp_path: Path) -> Path:
     root = tmp_path / "scenarios"
     root.mkdir()
@@ -36,8 +70,9 @@ def _copy_zero_row_package(tmp_path: Path) -> Path:
 
 
 def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_path: Path) -> None:
+    compared: list[str] = []
     scenarios = load_scenarios(SCENARIO_ROOT)
-    assert {scenario.id for scenario in scenarios} == {"parent-child-grain-trap", "zero-row-optional-output"}
+    assert {scenario.id for scenario in scenarios} == _packages_on_disk()
     for scenario in scenarios:
         assert get_dataset(scenario.dataset).name == scenario.dataset
         assert scenario.seed == 29
@@ -49,13 +84,39 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
         assert scenario.events_path.is_file()
         assert scenario.required_plants
         assert set(scenario.gates) == set(GATE_PHASES)
-        assert scenario.gates["follow-up"].kind in {"grain_and_aggregation", "optional_required_outputs"}
+        # Derived, not enumerated: a per-kind list here is one more shared
+        # edit per scenario, which is what the followups registry removed.
+        assert followups.is_registered(scenario.gates["follow-up"].kind)
         generated = scenario.generate_fixture(tmp_path / scenario.id)
         for name, path in scenario.gold.items():
             assert path.is_file()
+        if not followups.get(scenario.gates["follow-up"].kind).gold_reproducible_from_fixture:
+            # This kind's gold records something the CSV generator does not
+            # produce -- live Postgres facts, or declared runtime constants --
+            # so it cannot be compared byte-for-byte against a regenerated
+            # fixture. Its counts are reconciled against independently
+            # recounted evidence in the kind's own test module, and the fields
+            # it duplicates from scenario.yaml are checked by
+            # test_gold_never_disagrees_with_the_declaration_it_duplicates.
+            continue
+        for name, path in scenario.gold.items():
             generated_path = scenario.gold_path(name, generated.out_dir)
             assert generated_path.is_file()
             assert generated_path.read_bytes() == path.read_bytes()
+            compared.append(f"{scenario.id}:{name}")
+
+    # The opt-out above is a `continue`, so it can swallow the byte comparison
+    # entirely. Asserting the exact set rather than truthiness: a single kind
+    # opting out wrongly drops its artifacts from this list while leaving a
+    # non-empty one behind, which a truthiness check would not notice.
+    expected_comparisons = {
+        f"{scenario.id}:{name}"
+        for scenario in scenarios
+        if followups.get(scenario.gates["follow-up"].kind).gold_reproducible_from_fixture
+        for name in scenario.gold
+    }
+    assert set(compared) == expected_comparisons
+    assert expected_comparisons, "no scenario's gold was compared against a regenerated fixture"
 
 
 @pytest.mark.parametrize("missing", sorted({
@@ -301,8 +362,11 @@ def test_loader_rejects_a_non_positive_turn_budget(tmp_path: Path) -> None:
 
 def test_discovery_does_not_need_a_python_registry() -> None:
     discovered = load_scenarios(SCENARIO_ROOT)
-    direct = tuple(load_scenario(SCENARIO_ROOT / name) for name in ("zero-row-optional-output", "parent-child-grain-trap"))
-    assert tuple(item.id for item in discovered) == tuple(item.id for item in direct)
+    direct = sorted(
+        (load_scenario(SCENARIO_ROOT / name) for name in _packages_on_disk()),
+        key=lambda scenario: scenario.run_order,
+    )
+    assert [item.id for item in discovered] == [item.id for item in direct]
 
 
 def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> None:
@@ -317,6 +381,8 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.copytree(SCENARIO_ROOT, root)
     shutil.rmtree(root / "zero-row-optional-output")
     shutil.rmtree(root / "parent-child-grain-trap")
+    shutil.rmtree(root / "credential-rotation")
+    shutil.rmtree(root / "sigterm-diagnosis")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -338,6 +404,8 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.copytree(SCENARIO_ROOT, root)
     shutil.rmtree(root / "zero-row-optional-output")
     shutil.rmtree(root / "parent-child-grain-trap")
+    shutil.rmtree(root / "credential-rotation")
+    shutil.rmtree(root / "sigterm-diagnosis")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -368,3 +436,133 @@ def test_legacy_t0_scenario_tier_remains_accepted(tmp_path: Path) -> None:
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     assert load_scenario(package).tier == "T0"
+
+
+def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
+    """The smoke tier must not silently acquire a core scenario.
+
+    ``load_scenarios`` deliberately loads every package under a root, so the
+    tier boundary is only real if something selects on it. Before this,
+    ``scenario.tier`` was carried into the manifest and never used to choose
+    what ran.
+    """
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    assert {scenario.id for scenario in scenarios} == _packages_on_disk()
+
+    smoke = select_tier(scenarios, "smoke")
+    core = select_tier(scenarios, "core")
+
+    # Which tier a scenario belongs to is pinned, not merely partitioned.
+    # A partition assertion is satisfied by a scenario silently migrating
+    # between tiers, and that migration is exactly the defect this suite
+    # cares about: a smoke scenario drifting to core stops running on every
+    # change, and a core scenario drifting to smoke pulls a Docker Postgres
+    # into the tier that has to stay cheap. Adding a scenario means adding a
+    # line here on purpose -- the set assertion below fails until you do.
+    assert EXPECTED_TIERS.keys() == _packages_on_disk()
+    assert {scenario.id: scenario.tier for scenario in scenarios} == EXPECTED_TIERS
+
+    assert {scenario.id for scenario in smoke}.isdisjoint({scenario.id for scenario in core})
+    assert {scenario.id for scenario in (*smoke, *core)} == _packages_on_disk()
+    assert smoke and core
+
+    # What select_tier itself returns, pinned against EXPECTED_TIERS rather
+    # than against the loader. EXPECTED_TIERS pins what load_scenarios
+    # reports; without this, inverting select_tier's own predicate -- so
+    # --tier smoke runs the core scenarios and vice versa -- satisfies every
+    # assertion above, because the two sets merely swap.
+    for tier in ("smoke", "core"):
+        expected = {name for name, declared in EXPECTED_TIERS.items() if declared == tier}
+        assert {scenario.id for scenario in select_tier(scenarios, tier)} == expected
+        assert all(scenario.tier == tier for scenario in select_tier(scenarios, tier))
+
+
+def test_select_tier_preserves_declared_run_order() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    smoke = select_tier(scenarios, "smoke")
+    assert [scenario.run_order for scenario in smoke] == sorted(
+        scenario.run_order for scenario in smoke
+    )
+
+
+def test_select_tier_rejects_an_unknown_tier() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    with pytest.raises(ScenarioError):
+        select_tier(scenarios, "full")
+
+
+def test_a_tier_that_matches_no_scenario_is_an_error_not_an_empty_clean_run() -> None:
+    """An empty selection would produce a tier result that examined nothing.
+
+    The harness already refuses to treat a tier that examined no scenario as
+    evidence of a clean run; selection fails closed for the same reason.
+    """
+
+    scenarios = select_tier(load_scenarios(SCENARIO_ROOT), "core")
+    with pytest.raises(ScenarioError):
+        select_tier(scenarios, "smoke")
+
+
+def test_gold_never_disagrees_with_the_declaration_it_duplicates() -> None:
+    """A gold artifact that restates scenario.yaml must restate it correctly.
+
+    Several gold files carry a second copy of facts the declaration already
+    owns -- the dataset and seed the fixture was generated from, and (for
+    sigterm-diagnosis) the true cause and declared filter the follow-up
+    settings define. The handler reads those from the settings, never from the
+    gold, so an unchecked copy can drift out of agreement and mislead the next
+    reader without failing anything.
+    """
+
+    checked: list[str] = []
+    for scenario in load_scenarios(SCENARIO_ROOT):
+        settings = scenario.gates["follow-up"].settings
+        for name in scenario.gold:
+            document = scenario.raw_gold(name)
+            if not isinstance(document, dict):
+                continue
+            if "dataset" in document:
+                assert document["dataset"] == scenario.dataset, f"{scenario.id}:{name} dataset"
+                checked.append(f"{scenario.id}:{name}:dataset")
+            if "seed" in document:
+                assert document["seed"] == scenario.seed, f"{scenario.id}:{name} seed"
+                checked.append(f"{scenario.id}:{name}:seed")
+            for key, declared in settings.items():
+                if key in document and isinstance(declared, (str, int, float, bool)):
+                    assert document[key] == declared, f"{scenario.id}:{name} {key}"
+                    checked.append(f"{scenario.id}:{name}:{key}")
+
+    # Guard the loop itself: if no gold duplicated anything, this test would
+    # pass while asserting nothing at all.
+    assert checked, "no gold artifact duplicated a declared field"
+
+
+def test_select_tier_treats_the_legacy_t0_spelling_as_smoke(tmp_path: Path) -> None:
+    """T0 is documented as smoke's alias and the loader still accepts it.
+
+    Matching the literal string would omit a T0 package from a smoke run
+    rather than reject it, and select_tier only raises when *nothing* matches
+    -- so the omission would never surface. A package quietly dropped from the
+    tier that runs on every change is the same defect as one wrongly added.
+    """
+
+    root = tmp_path / "scenarios"
+    shutil.copytree(SCENARIO_ROOT, root)
+    smoke_package = next(
+        path
+        for path in root.iterdir()
+        if path.is_dir()
+        and not path.name.startswith("_")
+        and (path / "scenario.yaml").is_file()
+        and yaml.safe_load((path / "scenario.yaml").read_text(encoding="utf-8"))["tier"] == "smoke"
+    )
+    declaration = yaml.safe_load((smoke_package / "scenario.yaml").read_text(encoding="utf-8"))
+    declaration["tier"] = "T0"
+    (smoke_package / "scenario.yaml").write_text(yaml.safe_dump(declaration), encoding="utf-8")
+
+    scenarios = load_scenarios(root)
+    smoke_ids = {scenario.id for scenario in select_tier(scenarios, "smoke")}
+    assert smoke_package.name in smoke_ids, "a T0 package was dropped from the smoke tier"
+    # And the alias resolves in both directions.
+    assert {scenario.id for scenario in select_tier(scenarios, "T0")} == smoke_ids

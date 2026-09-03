@@ -9,47 +9,39 @@ from becoming an unmeasured pass.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
 
 import yaml
 
-from .grading import GATE_PHASES, GATE_POINTS, Finding, GoldRowSet, GateResult, gate_follow_up, gate_query, gold_rowset
+from . import followups
+from .followups import FollowUpContext, FollowUpError
+from .support import (
+    _MISSING,
+    _manifest_row_counts,
+    _mapping,
+    _read_document,
+    _string,
+    _unknown,
+    ScenarioError,
+)
+from .grading import (
+    GATE_PHASES,
+    Finding,
+    GoldRowSet,
+    GateResult,
+    gate_follow_up,
+    gate_query,
+    gold_rowset,
+)
 from .grading.statistics import RepeatabilityTier, repeatability_plan
 from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
 from .operator.answer_sheet import AnswerSheet, load_answer_sheet
 from .synthgen import GenerationResult, generate_dataset, get_dataset
-
-
-class ScenarioError(ValueError):
-    """Raised when a scenario package is incomplete or internally inconsistent."""
-
-
-_MISSING = object()
-
-
-def _mapping(value: object, location: str) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ScenarioError(f"{location} must be a mapping")
-    return dict(value)
-
-
-def _unknown(value: Mapping[str, object], allowed: set[str], location: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise ScenarioError(f"{location} contains unknown key(s): {', '.join(unknown)}")
-
-
-def _string(value: object, location: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ScenarioError(f"{location} must be a non-empty string")
-    return value
 
 
 def _strings(value: object, location: str, *, allow_empty: bool = False) -> tuple[str, ...]:
@@ -379,19 +371,22 @@ class Scenario:
                     row_count_oracle = closure["row_count_oracle"]
                 elif "row_counts" in closure:
                     row_count_oracle = closure["row_counts"]
-        if binding.kind == "grain_and_aggregation":
-            result: dict[str, object] = dict(_grain_follow_up(target, binding.settings))
-        elif binding.kind == "optional_required_outputs":
-            result = dict(
-                self._zero_row_follow_up(
-                    target,
-                    binding.settings,
-                    fixture_dir=fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
-                    row_count_oracle=row_count_oracle,
-                )
-            )
+        context = FollowUpContext(
+            fixture_dir=fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
+            row_count_oracle=row_count_oracle,
+        )
+        try:
+            kind = followups.get(binding.kind)
+        except FollowUpError:
+            # A kind the loader accepted but no module registers can only mean
+            # a package registered under one name and graded under another.
+            result: dict[str, object] = {
+                "status": "not-examined",
+                "passed": False,
+                "findings": ["unknown_follow_up_kind"],
+            }
         else:
-            result = {"status": "not-examined", "passed": False, "findings": ["unknown_follow_up_kind"]}
+            result = dict(kind.handler(self, target, binding.settings, context))
         if query_rows is not None and self.has_scoreable_answer_gold:
             assessment = self.score_query(
                 query_rows,
@@ -590,123 +585,6 @@ class Scenario:
 
     fired_plants_check = check_fired_plants
 
-    def _zero_row_follow_up(
-        self,
-        target: object,
-        settings: Mapping[str, object],
-        *,
-        fixture_dir: str | Path | None = None,
-        row_count_oracle: object = _MISSING,
-    ) -> Mapping[str, object]:
-        resources = _mapping(settings.get("resources"), "follow-up.resources")
-        declared_required = {
-            resource: _required_flag(value, f"follow-up.resources.{resource}")
-            for resource, value in resources.items()
-        }
-        findings: list[str] = []
-
-        closure_target = target
-        if isinstance(target, Mapping) and "closure" in target:
-            closure_target = target.get("closure")
-            if row_count_oracle is _MISSING:
-                row_count_oracle = target.get("row_count_oracle", target.get("row_counts", _MISSING))
-
-        requiredness_document = _read_document(
-            closure_target,
-            _string(settings.get("document"), "follow-up.document"),
-        )
-        observed_required = _requiredness_from_document(
-            requiredness_document,
-            _string(settings.get("requiredness_path"), "follow-up.requiredness_path"),
-        )
-        if observed_required is None:
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["requiredness_not_examined"],
-            }
-        if observed_required != declared_required:
-            findings.append("requiredness_artifact_mismatch")
-
-        count_source = "not-examined"
-        actual_counts: dict[str, int] | None = None
-        malformed_resources: set[str] = set()
-        if row_count_oracle is not _MISSING:
-            count_source = "row_count_oracle"
-            actual_counts = _row_count_mapping(row_count_oracle)
-            if actual_counts is None:
-                return {
-                    "status": "not-examined",
-                    "passed": False,
-                    "findings": ["resource_counts_not_examined"],
-                }
-        elif isinstance(fixture_dir, (str, Path)):
-            manifest = _read_document(fixture_dir, "fixture-manifest.json")
-            actual_counts = _manifest_row_counts(manifest)
-            if actual_counts is None:
-                count_source = "closure_data"
-            else:
-                count_source = "fixture_manifest"
-        elif isinstance(closure_target, Mapping):
-            # Preserve the direct mapping API as an explicit oracle input.
-            actual_counts = _row_count_mapping(closure_target)
-            if actual_counts is None:
-                count_source = "closure_data"
-        if actual_counts is None and isinstance(closure_target, (str, Path)):
-            count_source = "closure_data"
-            root = Path(closure_target)
-            data_root = root / "data"
-            if not root.is_dir() or not data_root.is_dir():
-                return {
-                    "status": "not-examined",
-                    "passed": False,
-                    "findings": ["resource_counts_not_examined"],
-                }
-            actual_counts = {}
-            for resource in resources:
-                path = data_root / f"{resource}.csv"
-                if not path.is_file():
-                    continue
-                try:
-                    with path.open(encoding="utf-8", newline="") as handle:
-                        reader = csv.DictReader(handle)
-                        if not reader.fieldnames or any(
-                            not isinstance(field, str) or not field.strip() for field in reader.fieldnames
-                        ):
-                            malformed_resources.add(resource)
-                            continue
-                        actual_counts[resource] = sum(1 for _ in reader)
-                except (OSError, UnicodeError, csv.Error):
-                    malformed_resources.add(resource)
-            findings.extend(f"resource_malformed:{resource}" for resource in sorted(malformed_resources))
-        if actual_counts is None:
-            return {"status": "not-examined", "passed": False, "findings": ["resource_counts_not_examined"]}
-
-        expected_counts = _count_rows(self.raw_gold("counts", fixture_dir))
-        for resource, required in declared_required.items():
-            if resource not in actual_counts:
-                if resource in malformed_resources:
-                    continue
-                if required is False:
-                    findings.append("optional_resource_absent")
-                else:
-                    findings.append("required_resource_absent")
-        if actual_counts != expected_counts:
-            findings.append("resource_count_mismatch")
-        optional = [resource for resource, required in declared_required.items() if required is False]
-        if any(resource in actual_counts and actual_counts[resource] != 0 for resource in optional):
-            findings.append("optional_placeholder_row")
-        return {
-            "status": "examined",
-            "passed": not findings,
-            "findings": findings,
-            "actual_counts": actual_counts,
-            "expected_counts": expected_counts,
-            "required": declared_required,
-            "observed_required": observed_required,
-            "count_source": count_source,
-        }
-
 
 ScenarioDeclaration = Scenario
 
@@ -734,18 +612,16 @@ _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
-_SCENARIO_TIERS = frozenset({"smoke", "T0"})
+_SCENARIO_TIERS = frozenset({"smoke", "T0", "core"})
+# The legacy spelling maps onto the tier it is an alias for, so selection
+# treats the two as one tier rather than as two that never intersect.
+_TIER_ALIASES = {"T0": "smoke"}
+# Public alias: the CLIs offer these as argparse choices, so a bad --tier is
+# a usage error rather than a traceback out of select_tier.
+SCENARIO_TIERS = _SCENARIO_TIERS
 _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",
-}
-_GOLD_KEYS_BY_FOLLOW_UP = {
-    "grain_and_aggregation": frozenset({"answer", "control_total", "diagnostics"}),
-    "optional_required_outputs": frozenset({"counts", "diagnostics"}),
-}
-_CERTIFICATION_GOLD_BY_FOLLOW_UP = {
-    "optional_required_outputs": {"build": "counts", "query": "answer"},
-    "grain_and_aggregation": {"query": "answer"},
 }
 
 
@@ -803,19 +679,6 @@ def _validate_plants(
     missing_events = sorted(required - planted)
     if missing_events:
         raise ScenarioError("required_plants must be backed by planted event(s): " + ", ".join(missing_events))
-
-
-def _validate_plant_evidence(required: frozenset[str], gates: Mapping[str, GateSpec]) -> None:
-    if gates["follow-up"].kind != "optional_required_outputs":
-        return
-    raw = gates["follow-up"].settings.get("plant_evidence")
-    evidence = _mapping(raw, "follow-up.plant_evidence")
-    missing = sorted(required - set(evidence))
-    if missing:
-        raise ScenarioError("follow-up.plant_evidence is missing required plant(s): " + ", ".join(missing))
-    unknown = sorted(set(evidence) - required)
-    if unknown:
-        raise ScenarioError("follow-up.plant_evidence contains unknown plant(s): " + ", ".join(unknown))
 
 
 def _parse_coverage(value: object, fixture_variant: str) -> Mapping[str, str]:
@@ -913,26 +776,15 @@ def _parse_gates(value: object) -> Mapping[str, GateSpec]:
             kind = _string(mapping.pop("kind", None), f"gates.{name}.kind")
             settings = MappingProxyType(mapping)
         parsed[name] = GateSpec(name, kind, settings)
-    if parsed["follow-up"].kind not in {"grain_and_aggregation", "optional_required_outputs"}:
-        raise ScenarioError("gates.follow-up must declare a supported scenario-specific follow-up")
-    if parsed["follow-up"].kind == "grain_and_aggregation":
-        _string(parsed["follow-up"].settings.get("document"), "gates.follow-up.document")
-    if parsed["follow-up"].kind == "optional_required_outputs":
-        settings = parsed["follow-up"].settings
-        if settings.get("count_source") != "row_count_oracle":
-            raise ScenarioError("follow-up.count_source must be row_count_oracle")
-        _string(settings.get("document"), "follow-up.document")
-        _string(settings.get("requiredness_path"), "follow-up.requiredness_path")
-        resources = _mapping(settings.get("resources"), "follow-up.resources")
-        for resource, declaration in resources.items():
-            _required_flag(declaration, f"follow-up.resources.{resource}")
-        plant_evidence = _mapping(settings.get("plant_evidence"), "follow-up.plant_evidence")
-        for plant, declaration in plant_evidence.items():
-            evidence = _mapping(declaration, f"follow-up.plant_evidence.{plant}")
-            _string(evidence.get("resource"), f"follow-up.plant_evidence.{plant}.resource")
-            row_count = evidence.get("row_count")
-            if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
-                raise ScenarioError(f"follow-up.plant_evidence.{plant}.row_count must be a non-negative integer")
+    follow_up = parsed["follow-up"]
+    if not followups.is_registered(follow_up.kind):
+        raise ScenarioError(
+            "gates.follow-up must declare a supported scenario-specific follow-up; "
+            f"{follow_up.kind!r} is not registered (have: {sorted(followups.registered_names())})"
+        )
+    validate = followups.get(follow_up.kind).validate_settings
+    if validate is not None:
+        validate(follow_up.settings)
     return MappingProxyType(parsed)
 
 
@@ -942,7 +794,7 @@ def _parse_gold(
     follow_up_kind: str,
 ) -> tuple[Mapping[str, Path], Mapping[str, str]]:
     raw = _mapping(value, "gold")
-    expected = _GOLD_KEYS_BY_FOLLOW_UP[follow_up_kind]
+    expected = followups.get(follow_up_kind).gold_keys
     actual = set(raw)
     if actual != expected:
         missing = sorted(expected - actual)
@@ -1063,9 +915,9 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("operator.sentinel must be text or null")
     obstacle_terms = _strings(operator_raw["obstacle_terms"], "operator.obstacle_terms", allow_empty=True)
     gates = _parse_gates(raw["gates"])
-    _validate_plant_evidence(required_plants, gates)
+    _run_kind_hook(gates, "validate_plant_evidence", required_plants, gates["follow-up"].settings)
     gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
-    _validate_fixture_gold(gates["follow-up"].kind, gates["follow-up"].settings, gold)
+    _run_kind_hook(gates, "validate_fixture_gold", gates["follow-up"].settings, gold)
     _validate_certification_gold(repeatability, gates["follow-up"].kind, gold)
     script = OperatorScript.from_components(
         persona,
@@ -1121,166 +973,50 @@ def load_scenarios(root: str | Path) -> tuple[Scenario, ...]:
     return tuple(sorted(loaded, key=lambda scenario: scenario.run_order))
 
 
-def _read_document(value: object, document_name: str | None = None) -> object:
-    if isinstance(value, Mapping):
-        return value
-    path = Path(value) if isinstance(value, (str, Path)) else None
-    if path is None or not path.exists():
-        return _MISSING
-    if path.is_file():
-        candidates = [path]
-    elif document_name is not None:
-        document = Path(document_name)
-        if document.is_absolute() or ".." in document.parts:
-            return _MISSING
-        candidates = [path / document]
-    else:
-        return _MISSING
-    candidates = [candidate for candidate in candidates if candidate.is_file()]
-    documents: list[Mapping[str, object]] = []
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate.read_text(encoding="utf-8")) if candidate.suffix.lower() == ".json" else yaml.safe_load(candidate.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError, yaml.YAMLError):
-            continue
-        if isinstance(parsed, Mapping):
-            documents.append(dict(parsed))
-    if not documents:
-        return _MISSING
-    merged: dict[str, object] = {}
-    for document in documents:
-        merged.update(document)
-    return merged
+def select_tier(scenarios: Sequence[Scenario], tier: str) -> tuple[Scenario, ...]:
+    """Return only the scenarios declaring ``tier``, preserving run order.
+
+    ``load_scenarios`` deliberately loads every package under a root, and the
+    tier a package declares was previously carried into the run manifest
+    without ever selecting anything.  While every package was smoke that was
+    invisible; the moment a core package shares the root it would ride along
+    into the smoke tier, which is the one tier that must stay cheap enough to
+    run on every change.  Selection is therefore explicit, and a tier that
+    matches no package is an error rather than an empty, clean-looking run.
+    """
+
+    if tier not in _SCENARIO_TIERS:
+        raise ScenarioError(f"unknown tier {tier!r}: expected one of {sorted(_SCENARIO_TIERS)}")
+    # T0 is the legacy spelling of smoke -- manifest.py documents it as the
+    # alias and the loader still accepts a package declaring it. Matching the
+    # literal string would silently omit such a package from a smoke run
+    # rather than reject it, and select_tier only raises when *nothing*
+    # matches, so the omission would not surface at all.
+    wanted = _TIER_ALIASES.get(tier, tier)
+    selected = tuple(
+        scenario for scenario in scenarios if _TIER_ALIASES.get(scenario.tier, scenario.tier) == wanted
+    )
+    if not selected:
+        raise ScenarioError(f"no scenario declares tier {tier!r}")
+    return selected
 
 
-def _lookup(value: object, dotted_path: str) -> object:
-    current = value
-    for part in dotted_path.split("."):
-        if not isinstance(current, Mapping) or part not in current:
-            return _MISSING
-        current = current[part]
-    return current
+def _run_kind_hook(gates: Mapping[str, "GateSpec"], hook_name: str, *args: object) -> None:
+    """Invoke one of a follow-up kind's optional loader hooks.
 
+    These two checks -- required_plants against declared plant evidence, and
+    fixture-gold internal consistency -- used to be functions in this module
+    that returned early unless the kind was ``optional_required_outputs``.
+    That left a new kind with no cross-validation at all, silently and by
+    default, which is how a declared-but-ungraded gold artifact shipped once
+    already. A kind now says what it wants checked; ``None`` still means "no
+    cross-check", but it is a visible declaration in the kind's own module
+    rather than an invisible early return here.
+    """
 
-def _grain_follow_up(closure: object, settings: Mapping[str, object]) -> Mapping[str, object]:
-    document = _read_document(closure, _string(settings.get("document"), "follow-up.document"))
-    if document is _MISSING:
-        return {"status": "not-examined", "passed": False, "findings": ["closure_not_examined"]}
-    grain_path = _string(settings.get("grain_path"), "follow-up.grain_path")
-    aggregation_path = _string(settings.get("aggregation_path"), "follow-up.aggregation_path")
-    expected_grain = _string(settings.get("expected_grain"), "follow-up.expected_grain")
-    expected_aggregation = _string(settings.get("expected_aggregation"), "follow-up.expected_aggregation")
-    observed_grain = _lookup(document, grain_path)
-    observed_aggregation = _lookup(document, aggregation_path)
-    findings: list[str] = []
-    if observed_grain is _MISSING:
-        findings.append("grain_not_declared")
-    elif observed_grain != expected_grain:
-        findings.append("grain_mismatch")
-    if observed_aggregation is _MISSING:
-        findings.append("aggregation_not_declared")
-    elif observed_aggregation != expected_aggregation:
-        findings.append("aggregation_mismatch")
-    return {
-        "status": "examined",
-        "passed": not findings,
-        "findings": findings,
-        "grain": observed_grain if observed_grain is not _MISSING else None,
-        "aggregation": observed_aggregation if observed_aggregation is not _MISSING else None,
-    }
-
-
-def _required_flag(value: object, location: str) -> bool:
-    declaration = _mapping(value, location)
-    required = declaration.get("required")
-    if not isinstance(required, bool):
-        raise ScenarioError(f"{location}.required must be boolean")
-    return required
-
-
-def _declared_required(settings: Mapping[str, object]) -> dict[str, bool]:
-    resources = _mapping(settings.get("resources"), "follow-up.resources")
-    return {
-        str(resource): _required_flag(value, f"follow-up.resources.{resource}")
-        for resource, value in resources.items()
-    }
-
-
-def _requiredness_from_document(document: object, path: str) -> dict[str, bool] | None:
-    if document is _MISSING:
-        return None
-    raw = _lookup(document, path)
-    if not isinstance(raw, Mapping) or not raw:
-        return None
-    result: dict[str, bool] = {}
-    for resource, value in raw.items():
-        if not isinstance(resource, str):
-            return None
-        if isinstance(value, bool):
-            result[resource] = value
-            continue
-        if isinstance(value, Mapping) and isinstance(value.get("required"), bool):
-            result[resource] = value["required"]
-            continue
-        return None
-    return result
-
-
-def _row_count_mapping(value: object) -> dict[str, int] | None:
-    if not isinstance(value, Mapping):
-        return None
-    candidate: object = value
-    for key in ("row_count_oracle", "per_model_row_counts", "row_counts", "counts"):
-        nested = value.get(key)
-        if isinstance(nested, Mapping):
-            candidate = nested
-            break
-    if not isinstance(candidate, Mapping) or not candidate:
-        return None
-    result: dict[str, int] = {}
-    for resource, count in candidate.items():
-        if (
-            not isinstance(resource, str)
-            or isinstance(count, bool)
-            or not isinstance(count, int)
-            or count < 0
-        ):
-            return None
-        result[resource] = count
-    return result
-
-
-def _manifest_row_counts(manifest: object) -> dict[str, int] | None:
-    if isinstance(manifest, Mapping):
-        table_counts = manifest.get("table_row_counts")
-        if isinstance(table_counts, Mapping):
-            return _row_count_mapping(table_counts)
-    return _row_count_mapping(manifest)
-
-
-def _validate_fixture_gold(
-    follow_up_kind: str,
-    settings: Mapping[str, object],
-    gold: Mapping[str, Path],
-) -> None:
-    """Validate fixture-side consistency before any run can be graded."""
-
-    if follow_up_kind != "optional_required_outputs":
-        return
-    try:
-        counts = json.loads(gold["counts"].read_text(encoding="utf-8"))
-        diagnostics = json.loads(gold["diagnostics"].read_text(encoding="utf-8"))
-        expected_counts = _count_rows(counts)
-        expected_diagnostics = _diagnostic_rows(diagnostics)
-    except (KeyError, OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ScenarioError(f"optional-output gold could not be loaded: {exc}") from exc
-    expected_required = {
-        row["resource"]: row["required"] for row in expected_diagnostics
-    }
-    if _declared_required(settings) != expected_required:
-        raise ScenarioError("optional-output diagnostics gold requiredness disagrees with follow-up.resources")
-    if set(expected_counts) != set(expected_required):
-        raise ScenarioError("optional-output count and diagnostics gold resource sets disagree")
+    hook = getattr(followups.get(gates["follow-up"].kind), hook_name)
+    if hook is not None:
+        hook(*args)
 
 
 def _validate_certification_gold(
@@ -1290,48 +1026,13 @@ def _validate_certification_gold(
 ) -> None:
     """Reject certification claims whose scoreable gold is not declared."""
 
-    required_gold = _CERTIFICATION_GOLD_BY_FOLLOW_UP.get(follow_up_kind, {})
+    required_gold = followups.get(follow_up_kind).certification_gold
     for gate in repeatability.gates:
         artifact = required_gold.get(gate)
         if artifact is not None and artifact not in gold:
             raise ScenarioError(
                 f"certification gate {gate} requires scoreable gold artifact {artifact!r}"
             )
-
-
-def _count_rows(value: object) -> dict[str, int]:
-    if not isinstance(value, list):
-        raise ScenarioError("count gold must be a list of rows")
-    result: dict[str, int] = {}
-    for row in value:
-        if (
-            not isinstance(row, Mapping)
-            or not isinstance(row.get("resource"), str)
-            or isinstance(row.get("row_count"), bool)
-            or not isinstance(row.get("row_count"), int)
-            or row["row_count"] < 0
-        ):
-            raise ScenarioError("count gold rows require resource and integer row_count")
-        result[row["resource"]] = row["row_count"]
-    return result
-
-
-def _diagnostic_rows(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        raise ScenarioError("diagnostic gold must be a list of rows")
-    result: list[dict[str, object]] = []
-    for row in value:
-        if (
-            not isinstance(row, Mapping)
-            or not isinstance(row.get("resource"), str)
-            or isinstance(row.get("row_count"), bool)
-            or not isinstance(row.get("row_count"), int)
-            or row["row_count"] < 0
-            or not isinstance(row.get("required"), bool)
-        ):
-            raise ScenarioError("diagnostic gold rows require resource, integer row_count, and boolean required")
-        result.append(dict(row))
-    return result
 
 
 def _naive_rows(value: object) -> list[dict[str, object]] | None:
@@ -1357,6 +1058,8 @@ __all__ = [
     "ScenarioDeclaration",
     "ScenarioError",
     "load_scenario",
+    "SCENARIO_TIERS",
     "load_scenarios",
+    "select_tier",
     "scenario_script_hash",
 ]

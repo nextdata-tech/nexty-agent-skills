@@ -7,7 +7,7 @@ The suite runs scenarios the way a BI analyst actually works — a vague first
 message, corrections mid-stream, disputes after the fact — and grades the runs
 mechanically, without trusting the agent's own narrative.
 
-## Scope of this checkout: the smoke tier
+## Scope of this checkout: the smoke tier, plus the first two core-tier scenarios
 
 The smoke tier runs on every skill, runtime, or generator change, takes minutes,
 and spends nearly nothing on models. The tiers above it are the core tier
@@ -28,6 +28,28 @@ The smoke tier contains three scenarios, run in the order each declares through
    seed, and reconciliation is against a fixture ground-truth control total —
    internal self-consistency is not enough, because self-consistent wrong numbers
    agree with each other.
+
+Two core-tier scenarios ship here. Each is the first real caller of a build
+unit that until then had no consumer outside its own tests — the condition
+under which a unit's tests quietly start asserting its self-report instead of
+its behaviour. Both run through the deterministic/replay path only; neither
+has been driven by a live agent session. See each scenario's own `README.md`
+for what it covers and what it does not.
+
+`scenarios/credential-rotation/` (`tier: core`) is the first caller of
+`src/dp_scenarios/pgfixture/`: a disposable, owned Postgres container with a
+command-stepped credential rotation, graded against connection-level evidence
+rather than the fixture's own narrative. Its README also records the B5/B10
+naming decision the planning notes leave contradictory.
+
+`scenarios/sigterm-diagnosis/` (`tier: core`) is the first caller of
+`src/dp_scenarios/knobs/`. The graded difficulty is the *diagnosis*, not the
+failure: the naive plan is SIGTERM-killed with no staging marker, and the
+attribution must land on the supervisor transform window rather than on
+memory, a client RPC deadline, or a code bug. The overrun is guaranteed by
+construction — `TransformWindowSizing.from_plans` proves the naive plan
+exceeds twice the window while the bounded plan stays under half — never by
+row counts.
 
 The smoke tier runs the agent under test only: no judge model, no field-mapper
 provider calls, no export. It **does** serve and query, because on lean desktop a
@@ -74,6 +96,46 @@ from `--knob-plan`, using either this outer shape or its inner `scenarios` objec
 Workflow switching remains a programmatic control because its replacement
 transport and endpoint observation must be supplied by the caller. A CLI plan
 that declares one is rejected rather than silently running with the switch off.
+
+### Adding a scenario
+
+A scenario package is additive: it needs no edit to a shared file, so two
+scenarios can be authored in parallel without conflicting.
+
+1. `scenarios/<name>/` — `scenario.yaml` (unique `run_order`, declared `tier`),
+   `answer-sheet.yaml`, `events.yaml`, `gold/`, and a `README.md` stating the
+   fixture, execution, goal, assertions and limitations.
+2. `src/dp_scenarios/followups/<kind>.py` — the follow-up check. Define
+   `check(scenario, target, settings, context)` and `register()` a
+   `FollowUpKind` naming its gold keys, any certification gold, and a settings
+   validator. `followups/__init__.py` imports every module beside it, so
+   nothing needs to list the new kind.
+3. `tests/test_scenario_<name>.py` — property tests. Mutation-test them: break
+   each check and confirm a test fails.
+
+The loader tests derive the expected package set from disk rather than
+enumerating ids, so a new package needs no test edit either.
+
+### Selecting a tier
+
+`load_scenarios` loads every package under a scenario root; the tier a package
+declares is what selects it. The runner CLI therefore requires `--tier`, and a
+tier matching no package is an error rather than an empty, clean-looking run:
+
+```bash
+uv run --project evals/dp-scenarios python -m dp_scenarios.runner.cli \
+  --tier smoke --scenario-root evals/dp-scenarios/scenarios ...
+```
+
+The smoke tier is `drift-canary` → `zero-row-optional-output` →
+`parent-child-grain-trap`. `credential-rotation` and `sigterm-diagnosis` both
+declare `tier: core` and neither is pulled into a smoke run — one needs a
+Docker Postgres, which the smoke tier must not require.
+
+`scripts/run_local_claude.py` applies the same boundary: with no `--scenario`
+it runs `--tier smoke` (the default) rather than every package on disk, since
+it drives a live authenticated session. Naming a scenario id explicitly still
+crosses the tier, which is the deliberate way to run one core scenario live.
 
 ### Local live qualification
 

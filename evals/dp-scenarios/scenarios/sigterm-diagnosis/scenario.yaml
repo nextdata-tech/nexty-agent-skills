@@ -1,0 +1,50 @@
+version: 1
+id: sigterm-diagnosis
+tier: core
+run_order: 4
+fixture:
+  dataset: grain_trap
+  seed: 29
+  variant: mock-rest-order-fetch-sigterm
+  plant: grain_trap_fanout
+coverage:
+  variant: mock-rest-order-fetch-sigterm
+  untested: This variant does not exercise a live supervisor build or a live agent session; the SIGTERM/timeout run records, the transform-window arithmetic, and the diagnosis are graded from supplied evidence shaped like what a real supervisor run and agent diagnosis would produce (the deterministic/replay path), not from an actual overnight build.
+turn_budget: 9
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: wilson_lower_bound
+    gates: [build]
+    lower_bound: 0.90
+    confidence: 0.95
+persona: ../_personas/confidently-wrong.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+required_plants:
+  - grain_trap_fanout
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: sigterm_diagnosis
+    true_cause: supervisor_transform_window_timeout
+    declared_filter: "status=active"
+gold:
+  diagnostics: gold/sigterm_diagnosis_oracle.json
+operator:
+  sentinel: null
+  obstacle_terms: []

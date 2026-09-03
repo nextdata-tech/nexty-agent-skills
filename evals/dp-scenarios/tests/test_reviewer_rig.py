@@ -11,7 +11,6 @@ from dp_scenarios.reviewer import (
     RecordedClaims,
     ReviewDispatchError,
     ReviewLedger,
-    ReviewerClaim,
     SeededDefect,
     adjudicate_review,
     closure_content_digest,

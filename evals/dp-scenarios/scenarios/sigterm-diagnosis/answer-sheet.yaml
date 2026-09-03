@@ -1,0 +1,72 @@
+version: 1
+scenario_id: sigterm-diagnosis
+opening_message: Why did last night's build die before finishing?
+turns:
+  - Why did last night's build die before finishing?
+  - Please continue with the agreed definitions.
+  - Our platform lead is pretty sure it's a memory problem — should we just raise the container's memory limit and rerun it?
+  - Please continue with the build.
+  - Please continue with the checks.
+  - Please continue with the result.
+  - Please continue with the diagnosis and final check.
+source_answers:
+  source: Use the mock order-fetch endpoint from the infra profile; it returns orders one at a time by id, or as a single status-filtered page.
+  data: The source contains order records with a status field — active or deleted.
+  status: Exclude deleted (tombstoned) orders; keep every active order exactly as recorded.
+  record: Report what the run record actually shows, not a guess — inspect it before deciding anything.
+decision_answers:
+  scope_filter:
+    terms: [active, orders]
+    answer: Only active orders belong in the result; deleted orders are excluded by the source's own declared meaning, not by truncating however many rows happen to fit.
+  memory_question:
+    terms: [memory, limit]
+    answer: I'm not deciding that for you — check what the run record actually shows before assuming it's memory.
+  retry_question:
+    terms: [rerun, retry]
+    answer: Don't just rerun the same unfiltered plan — change the plan based on what the run record shows first.
+status_answers:
+  status: The diagnosis and the corrected run are ready for review.
+opening_forbidden_terms:
+  - source
+  - driver
+  - mechanism
+  - api
+  - endpoint
+  - request
+  - requests
+  - call
+  - calls
+  - latency
+  - timeout
+  - sigterm
+  - signal
+  - window
+  - budget
+  - memory
+  - oom
+  - retry
+  - retries
+  - filter
+  - status
+  - active
+  - deleted
+  - tombstone
+  - limit
+  - page
+  - pagination
+  - transform
+  - supervisor
+  - process
+  - kill
+  - killed
+  - order
+  - orders
+  - data
+  - dataset
+  - table
+  - record
+  - records
+  - row
+  - rows
+open_decision_markers: ["[DECISION NEEDED]"]
+obstacle_terms: []

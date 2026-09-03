@@ -390,3 +390,22 @@ def test_counter_oracle_rejects_a_null_total_without_raising() -> None:
 
     assert result.state is OracleState.VIOLATED
     assert "counters_shape_invalid" in result.codes
+
+
+def test_a_legacy_alias_renames_finding_codes_instead_of_raising() -> None:
+    """The legacy path only touches finding codes when a gate actually failed.
+
+    Its sole prior test drove a *passing* ledger, so the comprehension that
+    rewrites the codes was never evaluated and an unbound name in it survived:
+    every legacy gate carrying at least one finding raised ``NameError``
+    instead of returning a result.
+    """
+
+    result = g1_intake(_ledger({"turn": 2, "action_kind": "codegen"}))
+
+    assert result.gate == "G1"
+    assert not result.passed
+    assert result.codes, "a failing intake must carry findings for this path to matter"
+    for code in result.codes:
+        assert not code.startswith("intake_"), f"{code} kept its canonical prefix"
+        assert code.startswith("g1_"), f"{code} was not renamed to the legacy prefix"

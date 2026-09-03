@@ -28,7 +28,7 @@ from dp_scenarios.runner.local import FileSupervisorRecordReader, temporary_plug
 from dp_scenarios.runner.report import write_report
 from dp_scenarios.runner.session import LiveSession
 from dp_scenarios.runner.tier import RunBudgets, TierError, TierRunner, run_drift_canary
-from dp_scenarios.scenario import Scenario, load_scenarios
+from dp_scenarios.scenario import SCENARIO_TIERS, Scenario, load_scenarios, select_tier
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -112,6 +112,25 @@ def _select_scenarios(all_scenarios: Sequence[Scenario], selected: Sequence[str]
     return tuple(scenario for scenario in all_scenarios if scenario.id in selected_set)
 
 
+def _scenarios_in_scope(
+    all_scenarios: Sequence[Scenario],
+    selected: Sequence[str],
+    tier: str,
+) -> tuple[Scenario, ...]:
+    """Apply the tier boundary to the default (no ``--scenario``) case.
+
+    The boundary has to hold in both loader call sites. ``runner/cli.py``
+    requires ``--tier``; this entrypoint drives a live authenticated Claude
+    Code session, so an unbounded default is worse here -- it would spend
+    model tokens driving core packages whose evidence a live run cannot
+    produce. Naming a scenario id still crosses the tier deliberately.
+    """
+
+    if selected:
+        return tuple(all_scenarios)
+    return select_tier(all_scenarios, tier)
+
+
 def _configure_scenarios(
     all_scenarios: Sequence[Scenario],
     selected: Sequence[str],
@@ -142,7 +161,17 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the local runner CLI parser."""
 
     parser = argparse.ArgumentParser(description="Run local Claude Code DP-scenarios")
-    parser.add_argument("--scenario", action="append", default=[], help="scenario id; repeat to select several (default: all)")
+    parser.add_argument("--scenario", action="append", default=[], help="scenario id; repeat to select several (default: every scenario in --tier)")
+    parser.add_argument(
+        "--tier",
+        default="smoke",
+        choices=sorted(SCENARIO_TIERS),
+        help=(
+            "tier to run when --scenario is not given (default: smoke). This "
+            "entrypoint drives a live, authenticated Claude Code session, so "
+            "it defaults to the cheap tier rather than to every package on disk"
+        ),
+    )
     parser.add_argument("--epochs", type=int, default=1, help="epochs per selected scenario (use 5 for the declared deterministic tier)")
     parser.add_argument("--output-dir", type=Path, help="directory for report.json and summary.txt (default: a retained temp directory)")
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
@@ -181,7 +210,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.allow_host_home_bash and not args.allow_host_home:
         raise TierError("--allow-host-home-bash requires --allow-host-home")
     repo_root = REPO_ROOT
-    scenarios = _configure_scenarios(load_scenarios(SCENARIO_ROOT), args.scenario, args.epochs)
+    scenarios = _configure_scenarios(
+        _scenarios_in_scope(load_scenarios(SCENARIO_ROOT), args.scenario, args.tier),
+        args.scenario,
+        args.epochs,
+    )
     supervisor = resolve_supervisor(args.supervisor)
     desktop_python = (args.desktop_python or _default_desktop_python()).expanduser().resolve()
     if not desktop_python.is_file() or not desktop_python.stat().st_mode & 0o111:

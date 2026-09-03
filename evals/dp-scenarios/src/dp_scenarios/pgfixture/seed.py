@@ -18,7 +18,7 @@ import random
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from dp_scenarios.synthgen.defects import Frame, InjectionRecord, negative_values
+from dp_scenarios.synthgen.defects import Frame, negative_values
 from dp_scenarios.synthgen.generator import generate_dataset
 
 
