@@ -133,10 +133,19 @@ _SMOKE_TIER_WAIVERS = frozenset(
 # tier does.  A scenario that does need those pins simply does not waive
 # itself out of supplying them; the waiver only permits ``not-applicable``.
 _CORE_TIER_WAIVERS = _SMOKE_TIER_WAIVERS
+# The live tier (added in b6acc702) grades multi-turn agent behaviour rather
+# than an LLM-judged closure or a field-mapper grant fixture, so it waives the
+# same surfaces smoke and core do.  This waiver was missing until the first
+# live-tier package (capability-shortfall) actually tried to construct a
+# manifest and every run failed closed with "unknown tier 'live'" -- the tier
+# existed in ``scenario.py`` before anything downstream of it recognized the
+# spelling.
+_LIVE_TIER_WAIVERS = _SMOKE_TIER_WAIVERS
 TIER_WAIVERS: dict[str, frozenset[str]] = {
     "smoke": _SMOKE_TIER_WAIVERS,
     "T0": _SMOKE_TIER_WAIVERS,
     "core": _CORE_TIER_WAIVERS,
+    "live": _LIVE_TIER_WAIVERS,
 }
 
 REPLAY_TIER_WAIVERS: dict[str, frozenset[str]] = {

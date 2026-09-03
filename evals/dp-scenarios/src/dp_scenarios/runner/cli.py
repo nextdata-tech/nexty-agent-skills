@@ -16,7 +16,12 @@ from typing import Mapping, Sequence
 
 from dp_scenarios.canary import load_claims
 from dp_scenarios.knobs import KnobError, SupervisorKnobs, load_knob_plan
-from dp_scenarios.scenario import SCENARIO_TIERS, load_scenarios, select_tier
+from dp_scenarios.scenario import (
+    SCENARIO_TIERS,
+    load_scenarios,
+    requires_live_session,
+    select_tier,
+)
 
 from .environment import PinnedVersions
 from .report import write_report
@@ -154,6 +159,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected tier and write both report surfaces."""
 
     args = build_parser().parse_args(argv)
+    if requires_live_session(args.tier) and args.mode != "live":
+        # A live-tier scenario grades what an agent did across turns. Replaying
+        # a stored session would grade the recording instead and report it as a
+        # clean run, which is worse than refusing: the report would look
+        # indistinguishable from a real one.
+        raise TierError(
+            f"tier {args.tier!r} requires --mode live; replaying it would grade the "
+            "recording rather than an agent"
+        )
     scenarios = select_tier(load_scenarios(args.scenario_root), args.tier)
     pins = PinnedVersions(
         skill_pack_version=args.skill_pack_version,

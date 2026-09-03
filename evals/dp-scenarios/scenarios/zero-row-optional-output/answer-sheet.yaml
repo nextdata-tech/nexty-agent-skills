@@ -57,3 +57,20 @@ opening_forbidden_terms:
   - pipeline
 open_decision_markers: ["[DECISION NEEDED]"]
 obstacle_terms: []
+# Facts the operator actually knows, consulted only when a question the
+# answer sheet above does not cover still needs a real answer instead of a
+# fabricated or confidently irrelevant one. See GroundTruthFact in
+# src/dp_scenarios/operator/answer_sheet.py for the matching contract.
+ground_truth:
+  value_column:
+    terms: [value, column]
+    fact: The value column is the recognized dollar amount for that January record.
+  customer_name_policy:
+    terms: [customer_name]
+    fact: customer_name, customer_email, and salary are never included in the output; drop them rather than mask them.
+  customer_email_policy:
+    terms: [customer_email]
+    fact: customer_name, customer_email, and salary are never included in the output; drop them rather than mask them.
+  salary_policy:
+    terms: [salary]
+    fact: customer_name, customer_email, and salary are never included in the output; drop them rather than mask them.

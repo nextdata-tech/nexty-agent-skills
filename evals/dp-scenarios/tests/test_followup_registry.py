@@ -33,6 +33,7 @@ EXPECTED_CROSS_CHECKS = {
     "sigterm_diagnosis": (False, False),
     "restart_and_switch": (False, False),
     "optional_required_outputs": (True, True),
+    "capability_shortfall": (False, False),
 }
 
 # Whether each kind's gold is byte-reproducible by regenerating the CSV
@@ -44,6 +45,7 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "credential_rotation": False,
     "sigterm_diagnosis": False,
     "restart_and_switch": False,
+    "capability_shortfall": False,
 }
 
 

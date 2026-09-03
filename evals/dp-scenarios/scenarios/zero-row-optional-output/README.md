@@ -23,9 +23,16 @@ the expected resource counts and the requiredness diagnostics.
 ## Conversation and execution
 
 The operator opens with a deliberately vague business question about January.
-It then answers only questions the agent asks about the source, status, and the
-optional output. The operator script reaches the build, query, and takeaway
-phases, and a planted raw-rows request exercises the zero-row difficulty.
+It then answers questions the agent asks about the source, status, and the
+optional output from the scripted answer bank, and column-semantics or PII
+questions the answer bank does not cover (for example, what the value column
+means, or whether `customer_name`/`customer_email`/`salary` belong in the
+output) from a declared `ground_truth` brief. A source, status, or decision
+question that neither the answer bank nor the brief covers gets the operator's
+honest "I don't know, you tell me" fallback rather than a scripted line that
+happens to not address it. The operator script reaches the build, query, and
+takeaway phases, and a planted raw-rows request exercises the zero-row
+difficulty.
 
 The agent under test is expected to use the Nexty job-loop and `nxd-desktop`
 MCP flow to author the closure, validate it, build it, and inspect the result.

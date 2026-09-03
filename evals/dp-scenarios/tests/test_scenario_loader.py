@@ -10,7 +10,14 @@ import yaml
 
 from dp_scenarios import followups
 from dp_scenarios.grading import GATE_PHASES
-from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios, select_tier
+from dp_scenarios.scenario import (
+    SCENARIO_TIERS,
+    ScenarioError,
+    load_scenario,
+    load_scenarios,
+    requires_live_session,
+    select_tier,
+)
 from dp_scenarios.synthgen import get_dataset
 
 
@@ -39,6 +46,7 @@ EXPECTED_TIERS = {
     "credential-rotation": "core",
     "sigterm-diagnosis": "core",
     "restart-and-switch": "core",
+    "capability-shortfall": "live",
 }
 
 
@@ -385,6 +393,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "credential-rotation")
     shutil.rmtree(root / "sigterm-diagnosis")
     shutil.rmtree(root / "restart-and-switch")
+    shutil.rmtree(root / "capability-shortfall")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -409,6 +418,7 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.rmtree(root / "credential-rotation")
     shutil.rmtree(root / "sigterm-diagnosis")
     shutil.rmtree(root / "restart-and-switch")
+    shutil.rmtree(root / "capability-shortfall")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -455,6 +465,7 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
 
     smoke = select_tier(scenarios, "smoke")
     core = select_tier(scenarios, "core")
+    live = select_tier(scenarios, "live")
 
     # Which tier a scenario belongs to is pinned, not merely partitioned.
     # A partition assertion is satisfied by a scenario silently migrating
@@ -466,16 +477,21 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
     assert EXPECTED_TIERS.keys() == _packages_on_disk()
     assert {scenario.id: scenario.tier for scenario in scenarios} == EXPECTED_TIERS
 
-    assert {scenario.id for scenario in smoke}.isdisjoint({scenario.id for scenario in core})
-    assert {scenario.id for scenario in (*smoke, *core)} == _packages_on_disk()
-    assert smoke and core
+    smoke_ids = {scenario.id for scenario in smoke}
+    core_ids = {scenario.id for scenario in core}
+    live_ids = {scenario.id for scenario in live}
+    assert smoke_ids.isdisjoint(core_ids)
+    assert smoke_ids.isdisjoint(live_ids)
+    assert core_ids.isdisjoint(live_ids)
+    assert {scenario.id for scenario in (*smoke, *core, *live)} == _packages_on_disk()
+    assert smoke and core and live
 
     # What select_tier itself returns, pinned against EXPECTED_TIERS rather
     # than against the loader. EXPECTED_TIERS pins what load_scenarios
     # reports; without this, inverting select_tier's own predicate -- so
     # --tier smoke runs the core scenarios and vice versa -- satisfies every
     # assertion above, because the two sets merely swap.
-    for tier in ("smoke", "core"):
+    for tier in ("smoke", "core", "live"):
         expected = {name for name, declared in EXPECTED_TIERS.items() if declared == tier}
         assert {scenario.id for scenario in select_tier(scenarios, tier)} == expected
         assert all(scenario.tier == tier for scenario in select_tier(scenarios, tier))
@@ -569,3 +585,28 @@ def test_select_tier_treats_the_legacy_t0_spelling_as_smoke(tmp_path: Path) -> N
     assert smoke_package.name in smoke_ids, "a T0 package was dropped from the smoke tier"
     # And the alias resolves in both directions.
     assert {scenario.id for scenario in select_tier(scenarios, "T0")} == smoke_ids
+
+
+def test_live_is_the_only_tier_that_cannot_be_replayed() -> None:
+    """Pin the live-only set against every declared tier, not against itself.
+
+    ``requires_live_session`` decides whether the deterministic CLI refuses a
+    replay run. Asserting only that ``"live"`` is live-only would let the
+    predicate widen to every tier -- which would refuse every existing replay
+    run -- without failing here.
+    """
+
+    live_only = {tier for tier in SCENARIO_TIERS if requires_live_session(tier)}
+    assert live_only == {"live"}
+    assert not requires_live_session("T0"), "the legacy smoke spelling is replayable"
+
+
+def test_capability_shortfall_is_the_first_package_to_declare_the_live_tier() -> None:
+    # The live tier existed before any package used it (b6acc702); this pins
+    # capability-shortfall as the first, and only, package that does. A
+    # second scenario silently added to "live" is a real change and should
+    # fail this until EXPECTED_TIERS is updated on purpose.
+    live_ids = {name for name, tier in EXPECTED_TIERS.items() if tier == "live"}
+    assert live_ids == {"capability-shortfall"}
+    selected = select_tier(load_scenarios(ROOT / "scenarios"), "live")
+    assert {scenario.id for scenario in selected} == live_ids

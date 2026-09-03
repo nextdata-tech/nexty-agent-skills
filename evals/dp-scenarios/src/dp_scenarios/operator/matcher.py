@@ -18,6 +18,7 @@ from typing import Pattern
 
 from .answer_sheet import AnswerSheet
 from .persona import PersonaCard
+from .text_match import contains_any_term
 
 
 class MatcherError(ValueError):
@@ -45,6 +46,7 @@ class MatchResult:
     answer_key: str | None = None
     matched: bool = True
     obstacle_question: bool = False
+    ground_truth: bool = False
 
     @property
     def matched_rule_id(self) -> str:
@@ -105,17 +107,7 @@ _RULES = (
 
 
 def _contains_term(message: str, terms: tuple[str, ...]) -> bool:
-    lowered = message.casefold()
-    for term in terms:
-        if not term:
-            continue
-        candidate = term.casefold()
-        if any(character.isspace() for character in candidate):
-            if candidate in lowered:
-                return True
-        elif re.search(r"(?<!\w)" + re.escape(candidate) + r"(?!\w)", lowered):
-            return True
-    return False
+    return contains_any_term(message, terms)
 
 
 def _contains_declared_term(value: str | bytes, terms: tuple[str, ...]) -> bool:
@@ -133,6 +125,7 @@ def _reachable_reply_material(persona: PersonaCard, answer_sheet: AnswerSheet) -
     values.extend(answer_sheet.source_answers.values())
     values.extend(answer.answer for answer in answer_sheet.decision_answers.values())
     values.extend(answer_sheet.status_answers.values())
+    values.extend(fact.fact for fact in answer_sheet.ground_truth.values())
     return tuple(values)
 
 
@@ -249,19 +242,58 @@ class MatcherBank:
                     answer,
                     answer_key=key,
                 )
-            return MatchResult(
-                Category.SOURCE_QUESTION,
-                "persona.source_question",
-                self.persona.replies_for(Category.SOURCE_QUESTION.value)[0],
-                matched=False,
-            )
+            return self._unmatched(classified, message)
         if classified.category is Category.STATUS_QUERY:
             status = self.answer_sheet.answer_for_status(message)
             if status is not None:
                 key, answer = status
                 return MatchResult(Category.STATUS_QUERY, f"status.answer.{key}", answer, answer_key=key)
+            return self._unmatched(classified, message)
+        if classified.category is Category.DECISION_REQUEST:
+            return self._unmatched(classified, message)
+        # APPROVAL_REQUEST has no declared-fact lookup: whether to approve is
+        # a persona behavioral choice, not a fact a ground-truth brief holds.
         bank = self.persona.replies_for(classified.category.value)
         return MatchResult(classified.category, f"persona.{classified.category.value}", bank[0])
+
+    def _unmatched(self, classified: MatchResult, message: str) -> MatchResult:
+        """Resolve a factual category with no declared answer-sheet match.
+
+        No ``ground_truth`` brief declared (the common, legacy case) keeps
+        the exact prior behavior byte-for-byte: the persona's own stock line
+        for that category, reported unmatched. A declared brief is consulted
+        first and, when it covers the question, answered from it — a real
+        fact, never fabricated. Only when neither the answer sheet nor the
+        brief covers the question does the operator fall back to its fixed,
+        never-leading "I don't know, you tell me" line: this is the one path
+        that must never produce a confidently wrong or confidently empty
+        scripted answer.
+        """
+
+        if not self.answer_sheet.ground_truth:
+            bank = self.persona.replies_for(classified.category.value)
+            return MatchResult(
+                classified.category,
+                f"persona.{classified.category.value}",
+                bank[0],
+                matched=False,
+            )
+        found = self.answer_sheet.answer_for_ground_truth(message)
+        if found is not None:
+            key, fact = found
+            return MatchResult(
+                classified.category,
+                f"ground_truth.{key}",
+                fact,
+                answer_key=key,
+                ground_truth=True,
+            )
+        return MatchResult(
+            classified.category,
+            f"unmatched.{classified.category.value}",
+            self.persona.no_leading_fallback,
+            matched=False,
+        )
 
 
 def classify_and_reply(

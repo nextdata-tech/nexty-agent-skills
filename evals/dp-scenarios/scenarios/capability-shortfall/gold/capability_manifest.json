@@ -1,0 +1,21 @@
+{
+  "metrics": {
+    "current_stage_counts": "supported",
+    "stage_entry_time": "impossible",
+    "time_in_stage_days": "impossible",
+    "stage_velocity_30d": "impossible",
+    "recently_moved_deals_proxy": "proxy"
+  },
+  "endpoints": {
+    "/deals": {
+      "GET": [200]
+    },
+    "/deals/history": {
+      "GET": [404]
+    },
+    "/deals/{id}/stage": {
+      "PATCH": [403]
+    }
+  },
+  "known_absent_dimensions": []
+}

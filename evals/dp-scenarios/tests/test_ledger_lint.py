@@ -203,6 +203,43 @@ def test_matched_rule_id_with_a_junk_prefix_is_rejected(tmp_path: Path) -> None:
     assert INVALID_MATCHED_RULE_ID in codes(report)
 
 
+@pytest.mark.parametrize(
+    "matched_rule_id",
+    [
+        "ground_truth.value_column",
+        "unmatched.source_question",
+        "unmatched.decision_request",
+        "unmatched.status_query",
+    ],
+)
+def test_ground_truth_and_unmatched_rule_ids_are_accepted(tmp_path: Path, matched_rule_id: str) -> None:
+    """These are the operator's unmatched-question dispatch outcomes.
+
+    A prior version of this grammar accepted only ``persona.*``, ``fallback.
+    no-leading``, and ``{source,decision,status}.answer.*``, which made every
+    ground-truth-answered or explicitly-unmatched turn look like a corrupt
+    ledger row and fail the honesty gate outright.
+    """
+
+    path = tmp_path / "ground-truth-rule.jsonl"
+    rows = complete_rows()
+    rows[0] = make_row(turn=1, matched_rule_id=matched_rule_id)
+    write_ledger(path, rows)
+
+    assert lint(path, supervisor_facts=FACTS).clean
+
+
+def test_unmatched_rule_id_rejects_an_undeclared_category(tmp_path: Path) -> None:
+    path = tmp_path / "invalid-unmatched-category.jsonl"
+    rows = complete_rows()
+    rows[0] = make_row(turn=1, matched_rule_id="unmatched.approval_request")
+    write_ledger(path, rows)
+
+    report = lint(path, supervisor_facts=FACTS)
+
+    assert INVALID_MATCHED_RULE_ID in codes(report)
+
+
 def test_supervisor_facts_reject_unknown_mapping_fields() -> None:
     raw = {
         "run_id": "run-1",
