@@ -613,6 +613,9 @@ _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
 _SCENARIO_TIERS = frozenset({"smoke", "T0", "core"})
+# The legacy spelling maps onto the tier it is an alias for, so selection
+# treats the two as one tier rather than as two that never intersect.
+_TIER_ALIASES = {"T0": "smoke"}
 _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",
@@ -981,7 +984,15 @@ def select_tier(scenarios: Sequence[Scenario], tier: str) -> tuple[Scenario, ...
 
     if tier not in _SCENARIO_TIERS:
         raise ScenarioError(f"unknown tier {tier!r}: expected one of {sorted(_SCENARIO_TIERS)}")
-    selected = tuple(scenario for scenario in scenarios if scenario.tier == tier)
+    # T0 is the legacy spelling of smoke -- manifest.py documents it as the
+    # alias and the loader still accepts a package declaring it. Matching the
+    # literal string would silently omit such a package from a smoke run
+    # rather than reject it, and select_tier only raises when *nothing*
+    # matches, so the omission would not surface at all.
+    wanted = _TIER_ALIASES.get(tier, tier)
+    selected = tuple(
+        scenario for scenario in scenarios if _TIER_ALIASES.get(scenario.tier, scenario.tier) == wanted
+    )
     if not selected:
         raise ScenarioError(f"no scenario declares tier {tier!r}")
     return selected

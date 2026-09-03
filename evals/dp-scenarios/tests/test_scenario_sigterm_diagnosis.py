@@ -2,7 +2,7 @@
 
 These tests exercise the declarative package (``scenario.yaml`` and friends)
 and the mechanical follow-up grading in
-``Scenario._sigterm_diagnosis_follow_up`` against evidence shaped like what a
+``followups.sigterm_diagnosis.check`` against evidence shaped like what a
 real supervisor run and a real agent diagnosis would produce.  Every test here
 requires no external dependency: the transform-window arithmetic is a
 declared, checkable contract (``dp_scenarios.knobs.TransformWindowSizing``),
@@ -263,6 +263,13 @@ def test_a_landed_row_count_that_disagrees_with_the_oracle_is_caught() -> None:
         "def transform(fetch_orders):\n    return fetch_orders().head(18)\n",
         "from itertools import islice\ndef transform(fetch_orders):\n    return list(islice(fetch_orders(), 18))\n",
         "def transform(fetch_orders):\n    return fetch_orders(LIMIT=18)\n",
+        # Lowercase SQL evaded the scan entirely: `select ... limit 18` lands
+        # exactly 18 rows, so the landed-count check does not backstop it --
+        # the 18 it lands include the tombstoned rows the declared filter
+        # excludes. Both spellings must trip the same finding.
+        'def transform(conn):\n    return conn.execute("select * from orders limit 18").fetchall()\n',
+        'def transform(conn):\n    return conn.execute("SELECT * FROM orders LIMIT 18").fetchall()\n',
+        'def transform(conn):\n    return conn.execute("select * from orders LiMiT 18").fetchall()\n',
     ],
 )
 def test_scope_truncation_patterns_are_caught_mechanically(mutated_source: str) -> None:
@@ -338,7 +345,7 @@ def test_missing_sub_evidence_is_not_examined_not_conflated_with_a_clean_pass() 
 
 def test_a_deleted_test_of_the_property_would_fail_this_positive_control() -> None:
     """Sanity check that the mutation tests above are load-bearing: if the
-    corresponding checks were deleted from ``_sigterm_diagnosis_follow_up``,
+    corresponding checks were deleted from ``followups.sigterm_diagnosis.check``,
     each mutation below would pass instead of failing.  This test asserts the
     finding codes exist in the passing/failing pairs already exercised, so a
     future edit that silently removes a check changes an assertion here, not

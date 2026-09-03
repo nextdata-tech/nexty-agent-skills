@@ -87,7 +87,7 @@ command-stepped states with connection-level oracle records at every step:
 
 Per the task, no authenticated live Claude Desktop E2E run was attempted for
 this scenario — that needs credentials this environment does not have. What
-runs is the **deterministic/replay path**: `Scenario._credential_rotation_follow_up`
+runs is the **deterministic/replay path**: `followups.credential_rotation.check`
 grades evidence shaped like what a real run would produce, and
 `tests/test_scenario_credential_rotation.py` supplies that evidence two ways:
 
@@ -176,7 +176,7 @@ is invisible must be checked against `pg_catalog`, not just
   string" pattern is built around and the value an actual operator transcript
   would contain. A leak of the fixture's own generated password into a
   surface this check is given would not be caught by
-  `_credential_rotation_follow_up` itself.
+  `followups/credential_rotation.py`'s `check` itself.
 - **B5's warehouse/SKU framing is not implemented.** `pgfixture`'s schema is
   orders/line_items/product-lookup (`grain_trap`'s shape), not
   warehouse/SKU stock position. The operator script's narrative was written

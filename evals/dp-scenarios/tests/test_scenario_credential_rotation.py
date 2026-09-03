@@ -1,7 +1,7 @@
 """Guard tests for the core-tier credential-rotation scenario.
 
 These tests exercise the declarative package (``scenario.yaml`` and friends)
-and the mechanical follow-up grading in ``Scenario._credential_rotation_follow_up``
+and the mechanical follow-up grading in ``followups.credential_rotation.check``
 against evidence shaped like what a real ``PostgresFixture`` run produces.  The
 static/mutation tests below require no external dependency.  The
 ``@pytest.mark.integration`` test drives a real, disposable Postgres container
@@ -296,7 +296,7 @@ def test_missing_surfaces_or_diff_are_not_conflated_with_a_clean_pass() -> None:
 def test_a_deleted_test_of_the_property_would_fail_this_positive_control() -> None:
     """Sanity check that the mutation tests above are load-bearing: if the
     bypass/visibility/leak checks were deleted from
-    ``_credential_rotation_follow_up``, the bypass mutation above would pass
+    ``followups.credential_rotation.check``, the bypass mutation above would pass
     instead of failing.  This test asserts the finding codes exist in the
     passing/failing pairs already exercised, so a future edit that silently
     removes a check changes an assertion here, not just a comment.

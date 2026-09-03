@@ -7,7 +7,7 @@ The suite runs scenarios the way a BI analyst actually works — a vague first
 message, corrections mid-stream, disputes after the fact — and grades the runs
 mechanically, without trusting the agent's own narrative.
 
-## Scope of this checkout: the smoke tier, plus a first core-tier scenario
+## Scope of this checkout: the smoke tier, plus the first two core-tier scenarios
 
 The smoke tier runs on every skill, runtime, or generator change, takes minutes,
 and spends nearly nothing on models. The tiers above it are the core tier
@@ -29,13 +29,27 @@ The smoke tier contains three scenarios, run in the order each declares through
    internal self-consistency is not enough, because self-consistent wrong numbers
    agree with each other.
 
-`scenarios/credential-rotation/` (`tier: core`) is the first core-tier
-scenario and the first real caller of `src/dp_scenarios/pgfixture/`: a
-disposable, owned Postgres container with a command-stepped credential
-rotation, graded against connection-level evidence rather than the fixture's
-own narrative. It runs through the deterministic/replay path only — see its
-own `README.md` for the naming decision, what it covers, and what it does
-not.
+Two core-tier scenarios ship here. Each is the first real caller of a build
+unit that until then had no consumer outside its own tests — the condition
+under which a unit's tests quietly start asserting its self-report instead of
+its behaviour. Both run through the deterministic/replay path only; neither
+has been driven by a live agent session. See each scenario's own `README.md`
+for what it covers and what it does not.
+
+`scenarios/credential-rotation/` (`tier: core`) is the first caller of
+`src/dp_scenarios/pgfixture/`: a disposable, owned Postgres container with a
+command-stepped credential rotation, graded against connection-level evidence
+rather than the fixture's own narrative. Its README also records the B5/B10
+naming decision the planning notes leave contradictory.
+
+`scenarios/sigterm-diagnosis/` (`tier: core`) is the first caller of
+`src/dp_scenarios/knobs/`. The graded difficulty is the *diagnosis*, not the
+failure: the naive plan is SIGTERM-killed with no staging marker, and the
+attribution must land on the supervisor transform window rather than on
+memory, a client RPC deadline, or a code bug. The overrun is guaranteed by
+construction — `TransformWindowSizing.from_plans` proves the naive plan
+exceeds twice the window while the bounded plan stays under half — never by
+row counts.
 
 The smoke tier runs the agent under test only: no judge model, no field-mapper
 provider calls, no export. It **does** serve and query, because on lean desktop a
@@ -114,9 +128,14 @@ uv run --project evals/dp-scenarios python -m dp_scenarios.runner.cli \
 ```
 
 The smoke tier is `drift-canary` → `zero-row-optional-output` →
-`parent-child-grain-trap`. `credential-rotation` declares `tier: core` and is
-not pulled into a smoke run; it needs a Docker Postgres, which the smoke tier
-must not require.
+`parent-child-grain-trap`. `credential-rotation` and `sigterm-diagnosis` both
+declare `tier: core` and neither is pulled into a smoke run — one needs a
+Docker Postgres, which the smoke tier must not require.
+
+`scripts/run_local_claude.py` applies the same boundary: with no `--scenario`
+it runs `--tier smoke` (the default) rather than every package on disk, since
+it drives a live authenticated session. Naming a scenario id explicitly still
+crosses the tier, which is the deliberate way to run one core scenario live.
 
 ### Local live qualification
 

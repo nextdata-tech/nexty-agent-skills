@@ -536,3 +536,33 @@ def test_gold_never_disagrees_with_the_declaration_it_duplicates() -> None:
     # Guard the loop itself: if no gold duplicated anything, this test would
     # pass while asserting nothing at all.
     assert checked, "no gold artifact duplicated a declared field"
+
+
+def test_select_tier_treats_the_legacy_t0_spelling_as_smoke(tmp_path: Path) -> None:
+    """T0 is documented as smoke's alias and the loader still accepts it.
+
+    Matching the literal string would omit a T0 package from a smoke run
+    rather than reject it, and select_tier only raises when *nothing* matches
+    -- so the omission would never surface. A package quietly dropped from the
+    tier that runs on every change is the same defect as one wrongly added.
+    """
+
+    root = tmp_path / "scenarios"
+    shutil.copytree(SCENARIO_ROOT, root)
+    smoke_package = next(
+        path
+        for path in root.iterdir()
+        if path.is_dir()
+        and not path.name.startswith("_")
+        and (path / "scenario.yaml").is_file()
+        and yaml.safe_load((path / "scenario.yaml").read_text(encoding="utf-8"))["tier"] == "smoke"
+    )
+    declaration = yaml.safe_load((smoke_package / "scenario.yaml").read_text(encoding="utf-8"))
+    declaration["tier"] = "T0"
+    (smoke_package / "scenario.yaml").write_text(yaml.safe_dump(declaration), encoding="utf-8")
+
+    scenarios = load_scenarios(root)
+    smoke_ids = {scenario.id for scenario in select_tier(scenarios, "smoke")}
+    assert smoke_package.name in smoke_ids, "a T0 package was dropped from the smoke tier"
+    # And the alias resolves in both directions.
+    assert {scenario.id for scenario in select_tier(scenarios, "T0")} == smoke_ids

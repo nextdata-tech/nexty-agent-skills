@@ -11,9 +11,10 @@ import pytest
 
 from dp_scenarios.runner.tier import TierError
 from dp_scenarios.grading.statistics import RepeatabilityTier
-from dp_scenarios.scenario import RepeatabilitySpec
+from dp_scenarios.scenario import RepeatabilitySpec, load_scenarios
 
 
+SCENARIO_ROOT = Path(__file__).resolve().parents[1] / "scenarios"
 SCRIPT = Path(__file__).parents[1] / "scripts/run_local_claude.py"
 
 
@@ -84,3 +85,40 @@ def test_local_runner_host_home_is_explicit_and_bash_requires_a_second_opt_in(
 
     with pytest.raises(TierError, match="requires --allow-host-home"):
         module.main(["--allow-host-home-bash"])
+
+
+def test_the_live_entrypoint_defaults_to_the_smoke_tier_not_every_package() -> None:
+    """Omitting --scenario must not drive the core tier through a live session.
+
+    This entrypoint spends model tokens against an authenticated Claude Code
+    session. Before the tier boundary existed, "default: all" meant the two
+    smoke packages; adding core packages to the same root silently made it
+    mean those too -- including one that needs a Docker Postgres and one whose
+    evidence a live run cannot produce. The runner CLI's boundary did not
+    cover this second loader call site.
+    """
+
+    module = _load_runner_module()
+    args = module.build_parser().parse_args([])
+    assert args.tier == "smoke"
+    assert args.scenario == []
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    in_scope = module._scenarios_in_scope(scenarios, args.scenario, args.tier)
+    assert {scenario.id for scenario in in_scope} == {
+        scenario.id for scenario in scenarios if scenario.tier == "smoke"
+    }
+    assert all(scenario.tier == "smoke" for scenario in in_scope)
+    assert len(in_scope) < len(scenarios), "the boundary excluded nothing"
+
+
+def test_the_live_entrypoint_still_lets_an_explicit_id_cross_the_tier() -> None:
+    """Naming a core scenario is the deliberate way to run one live."""
+
+    module = _load_runner_module()
+    args = module.build_parser().parse_args(["--scenario", "credential-rotation"])
+    assert args.scenario == ["credential-rotation"]
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    in_scope = module._scenarios_in_scope(scenarios, args.scenario, args.tier)
+    assert {scenario.id for scenario in in_scope} == {scenario.id for scenario in scenarios}

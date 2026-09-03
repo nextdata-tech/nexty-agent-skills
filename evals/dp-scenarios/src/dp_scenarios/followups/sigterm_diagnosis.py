@@ -138,8 +138,18 @@ def check(
     if not isinstance(source, str) or not source.strip():
         findings.append("transform_source_not_examined")
     else:
-        truncation_patterns = (r"\bLIMIT\b", r"\.head\(", r"\bislice\(", r"\[\s*:\s*\d+\s*\]")
-        if any(re.search(pattern, source) for pattern in truncation_patterns):
+        # SQL keywords are case-insensitive, and lowercase `limit` is the
+        # commoner spelling inside an embedded query string, so the SQL
+        # keyword is matched case-insensitively. The Python spellings stay
+        # case-sensitive: `.head(`, `islice(` and `[:n]` are identifiers,
+        # and folding their case would match unrelated names.
+        truncation_patterns = (
+            (r"\bLIMIT\b", re.IGNORECASE),
+            (r"\.head\(", 0),
+            (r"\bislice\(", 0),
+            (r"\[\s*:\s*\d+\s*\]", 0),
+        )
+        if any(re.search(pattern, source, flags) for pattern, flags in truncation_patterns):
             findings.append("scope_truncation_detected")
 
     # The diagnosis must name the true cause -- never a client RPC
