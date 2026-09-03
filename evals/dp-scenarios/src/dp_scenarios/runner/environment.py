@@ -10,7 +10,10 @@ the session.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 import tempfile
@@ -31,6 +34,34 @@ class EnvironmentError(RuntimeError):
 
 
 RunEnvironmentError = EnvironmentError
+
+
+_AGENT_MANIFEST_FIELDS = frozenset(
+    {
+        "format_version",
+        "dataset",
+        "seed",
+        "base_instant",
+        "python_version",
+        "python_implementation",
+        "description",
+        "table_row_counts",
+        "fixture_hash",
+    }
+)
+
+
+def _agent_fixture_manifest(manifest: Mapping[str, object], oracle_path: Path) -> dict[str, object]:
+    """Return the safe manifest visible to the agent, never the grading oracle."""
+
+    # Use an allowlist: a future generator field is private until explicitly
+    # reviewed for agent visibility.
+    safe = {key: value for key, value in manifest.items() if key in _AGENT_MANIFEST_FIELDS}
+    safe["fixture_scope"] = "agent-visible-data-only"
+    safe["oracle_manifest_sha256"] = hashlib.sha256(
+        (oracle_path / "fixture-manifest.json").read_bytes()
+    ).hexdigest()
+    return safe
 
 
 _SESSION_ENVIRONMENT_ALLOWLIST = frozenset(
@@ -256,6 +287,8 @@ class RunEnvironment:
     desktop_server_name: str = "nxd-desktop"
     desktop_allowed_tools: Sequence[str] | None = None
     desktop_session_root: Path | None = None
+    live_cwd: Path | None = None
+    allow_host_home: bool = False
     knobs: SupervisorKnobs = field(default_factory=SupervisorKnobs.off)
     attempt: int = 1
     _temporary: tempfile.TemporaryDirectory[str] | None = field(default=None, init=False, repr=False)
@@ -263,6 +296,7 @@ class RunEnvironment:
     _ledger: LedgerStore | None = field(default=None, init=False, repr=False)
     _manifest: Manifest | None = field(default=None, init=False, repr=False)
     _fixture: Path | None = field(default=None, init=False, repr=False)
+    _oracle: Path | None = field(default=None, init=False, repr=False)
     _generated_fixture_manifest: Mapping[str, object] | None = field(default=None, init=False, repr=False)
     _home: Path | None = field(default=None, init=False, repr=False)
     _live_transport: Any | None = field(default=None, init=False, repr=False)
@@ -295,6 +329,26 @@ class RunEnvironment:
         self._fixture = base / "fixture"
         generation = self.scenario.generate_fixture(self._fixture)
         self._generated_fixture_manifest = dict(generation.manifest)
+        base_instant = generation.manifest.get("base_instant")
+        if not isinstance(base_instant, str) or not base_instant:
+            self.close()
+            raise EnvironmentError("generated fixture manifest has no pinned base_instant")
+        try:
+            self._oracle = base / "oracle"
+            self._oracle.mkdir()
+            oracle_manifest = self._oracle / "fixture-manifest.json"
+            shutil.move(str(generation.manifest_path), str(oracle_manifest))
+            shutil.move(str(generation.gold_dir), str(self._oracle / "gold"))
+            (self._fixture / "fixture-manifest.json").write_text(
+                json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
+            raise
 
         route_config = self.route_config if self.route_config is not None else _scenario_route_config(self.scenario)
         requested_validation_mode = "live" if self.live_command is not None else "replay"
@@ -320,7 +374,22 @@ class RunEnvironment:
                 from .desktop import DesktopStdioTransport
 
                 supervisor_args = tuple(str(argument) for argument in self.supervisor_args)
-                supervisor_environment = dict(self.supervisor_environment or self.agent_environment)
+                if not supervisor_args:
+                    supervisor_args = (
+                        "--data-dir",
+                        str(base / "desktop-state"),
+                        "mcp",
+                        "serve",
+                    )
+                # Host-home access is an explicit allowance for the agent
+                # process (typically to read a configured Claude profile),
+                # not an implicit allowance for the supervisor or its
+                # descendants.  Keep this invariant even when a caller
+                # supplies additional supervisor variables.
+                supervisor_environment = dict(self.supervisor_environment or {})
+                supervisor_environment.update(
+                    {"HOME": str(self.home), "USERPROFILE": str(self.home)}
+                )
                 if self.knobs.broker_fault is not None:
                     supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
                         self.attempt,
@@ -333,7 +402,7 @@ class RunEnvironment:
                 transport = DesktopStdioTransport.create(
                     _desktop_command_builder(self.live_command),
                     environment=self.agent_environment,
-                    cwd=self.base_dir,
+                    cwd=self.live_cwd or (base / "agent"),
                     server_command=self.supervisor_command,
                     server_args=supervisor_args,
                     server_environment=supervisor_environment,
@@ -341,6 +410,7 @@ class RunEnvironment:
                     server_name=self.desktop_server_name,
                     allowed_tools=self.desktop_allowed_tools,
                 )
+                (self.live_cwd or (base / "agent")).mkdir(parents=True, exist_ok=True)
                 self._live_transport = transport
                 transport.start()
         except Exception as error:
@@ -350,10 +420,6 @@ class RunEnvironment:
                 error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
             raise
 
-        generated_manifest = generation.manifest
-        base_instant = generated_manifest.get("base_instant")
-        if not isinstance(base_instant, str) or not base_instant:
-            raise EnvironmentError("generated fixture manifest has no pinned base_instant")
         effective_run_id = self.run_id or f"{self.scenario.id}-trial-{self.trial_index}"
         if not isinstance(effective_run_id, str) or not effective_run_id:
             raise EnvironmentError("run_id must be a non-empty string")
@@ -383,7 +449,7 @@ class RunEnvironment:
             skill_pack_version=self.pins.skill_pack_version,
             supervisor_version=self.pins.supervisor_version,
             nxd_data_product_wheel_version=self.pins.runtime_wheel_version,
-            fixture_dir_hash=fixture_dir_hash(generation.out_dir),
+            fixture_dir_hash=fixture_dir_hash(self.fixture_dir),
             mock_api_version=self.pins.mock_api_version,
             operator_script_hash=self.scenario.script_hash,
             turn_budget=self.scenario.turn_budget,
@@ -473,11 +539,19 @@ class RunEnvironment:
 
     @property
     def fixture_dir(self) -> Path:
-        """Return generated fixture data and gold artifacts."""
+        """Return generated fixture data and the safe manifest."""
 
         if self._fixture is None:
             raise EnvironmentError("environment has not been prepared")
         return self._fixture
+
+    @property
+    def oracle_dir(self) -> Path:
+        """Return the harness-only oracle directory."""
+
+        if self._oracle is None:
+            raise EnvironmentError("environment has not been prepared")
+        return self._oracle
 
     @property
     def generated_fixture_manifest(self) -> Mapping[str, object]:
@@ -574,8 +648,12 @@ class RunEnvironment:
                 "XDG_CACHE_HOME": str(self.home / ".cache"),
                 "XDG_STATE_HOME": str(self.home / ".state"),
                 "NXD_EVAL_FIXTURE_DIR": str(self.fixture_dir),
+                "NXD_EVAL_ATTESTATIONS_PATH": str(self.base_dir / "agent" / "agent-attestations.json"),
             }
         )
+        if self.allow_host_home:
+            host_home = str(Path.home())
+            values.update({"HOME": host_home, "USERPROFILE": host_home})
         if self._mock_source is not None:
             values["NXD_EVAL_SOURCE_URL"] = self._mock_source.server.data_url
         return MappingProxyType(values)
@@ -609,6 +687,7 @@ class RunEnvironment:
                 setattr(self, attribute, None)
         self._manifest = None
         self._fixture = None
+        self._oracle = None
         self._generated_fixture_manifest = None
         self._home = None
         if first_error is not None:

@@ -197,6 +197,13 @@ class MatcherBank:
         if _contains_term(message, self.obstacle_terms):
             raise MatcherError("the composed operator message contains a planted obstacle term")
 
+    def validate_generated_surface(self, message: str) -> None:
+        """Apply the stricter no-obstacle guard to model-rendered operator text."""
+
+        self.validate_outgoing_message(message)
+        if _contains_term(message, self.question_obstacle_terms):
+            raise MatcherError("the generated operator surface contains an obstacle term")
+
     def classify(self, message: str) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 

@@ -32,6 +32,7 @@ from .appender import (
     row_payload,
 )
 from .events import EventInjection, EventSchedule, event_from_mapping
+from .generated import GeneratedOperator, OperatorView
 from .matcher import Category, MatchResult, MatcherBank
 from .persona import PersonaCard
 from .transport import Attachment, OperatorMessage, Transport, TurnResult, TouchedFile, ToolCall
@@ -52,6 +53,7 @@ FAILURE_MODES = frozenset(
         "one_obstacle_per_turn",
         "intake_failure",
         "turn_budget_exceeded",
+        "operator_fallback",
     }
 )
 
@@ -395,6 +397,17 @@ def _as_bytes(value: object) -> tuple[bytes, ...]:
     return (str(value).encode("utf-8"),)
 
 
+def _operator_context(value: str | bytes, sentinels: Sequence[bytes]) -> str:
+    """Redact planted sentinel values before context reaches a provider."""
+
+    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+    for marker in sentinels:
+        decoded = marker.decode("utf-8", errors="replace")
+        if decoded:
+            text = text.replace(decoded, "<redacted-sentinel>")
+    return text
+
+
 def _snapshot(reader: object) -> Mapping[str, object]:
     if callable(reader):
         value = reader()
@@ -446,6 +459,7 @@ class OperatorEngine:
         ledger_writer: LedgerWriter | None = None,
         supervisor_reader: SupervisorRecordReader | None = None,
         counter_readers: Sequence[object] = (),
+        generated_operator: GeneratedOperator | None = None,
     ) -> None:
         self.script = script
         self.transport = transport
@@ -467,6 +481,7 @@ class OperatorEngine:
             self._run_id = facts.run_id
             self._ledger_supervisor_reader = StaticSupervisorRecordReader(facts)
         self.counter_readers = tuple(counter_readers)
+        self.generated_operator = generated_operator
         event_material: list[str | bytes] = []
         for card in script.events.cards:
             event_material.extend(
@@ -614,6 +629,8 @@ class OperatorEngine:
         sentinel_tripped = False
         environment_wedged = False
         next_reply: str | None = None
+        previous_agent_message = ""
+        prior_operator_messages: list[str] = []
 
         for index, scripted_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
@@ -631,8 +648,30 @@ class OperatorEngine:
                 if index == 1 or not scripted_turn.substitute_reply
                 else (next_reply or scripted_turn.text)
             )
+            if index > 1 and scripted_turn.substitute_reply and next_reply and self.generated_operator is not None:
+                view = OperatorView.from_persona(
+                    turn=index,
+                    phase=self.phase,
+                    persona=self.script.persona,
+                    agent_message=_operator_context(previous_agent_message, active_sentinels),
+                    selected_reply=next_reply,
+                    prior_operator_messages=tuple(
+                        _operator_context(message, active_sentinels)
+                        for message in prior_operator_messages
+                    ),
+                    remaining_turns=len(self.script.turns) - index + 1,
+                )
+                rendered = self.generated_operator.render(
+                    view,
+                    fallback=next_reply,
+                    validate=self.matcher.validate_generated_surface,
+                )
+                base = rendered.text
+                if rendered.used_fallback and "operator_fallback" not in self.failure_modes:
+                    self.failure_modes.append("operator_fallback")
             message = self._message_for(base, injections)
             self.matcher.validate_outgoing_message(message.text)
+            prior_operator_messages.append(message.text)
             result = self.transport.send_message(message)
             if self._scan(result, tuple(active_sentinels)):
                 self.failure_modes.append("sentinel_trip")
@@ -713,6 +752,7 @@ class OperatorEngine:
                 claim=claim or None,
             )
             next_reply = match.reply
+            previous_agent_message = result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message
             if sentinel_tripped or environment_wedged:
                 break
 

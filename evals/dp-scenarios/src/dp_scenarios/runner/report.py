@@ -35,6 +35,7 @@ _NON_REPRODUCIBLE_KEYS = frozenset(
         "observed_wall_clock_seconds",
         "ledger_path",
         "fixture_dir",
+        "evidence_bundle_dir",
         "supervisor",
         "closure",
         "command",

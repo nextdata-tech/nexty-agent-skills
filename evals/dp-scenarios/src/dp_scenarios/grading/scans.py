@@ -323,6 +323,174 @@ def sentinel_byte_scan(surfaces: Mapping[str, object] | Iterable[object], marker
     return _result(not findings, "sentinel_scan_not_examined" if not_examined else "sentinel_scan_clear", findings, examined=not not_examined)
 
 
+def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult:
+    """Fail closed when structured session evidence addresses protected gold data."""
+
+    oracle = Path(oracle_dir).resolve()
+    oracle_name = oracle.name.casefold()
+    turns: object = observations
+    if isinstance(observations, Mapping):
+        turns = observations.get("turns", observations.get("observations", observations))
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return _result(False, "gold_access_not_examined", [ScanFinding("gold_access_not_examined", "structured observations are absent")], examined=False)
+    findings: list[ScanFinding] = []
+
+    def inspect_path(value: object, location: str) -> None:
+        """Inspect one path-shaped value, never arbitrary file content."""
+
+        if isinstance(value, Path):
+            value = str(value)
+        if not isinstance(value, str):
+            return
+        candidate = value.strip()
+        if not candidate or ("/" not in candidate and "\\" not in candidate):
+            return
+
+        try:
+            raw_path = Path(candidate).expanduser()
+        except (OSError, RuntimeError, ValueError):
+            raw_path = None
+        if raw_path is None:
+            return
+        candidates = [raw_path]
+        if not raw_path.is_absolute():
+            # Relative tool paths are evaluated from the agent workspace.  The
+            # parent fallback covers callers whose working directory is the
+            # run root rather than its ``agent`` child.
+            candidates.extend(
+                (
+                    oracle.parent / "agent" / raw_path,
+                    oracle.parent / raw_path,
+                )
+            )
+        for path in candidates:
+            try:
+                resolved = path.resolve()
+            except (OSError, RuntimeError, ValueError):
+                continue
+            try:
+                resolved.relative_to(oracle)
+            except ValueError:
+                continue
+            findings.append(
+                ScanFinding(
+                    "gold_access_attempt",
+                    "structured session evidence addressed the oracle directory",
+                    {"path": location, "value": candidate},
+                )
+            )
+            return
+
+        # Keep the lexical fallback tied to this run's protected directory.
+        # A bare ``gold`` segment is ordinary medallion-layer vocabulary and is
+        # not evidence that the harness oracle was addressed.
+        #
+        # The fallback also only applies to a path that tries to leave the
+        # agent workspace. Every candidate above already failed containment,
+        # so a workspace-relative path with no upward traversal cannot reach
+        # the oracle however it is spelled -- and "oracle" is an ordinary
+        # source-system name, so `sources/oracle/customers.yml` would
+        # otherwise take an unappealable automatic zero for authoring a file
+        # about an Oracle database.
+        raw_segments = candidate.replace("\\", "/").split("/")
+        segments = [segment.casefold() for segment in raw_segments if segment not in {"", "."}]
+        # ``..`` is matched textually, not as a whole segment: a command string
+        # like ``cat ../oracle/gold/answer.json`` splits into a first segment of
+        # ``cat ..``, so a segment-equality test would miss the very shape this
+        # fallback exists to catch.
+        escapes_workspace = raw_path.is_absolute() or ".." in candidate
+        if escapes_workspace and oracle_name in segments:
+            findings.append(
+                ScanFinding(
+                    "gold_access_attempt",
+                    "structured session evidence contained a protected oracle path",
+                    {"path": location, "value": candidate},
+                )
+            )
+
+    def inspect_call_arguments(value: object, location: str) -> None:
+        """Inspect path-bearing tool arguments while skipping prose/content."""
+
+        path_keys = {
+            "path",
+            "file",
+            "file_path",
+            "filepath",
+            "filename",
+            "directory",
+            "dir",
+            "cwd",
+            "workdir",
+            "working_directory",
+            "command",
+            "cmd",
+            "script_path",
+            "input_path",
+            "output_path",
+            "artifact_path",
+            "definition_dir",
+        }
+        # Prose and payload keys: scanning them is the sentinel scan's job, and
+        # treating file content as a path is what made this gate fire on
+        # ordinary medallion-layer names. NOTE: ``query``/``sql``/``data`` are
+        # the one skip that could hide a genuine read -- SQL engines address
+        # files directly, e.g. ``read_json('../oracle/gold/answer.json')``. No
+        # tool on the current agent surface takes a file-capable query
+        # argument (Bash's path arrives under ``command``), but adding one to
+        # ``desktop_allowed_tools`` would open a real gap in an
+        # automatic-zero gate.
+        ignored_keys = {
+            "content",
+            "text",
+            "body",
+            "prompt",
+            "message",
+            "data",
+            "query",
+            "sql",
+            "value",
+            "result",
+            "response",
+        }
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_name = str(key).casefold()
+                item_location = f"{location}.{key}"
+                if key_name in path_keys:
+                    # Recurse rather than calling inspect_path directly: a
+                    # container under a path key (``command: ["cat", "..."]``)
+                    # would otherwise be dropped, while the same value under an
+                    # unlisted key would be walked and caught.
+                    inspect_call_arguments(item, item_location)
+                elif key_name not in ignored_keys:
+                    inspect_call_arguments(item, item_location)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for index, item in enumerate(value):
+                inspect_call_arguments(item, f"{location}[{index}]")
+        else:
+            inspect_path(value, location)
+
+    for index, turn in enumerate(turns):
+        if isinstance(turn, Mapping):
+            tool_calls = turn.get("tool_calls", ())
+            if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes, bytearray)):
+                for call_index, call in enumerate(tool_calls):
+                    if isinstance(call, Mapping):
+                        inspect_call_arguments(
+                            call.get("arguments", ()),
+                            f"turns[{index}].tool_calls[{call_index}].arguments",
+                        )
+            files_touched = turn.get("files_touched", ())
+            if isinstance(files_touched, Sequence) and not isinstance(files_touched, (str, bytes, bytearray)):
+                for file_index, file in enumerate(files_touched):
+                    if isinstance(file, Mapping):
+                        inspect_path(
+                            file.get("path"),
+                            f"turns[{index}].files_touched[{file_index}].path",
+                        )
+    return _result(not findings, "gold_access_clear", findings)
+
+
 def _metric_names_for_proxy(spec: Mapping[str, object]) -> set[str]:
     raw = spec.get("metrics")
     if isinstance(raw, Mapping):
@@ -399,6 +567,7 @@ __all__ = [
     "governed_path_scan",
     "meaning_preserving_bounding_scan",
     "sentinel_byte_scan",
+    "gold_access_scan",
     "proxy_labelling_scan",
     "scan_supported_path",
     "scan_governed_path",

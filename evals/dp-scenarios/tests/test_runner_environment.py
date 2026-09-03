@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import subprocess
 
@@ -195,6 +196,18 @@ def test_each_environment_gets_a_fresh_home_and_a_row_zero_manifest(tmp_path: Pa
         assert second.home != first_home
         assert second.home.is_dir()
         assert second.manifest.trial_index == 1
+
+
+def test_agent_fixture_excludes_gold_and_sensitive_generation_metadata(tmp_path: Path) -> None:
+    with RunEnvironment(make_scenario(), pins(), root=tmp_path) as environment:
+        agent_manifest = json.loads((environment.fixture_dir / "fixture-manifest.json").read_text(encoding="utf-8"))
+        assert not (environment.fixture_dir / "gold").exists()
+        assert (environment.oracle_dir / "gold").is_dir()
+        assert "pii_markers" not in agent_manifest
+        assert "pii_dictionary" not in agent_manifest
+        assert agent_manifest["fixture_scope"] == "agent-visible-data-only"
+        assert "file_hashes" not in agent_manifest
+        assert str(environment.oracle_dir) not in environment.agent_environment.values()
 
 
 def test_fixture_hash_is_derived_from_the_generated_fixture(tmp_path: Path) -> None:

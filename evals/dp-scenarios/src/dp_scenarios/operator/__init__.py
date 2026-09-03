@@ -27,6 +27,7 @@ from .engine import (
     operator_script_hash,
 )
 from .events import EventCard, EventInjection, EventSchedule, EventType, event_from_mapping, load_event_cards
+from .generated import GeneratedOperator, OperatorProvider, OperatorRender, OperatorView
 from .matcher import Category, MatchResult, MatcherBank, MatcherError
 from .persona import PersonaCard, PersonaError, load_persona, persona_from_mapping
 from .transport import (
@@ -52,6 +53,7 @@ __all__ = [
     "EventInjection",
     "EventSchedule",
     "EventType",
+    "GeneratedOperator",
     "event_from_mapping",
     "Engine",
     "Outcome",
@@ -62,7 +64,10 @@ __all__ = [
     "MatcherError",
     "OperatorEngine",
     "OperatorMessage",
+    "OperatorProvider",
+    "OperatorRender",
     "OperatorScript",
+    "OperatorView",
     "ScriptTurn",
     "PersonaCard",
     "PersonaError",

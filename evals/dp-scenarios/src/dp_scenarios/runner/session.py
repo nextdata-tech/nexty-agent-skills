@@ -50,6 +50,8 @@ _RESERVED_HARNESS_ARTIFACT_NAMES = frozenset(
         "row_counts.json",
         "route-fidelity.json",
         "route_fidelity.json",
+        "ledger-extra.json",
+        "ledger_rows.json",
     }
 )
 
@@ -577,7 +579,15 @@ class LiveSession:
         line = self._process.stdout.readline()
         if not line:
             stderr = self._process.stderr.read() if self._process.stderr is not None else ""
-            raise SessionError(f"live session ended without a structured turn result: {stderr[-500:]}")
+            detail = "live session ended without a structured turn result"
+            if stderr:
+                detail += f": {stderr[-500:]}"
+            self.close(wait_timeout=min(self.timeout, 5.0))
+            return TurnResult(
+                environment_wedged=True,
+                environment_detail=detail,
+                session_id=f"live-session-{self._session_counter}",
+            )
         try:
             raw = json.loads(line)
         except json.JSONDecodeError as exc:

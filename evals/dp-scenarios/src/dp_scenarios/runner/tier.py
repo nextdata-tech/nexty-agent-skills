@@ -10,12 +10,14 @@ condition and to persist observations.
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 import tempfile
 import time
+import shutil
 from typing import Any, TypeAlias
 
 from dp_scenarios.canary import ClaimsDocument, Verdict, aggregate_verdict, extract_claims, load_claims
@@ -38,21 +40,23 @@ from dp_scenarios.grading import (
     score_run,
 )
 from dp_scenarios.grading.oracles import marker_values
-from dp_scenarios.grading.scans import sentinel_byte_scan
+from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityReport
 from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
+    GeneratedOperator,
     OperatorEngine,
     StaticSupervisorRecordReader,
     TerminalState as EngineTerminalState,
 )
-from dp_scenarios.operator.appender import AppenderError, SupervisorRecordReader, TurnEvidence, append_turn_row
+from dp_scenarios.operator.appender import SupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import Scenario, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
+from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     ReplayRecording,
     ReplaySession,
@@ -64,6 +68,14 @@ from .session import (
 
 class TierError(RuntimeError):
     """Raised when the tier cannot produce a comparable result."""
+
+
+@dataclass(frozen=True, slots=True)
+class _AttestationRead:
+    """Parsed agent attestations plus a non-authoritative parse finding."""
+
+    values: tuple[Mapping[str, object], ...] = ()
+    findings: tuple[Finding, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +145,11 @@ class ScenarioRun:
     replay_recording: ReplayRecording
     route_fidelity_status: str
     route_fidelity_reason: str
+    evidence_bundle_dir: str | None
+    bundle_digest: str | None
+    replay_verification_status: str
+    replay_verification_reason: str
+    qualification: QualificationRecord
 
     @property
     def invalid(self) -> bool:
@@ -193,6 +210,13 @@ class ScenarioRun:
         )
         result["ledger_path"] = self.ledger_path
         result["fixture_dir"] = self.fixture_dir
+        result["evidence_bundle_dir"] = self.evidence_bundle_dir
+        result["bundle_digest"] = self.bundle_digest
+        result["replay_verification"] = {
+            "status": self.replay_verification_status,
+            "reason": self.replay_verification_reason,
+        }
+        result["qualification"] = self.qualification.to_dict()
         return result
 
 
@@ -272,6 +296,7 @@ CanaryFactory: TypeAlias = Callable[[], CanaryResult | Verdict]
 SupervisorReaderFactory: TypeAlias = Callable[..., SupervisorRecordReader | None]
 KnobPlan: TypeAlias = Mapping[tuple[str, int], SupervisorKnobs] | Callable[[Scenario, int], SupervisorKnobs]
 WorkflowRestartFactory: TypeAlias = Callable[[Scenario, RunEnvironment, int, str], Transport]
+GeneratedOperatorFactory: TypeAlias = Callable[..., GeneratedOperator | None]
 
 
 def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: ClaimsDocument) -> Verdict:
@@ -412,6 +437,94 @@ def _first_json(root: Path, names: Sequence[str]) -> object | None:
     return None
 
 
+def _replay_verification(
+    scenario: Scenario,
+    recording: ReplayRecording,
+    expected: Any,
+    *,
+    generated_operator: bool,
+) -> tuple[str, str]:
+    """Replay scripted turns and compare the two canonical evidence surfaces."""
+
+    if generated_operator:
+        return "not-attempted", "generated operator output is not assumed deterministic"
+    try:
+        transport = ReplaySession(recording)
+        replay = OperatorEngine(scenario.script, transport).run()
+        if transport.remaining_turns:
+            return "mismatch", f"replay left {transport.remaining_turns} turn(s) unconsumed"
+    except Exception as exc:
+        return "mismatch", f"replay failed: {type(exc).__name__}"
+    if replay.ledger_bytes != expected.ledger_bytes:
+        return "mismatch", "replayed ledger rows differ from the recorded run"
+    if replay.operator_message_bytes != expected.operator_message_bytes:
+        return "mismatch", "replayed operator messages differ from the recorded run"
+    return "verified", "replayed operator messages and ledger rows match"
+
+
+def _bundle_digest(root: Path) -> str:
+    """Hash bundle paths and bytes in stable order, excluding its digest file."""
+
+    digest = hashlib.sha256()
+    for path in sorted(item for item in root.rglob("*") if item.is_file() and item.name != "bundle.sha256"):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        content = path.read_bytes()
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
+    """Apply scenario-level repeatability certification to one live run."""
+
+    qualification = qualify_run(
+        run.score,
+        replay_status=run.replay_verification_status,
+        generated_operator=run.qualification.operator_mode == "generated_surface",
+        repeatability_certified=True,
+        validation_mode=run.manifest.validation_mode,
+    )
+    if qualification.disposition is not QualificationDisposition.CERTIFIED:
+        return run
+    bundle_digest = run.bundle_digest
+    if run.evidence_bundle_dir is not None:
+        bundle = Path(run.evidence_bundle_dir)
+        if not bundle.is_dir():
+            raise TierError(f"evidence bundle is missing for certified run: {bundle}")
+        _write_json(bundle / "qualification.json", qualification.to_dict())
+        bundle_digest = _bundle_digest(bundle)
+        (bundle / "bundle.sha256").write_text(bundle_digest + "\n", encoding="ascii")
+    return replace(run, qualification=qualification, bundle_digest=bundle_digest)
+
+
+def _retain_evidence_bundle(
+    destination: Path,
+    environment: RunEnvironment,
+    artifact_root: Path,
+    replay: ReplayRecording,
+    qualification: QualificationRecord,
+) -> str:
+    """Copy the complete local evidence surfaces before disposable cleanup."""
+
+    if destination.exists():
+        raise TierError(f"evidence bundle destination already exists: {destination}")
+    destination.mkdir(parents=True)
+    shutil.copytree(environment.fixture_dir, destination / "fixture")
+    shutil.copytree(environment.oracle_dir, destination / "oracle")
+    shutil.copytree(artifact_root, destination / "artifacts")
+    shutil.copy2(environment.ledger_path, destination / "evidence.jsonl")
+    anchor = environment.ledger_path.with_name(environment.ledger_path.name + ".anchor")
+    shutil.copy2(anchor, destination / "evidence.jsonl.anchor")
+    replay.write(destination / "session-replay.json")
+    _write_json(destination / "manifest.json", environment.manifest.to_dict())
+    _write_json(destination / "qualification.json", qualification.to_dict())
+    digest = _bundle_digest(destination)
+    (destination / "bundle.sha256").write_text(digest + "\n", encoding="ascii")
+    return digest
+
+
 def _fixture_integrity_error(environment: RunEnvironment) -> str | None:
     """Return a grade-time fixture mutation error, if the tree drifted."""
 
@@ -549,52 +662,60 @@ def _snapshot_source_artifacts(environment: RunEnvironment, artifact_root: Path)
     _write_json(artifact_root / "server-counters.json", source.server.counters.snapshot())
 
 
-def _append_artifact_rows(
-    environment: RunEnvironment,
-    artifact_root: Path,
-    *,
-    supervisor_reader: SupervisorRecordReader | None,
-) -> None:
+def _append_artifact_rows(artifact_root: Path) -> None:
     raw = _first_json(artifact_root, ("ledger-extra.json", "ledger_rows.json"))
     if raw is None:
         return
-    rows = raw.get("rows") if isinstance(raw, Mapping) else raw
-    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
-        raise TierError("ledger-extra.json must contain a row list")
-    for value in rows:
-        if not isinstance(value, Mapping):
-            raise TierError("every ledger-extra row must be an object")
-        row = dict(value)
-        try:
-            turn = row.get("turn", 1)
-            phase = row.get("phase", 1)
-            if isinstance(turn, bool) or not isinstance(turn, int) or turn < 1:
-                raise TierError("ledger-extra row turn must be a positive integer")
-            if isinstance(phase, bool) or not isinstance(phase, int) or phase < 1:
-                raise TierError("ledger-extra row phase must be a positive integer")
-            event_ids = row.get("event_ids")
-            evidence = TurnEvidence(
-                run_id=environment.manifest.run_id,
-                scenario_id=environment.manifest.scenario_id,
-                turn=turn,
-                phase=phase,
-                action_kind=str(row.get("action_kind", "")),
-                detail=str(row.get("action", row.get("detail", ""))),
-                matched_rule_id=row.get("matched_rule_id") if isinstance(row.get("matched_rule_id"), str) else None,
-                event_ids=tuple(item for item in event_ids if isinstance(item, str)) if isinstance(event_ids, Sequence) and not isinstance(event_ids, (str, bytes, bytearray)) else (),
-                artifact_ref=row.get("artifact_ref") if isinstance(row.get("artifact_ref"), str) else None,
-                claim=row.get("claim"),
-                evidence_ref=row.get("evidence_ref") if isinstance(row.get("evidence_ref"), str) else None,
-                qualification=row.get("qualification") if isinstance(row.get("qualification"), str) else None,
-                phase_status=str(row.get("phase_status", "executed")),
-                phase_status_reason=row.get("phase_status_reason") if isinstance(row.get("phase_status_reason"), str) else None,
-                fact_key=row.get("fact_key") if isinstance(row.get("fact_key"), str) else None,
-                supersedes=row.get("supersedes") if isinstance(row.get("supersedes"), int) else None,
-                term=row.get("term") if isinstance(row.get("term"), str) else None,
+    # The ledger is a harness-owned evidence boundary.  Historically this
+    # file was merged into the ledger, which let an agent mint approvals,
+    # construction outcomes, and qualification claims after the session.
+    raise TierError("agent-owned ledger artifact is forbidden; evidence rows are harness-owned")
+
+
+def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
+    """Read the narrow, non-authoritative attestation channel from the agent."""
+
+    path = root / "agent-attestations.json"
+    if not path.is_file() and fallback_root is not None:
+        path = fallback_root / "agent-attestations.json"
+    if not path.is_file():
+        return _AttestationRead()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return _AttestationRead(
+            findings=(Finding("agent_attestations_invalid", f"agent-attestations.json could not be read: {type(exc).__name__}"),)
+        )
+    values = raw.get("attestations") if isinstance(raw, Mapping) else raw
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return _AttestationRead(
+            findings=(Finding("agent_attestations_invalid", "agent-attestations.json must contain an attestation list"),)
+        )
+    allowed = {"action_kind", "turn", "outcome", "evidence_ref"}
+    result: list[Mapping[str, object]] = []
+    for value in values:
+        if not isinstance(value, Mapping) or set(value) != allowed:
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation has an invalid shape"),)
             )
-            append_turn_row(environment.ledger, evidence, supervisor_reader=supervisor_reader)
-        except (AppenderError, TypeError, ValueError) as exc:
-            raise TierError(f"agent ledger artifact row was rejected: {exc}") from exc
+        if value.get("action_kind") not in {"self_check", "adversarial_review"}:
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation action_kind is not allowed"),)
+            )
+        if isinstance(value.get("turn"), bool) or not isinstance(value.get("turn"), int) or value["turn"] < 1:
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation turn must be a positive integer"),)
+            )
+        if not isinstance(value.get("outcome"), str) or not value["outcome"].strip():
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation outcome must be non-empty text"),)
+            )
+        if not isinstance(value.get("evidence_ref"), str) or not value["evidence_ref"].strip():
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation evidence_ref must be non-empty text"),)
+            )
+        result.append(dict(value))
+    return _AttestationRead(tuple(result))
 
 
 def _supervisor_facts(reader: SupervisorRecordReader | None) -> SupervisorFacts | None:
@@ -672,14 +793,18 @@ class TierRunner:
         session_factory: SessionFactory | None = None,
         replay_recordings: Mapping[str, object] | None = None,
         environment_root: str | Path | None = None,
+        evidence_root: str | Path | None = None,
         budgets: RunBudgets | None = None,
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
         live_command: Sequence[str] | None = None,
         supervisor_command: str | Path | Sequence[str] | None = None,
+        supervisor_environment: Mapping[str, str] | None = None,
         knob_plan: KnobPlan | None = None,
         workflow_restart_factory: WorkflowRestartFactory | None = None,
         workflow_observer: WorkflowObserver | None = None,
+        operator_factory: GeneratedOperator | GeneratedOperatorFactory | None = None,
+        allow_host_home: bool = False,
     ) -> None:
         self.scenarios = tuple(scenarios)
         self.pins = pins
@@ -687,14 +812,26 @@ class TierRunner:
         self.session_factory = session_factory
         self.replay_recordings = dict(replay_recordings or {})
         self.environment_root = Path(environment_root) if environment_root is not None else None
+        # Retention is explicit.  A hidden temporary root would retain oracle
+        # data after the caller loses the report and leak sensitive fixtures
+        # into the host temp directory.  The local live entrypoint supplies a
+        # report-scoped root; library callers can opt in the same way.
+        self.evidence_root = Path(evidence_root).expanduser().resolve() if evidence_root is not None else None
+        if self.evidence_root is not None:
+            self.evidence_root.mkdir(parents=True, exist_ok=True)
         self.budgets = budgets or RunBudgets()
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
         self.live_command = tuple(live_command) if live_command is not None else None
         self.supervisor_command = supervisor_command
+        self.supervisor_environment = (
+            dict(supervisor_environment) if supervisor_environment is not None else None
+        )
         self.knob_plan = knob_plan
         self.workflow_restart_factory = workflow_restart_factory
         self.workflow_observer = workflow_observer
+        self.operator_factory = operator_factory
+        self.allow_host_home = allow_host_home
 
     def _workflow_restart(
         self,
@@ -707,6 +844,38 @@ class TierRunner:
         if self.workflow_restart_factory is None:
             return None
         return lambda workflow: self.workflow_restart_factory(scenario, environment, epoch, workflow)
+
+    def _generated_operator(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> GeneratedOperator | None:
+        """Resolve the optional generated surface without changing engine state."""
+
+        factory = self.operator_factory
+        if factory is None:
+            return None
+        if isinstance(factory, GeneratedOperator):
+            return factory
+        try:
+            parameters = inspect.signature(factory).parameters.values()
+            positional = [item for item in parameters if item.kind in (item.POSITIONAL_ONLY, item.POSITIONAL_OR_KEYWORD)]
+            variadic = any(item.kind is item.VAR_POSITIONAL for item in parameters)
+        except (TypeError, ValueError):
+            positional = []
+            variadic = True
+        if variadic or len(positional) >= 3:
+            value = factory(scenario, environment, epoch)
+        elif len(positional) == 2:
+            value = factory(scenario, environment)
+        elif len(positional) == 1:
+            value = factory(scenario)
+        else:
+            value = factory()
+        if value is not None and not isinstance(value, GeneratedOperator):
+            raise TierError("operator factory returned no GeneratedOperator")
+        return value
 
     def _canary(self) -> CanaryResult:
         value = self.canary() if callable(self.canary) else self.canary
@@ -766,6 +935,7 @@ class TierRunner:
             raise TierError("a non-blocking canary result must carry its claims hash")
         if canary.claims_hash != self.pins.canary_claims_hash:
             raise TierError("canary claims hash does not match the pinned assertion")
+        self._validate_evidence_destinations()
         run_pins = replace(self.pins, canary_claims_hash=canary.claims_hash)
         summaries: list[ScenarioSummary] = []
         for scenario in self.scenarios:
@@ -784,6 +954,8 @@ class TierRunner:
                 observations,
                 getattr(scenario, "repeatability", scenario.repeatability_tier),
             )
+            if repeatability.certified:
+                runs = tuple(_promote_certified_run(run) for run in runs)
             summaries.append(ScenarioSummary(scenario.id, repeatability, tuple(runs)))
         states = [run.score.state for summary in summaries for run in summary.runs]
         if not states:
@@ -798,6 +970,17 @@ class TierRunner:
         else:
             verdict = "failed"
         return TierResult(verdict, canary, tuple(summaries), time.monotonic() - started)
+
+    def _validate_evidence_destinations(self) -> None:
+        """Reject bundle collisions before constructing any scenario session."""
+
+        if self.evidence_root is None:
+            return
+        for scenario in self.scenarios:
+            for epoch in range(1, scenario.epochs + 1):
+                destination = self.evidence_root / scenario.id / f"epoch-{epoch}"
+                if destination.exists():
+                    raise TierError(f"evidence bundle destination already exists: {destination}")
 
     def _run_scenario_epochs(self, scenario: Scenario, *, pins: PinnedVersions) -> tuple[ScenarioRun, ...]:
         runs: list[ScenarioRun] = []
@@ -829,6 +1012,8 @@ class TierRunner:
                 manifest_override=manifest_override,
                 live_command=self.live_command,
                 supervisor_command=self.supervisor_command,
+                supervisor_environment=self.supervisor_environment,
+                allow_host_home=self.allow_host_home,
                 knobs=knobs,
                 attempt=epoch,
             ) as environment:
@@ -860,11 +1045,16 @@ class TierRunner:
                             turn=turn,
                         ),
                     )
+                generated_operator = self._generated_operator(scenario, environment, epoch)
                 started = time.monotonic()
                 transport_closed = False
                 primary_error: BaseException | None = None
                 try:
-                    engine = OperatorEngine(scenario.script, transport)
+                    engine = OperatorEngine(
+                        scenario.script,
+                        transport,
+                        generated_operator=generated_operator,
+                    )
                     run_result = engine.run()
                     if isinstance(transport, ReplaySession) and transport.remaining_turns:
                         raise TierError(
@@ -882,12 +1072,17 @@ class TierRunner:
                         row["run_id"] = environment.manifest.run_id
                         row["scenario_id"] = environment.manifest.scenario_id
                         environment.ledger.append(LedgerRow.from_mapping(row))
-                    _append_artifact_rows(
-                        environment,
-                        artifact_root,
-                        supervisor_reader=supervisor_reader,
-                    )
+                    _append_artifact_rows(artifact_root)
                     facts = _supervisor_facts(supervisor_reader)
+                    if facts is not None and supervisor_reader is not None:
+                        append_supervisor_facts(
+                            environment.ledger,
+                            supervisor_reader,
+                            run_id=environment.manifest.run_id,
+                            scenario_id=environment.manifest.scenario_id,
+                            turn=max(1, len(run_result.turns)),
+                            phase=5,
+                        )
                     _snapshot_source_artifacts(environment, artifact_root)
                     _write_operator_observations(artifact_root, run_result)
                     close = getattr(transport, "close", None)
@@ -926,6 +1121,29 @@ class TierRunner:
                     budgets=self.budgets,
                 )
                 score = replace(score, efficiency=efficiency)
+                replay_status, replay_reason = _replay_verification(
+                    scenario,
+                    replay,
+                    run_result,
+                    generated_operator=generated_operator is not None,
+                )
+                qualification = qualify_run(
+                    score,
+                    replay_status=replay_status,
+                    generated_operator=generated_operator is not None,
+                    validation_mode=environment.manifest.validation_mode,
+                )
+                bundle_dir: Path | None = None
+                bundle_digest: str | None = None
+                if self.evidence_root is not None:
+                    bundle_dir = self.evidence_root / scenario.id / f"epoch-{epoch}"
+                    bundle_digest = _retain_evidence_bundle(
+                        bundle_dir,
+                        environment,
+                        artifact_root,
+                        replay,
+                        qualification,
+                    )
                 runs.append(
                     ScenarioRun(
                         scenario_id=scenario.id,
@@ -946,6 +1164,11 @@ class TierRunner:
                         replay_recording=replay,
                         route_fidelity_status=route_status,
                         route_fidelity_reason=route_reason,
+                        evidence_bundle_dir=str(bundle_dir) if bundle_dir is not None else None,
+                        bundle_digest=bundle_digest,
+                        replay_verification_status=replay_status,
+                        replay_verification_reason=replay_reason,
+                        qualification=qualification,
                     )
                 )
         return tuple(runs)
@@ -1005,12 +1228,32 @@ class TierRunner:
         observations = _load_json(artifact_root / "operator-observations.json")
         if not isinstance(observations, Mapping):
             raise TierError("operator observations were not persisted before grading")
+        attestation_read = _agent_attestations(
+            environment.base_dir / "agent",
+            fallback_root=artifact_root,
+        )
+        attestations = attestation_read.values
+        gold_access = gold_access_scan(observations, environment.oracle_dir)
 
+        construction = gate_construction(
+            ledger_artifact,
+            observations=observations,
+            attestations=attestations,
+            require_observed=True,
+            desktop_server_name=environment.desktop_server_name,
+        )
+        if attestation_read.findings:
+            construction = replace(
+                construction,
+                passed=False,
+                points=0,
+                findings=construction.findings + attestation_read.findings,
+            )
         gates: dict[str, GateResult] = {
             "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
             "capability": gate_capability(spec, capability, required=environment.mock_source is not None),
             "narrowing": gate_narrowing(spec_diff, ledger_artifact, closure),
-            "construction": gate_construction(ledger_artifact),
+            "construction": construction,
             "build": gate_build(facts, row_counts),
         }
         answer_gold_declared = bool(getattr(scenario, "has_scoreable_answer_gold", True))
@@ -1034,7 +1277,7 @@ class TierRunner:
             )
         else:
             try:
-                gold = scenario.load_gold("answer", environment.fixture_dir)
+                gold = scenario.load_gold("answer", environment.oracle_dir)
             except Exception as exc:
                 gates["query"] = GateResult(
                     "query",
@@ -1067,7 +1310,7 @@ class TierRunner:
                 follow_up_kwargs["row_count_oracle"] = row_counts
             follow_up = follow_up_method(
                 closure,
-                environment.fixture_dir,
+                environment.oracle_dir,
                 query_rows,
                 **follow_up_kwargs,
             )
@@ -1088,6 +1331,16 @@ class TierRunner:
                 ungraded=True,
             )
         gates["follow-up"] = follow_up
+        if not gold_access.passed:
+            gates["query"] = GateResult(
+                "query",
+                False,
+                0,
+                gates["query"].findings
+                + tuple(Finding(f.code, f.detail, f.value) for f in gold_access.findings),
+                examined=gold_access.examined and gates["query"].examined,
+                required=gates["query"].required,
+            )
 
         if facts is None:
             honesty = LintReport(False, [LintFinding("incomplete_supervisor_facts", 1, "supervisor facts not examined")])
@@ -1131,6 +1384,7 @@ class TierRunner:
             honesty_report=honesty,
             route_fidelity=route_fidelity,
             sentinel_tripped=sentinel,
+            gold_access_tripped=not gold_access.passed,
             invalid=invalid,
             efficiency=efficiency,
         )
