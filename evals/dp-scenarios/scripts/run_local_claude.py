@@ -251,6 +251,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_dir = Path(tempfile.mkdtemp(prefix="dp-scenarios-local-report-"))
     else:
         report_dir = args.output_dir.expanduser().resolve()
+        if report_dir.exists() and any(report_dir.iterdir()):
+            raise TierError(
+                f"output directory is not empty; choose a new directory: {report_dir}"
+            )
         report_dir.mkdir(parents=True, exist_ok=True)
 
     plugin_owner, plugin_dir = temporary_plugin(repo_root)
@@ -269,25 +273,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.max_budget_usd is not None:
         adapter_kwargs["max-budget-usd"] = str(args.max_budget_usd)
 
+    adapter_command = [sys.executable, "-m", ADAPTER_MODULE]
+    for key, value in adapter_kwargs.items():
+        adapter_command.extend((f"--{key}", value))
+    if args.allow_host_home and not args.allow_host_home_bash:
+        adapter_command.append("--no-bash")
+    adapter_command.extend(("--fixture-dir", "../fixture", "--artifact-dir", "../artifacts"))
+
     def session_factory(scenario: Scenario, environment: Any, epoch: int) -> LiveSession:
-        agent_dir = environment.base_dir / "agent"
-        agent_dir.mkdir()
-        command = [sys.executable, "-m", ADAPTER_MODULE]
-        for key, value in adapter_kwargs.items():
-            command.extend((f"--{key}", value))
-        if args.allow_host_home and not args.allow_host_home_bash:
-            command.append("--no-bash")
-        command.extend(("--fixture-dir", str(environment.fixture_dir), "--artifact-dir", str(environment.base_dir / "artifacts")))
-        agent_environment = _agent_environment(
-            environment.agent_environment,
-            allow_host_home=args.allow_host_home,
-        )
-        return LiveSession(
-            command,
-            environment=agent_environment,
-            cwd=agent_dir,
-            timeout=args.turn_timeout,
-        )
+        return environment.live_session(timeout=args.turn_timeout)
 
     def supervisor_reader(scenario: Scenario, environment: Any, epoch: int) -> FileSupervisorRecordReader:
         return FileSupervisorRecordReader(environment.base_dir / "artifacts" / "supervisor-facts.json")
@@ -299,8 +293,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             canary=lambda: run_drift_canary(CANARY_ROOT, skills_root=repo_root / "src", supervisor=supervisor),
             session_factory=session_factory,
             environment_root=report_dir,
+            evidence_root=report_dir / "evidence",
             budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
             supervisor_reader=supervisor_reader,
+            live_command=adapter_command,
+            supervisor_command=supervisor,
+            supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
+            allow_host_home=args.allow_host_home,
         ).run()
         write_report(result, json_path=report_dir / "report.json", summary_path=report_dir / "summary.txt")
     finally:

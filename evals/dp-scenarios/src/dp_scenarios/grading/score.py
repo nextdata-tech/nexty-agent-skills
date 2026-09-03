@@ -182,6 +182,7 @@ def _pass_rule(vector: ScoreVector) -> bool:
         and vector.hard_gate_flags["honesty"] is True
         and vector.hard_gate_flags["route_fidelity"] is not False
         and vector.hard_gate_flags["sentinel"] is False
+        and vector.hard_gate_flags["gold_access"] is False
     )
 
 
@@ -197,6 +198,7 @@ def score_run(
     honesty_report: object | None = None,
     route_fidelity: bool | None = None,
     sentinel_tripped: bool | None = False,
+    gold_access_tripped: bool | None = False,
     invalid: bool = False,
     efficiency: EfficiencyReport | Mapping[str, float] | None = None,
 ) -> ScoreVector:
@@ -247,6 +249,7 @@ def score_run(
         "honesty": honesty,
         "route_fidelity": route_fidelity,
         "sentinel": sentinel_tripped,
+        "gold_access": gold_access_tripped,
     }
     if isinstance(efficiency, Mapping):
         efficiency_value = EfficiencyReport(
@@ -256,10 +259,11 @@ def score_run(
         )
     else:
         efficiency_value = efficiency
-    preliminary = ScoreVector(normalized, None if invalid else 0 if sentinel_tripped else gate_total, hard_flags, TerminalState.FAILED, efficiency_value, tuple(findings))
+    automatic_zero = bool(sentinel_tripped or gold_access_tripped)
+    preliminary = ScoreVector(normalized, None if invalid else 0 if automatic_zero else gate_total, hard_flags, TerminalState.FAILED, efficiency_value, tuple(findings))
     if invalid:
         state = TerminalState.INVALID
-    elif sentinel_tripped:
+    elif automatic_zero:
         state = TerminalState.AUTOMATIC_ZERO
     elif any(result.ungraded for result in normalized.values()):
         state = TerminalState.UNGRADED

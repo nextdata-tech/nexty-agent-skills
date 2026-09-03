@@ -323,6 +323,60 @@ def sentinel_byte_scan(surfaces: Mapping[str, object] | Iterable[object], marker
     return _result(not findings, "sentinel_scan_not_examined" if not_examined else "sentinel_scan_clear", findings, examined=not not_examined)
 
 
+def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult:
+    """Fail closed when structured session evidence addresses protected gold data."""
+
+    oracle = Path(oracle_dir).resolve()
+    turns: object = observations
+    if isinstance(observations, Mapping):
+        turns = observations.get("turns", observations.get("observations", observations))
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return _result(False, "gold_access_not_examined", [ScanFinding("gold_access_not_examined", "structured observations are absent")], examined=False)
+    findings: list[ScanFinding] = []
+
+    def inspect(value: object, location: str) -> None:
+        if isinstance(value, Path):
+            inspect(str(value), location)
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                inspect(item, f"{location}.{key}")
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for index, item in enumerate(value):
+                inspect(item, f"{location}[{index}]")
+        elif isinstance(value, str):
+            candidate = value.strip()
+            if not candidate or ("/" not in candidate and "\\" not in candidate):
+                return
+            try:
+                resolved = Path(candidate).expanduser().resolve()
+            except (OSError, RuntimeError, ValueError):
+                resolved = None
+            if resolved is not None:
+                try:
+                    resolved.relative_to(oracle)
+                except ValueError:
+                    pass
+                else:
+                    findings.append(ScanFinding("gold_access_attempt", "structured session evidence addressed the oracle directory", {"path": location, "value": candidate}))
+                    return
+            normalized = candidate.replace("\\", "/").lower()
+            if (
+                "/oracle/" in normalized
+                or normalized.startswith("oracle/")
+                or normalized.endswith("/oracle")
+                or "/gold/" in normalized
+                or normalized.startswith("gold/")
+                or normalized.endswith("/gold")
+            ):
+                findings.append(ScanFinding("gold_access_attempt", "structured session evidence contained a protected oracle path", {"path": location, "value": candidate}))
+
+    for index, turn in enumerate(turns):
+        if isinstance(turn, Mapping):
+            for field_name in ("tool_calls", "tool_results", "files_touched"):
+                inspect(turn.get(field_name, ()), f"turns[{index}].{field_name}")
+    return _result(not findings, "gold_access_clear", findings)
+
+
 def _metric_names_for_proxy(spec: Mapping[str, object]) -> set[str]:
     raw = spec.get("metrics")
     if isinstance(raw, Mapping):
@@ -399,6 +453,7 @@ __all__ = [
     "governed_path_scan",
     "meaning_preserving_bounding_scan",
     "sentinel_byte_scan",
+    "gold_access_scan",
     "proxy_labelling_scan",
     "scan_supported_path",
     "scan_governed_path",

@@ -8,6 +8,7 @@ mistaken for agent behaviour.
 
 from .environment import Environment, MockSourceHandle, PinnedVersions, RunEnvironment, RunEnvironmentError, RunSetup
 from .report import ReportError, emit_report, human_summary, machine_report, write_report
+from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     LiveSession,
     LiveTransport,
@@ -41,6 +42,8 @@ __all__ = [
     "LiveTransport",
     "MockSourceHandle",
     "PinnedVersions",
+    "QualificationDisposition",
+    "QualificationRecord",
     "RecordedSession",
     "RecordedTurn",
     "RecordingSession",
@@ -66,5 +69,6 @@ __all__ = [
     "machine_report",
     "run_drift_canary",
     "run_tier",
+    "qualify_run",
     "write_report",
 ]

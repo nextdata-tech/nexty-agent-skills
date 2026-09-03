@@ -40,7 +40,14 @@ the workspace's closure/ directory and keep any blueprint at the workspace
 root. Use the nxd-desktop MCP tools for self-check, build, serving, inspection,
 and governed queries; do not invoke nxd-desktop-supervisor from Bash. Follow
 the installed Nexty skills and answer the operator directly after each turn.
-The runner owns machine evidence; do not create or edit artifacts/ files.
+The runner owns machine evidence; do not create or edit artifacts/ files or
+ledger-extra.json. If you perform the self-check and adversarial review,
+write only their short outcomes to the JSON list at
+NXD_EVAL_ATTESTATIONS_PATH; this is an attestation channel, not a ledger
+and not proof by itself. The only accepted attestation shape is a JSON array
+of objects with exactly these keys: action_kind (self_check or
+adversarial_review), turn (positive integer), outcome (non-empty string), and
+evidence_ref (string). Do not add any other keys.
 """
 
 
@@ -427,6 +434,9 @@ class ClaudeCodeAdapter:
         max_budget_usd: float | None,
         append_system_prompt: str,
         allow_bash: bool = True,
+        mcp_config: Path | None = None,
+        strict_mcp_config: bool = False,
+        allowed_tools: str | None = None,
     ) -> None:
         self.claude = claude
         self.model = model
@@ -442,6 +452,9 @@ class ClaudeCodeAdapter:
         self.max_budget_usd = max_budget_usd
         self.append_system_prompt = append_system_prompt
         self.allow_bash = allow_bash
+        self.mcp_config = mcp_config
+        self.strict_mcp_config = strict_mcp_config
+        self.allowed_tools = allowed_tools
         self._stdio: Any = None
         self._temp: tempfile.TemporaryDirectory[str] | None = None
         self._process: subprocess.Popen[bytes] | None = None
@@ -462,26 +475,31 @@ class ClaudeCodeAdapter:
 
         if self._process is not None:
             return
-        for path, label in ((self.claude, "claude"), (self.plugin_dir, "plugin directory"), (self.desktop_supervisor, "desktop supervisor"), (self.desktop_python, "desktop Python")):
+        required_paths = [(self.claude, "claude"), (self.plugin_dir, "plugin directory")]
+        if self.mcp_config is None:
+            required_paths.extend(((self.desktop_supervisor, "desktop supervisor"), (self.desktop_python, "desktop Python")))
+        for path, label in required_paths:
             if not path.exists():
                 raise ClaudeAdapterError(f"{label} does not exist: {path}")
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
-        state_dir = Path(self._temp.name) / "desktop-state"
-        stdio = self._desktop_stdio_type(
-            [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
-            server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
-        )
-        self._stdio = stdio.start()
+        if self.mcp_config is None:
+            self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
+            state_dir = Path(self._temp.name) / "desktop-state"
+            stdio = self._desktop_stdio_type(
+                [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
+                server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
+            )
+            self._stdio = stdio.start()
+            mcp_config = self._stdio.config_path
+            strict_mcp_config = True
+            mcp_allowed_tools = self._stdio.allowed_tools_csv
+        else:
+            mcp_config = self.mcp_config
+            strict_mcp_config = self.strict_mcp_config
+            mcp_allowed_tools = self.allowed_tools or ""
         allowed_tools = [
-            "Read",
-            "Write",
-            "Edit",
-            "Glob",
-            "Grep",
-            "TodoWrite",
-            "Skill",
-            self._stdio.allowed_tools_csv,
+            "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite", "Skill", "Task",
+            mcp_allowed_tools,
         ]
         if self.allow_bash:
             allowed_tools.insert(0, "Bash")
@@ -508,14 +526,15 @@ class ClaudeCodeAdapter:
             "--plugin-dir",
             str(self.plugin_dir.resolve()),
             "--mcp-config",
-            str(self._stdio.config_path),
-            "--strict-mcp-config",
+            str(mcp_config),
             "--permission-mode",
             "acceptEdits",
             "--no-session-persistence",
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        if strict_mcp_config:
+            command.insert(command.index("--permission-mode"), "--strict-mcp-config")
         if self.effort:
             command.extend(("--effort", self.effort))
         if self.max_budget_usd is not None:
@@ -761,6 +780,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude-config-dir", type=Path)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--max-budget-usd", type=float)
+    parser.add_argument("--mcp-config", type=Path, help="use a runner-owned MCP config instead of starting a nested Desktop server")
+    parser.add_argument("--strict-mcp-config", action="store_true")
+    parser.add_argument("--allowedTools")
     parser.add_argument(
         "--no-bash",
         action="store_true",
@@ -789,6 +811,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_budget_usd=args.max_budget_usd,
         append_system_prompt=args.append_system_prompt,
         allow_bash=not args.no_bash,
+        mcp_config=args.mcp_config.expanduser().resolve() if args.mcp_config is not None else None,
+        strict_mcp_config=args.strict_mcp_config,
+        allowed_tools=args.allowedTools,
     )
 
     def terminate_on_signal(signum: int, _frame: Any) -> None:

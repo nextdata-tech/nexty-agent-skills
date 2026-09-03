@@ -151,8 +151,19 @@ def _session_config_digest(session: DesktopStdioSession) -> str:
                 )
         return value
 
+    def canonical_command_argument(value: str) -> str:
+        path = Path(value).expanduser()
+        if path.is_absolute():
+            try:
+                relative = path.resolve().relative_to(run_parent)
+            except ValueError:
+                pass
+            else:
+                return f"<run-parent>/{relative.as_posix()}"
+        return value
+
     semantic_config = {
-        "server_command": list(session.server_command),
+        "server_command": [canonical_command_argument(value) for value in session.server_command],
         "server_environment": {
             key: canonical_environment_value(key, value)
             for key, value in sorted(session.server_env.items())

@@ -27,7 +27,7 @@ from dp_scenarios.operator import (
     event_from_mapping,
 )
 from dp_scenarios.operator.persona import load_persona
-from dp_scenarios.operator.transport import InMemoryTransport, TouchedFile, TurnResult
+from dp_scenarios.operator.transport import InMemoryTransport, ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner import (
     CanaryResult,
     PinnedVersions,
@@ -38,6 +38,7 @@ from dp_scenarios.runner import (
     TierRunner,
 )
 from dp_scenarios.runner.session import LiveSession, SessionError
+from dp_scenarios.runner.report import machine_report
 from dp_scenarios.runner.tier import run_drift_canary
 from dp_scenarios.scenario import FixtureSpec, load_scenario
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
@@ -195,27 +196,11 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
             "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
-            "ledger-extra.json": {
-                "rows": [
-                    {
-                        "turn": 7,
-                        "phase": 4,
-                        "action_kind": "self_check",
-                        "action": "self-check completed",
-                        "claim": {"outcome": "pass"},
-                        "evidence_ref": "artifact#self-check",
-                        "qualification": "not-claimed",
-                    },
-                    {
-                        "turn": 7,
-                        "phase": 4,
-                        "action_kind": "adversarial_review",
-                        "action": "adversarial review completed",
-                        "claim": {"outcome": "pass"},
-                        "evidence_ref": "artifact#adversarial-review",
-                        "qualification": "not-claimed",
-                    },
-                ] + supervisor_rows
+            "agent-attestations.json": {
+                "attestations": [
+                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                ]
             },
             "closure/semantic.json": {
                 "semantic": {
@@ -234,7 +219,14 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
             TurnResult(agent_message="The build is ready."),
-            TurnResult(agent_message="The build completed.", files_touched=files),
+            TurnResult(
+                agent_message="The build completed.",
+                tool_calls=(
+                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
+                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                ),
+                files_touched=files,
+            ),
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
@@ -281,27 +273,11 @@ def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRe
         artifacts: dict[str, object] = {
             "spec.json": {"metrics": {"primary": "supported"}},
             "spec-diff.json": {"turn": 3, "metrics": {"primary": 3}},
-            "ledger-extra.json": {
-                "rows": [
-                    {
-                        "turn": 7,
-                        "phase": 4,
-                        "action_kind": "self_check",
-                        "action": "self-check completed",
-                        "claim": {"outcome": "pass"},
-                        "evidence_ref": "artifact#self-check",
-                        "qualification": "not-claimed",
-                    },
-                    {
-                        "turn": 7,
-                        "phase": 4,
-                        "action_kind": "adversarial_review",
-                        "action": "adversarial review completed",
-                        "claim": {"outcome": "pass"},
-                        "evidence_ref": "artifact#adversarial-review",
-                        "qualification": "not-claimed",
-                    },
-                ] + supervisor_rows
+            "agent-attestations.json": {
+                "attestations": [
+                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                ]
             },
             "closure/requiredness.json": {
                 "requiredness": {"optional_events": False, "primary": True}
@@ -331,7 +307,14 @@ def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRe
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
             TurnResult(agent_message="The build is ready."),
-            TurnResult(agent_message="The build completed.", files_touched=files),
+            TurnResult(
+                agent_message="The build completed.",
+                tool_calls=(
+                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
+                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                ),
+                files_touched=files,
+            ),
             TurnResult(agent_message="Now query that result and show me the final rows."),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
@@ -356,6 +339,97 @@ def test_blocking_canary_returns_before_any_scenario_transport_is_constructed() 
     assert result.scenarios == ()
     assert calls == []
     assert result.blocked_reason[0]["code"] == "code"
+
+
+def test_tier_retains_a_digestable_evidence_bundle_and_replay_status(tmp_path: Path) -> None:
+    scenario = make_scenario("bundle")
+    recording = recording_for(scenario, responses_for(scenario))
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    run = result.scenario_runs[0]
+    bundle = Path(run.evidence_bundle_dir)
+    assert run.replay_verification_status == "verified"
+    assert run.qualification.disposition.value == "OBSERVED"  # the fake scenario is not fully scoreable
+    assert (bundle / "evidence.jsonl").is_file()
+    assert (bundle / "oracle").is_dir()
+    assert (bundle / "session-replay.json").is_file()
+    assert (bundle / "qualification.json").is_file()
+    assert (bundle / "bundle.sha256").read_text(encoding="ascii").strip() == run.bundle_digest
+    reported = machine_report(result)["scenarios"][0]["runs"][0]
+    assert "evidence_bundle_dir" not in reported
+    assert reported["bundle_digest"] == run.bundle_digest
+
+
+def test_tier_does_not_create_hidden_evidence_root_when_retention_is_not_requested() -> None:
+    scenario = make_scenario("no-hidden-evidence")
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario))},
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert run.evidence_bundle_dir is None
+    assert run.bundle_digest is None
+
+
+def test_tier_rejects_existing_evidence_destination_before_running_a_session(tmp_path: Path) -> None:
+    scenario = make_scenario("evidence-collision")
+    destination = tmp_path / "evidence" / scenario.id / "epoch-1"
+    destination.mkdir(parents=True)
+    called: list[str] = []
+
+    def forbidden_session() -> object:
+        called.append("constructed")
+        raise AssertionError("session must not be constructed after an evidence collision")
+
+    with pytest.raises(TierError, match="evidence bundle destination already exists"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=forbidden_session,
+            evidence_root=tmp_path / "evidence",
+        ).run()
+    assert called == []
+
+
+def test_malformed_agent_attestation_is_a_grade_finding_not_a_tier_abort(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "agent-attestations.json").write_text(
+        '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass","unexpected":true}]}\n',
+        encoding="utf-8",
+    )
+
+    parsed = tier_module._agent_attestations(artifact_root)
+
+    assert parsed.values == ()
+    assert parsed.findings[0].code == "agent_attestations_invalid"
+
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    (agent_root / "agent-attestations.json").write_text(
+        '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass","evidence_ref":"tool:self-check"}]}\n',
+        encoding="utf-8",
+    )
+    from_agent_workspace = tier_module._agent_attestations(agent_root, fallback_root=artifact_root)
+    assert len(from_agent_workspace.values) == 1
+
+    (artifact_root / "agent-attestations.json").write_text(
+        '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass"}]}\n',
+        encoding="utf-8",
+    )
+    missing_required_key = tier_module._agent_attestations(artifact_root)
+    assert missing_required_key.values == ()
+    assert missing_required_key.findings[0].code == "agent_attestations_invalid"
 
 
 def test_empty_tier_is_failed_instead_of_clean() -> None:
@@ -458,29 +532,6 @@ def test_completed_build_run_lints_clean_with_available_supervisor_facts(monkeyp
     }
     recording = recording_for(scenario, responses_for(scenario))
     turns = list(recording.turns)
-    fact_rows = [
-        {
-            "turn": 7,
-            "phase": 5,
-            "action_kind": "supervisor_fact",
-            "fact_key": fact_key,
-            "evidence_ref": f"supervisor#{fact_key}",
-            "qualification": "strong",
-        }
-        for fact_key in ("run_id", "artifact_id", "publish_sequence", "lifecycle_state")
-    ] + [
-        {
-            "turn": 7,
-            "phase": 5,
-            "action_kind": "supervisor_fact",
-            "fact_key": f"per_model_row_counts.{model}",
-            "evidence_ref": f"supervisor#row_counts.{model}",
-            "qualification": "strong",
-        }
-        for model in sorted(facts["per_model_row_counts"])
-    ]
-    extra = TouchedFile("ledger-extra.json", json.dumps({"rows": fact_rows}).encode())
-    turns[-1] = replace(turns[-1], result=replace(turns[-1].result, files_touched=(extra,)))
     recording = replace(recording, turns=tuple(turns), supervisor_facts=facts)
     reports = []
     original_gate_honesty = tier_module.gate_honesty
@@ -877,7 +928,7 @@ def test_rejected_agent_artifact_row_aborts_the_run(tmp_path: Path, field: str) 
         encoding="utf-8",
     )
 
-    with pytest.raises(TierError, match="ledger-extra row"):
+    with pytest.raises(TierError, match="agent-owned ledger artifact"):
         tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
     assert environment.ledger == []
 
@@ -915,12 +966,12 @@ def test_fabricated_supervisor_claim_in_artifact_row_aborts_before_append(tmp_pa
         )
     )
 
-    with pytest.raises(TierError, match="supervisor-owned claim"):
+    with pytest.raises(TierError, match="agent-owned ledger artifact"):
         tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=reader)
     assert environment.ledger == []
 
 
-def test_valid_artifact_row_is_appended_after_positive_integer_validation(tmp_path: Path) -> None:
+def test_agent_artifact_row_is_never_appended(tmp_path: Path) -> None:
     environment = SimpleNamespace(
         manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
         ledger=[],
@@ -932,10 +983,9 @@ def test_valid_artifact_row_is_appended_after_positive_integer_validation(tmp_pa
         encoding="utf-8",
     )
 
-    tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
-
-    assert len(environment.ledger) == 1
-    assert environment.ledger[0]["action_kind"] == "codegen"
+    with pytest.raises(TierError, match="agent-owned ledger artifact"):
+        tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
+    assert environment.ledger == []
 
 
 def test_supervisor_reader_paths_are_fail_closed() -> None:

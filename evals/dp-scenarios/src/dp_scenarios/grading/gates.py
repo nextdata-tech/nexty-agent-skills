@@ -400,7 +400,53 @@ def _outcome_value(value: object) -> object:
     return value
 
 
-def gate_construction(ledger: object) -> GateResult:
+def _construction_call_kinds(observations: object, *, desktop_server_name: str = "nxd-desktop") -> set[str]:
+    """Return construction checks observed at the structured session boundary."""
+
+    if not isinstance(observations, Mapping):
+        return set()
+    turns = observations.get("turns")
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return set()
+    found: set[str] = set()
+    for turn in turns:
+        if not isinstance(turn, Mapping):
+            continue
+        calls = turn.get("tool_calls")
+        if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
+            continue
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            result = call.get("result")
+            if not isinstance(result, Mapping) or result.get("is_error") is True:
+                continue
+            name = call.get("name")
+            if not isinstance(name, str):
+                continue
+            name = name.lower()
+            arguments = call.get("arguments")
+            if name == f"mcp__{desktop_server_name.lower()}__check_data_product":
+                found.add("self_check")
+            if name == "skill" and isinstance(arguments, Mapping):
+                skill_name = arguments.get("skill")
+                if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
+                    found.add("adversarial_review")
+            if name == "task" and isinstance(arguments, Mapping):
+                subagent_type = arguments.get("subagent_type")
+                if subagent_type in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
+                    found.add("adversarial_review")
+    return found
+
+
+def gate_construction(
+    ledger: object,
+    *,
+    observations: object | None = None,
+    attestations: object | None = None,
+    require_observed: bool = False,
+    desktop_server_name: str = "nxd-desktop",
+) -> GateResult:
     """construction: require explicit outcomes for both construction checks.
 
     The literal outcome ``could not run`` is deliberately accepted.  The
@@ -422,7 +468,24 @@ def gate_construction(ledger: object) -> GateResult:
             value = _outcome_value(row.get("claim"))
             if value is not None:
                 observed[str(kind)] = value
+    attested: dict[str, object] = {}
+    if require_observed:
+        values = attestations if isinstance(attestations, Sequence) and not isinstance(attestations, (str, bytes, bytearray)) else (attestations,)
+        for value in values:
+            if isinstance(value, Mapping) and value.get("action_kind") in {"self_check", "adversarial_review"}:
+                attested[str(value["action_kind"])] = value.get("outcome")
+        for kind, outcome in attested.items():
+            if kind not in observed and outcome is not None:
+                observed[kind] = outcome
     findings = [Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome") for kind in ("self_check", "adversarial_review") if kind not in observed or observed[kind] is None]
+    if require_observed:
+        observed_calls = _construction_call_kinds(observations, desktop_server_name=desktop_server_name)
+        for kind in ("self_check", "adversarial_review"):
+            if kind not in observed_calls:
+                findings.append(Finding(f"construction_{kind}_not_observed", f"{kind} was not observed as a successful structured tool call"))
+        for kind in ("self_check", "adversarial_review"):
+            if kind not in attested:
+                findings.append(Finding(f"construction_{kind}_attestation_missing", f"{kind} has no agent attestation"))
     return _result("construction", not findings, findings)
 
 

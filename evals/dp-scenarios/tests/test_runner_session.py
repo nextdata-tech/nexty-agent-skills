@@ -125,7 +125,7 @@ def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path) -> None
 
 def test_live_timeout_returns_a_recordable_environment_wedge() -> None:
     session = LiveSession(
-        [sys.executable, "-c", "import sys; sys.stdin.readline()"],
+        [sys.executable, "-c", "import sys; import time; sys.stdin.readline(); time.sleep(1)"],
         timeout=0.01,
     )
     try:

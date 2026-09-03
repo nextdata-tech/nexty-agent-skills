@@ -88,6 +88,13 @@ def test_hard_states_are_distinct_and_sentinel_zero_wins() -> None:
     assert not scenario_passes(zero)
 
 
+def test_gold_access_is_a_distinct_automatic_zero_hard_gate() -> None:
+    result = score_run(_all_pass(), honesty_report=_lint(), route_fidelity=True, gold_access_tripped=True)
+    assert result.hard_gate_flags["gold_access"] is True
+    assert result.state is TerminalState.AUTOMATIC_ZERO
+    assert result.total == 0
+
+
 def test_unexamined_sentinel_is_not_a_pass_and_is_not_coerced_to_false() -> None:
     result = score_run(_all_pass(), honesty_report=_lint(), route_fidelity=True, sentinel_tripped=None)
 

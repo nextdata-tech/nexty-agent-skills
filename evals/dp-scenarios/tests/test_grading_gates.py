@@ -210,6 +210,36 @@ def test_construction_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: 
     assert "construction_ledger_not_examined" in unexamined.codes
 
 
+def test_strict_construction_does_not_count_free_text_tool_arguments() -> None:
+    ledger = _ledger(
+        {"action_kind": "self_check", "claim": {"outcome": "pass"}},
+        {"action_kind": "adversarial_review", "claim": {"outcome": "pass"}},
+    )
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {"name": "Read", "arguments": {"path": "self_check.py"}, "result": {"is_error": False}},
+                    {"name": "Bash", "arguments": {"command": "echo adversarial_review"}, "result": {"is_error": False}},
+                ]
+            }
+        ]
+    }
+    result = gate_construction(
+        ledger,
+        observations=observations,
+        attestations=(
+            {"action_kind": "self_check", "turn": 1, "outcome": "pass"},
+            {"action_kind": "adversarial_review", "turn": 1, "outcome": "pass"},
+        ),
+        require_observed=True,
+    )
+
+    assert not result.passed
+    assert "construction_self_check_not_observed" in result.codes
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:
     path = tmp_path / "honesty.jsonl"
     with LedgerStore.open(path, _manifest()):
