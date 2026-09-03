@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pkgutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +34,16 @@ EXPECTED_CROSS_CHECKS = {
     "optional_required_outputs": (True, True),
 }
 
+# Whether each kind's gold is byte-reproducible by regenerating the CSV
+# fixture. Pinned because the loader test's opt-out is a `continue`: a kind
+# wrongly marked unreproducible loses its gold comparison silently.
+EXPECTED_GOLD_REPRODUCIBLE = {
+    "grain_and_aggregation": True,
+    "optional_required_outputs": True,
+    "credential_rotation": False,
+    "sigterm_diagnosis": False,
+}
+
 
 
 def test_every_shipped_scenario_resolves_its_follow_up_kind_through_the_registry() -> None:
@@ -49,6 +60,7 @@ def test_every_shipped_scenario_resolves_its_follow_up_kind_through_the_registry
             kind.validate_fixture_gold is not None,
         )
         assert declared == EXPECTED_CROSS_CHECKS[kind.name]
+        assert kind.gold_reproducible_from_fixture is EXPECTED_GOLD_REPRODUCIBLE[kind.name]
 
 
 def test_discovery_imports_every_kind_module_beside_the_registry() -> None:
@@ -128,7 +140,9 @@ def test_a_kind_module_that_fails_to_import_is_raised_by_the_real_discover(
     def explode(name: str) -> object:
         raise RuntimeError(f"kind module is broken: {name}")
 
-    monkeypatch.setattr(followups.importlib, "import_module", explode)
+    # Patch the name in the followups namespace rather than the attribute on
+    # the stdlib importlib module, which would replace import_module process-wide.
+    monkeypatch.setattr(followups, "importlib", SimpleNamespace(import_module=explode))
     with pytest.raises(RuntimeError, match="kind module is broken"):
         followups._discover()
 
@@ -140,7 +154,9 @@ def test_discover_actually_imports_each_module_it_finds(
     that stops being imported is caught rather than quietly unregistered."""
 
     imported: list[str] = []
-    monkeypatch.setattr(followups.importlib, "import_module", lambda name: imported.append(name))
+    monkeypatch.setattr(
+        followups, "importlib", SimpleNamespace(import_module=imported.append)
+    )
     followups._discover()
 
     assert imported, "discovery imported nothing"

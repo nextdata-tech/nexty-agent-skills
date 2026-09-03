@@ -206,5 +206,6 @@ KIND = register(
         gold_keys=frozenset({"diagnostics"}),
         handler=check,
         validate_settings=_validate_settings,
+        gold_reproducible_from_fixture=False,
     )
 )

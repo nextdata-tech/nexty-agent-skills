@@ -8,6 +8,7 @@ import shutil
 import pytest
 import yaml
 
+from dp_scenarios import followups
 from dp_scenarios.grading import GATE_PHASES
 from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios, select_tier
 from dp_scenarios.synthgen import get_dataset
@@ -69,6 +70,7 @@ def _copy_zero_row_package(tmp_path: Path) -> Path:
 
 
 def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_path: Path) -> None:
+    compared: list[str] = []
     scenarios = load_scenarios(SCENARIO_ROOT)
     assert {scenario.id for scenario in scenarios} == _packages_on_disk()
     for scenario in scenarios:
@@ -82,28 +84,29 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
         assert scenario.events_path.is_file()
         assert scenario.required_plants
         assert set(scenario.gates) == set(GATE_PHASES)
-        assert scenario.gates["follow-up"].kind in {
-            "grain_and_aggregation",
-            "optional_required_outputs",
-            "credential_rotation",
-            "sigterm_diagnosis",
-        }
+        # Derived, not enumerated: a per-kind list here is one more shared
+        # edit per scenario, which is what the followups registry removed.
+        assert followups.is_registered(scenario.gates["follow-up"].kind)
         generated = scenario.generate_fixture(tmp_path / scenario.id)
         for name, path in scenario.gold.items():
             assert path.is_file()
-        if scenario.gates["follow-up"].kind in {"credential_rotation", "sigterm_diagnosis"}:
-            # credential-rotation's committed gold documents facts about the
-            # live Postgres closure, and sigterm-diagnosis's documents facts
-            # about the SIGTERM/transform-window drill (both reconciled
-            # directly against their own regenerated evidence in their
-            # dedicated test modules); neither is reproduced by the plain CSV
-            # synthgen path the other two scenarios use, so neither is
-            # compared byte-for-byte against `generate_fixture` here.
+        if not followups.get(scenario.gates["follow-up"].kind).gold_reproducible_from_fixture:
+            # This kind's gold records something the CSV generator does not
+            # produce -- live Postgres facts, or declared runtime constants --
+            # so it cannot be compared byte-for-byte against a regenerated
+            # fixture. Each such kind reconciles its own gold against
+            # independently recounted evidence in its dedicated test module.
             continue
         for name, path in scenario.gold.items():
             generated_path = scenario.gold_path(name, generated.out_dir)
             assert generated_path.is_file()
             assert generated_path.read_bytes() == path.read_bytes()
+            compared.append(f"{scenario.id}:{name}")
+
+    # The opt-out above is a `continue`, so it can swallow the byte comparison
+    # entirely -- flipping the kind flag's default would silently skip every
+    # scenario and leave this test green on an empty loop.
+    assert compared, "no scenario's gold was compared against a regenerated fixture"
 
 
 @pytest.mark.parametrize("missing", sorted({
@@ -453,6 +456,16 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
     assert {scenario.id for scenario in smoke}.isdisjoint({scenario.id for scenario in core})
     assert {scenario.id for scenario in (*smoke, *core)} == _packages_on_disk()
     assert smoke and core
+
+    # What select_tier itself returns, pinned against EXPECTED_TIERS rather
+    # than against the loader. EXPECTED_TIERS pins what load_scenarios
+    # reports; without this, inverting select_tier's own predicate -- so
+    # --tier smoke runs the core scenarios and vice versa -- satisfies every
+    # assertion above, because the two sets merely swap.
+    for tier in ("smoke", "core"):
+        expected = {name for name, declared in EXPECTED_TIERS.items() if declared == tier}
+        assert {scenario.id for scenario in select_tier(scenarios, tier)} == expected
+        assert all(scenario.tier == tier for scenario in select_tier(scenarios, tier))
 
 
 def test_select_tier_preserves_declared_run_order() -> None:

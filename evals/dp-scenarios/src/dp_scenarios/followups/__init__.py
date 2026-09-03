@@ -60,6 +60,11 @@ class FollowUpKind:
     # shipped once already.
     validate_plant_evidence: PlantEvidenceValidator | None = None
     validate_fixture_gold: FixtureGoldValidator | None = None
+    # Whether this kind's gold is byte-reproducible by regenerating the CSV
+    # fixture. True is the stricter check and the default, so a kind whose
+    # gold records something the generator cannot reproduce -- live database
+    # facts, declared runtime constants -- has to say so deliberately.
+    gold_reproducible_from_fixture: bool = True
 
 
 _REGISTRY: dict[str, FollowUpKind] = {}
