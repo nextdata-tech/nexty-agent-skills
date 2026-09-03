@@ -616,6 +616,9 @@ _SCENARIO_TIERS = frozenset({"smoke", "T0", "core"})
 # The legacy spelling maps onto the tier it is an alias for, so selection
 # treats the two as one tier rather than as two that never intersect.
 _TIER_ALIASES = {"T0": "smoke"}
+# Public alias: the CLIs offer these as argparse choices, so a bad --tier is
+# a usage error rather than a traceback out of select_tier.
+SCENARIO_TIERS = _SCENARIO_TIERS
 _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",
@@ -1055,6 +1058,7 @@ __all__ = [
     "ScenarioDeclaration",
     "ScenarioError",
     "load_scenario",
+    "SCENARIO_TIERS",
     "load_scenarios",
     "select_tier",
     "scenario_script_hash",

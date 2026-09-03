@@ -28,7 +28,7 @@ from dp_scenarios.runner.local import FileSupervisorRecordReader, temporary_plug
 from dp_scenarios.runner.report import write_report
 from dp_scenarios.runner.session import LiveSession
 from dp_scenarios.runner.tier import RunBudgets, TierError, TierRunner, run_drift_canary
-from dp_scenarios.scenario import Scenario, load_scenarios, select_tier
+from dp_scenarios.scenario import SCENARIO_TIERS, Scenario, load_scenarios, select_tier
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -112,7 +112,6 @@ def _select_scenarios(all_scenarios: Sequence[Scenario], selected: Sequence[str]
     return tuple(scenario for scenario in all_scenarios if scenario.id in selected_set)
 
 
-
 def _scenarios_in_scope(
     all_scenarios: Sequence[Scenario],
     selected: Sequence[str],
@@ -166,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tier",
         default="smoke",
+        choices=sorted(SCENARIO_TIERS),
         help=(
             "tier to run when --scenario is not given (default: smoke). This "
             "entrypoint drives a live, authenticated Claude Code session, so "

@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 
 from dp_scenarios.canary import load_claims
 from dp_scenarios.knobs import KnobError, SupervisorKnobs, load_knob_plan
-from dp_scenarios.scenario import load_scenarios, select_tier
+from dp_scenarios.scenario import SCENARIO_TIERS, load_scenarios, select_tier
 
 from .environment import PinnedVersions
 from .report import write_report
@@ -123,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tier",
         required=True,
+        choices=sorted(SCENARIO_TIERS),
         help="Tier to run; only scenarios declaring it are selected from --scenario-root",
     )
     parser.add_argument("--canary-dir", type=Path, required=True)
