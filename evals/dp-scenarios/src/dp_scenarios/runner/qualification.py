@@ -36,6 +36,30 @@ class QualificationRecord:
         }
 
 
+def _ungraded_reasons(score: ScoreVector) -> tuple[str, ...]:
+    """Return the codes of the gates that actually voided the run.
+
+    The reason used to be the hardcoded string ``required_difficulty_not_fired``
+    for *every* ungraded score, whatever voided it -- a planted check that
+    measured nothing, a check with an unrecognized result, and a genuinely
+    unfired plant all reported as an unfired difficulty. That is a claim the
+    code never checked: a reader comparing ``qualification.json`` against
+    ``operator-observations.json`` could see "difficulty not fired" beside
+    ``fired_plant_ids: [...]`` and have no way to tell which was true.  The
+    reason is now read off the ungraded gates' own findings.
+    """
+
+    codes = tuple(
+        dict.fromkeys(
+            code
+            for result in score.gates.values()
+            if result.ungraded
+            for code in result.codes
+        )
+    )
+    return codes or ("run_ungraded",)
+
+
 def qualify_run(
     score: ScoreVector,
     *,
@@ -50,7 +74,9 @@ def qualify_run(
     if score.state is TerminalState.INVALID:
         return QualificationRecord(QualificationDisposition.INVALID, replay_status, operator_mode, ("run_invalid",))
     if score.state is TerminalState.UNGRADED:
-        return QualificationRecord(QualificationDisposition.OBSERVED, replay_status, operator_mode, ("required_difficulty_not_fired",))
+        return QualificationRecord(
+            QualificationDisposition.OBSERVED, replay_status, operator_mode, _ungraded_reasons(score)
+        )
     if score.state is not TerminalState.PASSED:
         return QualificationRecord(QualificationDisposition.REJECTED, replay_status, operator_mode, (f"score_state:{score.state.value}",))
     if validation_mode == "replay":

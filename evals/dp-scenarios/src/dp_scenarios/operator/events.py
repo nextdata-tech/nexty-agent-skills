@@ -70,6 +70,7 @@ EVENT_KEYS = frozenset(
         "replace_message",
         "metadata",
         "plant",
+        "required_terms",
     }
 )
 
@@ -149,6 +150,10 @@ class EventCard:
     # this package supports 3.11.
     metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     plant: bool = False
+    # Terms the *transmitted* operator message must contain for this beat to
+    # count as delivered.  Declared as scenario data so the delivery check is
+    # a property of the fixture, never a hardcoded predicate in the engine.
+    required_terms: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -182,6 +187,7 @@ class EventCard:
             "replace_message": self.replace_message,
             "metadata": dict(self.metadata),
             "plant": self.plant,
+            "required_terms": list(self.required_terms),
         }
         return result
 
@@ -210,6 +216,7 @@ class EventInjection:
     sentinel_bytes: bytes | None
     plant: bool
     replace_message: bool
+    required_terms: tuple[str, ...] = ()
 
 
 def event_from_mapping(value: Mapping[str, object]) -> EventCard:
@@ -263,6 +270,10 @@ def event_from_mapping(value: Mapping[str, object]) -> EventCard:
     fresh_session = raw.get("fresh_session", event_type is EventType.BACK_AFTER_LUNCH)
     replace_message = raw.get("replace_message", event_type in {EventType.SCREENSHOT, EventType.WRONG_FILE})
     plant = raw.get("plant", False)
+    required_raw = raw.get("required_terms", ())
+    if isinstance(required_raw, (str, bytes)) or not isinstance(required_raw, Sequence):
+        raise EventError("event.required_terms must be a list of non-empty strings")
+    required_terms = tuple(_string(item, "event.required_terms[]") for item in required_raw)
     return EventCard(
         version=version,
         card_id=_string(raw["id"], "event.id"),
@@ -280,6 +291,7 @@ def event_from_mapping(value: Mapping[str, object]) -> EventCard:
         replace_message=_bool(replace_message, "event.replace_message"),
         metadata=MappingProxyType(metadata),
         plant=_bool(plant, "event.plant"),
+        required_terms=required_terms,
     )
 
 
@@ -308,6 +320,7 @@ def inject_event(card: EventCard) -> EventInjection:
         sentinel_bytes=card.sentinel,
         plant=card.plant,
         replace_message=card.replace_message,
+        required_terms=card.required_terms,
     )
 
 

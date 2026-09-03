@@ -31,7 +31,7 @@ from .appender import (
     append_turn_row,
     row_payload,
 )
-from .events import EventInjection, EventSchedule, event_from_mapping
+from .events import EventInjection, EventSchedule, event_from_mapping, inject_event
 from .generated import GeneratedOperator, OperatorView
 from .matcher import Category, MatchResult, MatcherBank
 from .persona import PersonaCard
@@ -161,6 +161,7 @@ class OperatorScript:
             object.__setattr__(self, "sentinel", marker)
         object.__setattr__(self, "obstacle_terms", tuple(self.obstacle_terms))
         object.__setattr__(self, "required_plants", frozenset(self.required_plants) | self.events.planted_card_ids())
+        _validate_plant_deliverability(self.events, resolved_turns)
         normalized_phases = {int(key): int(value) for key, value in dict(self.phase_by_turn).items()}
         if any(key < 1 or value < 1 or value > 7 for key, value in normalized_phases.items()):
             raise ValueError("phase_by_turn must map positive turns to phases 1 through 7")
@@ -397,6 +398,65 @@ def _as_bytes(value: object) -> tuple[bytes, ...]:
     return (str(value).encode("utf-8"),)
 
 
+def _validate_plant_deliverability(
+    events: EventSchedule,
+    turns: Sequence[ScriptTurn],
+) -> None:
+    """Reject a planted beat that no run could ever transmit.
+
+    A planted card whose resolution yields neither text nor an attachment
+    carries its beat only on the scripted turn it fires with.  When that turn
+    is substitutable, a matcher reply replaces the authored line and the beat
+    is silently undeliverable -- so the combination is a fixture error, caught
+    when the script is built rather than discovered as a missing beat at the
+    end of a paid live run.
+    """
+
+    for card in events.cards:
+        if not card.plant:
+            continue
+        injection = inject_event(card)
+        if injection.messages or injection.attachments:
+            continue
+        index = card.trigger_turn - 1
+        if index < 0 or index >= len(turns):
+            continue
+        if card.trigger_turn > 1 and turns[index].substitute_reply:
+            raise ValueError(
+                f"planted event {card.card_id!r} has no content of its own and fires on "
+                f"substitutable turn {card.trigger_turn}: the beat can never be transmitted"
+            )
+
+
+def _injection_delivered(
+    injection: EventInjection,
+    message: OperatorMessage,
+    scripted_text: str,
+) -> bool:
+    """Return whether this card's beat is present in the transmitted message.
+
+    Delivery is read off the message that actually goes to the agent, never
+    off the intention to fire.  Declared ``required_terms`` are authoritative
+    when present; otherwise the card's own resolved material (its text, or the
+    attachment that stands in for it) must be there, and a card that carries
+    no material of its own rides on the authored scripted line.
+    """
+
+    text = message.text
+    if injection.required_terms:
+        folded = text.casefold()
+        return all(term.casefold() in folded for term in injection.required_terms)
+    expected_messages = (
+        () if (injection.replace_message and injection.attachments) else injection.messages
+    )
+    if expected_messages:
+        return all(part in text for part in expected_messages)
+    if injection.attachments:
+        names = {item.name for item in message.attachments}
+        return all(item.name in names for item in injection.attachments)
+    return scripted_text in text
+
+
 def _operator_context(value: str | bytes, sentinels: Sequence[bytes]) -> str:
     """Redact planted sentinel values before context reaches a provider."""
 
@@ -460,6 +520,7 @@ class OperatorEngine:
         supervisor_reader: SupervisorRecordReader | None = None,
         counter_readers: Sequence[object] = (),
         generated_operator: GeneratedOperator | None = None,
+        extra_sentinels: Sequence[bytes | str] = (),
     ) -> None:
         self.script = script
         self.transport = transport
@@ -482,6 +543,15 @@ class OperatorEngine:
             self._ledger_supervisor_reader = StaticSupervisorRecordReader(facts)
         self.counter_readers = tuple(counter_readers)
         self.generated_operator = generated_operator
+        # Planted markers live in the generated fixture, not in the scenario's
+        # operator block: a scenario may declare no ``operator.sentinel`` and
+        # still plant PII the agent can echo back.  Redaction before an
+        # external provider, and the in-engine scan, must cover both.
+        self.extra_sentinels = tuple(
+            value.encode("utf-8") if isinstance(value, str) else bytes(value)
+            for value in extra_sentinels
+            if value
+        )
         event_material: list[str | bytes] = []
         for card in script.events.cards:
             event_material.extend(
@@ -516,6 +586,19 @@ class OperatorEngine:
         ]
         text = "\n".join((base, *message_parts)) if message_parts else base
         return OperatorMessage(text, attachments)
+
+    def _redaction_markers(self, active_sentinels: Sequence[bytes]) -> tuple[bytes, ...]:
+        """Return every marker that must be redacted out of provider context.
+
+        This is deliberately wider than the set ``_scan`` trips on: the trip
+        gate is graded against the tier's leakable-surface policy (a marker in
+        a *read* result is not a leak), while redaction is unconditional --
+        nothing planted may be forwarded to an external model provider.
+        """
+
+        markers = list(active_sentinels)
+        markers.extend(marker for marker in self.extra_sentinels if marker not in markers)
+        return tuple(markers)
 
     def _scan(self, result: TurnResult, markers: Sequence[bytes]) -> bool:
         if not markers:
@@ -636,9 +719,6 @@ class OperatorEngine:
             self.turn_pointer = index - 1
             injections = self.script.events.fire(index)
             for injection in injections:
-                fired_events.append(injection.card_id)
-                if injection.plant:
-                    fired_plants.append(injection.card_id)
                 if injection.sentinel_bytes is not None:
                     active_sentinels.append(injection.sentinel_bytes)
             if any(injection.fresh_session for injection in injections):
@@ -649,14 +729,20 @@ class OperatorEngine:
                 else (next_reply or scripted_turn.text)
             )
             if index > 1 and scripted_turn.substitute_reply and next_reply and self.generated_operator is not None:
+                # Redaction covers strictly more than the trip scan: every
+                # declared sentinel *and* every planted fixture marker.  A
+                # marker read out of the fixture is not itself a leak (the
+                # tier's leakable-surface policy decides that), but it must
+                # still never be forwarded to an external model provider.
+                redaction_markers = self._redaction_markers(active_sentinels)
                 view = OperatorView.from_persona(
                     turn=index,
                     phase=self.phase,
                     persona=self.script.persona,
-                    agent_message=_operator_context(previous_agent_message, active_sentinels),
+                    agent_message=_operator_context(previous_agent_message, redaction_markers),
                     selected_reply=next_reply,
                     prior_operator_messages=tuple(
-                        _operator_context(message, active_sentinels)
+                        _operator_context(message, redaction_markers)
                         for message in prior_operator_messages
                     ),
                     remaining_turns=len(self.script.turns) - index + 1,
@@ -670,6 +756,21 @@ class OperatorEngine:
                 if rendered.used_fallback and "operator_fallback" not in self.failure_modes:
                     self.failure_modes.append("operator_fallback")
             message = self._message_for(base, injections)
+            # A card counts as fired only once its beat is in the text that
+            # actually goes out; an intention to fire is not a transmission.
+            delivered = tuple(
+                injection
+                for injection in injections
+                if _injection_delivered(injection, message, scripted_turn.text)
+            )
+            delivered_ids = {injection.card_id for injection in delivered}
+            undelivered_ids = tuple(
+                injection.card_id for injection in injections if injection.card_id not in delivered_ids
+            )
+            for injection in delivered:
+                fired_events.append(injection.card_id)
+                if injection.plant:
+                    fired_plants.append(injection.card_id)
             self.matcher.validate_outgoing_message(message.text)
             prior_operator_messages.append(message.text)
             result = self.transport.send_message(message)
@@ -715,9 +816,11 @@ class OperatorEngine:
             claim: dict[str, object] = {}
             if match.category is Category.APPROVAL_REQUEST:
                 claim["open_decision_marker"] = approval_marker
-            event_outcomes = tuple(injection.outcome for injection in injections)
+            event_outcomes = tuple(injection.outcome for injection in delivered)
             if event_outcomes:
                 claim["event_outcomes"] = list(event_outcomes)
+            if undelivered_ids:
+                claim["events_not_transmitted"] = list(undelivered_ids)
             if snapshots:
                 claim["counter_snapshots"] = [dict(snapshot) for snapshot in snapshots]
             session_gap_seconds = sum(injection.gap_seconds for injection in injections)
@@ -737,8 +840,8 @@ class OperatorEngine:
                 agent_message=result.agent_message,
                 transcript_delta=result.transcript_delta,
                 match=match,
-                event_ids=tuple(injection.card_id for injection in injections),
-                event_outcomes=tuple(injection.outcome for injection in injections),
+                event_ids=tuple(injection.card_id for injection in delivered),
+                event_outcomes=event_outcomes,
                 tool_calls=result.tool_calls,
                 files_touched=result.files_touched,
                 approval_artifact=approval_artifact,

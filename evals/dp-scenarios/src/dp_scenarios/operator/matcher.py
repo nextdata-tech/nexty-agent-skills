@@ -233,6 +233,24 @@ class MatcherBank:
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
             return classified
         if classified.category is Category.SOURCE_QUESTION:
+            # The brief is consulted before the source answers, not only after
+            # them. A ground-truth fact fires only when its *whole* declared
+            # term set is present, so a matching fact is strictly more specific
+            # than a source answer, which fires on a single topic key name.
+            # Consulting the sheet first let one generic key ("data") shadow
+            # every specific fact an author added precisely because the source
+            # answer was the wrong answer to that question. Scenarios that
+            # declare no brief are unaffected: an empty mapping never matches.
+            found = self.answer_sheet.answer_for_ground_truth(message)
+            if found is not None:
+                key, fact = found
+                return MatchResult(
+                    Category.SOURCE_QUESTION,
+                    f"ground_truth.{key}",
+                    fact,
+                    answer_key=key,
+                    ground_truth=True,
+                )
             source = self.answer_sheet.answer_for_source(message)
             if source is not None:
                 key, answer = source

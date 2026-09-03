@@ -9,6 +9,11 @@
   id: grain_trap_fanout
   trigger_turn: 6
   type: scope_creep
-  content: null
+  content: >-
+    One more thing while you are in there: can I also get this broken out by
+    owner and by stage at the same time, one line per combination?
   outcome: grain_trap_fanout_difficulty_fired
   plant: true
+  required_terms:
+    - "broken out by owner and by stage"
+    - "one line per combination"
