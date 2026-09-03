@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from dp_scenarios.ledger import lint as ledger_lint
 from dp_scenarios.ledger import read_ledger
@@ -141,6 +141,54 @@ def _result(
     )
 
 
+CLOSURE_DIR = "closure"
+
+
+def _authored_closure(files: object) -> bool:
+    """Report whether a turn wrote into the authored data-product closure.
+
+    This is the only observational evidence ``gate_intake`` accepts as
+    codegen, and the asymmetry is deliberate.  The inference feeds two
+    checks at once: it can supply a codegen turn the ledger failed to record,
+    and it can trip ``intake_approval_not_before_codegen``.  Because of the
+    second role, a false positive does not merely weaken a check -- it makes
+    the gate unpassable for every run.  A false negative only falls back to
+    the ledger's own ``codegen`` row, which is the authoritative signal
+    anyway.  So this errs toward not inferring.
+
+    Counts as codegen: a touched path with a ``closure`` component, which the
+    live adapter's system prompt makes the contractual home of the authored
+    data product.  Because the live adapter derives ``files_touched`` from a
+    workspace diff rather than from tool names, this catches a closure write
+    however it was performed -- Write, Edit, a Bash heredoc, or an MCP build
+    tool alike.
+
+    Deliberately does not count: tool calls of any name, including writes.
+    A tool name cannot distinguish authoring the closure from authoring the
+    blueprint, and the blueprint is what an agent is *supposed* to write
+    before asking for approval.  Reading a config file, listing data
+    products, or probing a source is likewise pre-approval work, not
+    codegen.  Touched files outside the closure do not count either, for the
+    same reason: the live workspace diff includes the root-level
+    ``dp-blueprint.md``/``dp-spec.md`` that exists precisely to be approved.
+
+    A malformed entry is not treated as authoring.  Fail-closed would mean
+    inferring codegen here, which is the failure mode this guards against.
+    """
+
+    if not isinstance(files, Sequence) or isinstance(files, (str, bytes, bytearray)):
+        return False
+    for file in files:
+        path = file.get("path") if isinstance(file, Mapping) else file
+        if isinstance(path, Path):
+            path = path.as_posix()
+        if not isinstance(path, str):
+            continue
+        if CLOSURE_DIR in PurePosixPath(path.replace("\\", "/")).parts:
+            return True
+    return False
+
+
 def gate_intake(ledger: object) -> GateResult:
     """intake: require approval strictly before the first code-generation row."""
 
@@ -162,11 +210,7 @@ def gate_intake(ledger: object) -> GateResult:
                 for turn in turns:
                     if not isinstance(turn, Mapping) or not isinstance(turn.get("turn"), int):
                         continue
-                    files = turn.get("files_touched")
-                    calls = turn.get("tool_calls")
-                    if (isinstance(files, Sequence) and not isinstance(files, (str, bytes, bytearray)) and files) or (
-                        isinstance(calls, Sequence) and not isinstance(calls, (str, bytes, bytearray)) and calls
-                    ):
+                    if _authored_closure(turn.get("files_touched")):
                         codegen.append(turn["turn"])
     findings: list[Finding] = []
     for row in rows:
