@@ -719,6 +719,41 @@ def test_a_product_tool_result_still_trips_the_sentinel_gate_on_the_live_path(
     assert run.score.state is ScoreTerminalState.AUTOMATIC_ZERO
 
 
+def test_a_malformed_session_replay_entry_falls_back_to_a_raw_scan(tmp_path: Path) -> None:
+    """The medium finding from the second review round.
+
+    A ``turns`` entry that is a mapping without ``"result"`` is not the
+    ``RecordedTurn.to_dict`` shape ``session-replay.json`` is supposed to
+    have. The extractor must signal that by returning ``None`` -- the same
+    way ``_turns_from_operator_observations`` does for its own shape check --
+    so ``_artifacts_surface_bytes`` falls back to a raw byte read of the
+    whole file instead of silently substituting a partial view that could
+    hide a leak sitting under a key the unwrapping doesn't recognise.
+    """
+
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "session-replay.json").write_text(
+        json.dumps({"turns": [{"unexpected_key": "PII-SENTINEL"}]}), encoding="utf-8"
+    )
+
+    surface = tier_module._artifacts_surface_bytes(artifact_root)
+
+    assert surface is not None
+    assert b"PII-SENTINEL" in surface
+
+
+def test_turns_from_session_replay_returns_none_on_a_missing_result_key() -> None:
+    assert tier_module._turns_from_session_replay({"turns": [{"operator_message": {}}]}) is None
+
+
+def test_turns_from_session_replay_unwraps_a_well_formed_entry() -> None:
+    result = tier_module._turns_from_session_replay(
+        {"turns": [{"operator_message": {}, "result": {"agent_message": "hi"}}]}
+    )
+    assert result == [{"agent_message": "hi"}]
+
+
 @pytest.mark.parametrize(
     ("name", "response", "expected_state", "expected_stop"),
     [

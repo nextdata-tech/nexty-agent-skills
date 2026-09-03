@@ -776,7 +776,7 @@ def _leakable_transcript_delta_lines(delta: str) -> list[str]:
     """Split a rendered transcript_delta into its leakable lines.
 
     Each segment is appended as one list entry and the whole list is
-    "\n".join-ed (claude_adapter.py), so a multi-line assistant or tool_use
+    "\\n".join-ed (claude_adapter.py), so a multi-line assistant or tool_use
     block's own internal newlines produce continuation lines carrying no
     prefix of their own -- only the first line of a block is prefixed. A
     per-line prefix filter therefore drops every continuation line
@@ -875,9 +875,16 @@ def _turns_from_session_replay(payload: Mapping[str, object]) -> Sequence[object
         return None
     results: list[object] = []
     for turn in turns:
-        # A malformed entry is not silently skipped -- append it whole so a
-        # shape this unwrapping cannot classify is still scanned.
-        results.append(turn.get("result") if isinstance(turn, Mapping) else turn)
+        if not isinstance(turn, Mapping) or "result" not in turn:
+            # Not the RecordedTurn.to_dict shape this file is supposed to
+            # have. Falling back to a raw read of the whole file -- the same
+            # policy _turns_from_operator_observations uses for its own
+            # shape check -- is fail-closed; silently substituting a partial
+            # view built from whatever this entry does have is not, because
+            # it could hide a leak sitting under a key this unwrapping
+            # doesn't recognise.
+            return None
+        results.append(turn.get("result"))
     return results
 
 
