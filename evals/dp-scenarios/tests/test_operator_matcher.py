@@ -233,3 +233,143 @@ def test_answer_maps_use_sorted_keys_for_repeatable_selection() -> None:
     assert bank.reply_for("Which source covers alpha and zeta?").reply == "Alpha source."
     assert bank.reply_for("Status of alpha and zeta").reply == "Alpha status."
     assert bank.reply_for("Should we use alpha option or zeta option?").reply == "Alpha decision."
+
+
+def sheet_with_ground_truth() -> object:
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["ground_truth"] = {
+        "value_column": {
+            "terms": ["value", "column"],
+            "fact": "The value column is the recognized dollar amount for that line.",
+        },
+        "pii_policy": {
+            "terms": ["customer_email", "salary"],
+            "fact": "customer_email and salary are dropped entirely, never masked.",
+        },
+    }
+    return answer_sheet_from_mapping(raw)
+
+
+def test_no_ground_truth_declared_keeps_legacy_unmatched_source_reply() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet())  # type: ignore[arg-type]
+
+    result = bank.reply_for("What does the value column represent?")
+
+    assert result.category is Category.SOURCE_QUESTION
+    assert result.rule_id == "persona.source_question"
+    assert result.reply == "I can answer from the sheet."
+    assert result.matched is False
+    assert result.ground_truth is False
+
+
+def test_no_ground_truth_declared_keeps_legacy_unmatched_decision_reply_but_reports_unmatched() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet())  # type: ignore[arg-type]
+
+    result = bank.reply_for("Which approach should we pick here?")
+
+    assert result.category is Category.DECISION_REQUEST
+    assert result.decision_id is None
+    assert result.rule_id == "persona.decision_request"
+    assert result.reply == "I can answer from the sheet."
+    assert result.matched is False
+
+
+def test_ground_truth_answers_a_question_the_answer_sheet_does_not_cover() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    result = bank.reply_for("What does the value column represent?")
+
+    assert result.category is Category.SOURCE_QUESTION
+    assert result.rule_id == "ground_truth.value_column"
+    assert result.answer_key == "value_column"
+    assert result.ground_truth is True
+    assert result.reply == "The value column is the recognized dollar amount for that line."
+
+
+def test_ground_truth_requires_every_declared_term_to_be_present() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    # Only "salary" is present; "customer_email" is not, so the pii_policy
+    # fact must not fire on a partial match.
+    result = bank.reply_for("Should the salary field be in the source output?")
+
+    assert result.ground_truth is False
+    assert result.rule_id != "ground_truth.pii_policy"
+
+
+def test_ground_truth_declared_but_uncovered_question_uses_honest_fallback() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    result = bank.reply_for("What is the endpoint retry policy?")
+
+    assert result.category is Category.SOURCE_QUESTION
+    assert result.rule_id == "unmatched.source_question"
+    assert result.reply == "I don't know, you tell me."
+    assert result.matched is False
+    assert result.ground_truth is False
+
+
+def test_ground_truth_declared_but_uncovered_decision_uses_honest_fallback() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    result = bank.reply_for("Which approach should we pick here?")
+
+    assert result.category is Category.DECISION_REQUEST
+    assert result.decision_id is None
+    assert result.rule_id == "unmatched.decision_request"
+    assert result.reply == "I don't know, you tell me."
+    assert result.matched is False
+
+
+def test_ground_truth_declared_but_uncovered_status_uses_honest_fallback() -> None:
+    raw = sheet_with_ground_truth().to_mapping()  # type: ignore[union-attr]
+    raw["status_answers"] = {}
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), answer_sheet_from_mapping(raw))  # type: ignore[arg-type]
+
+    result = bank.reply_for("Status of this work please.")
+
+    assert result.category is Category.STATUS_QUERY
+    assert result.rule_id == "unmatched.status_query"
+    assert result.reply == "I don't know, you tell me."
+    assert result.matched is False
+
+
+def test_declared_answer_sheet_entry_still_wins_over_ground_truth() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet_with_ground_truth())  # type: ignore[arg-type]
+
+    result = bank.reply_for("Which source contains the orders?")
+
+    assert result.rule_id == "source.answer.orders"
+    assert result.ground_truth is False
+    assert result.matched is True
+
+
+def test_ground_truth_fact_leaking_an_obstacle_term_is_rejected() -> None:
+    raw = sheet_with_ground_truth().to_mapping()  # type: ignore[union-attr]
+    raw["obstacle_terms"] = ["proxy"]
+    raw["ground_truth"]["value_column"]["fact"] = "It is probably a proxy issue."
+
+    with pytest.raises(MatcherError, match="obstacle"):
+        MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), answer_sheet_from_mapping(raw))  # type: ignore[arg-type]
+
+
+def test_ground_truth_malformed_entry_is_a_load_error_not_a_silent_skip() -> None:
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["ground_truth"] = {"value_column": {"terms": ["value"]}}  # missing "fact"
+
+    with pytest.raises(ValueError, match="terms and fact"):
+        answer_sheet_from_mapping(raw)
+
+
+def test_ground_truth_unknown_key_is_a_load_error() -> None:
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["ground_truth"] = {"value_column": {"terms": ["value"], "fact": "It is dollars.", "surprise": True}}
+
+    with pytest.raises(ValueError, match="unknown key"):
+        answer_sheet_from_mapping(raw)
+
+
+def test_ground_truth_key_absent_defaults_to_empty_and_round_trips() -> None:
+    plain = sheet()
+    assert plain.ground_truth == {}  # type: ignore[union-attr]
+    assert plain.to_mapping()["ground_truth"] == {}  # type: ignore[union-attr]

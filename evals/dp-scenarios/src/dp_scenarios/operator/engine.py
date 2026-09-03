@@ -723,6 +723,13 @@ class OperatorEngine:
             session_gap_seconds = sum(injection.gap_seconds for injection in injections)
             if session_gap_seconds:
                 claim["session_gap_seconds"] = session_gap_seconds
+            # Surface how the operator's reply was actually sourced: a reader
+            # comparing runs must be able to tell "5 of 7 turns answered from
+            # the brief" from "0 of 7", not just read a byte-identical reply.
+            if not match.matched:
+                claim["operator_unmatched"] = True
+            if match.ground_truth:
+                claim["operator_answered_from_ground_truth"] = True
             turn_record = TurnRecord(
                 turn=index,
                 phase=phase,

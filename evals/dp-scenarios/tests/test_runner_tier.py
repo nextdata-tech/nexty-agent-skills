@@ -1252,3 +1252,56 @@ def test_a_malformed_transcript_shape_is_scanned_whole_not_skipped(turns: list[o
                     call.setdefault("result", {"content": "NAME-SENTINEL-abc"})
     blob = json.dumps(tier_module._leakable_turn_surfaces(turns))
     assert "not-a-mapping" in blob or "NAME-SENTINEL-abc" in blob or "not-a-sequence" in blob
+def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path: Path) -> None:
+    """A reader must be able to tell how many turns the operator answered
+
+    from its declared brief versus how many it could not answer at all, not
+    just read byte-identical operator replies (the deadlock this guards
+    against left no distinguishing trace in earlier observations).
+    """
+
+    opening = "Improve visibility."
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "obs-test",
+            "opening_message": opening,
+            "turns": [opening, "Please continue.", "Please continue again."],
+            "source_answers": {"source": "Use the source."},
+            "decision_answers": {},
+            "status_answers": {},
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+            "ground_truth": {
+                "value_col": {"terms": ["value", "column"], "fact": "It is the recognized dollar amount."},
+            },
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turns=sheet.turns,
+        turn_budget=3,
+        phase_by_turn={1: 1, 2: 2, 3: 3},
+    )
+    responses = [
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="What is the endpoint retry policy?"),
+        TurnResult(agent_message="Yes, please proceed.", reported=True),
+    ]
+    result = OperatorEngine(script, InMemoryTransport(responses)).run()
+
+    tier_module._write_operator_observations(tmp_path, result)
+    payload = json.loads((tmp_path / "operator-observations.json").read_text())
+
+    assert payload["operator_ground_truth_turn_count"] == 1
+    assert payload["operator_unmatched_turn_count"] == 1
+    assert payload["turns"][0]["operator_answered_from_ground_truth"] is True
+    assert payload["turns"][0]["operator_matched"] is True
+    assert payload["turns"][0]["operator_matched_rule_id"] == "ground_truth.value_col"
+    assert payload["turns"][1]["operator_matched"] is False
+    assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
+    assert payload["turns"][1]["operator_matched_rule_id"] == "unmatched.source_question"
+    assert payload["turns"][2]["operator_matched"] is True
