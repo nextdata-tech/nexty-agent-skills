@@ -384,8 +384,22 @@ def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult
         # Keep the lexical fallback tied to this run's protected directory.
         # A bare ``gold`` segment is ordinary medallion-layer vocabulary and is
         # not evidence that the harness oracle was addressed.
-        segments = [segment for segment in candidate.replace("\\", "/").casefold().split("/") if segment not in {"", "."}]
-        if oracle_name in segments:
+        #
+        # The fallback also only applies to a path that tries to leave the
+        # agent workspace. Every candidate above already failed containment,
+        # so a workspace-relative path with no upward traversal cannot reach
+        # the oracle however it is spelled -- and "oracle" is an ordinary
+        # source-system name, so `sources/oracle/customers.yml` would
+        # otherwise take an unappealable automatic zero for authoring a file
+        # about an Oracle database.
+        raw_segments = candidate.replace("\\", "/").split("/")
+        segments = [segment.casefold() for segment in raw_segments if segment not in {"", "."}]
+        # ``..`` is matched textually, not as a whole segment: a command string
+        # like ``cat ../oracle/gold/answer.json`` splits into a first segment of
+        # ``cat ..``, so a segment-equality test would miss the very shape this
+        # fallback exists to catch.
+        escapes_workspace = raw_path.is_absolute() or ".." in candidate
+        if escapes_workspace and oracle_name in segments:
             findings.append(
                 ScanFinding(
                     "gold_access_attempt",
@@ -416,6 +430,15 @@ def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult
             "artifact_path",
             "definition_dir",
         }
+        # Prose and payload keys: scanning them is the sentinel scan's job, and
+        # treating file content as a path is what made this gate fire on
+        # ordinary medallion-layer names. NOTE: ``query``/``sql``/``data`` are
+        # the one skip that could hide a genuine read -- SQL engines address
+        # files directly, e.g. ``read_json('../oracle/gold/answer.json')``. No
+        # tool on the current agent surface takes a file-capable query
+        # argument (Bash's path arrives under ``command``), but adding one to
+        # ``desktop_allowed_tools`` would open a real gap in an
+        # automatic-zero gate.
         ignored_keys = {
             "content",
             "text",
@@ -434,7 +457,11 @@ def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult
                 key_name = str(key).casefold()
                 item_location = f"{location}.{key}"
                 if key_name in path_keys:
-                    inspect_path(item, item_location)
+                    # Recurse rather than calling inspect_path directly: a
+                    # container under a path key (``command: ["cat", "..."]``)
+                    # would otherwise be dropped, while the same value under an
+                    # unlisted key would be walked and caught.
+                    inspect_call_arguments(item, item_location)
                 elif key_name not in ignored_keys:
                     inspect_call_arguments(item, item_location)
         elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):

@@ -244,3 +244,54 @@ def test_proxy_labelling_requires_the_controlled_marker_and_proxy_label() -> Non
     assert not missing_spec.passed
     assert not missing_spec.examined
     assert "proxy_labelling_not_examined" in missing_spec.codes
+
+
+def test_gold_access_does_not_fire_on_ordinary_oracle_and_medallion_names(tmp_path) -> None:
+    """The gate is an automatic zero, so a false positive is unappealable.
+
+    ``gold`` is standard medallion-layer vocabulary and ``oracle`` is an
+    ordinary source-system name, in exactly the data-product work these
+    scenarios grade. Neither is evidence that the harness oracle was
+    addressed, and a run scored zero for authoring `dbt/models/gold/rev.sql`
+    is indistinguishable in the report from a real breach.
+    """
+
+    oracle = tmp_path / "oracle"
+    (oracle / "gold").mkdir(parents=True)
+    (oracle / "gold" / "answer.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "agent").mkdir()
+
+    clean = [
+        {"files_touched": [{"path": "sources/oracle/customers.yml", "content": "x"}]},
+        {"tool_calls": [{"name": "Write", "arguments": {"file_path": "dbt/models/gold/rev.sql"}}]},
+        {"files_touched": [{"path": "m.sql", "content": "-- reads warehouse/gold/orders\n"}]},
+    ]
+    for turn in clean:
+        assert gold_access_scan([turn], oracle).passed, turn
+
+
+def test_gold_access_still_catches_every_addressing_form(tmp_path) -> None:
+    """Including a container-valued command argument and a command string.
+
+    ``cat ../oracle/gold/answer.json`` splits into a first segment of
+    ``cat ..``, so an upward-traversal test that matched whole segments would
+    miss the shape the lexical fallback exists for.
+    """
+
+    oracle = tmp_path / "oracle"
+    (oracle / "gold").mkdir(parents=True)
+    (oracle / "gold" / "answer.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "agent").mkdir()
+    answer = oracle / "gold" / "answer.json"
+
+    breaches = [
+        {"tool_calls": [{"name": "Read", "arguments": {"file_path": "../oracle/gold/answer.json"}}]},
+        {"tool_calls": [{"name": "Read", "arguments": {"file_path": str(answer)}}]},
+        {"tool_calls": [{"name": "Bash", "arguments": {"command": "cat ../oracle/gold/answer.json"}}]},
+        {"tool_calls": [{"name": "Bash", "arguments": {"command": ["cat", "../oracle/gold/answer.json"]}}]},
+        {"files_touched": [{"path": str(answer), "content": "x"}]},
+    ]
+    for turn in breaches:
+        result = gold_access_scan([turn], oracle)
+        assert not result.passed, turn
+        assert "gold_access_attempt" in {finding.code for finding in result.findings}
