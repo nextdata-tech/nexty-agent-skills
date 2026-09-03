@@ -381,15 +381,15 @@ class RunEnvironment:
                         "mcp",
                         "serve",
                     )
-                supervisor_environment = dict(self.supervisor_environment or self.agent_environment)
-                if self.supervisor_environment is None:
-                    # Host-home access is an explicit allowance for the agent
-                    # process (typically to read a configured Claude profile),
-                    # not an implicit allowance for the supervisor or its
-                    # descendants.
-                    supervisor_environment.update(
-                        {"HOME": str(self.home), "USERPROFILE": str(self.home)}
-                    )
+                # Host-home access is an explicit allowance for the agent
+                # process (typically to read a configured Claude profile),
+                # not an implicit allowance for the supervisor or its
+                # descendants.  Keep this invariant even when a caller
+                # supplies additional supervisor variables.
+                supervisor_environment = dict(self.supervisor_environment or {})
+                supervisor_environment.update(
+                    {"HOME": str(self.home), "USERPROFILE": str(self.home)}
+                )
                 if self.knobs.broker_fault is not None:
                     supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
                         self.attempt,

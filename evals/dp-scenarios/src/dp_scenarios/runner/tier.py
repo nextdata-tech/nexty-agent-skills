@@ -56,7 +56,7 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import Scenario, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
-from .qualification import QualificationRecord, qualify_run
+from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     ReplayRecording,
     ReplaySession,
@@ -476,6 +476,29 @@ def _bundle_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
+    """Apply scenario-level repeatability certification to one live run."""
+
+    qualification = qualify_run(
+        run.score,
+        replay_status=run.replay_verification_status,
+        generated_operator=run.qualification.operator_mode == "generated_surface",
+        repeatability_certified=True,
+        validation_mode=run.manifest.validation_mode,
+    )
+    if qualification.disposition is not QualificationDisposition.CERTIFIED:
+        return run
+    bundle_digest = run.bundle_digest
+    if run.evidence_bundle_dir is not None:
+        bundle = Path(run.evidence_bundle_dir)
+        if not bundle.is_dir():
+            raise TierError(f"evidence bundle is missing for certified run: {bundle}")
+        _write_json(bundle / "qualification.json", qualification.to_dict())
+        bundle_digest = _bundle_digest(bundle)
+        (bundle / "bundle.sha256").write_text(bundle_digest + "\n", encoding="ascii")
+    return replace(run, qualification=qualification, bundle_digest=bundle_digest)
+
+
 def _retain_evidence_bundle(
     destination: Path,
     environment: RunEnvironment,
@@ -639,12 +662,7 @@ def _snapshot_source_artifacts(environment: RunEnvironment, artifact_root: Path)
     _write_json(artifact_root / "server-counters.json", source.server.counters.snapshot())
 
 
-def _append_artifact_rows(
-    environment: RunEnvironment,
-    artifact_root: Path,
-    *,
-    supervisor_reader: SupervisorRecordReader | None,
-) -> None:
+def _append_artifact_rows(artifact_root: Path) -> None:
     raw = _first_json(artifact_root, ("ledger-extra.json", "ledger_rows.json"))
     if raw is None:
         return
@@ -936,6 +954,8 @@ class TierRunner:
                 observations,
                 getattr(scenario, "repeatability", scenario.repeatability_tier),
             )
+            if repeatability.certified:
+                runs = tuple(_promote_certified_run(run) for run in runs)
             summaries.append(ScenarioSummary(scenario.id, repeatability, tuple(runs)))
         states = [run.score.state for summary in summaries for run in summary.runs]
         if not states:
@@ -1052,11 +1072,7 @@ class TierRunner:
                         row["run_id"] = environment.manifest.run_id
                         row["scenario_id"] = environment.manifest.scenario_id
                         environment.ledger.append(LedgerRow.from_mapping(row))
-                    _append_artifact_rows(
-                        environment,
-                        artifact_root,
-                        supervisor_reader=supervisor_reader,
-                    )
+                    _append_artifact_rows(artifact_root)
                     facts = _supervisor_facts(supervisor_reader)
                     if facts is not None and supervisor_reader is not None:
                         append_supervisor_facts(
@@ -1221,11 +1237,11 @@ class TierRunner:
 
         construction = gate_construction(
             ledger_artifact,
-                observations=observations,
-                attestations=attestations,
-                require_observed=True,
-                desktop_server_name=environment.desktop_server_name,
-            )
+            observations=observations,
+            attestations=attestations,
+            require_observed=True,
+            desktop_server_name=environment.desktop_server_name,
+        )
         if attestation_read.findings:
             construction = replace(
                 construction,

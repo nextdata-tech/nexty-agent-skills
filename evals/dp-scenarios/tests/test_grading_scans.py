@@ -162,13 +162,45 @@ def test_gold_access_scan_checks_structured_paths_and_fails_closed(tmp_path: Pat
     )
     assert not attempted.passed
     assert "gold_access_attempt" in attempted.codes
-    relative = gold_access_scan({"turns": [{"tool_calls": [{"name": "Read", "arguments": {"path": "gold/answer.json"}}]}]}, oracle)
+    relative = gold_access_scan({"turns": [{"tool_calls": [{"name": "Read", "arguments": {"path": "../oracle/gold/answer.json"}}]}]}, oracle)
     assert not relative.passed
     assert "gold_access_attempt" in relative.codes
     absent = gold_access_scan({}, oracle)
     assert not absent.passed
     assert not absent.examined
     assert "gold_access_not_examined" in absent.codes
+
+
+def test_gold_access_scan_ignores_medallion_paths_and_file_contents(tmp_path: Path) -> None:
+    oracle = tmp_path / "oracle"
+    (oracle / "gold").mkdir(parents=True)
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": "Write",
+                        "arguments": {
+                            "file_path": "dbt/models/gold/revenue.sql",
+                            "content": "-- reads from warehouse/gold/orders\nselect 1\n",
+                        },
+                        "result": {"content": "wrote dbt/models/gold/revenue.sql"},
+                    }
+                ],
+                "files_touched": [
+                    {
+                        "path": "dbt/models/gold/revenue.sql",
+                        "content": "select * from warehouse/gold/orders",
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = gold_access_scan(observations, oracle)
+
+    assert result.passed
+    assert result.examined is True
 
 
 def test_proxy_labelling_requires_the_controlled_marker_and_proxy_label() -> None:

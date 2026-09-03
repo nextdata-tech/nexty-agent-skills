@@ -37,6 +37,7 @@ from dp_scenarios.runner import (
     TierError,
     TierRunner,
 )
+from dp_scenarios.runner.qualification import QualificationDisposition
 from dp_scenarios.runner.session import LiveSession, SessionError
 from dp_scenarios.runner.report import machine_report
 from dp_scenarios.runner.tier import run_drift_canary
@@ -170,27 +171,6 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
             "per_model_row_counts": row_counts,
             "lifecycle_state": "published",
         }
-        supervisor_rows = [
-            {
-                "turn": 7,
-                "phase": 5,
-                "action_kind": "supervisor_fact",
-                "fact_key": fact_key,
-                "evidence_ref": f"supervisor#{fact_key}",
-                "qualification": "strong",
-            }
-            for fact_key in ("run_id", "artifact_id", "publish_sequence", "lifecycle_state")
-        ] + [
-            {
-                "turn": 7,
-                "phase": 5,
-                "action_kind": "supervisor_fact",
-                "fact_key": f"per_model_row_counts.{model}",
-                "evidence_ref": f"supervisor#row_counts.{model}",
-                "qualification": "strong",
-            }
-            for model in sorted(row_counts)
-        ]
         artifacts = {
             "spec.json": {"metrics": {"regional_revenue": "supported"}},
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
@@ -249,27 +229,6 @@ def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRe
             "per_model_row_counts": row_counts,
             "lifecycle_state": "published",
         }
-        supervisor_rows = [
-            {
-                "turn": 7,
-                "phase": 5,
-                "action_kind": "supervisor_fact",
-                "fact_key": fact_key,
-                "evidence_ref": f"supervisor#{fact_key}",
-                "qualification": "strong",
-            }
-            for fact_key in ("run_id", "artifact_id", "publish_sequence", "lifecycle_state")
-        ] + [
-            {
-                "turn": 7,
-                "phase": 5,
-                "action_kind": "supervisor_fact",
-                "fact_key": f"per_model_row_counts.{model}",
-                "evidence_ref": f"supervisor#row_counts.{model}",
-                "qualification": "strong",
-            }
-            for model in sorted(row_counts)
-        ]
         artifacts: dict[str, object] = {
             "spec.json": {"metrics": {"primary": "supported"}},
             "spec-diff.json": {"turn": 3, "metrics": {"primary": 3}},
@@ -856,6 +815,36 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
     assert all(not run.score.gates["capability"].examined and not run.score.gates["capability"].required for run in result.scenario_runs)
 
 
+def test_repeatability_certification_promotes_live_run_and_refreshes_bundle(tmp_path: Path) -> None:
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+    run = result.scenario_runs[0]
+    live_manifest = replace(
+        run.manifest,
+        validation_mode="live",
+        supervisor_binary_path="/opt/nxd-desktop-supervisor",
+        session_root="/tmp/desktop-session",
+        session_config_path="/tmp/desktop-session/mcp-config.json",
+        session_config_sha256="sha256:config",
+        session_trace_path="/tmp/desktop-session/trace.jsonl",
+        session_server_result_path="/tmp/desktop-session/server-result.json",
+    )
+
+    promoted = tier_module._promote_certified_run(replace(run, manifest=live_manifest))
+    bundle = Path(run.evidence_bundle_dir)
+
+    assert promoted.qualification.disposition is QualificationDisposition.CERTIFIED
+    assert promoted.bundle_digest != run.bundle_digest
+    assert json.loads((bundle / "qualification.json").read_text(encoding="utf-8"))["disposition"] == "CERTIFIED"
+    assert (bundle / "bundle.sha256").read_text(encoding="ascii").strip() == promoted.bundle_digest
+
+
 def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:
     scenario, recordings = populated_zero_row_recordings(tmp_path)
 
@@ -917,10 +906,6 @@ def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
 
 @pytest.mark.parametrize("field", ["turn", "phase"])
 def test_rejected_agent_artifact_row_aborts_the_run(tmp_path: Path, field: str) -> None:
-    environment = SimpleNamespace(
-        manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
-        ledger=[],
-    )
     artifact_root = tmp_path / field
     artifact_root.mkdir()
     (artifact_root / "ledger-extra.json").write_text(
@@ -929,15 +914,10 @@ def test_rejected_agent_artifact_row_aborts_the_run(tmp_path: Path, field: str) 
     )
 
     with pytest.raises(TierError, match="agent-owned ledger artifact"):
-        tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
-    assert environment.ledger == []
+        tier_module._append_artifact_rows(artifact_root)
 
 
 def test_fabricated_supervisor_claim_in_artifact_row_aborts_before_append(tmp_path: Path) -> None:
-    environment = SimpleNamespace(
-        manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
-        ledger=[],
-    )
     artifact_root = tmp_path / "forged-claim"
     artifact_root.mkdir()
     (artifact_root / "ledger-extra.json").write_text(
@@ -956,26 +936,11 @@ def test_fabricated_supervisor_claim_in_artifact_row_aborts_before_append(tmp_pa
         ),
         encoding="utf-8",
     )
-    reader = StaticSupervisorRecordReader(
-        SupervisorFacts(
-            run_id="run-1",
-            artifact_id="artifact-1",
-            publish_sequence="7",
-            per_model_row_counts={"model-a": "42"},
-            lifecycle_state="served",
-        )
-    )
-
     with pytest.raises(TierError, match="agent-owned ledger artifact"):
-        tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=reader)
-    assert environment.ledger == []
+        tier_module._append_artifact_rows(artifact_root)
 
 
 def test_agent_artifact_row_is_never_appended(tmp_path: Path) -> None:
-    environment = SimpleNamespace(
-        manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
-        ledger=[],
-    )
     artifact_root = tmp_path / "valid-row"
     artifact_root.mkdir()
     (artifact_root / "ledger-extra.json").write_text(
@@ -984,8 +949,7 @@ def test_agent_artifact_row_is_never_appended(tmp_path: Path) -> None:
     )
 
     with pytest.raises(TierError, match="agent-owned ledger artifact"):
-        tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
-    assert environment.ledger == []
+        tier_module._append_artifact_rows(artifact_root)
 
 
 def test_supervisor_reader_paths_are_fail_closed() -> None:

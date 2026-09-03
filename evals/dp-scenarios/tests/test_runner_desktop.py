@@ -164,11 +164,17 @@ def test_production_builder_injects_isolated_mcp_configuration(tmp_path: Path) -
         live_command=(sys.executable, str(turn), str(args_file)),
         supervisor_command=(sys.executable, str(server)),
         desktop_allowed_tools=allowed_tools,
-        supervisor_environment={"NXD_DESKTOP_PYTHON": "/tmp/desktop-python"},
+        supervisor_environment={
+            "NXD_DESKTOP_PYTHON": "/tmp/desktop-python",
+            "HOME": "/host-home",
+            "USERPROFILE": "/host-profile",
+        },
     ) as environment:
         assert environment.live_transport.session.server_command[-2:] == ("mcp", "serve")
         assert environment.live_transport.session.server_command[-4] == "--data-dir"
         assert environment.live_transport.session.server_env["NXD_DESKTOP_PYTHON"] == "/tmp/desktop-python"
+        assert environment.live_transport.session.server_env["HOME"] == str(environment.home)
+        assert environment.live_transport.session.server_env["USERPROFILE"] == str(environment.home)
         live = environment.live_session()
         config_path = environment.live_transport.config_path
         try:

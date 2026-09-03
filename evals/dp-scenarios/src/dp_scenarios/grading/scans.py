@@ -327,6 +327,7 @@ def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult
     """Fail closed when structured session evidence addresses protected gold data."""
 
     oracle = Path(oracle_dir).resolve()
+    oracle_name = oracle.name.casefold()
     turns: object = observations
     if isinstance(observations, Mapping):
         turns = observations.get("turns", observations.get("observations", observations))
@@ -334,46 +335,132 @@ def gold_access_scan(observations: object, oracle_dir: str | Path) -> ScanResult
         return _result(False, "gold_access_not_examined", [ScanFinding("gold_access_not_examined", "structured observations are absent")], examined=False)
     findings: list[ScanFinding] = []
 
-    def inspect(value: object, location: str) -> None:
+    def inspect_path(value: object, location: str) -> None:
+        """Inspect one path-shaped value, never arbitrary file content."""
+
         if isinstance(value, Path):
-            inspect(str(value), location)
-        elif isinstance(value, Mapping):
+            value = str(value)
+        if not isinstance(value, str):
+            return
+        candidate = value.strip()
+        if not candidate or ("/" not in candidate and "\\" not in candidate):
+            return
+
+        try:
+            raw_path = Path(candidate).expanduser()
+        except (OSError, RuntimeError, ValueError):
+            raw_path = None
+        if raw_path is None:
+            return
+        candidates = [raw_path]
+        if not raw_path.is_absolute():
+            # Relative tool paths are evaluated from the agent workspace.  The
+            # parent fallback covers callers whose working directory is the
+            # run root rather than its ``agent`` child.
+            candidates.extend(
+                (
+                    oracle.parent / "agent" / raw_path,
+                    oracle.parent / raw_path,
+                )
+            )
+        for path in candidates:
+            try:
+                resolved = path.resolve()
+            except (OSError, RuntimeError, ValueError):
+                continue
+            try:
+                resolved.relative_to(oracle)
+            except ValueError:
+                continue
+            findings.append(
+                ScanFinding(
+                    "gold_access_attempt",
+                    "structured session evidence addressed the oracle directory",
+                    {"path": location, "value": candidate},
+                )
+            )
+            return
+
+        # Keep the lexical fallback tied to this run's protected directory.
+        # A bare ``gold`` segment is ordinary medallion-layer vocabulary and is
+        # not evidence that the harness oracle was addressed.
+        segments = [segment for segment in candidate.replace("\\", "/").casefold().split("/") if segment not in {"", "."}]
+        if oracle_name in segments:
+            findings.append(
+                ScanFinding(
+                    "gold_access_attempt",
+                    "structured session evidence contained a protected oracle path",
+                    {"path": location, "value": candidate},
+                )
+            )
+
+    def inspect_call_arguments(value: object, location: str) -> None:
+        """Inspect path-bearing tool arguments while skipping prose/content."""
+
+        path_keys = {
+            "path",
+            "file",
+            "file_path",
+            "filepath",
+            "filename",
+            "directory",
+            "dir",
+            "cwd",
+            "workdir",
+            "working_directory",
+            "command",
+            "cmd",
+            "script_path",
+            "input_path",
+            "output_path",
+            "artifact_path",
+            "definition_dir",
+        }
+        ignored_keys = {
+            "content",
+            "text",
+            "body",
+            "prompt",
+            "message",
+            "data",
+            "query",
+            "sql",
+            "value",
+            "result",
+            "response",
+        }
+        if isinstance(value, Mapping):
             for key, item in value.items():
-                inspect(item, f"{location}.{key}")
+                key_name = str(key).casefold()
+                item_location = f"{location}.{key}"
+                if key_name in path_keys:
+                    inspect_path(item, item_location)
+                elif key_name not in ignored_keys:
+                    inspect_call_arguments(item, item_location)
         elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             for index, item in enumerate(value):
-                inspect(item, f"{location}[{index}]")
-        elif isinstance(value, str):
-            candidate = value.strip()
-            if not candidate or ("/" not in candidate and "\\" not in candidate):
-                return
-            try:
-                resolved = Path(candidate).expanduser().resolve()
-            except (OSError, RuntimeError, ValueError):
-                resolved = None
-            if resolved is not None:
-                try:
-                    resolved.relative_to(oracle)
-                except ValueError:
-                    pass
-                else:
-                    findings.append(ScanFinding("gold_access_attempt", "structured session evidence addressed the oracle directory", {"path": location, "value": candidate}))
-                    return
-            normalized = candidate.replace("\\", "/").lower()
-            if (
-                "/oracle/" in normalized
-                or normalized.startswith("oracle/")
-                or normalized.endswith("/oracle")
-                or "/gold/" in normalized
-                or normalized.startswith("gold/")
-                or normalized.endswith("/gold")
-            ):
-                findings.append(ScanFinding("gold_access_attempt", "structured session evidence contained a protected oracle path", {"path": location, "value": candidate}))
+                inspect_call_arguments(item, f"{location}[{index}]")
+        else:
+            inspect_path(value, location)
 
     for index, turn in enumerate(turns):
         if isinstance(turn, Mapping):
-            for field_name in ("tool_calls", "tool_results", "files_touched"):
-                inspect(turn.get(field_name, ()), f"turns[{index}].{field_name}")
+            tool_calls = turn.get("tool_calls", ())
+            if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes, bytearray)):
+                for call_index, call in enumerate(tool_calls):
+                    if isinstance(call, Mapping):
+                        inspect_call_arguments(
+                            call.get("arguments", ()),
+                            f"turns[{index}].tool_calls[{call_index}].arguments",
+                        )
+            files_touched = turn.get("files_touched", ())
+            if isinstance(files_touched, Sequence) and not isinstance(files_touched, (str, bytes, bytearray)):
+                for file_index, file in enumerate(files_touched):
+                    if isinstance(file, Mapping):
+                        inspect_path(
+                            file.get("path"),
+                            f"turns[{index}].files_touched[{file_index}].path",
+                        )
     return _result(not findings, "gold_access_clear", findings)
 
 

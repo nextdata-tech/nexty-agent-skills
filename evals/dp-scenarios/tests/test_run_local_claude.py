@@ -69,15 +69,8 @@ def test_local_runner_leaves_timeout_budget_for_the_adapter() -> None:
     assert module._adapter_timeout(0.1) < 0.1
 
 
-def test_local_runner_host_home_is_explicit_and_bash_requires_a_second_opt_in(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_local_runner_host_home_flag_and_bash_require_a_second_opt_in() -> None:
     module = _load_runner_module()
-    monkeypatch.setattr(module.Path, "home", classmethod(lambda _cls: Path("/host-home")))
-
-    sandbox = {"HOME": "/sandbox-home", "USERPROFILE": "/sandbox-home"}
-    assert module._agent_environment(sandbox, allow_host_home=False) == sandbox
-    assert module._agent_environment(sandbox, allow_host_home=True)["HOME"] == "/host-home"
 
     args = module.build_parser().parse_args(["--allow-host-home", "--allow-host-home-bash"])
     assert args.allow_host_home is True

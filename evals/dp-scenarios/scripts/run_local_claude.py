@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -81,20 +81,6 @@ def _adapter_timeout(turn_timeout: float) -> float:
     if turn_timeout <= 0:
         raise TierError("turn timeout must be positive")
     return turn_timeout * 0.9
-
-
-def _agent_environment(
-    base: Mapping[str, str],
-    *,
-    allow_host_home: bool,
-) -> dict[str, str]:
-    """Build the disposable agent environment, with host-home opt-in explicit."""
-
-    environment = dict(base)
-    if allow_host_home:
-        host_home = str(Path.home())
-        environment.update({"HOME": host_home, "USERPROFILE": host_home})
-    return environment
 
 
 def _default_desktop_python() -> Path:
