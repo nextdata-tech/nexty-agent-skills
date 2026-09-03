@@ -10,21 +10,18 @@ Two evidence sources are used. The mutation-tested section below builds
 target mappings by hand, the same pattern ``credential-rotation`` and
 ``sigterm-diagnosis`` use for their own follow-up checks. The section after it
 does *not* hand-write evidence: it drives ``dp_scenarios.knobs.broker``'s real
-process-level shim through a real subprocess (the same mechanism
-``test_supervisor_knobs.py`` uses to prove the occupied-port fault is silent
-and attempt-keyed) and ``dp_scenarios.mockrest.MockRestServer`` through two
-real, disposable HTTP servers via
-``dp_scenarios.knobs.workflow.script_restart_and_switch`` -- feeding their
-*actual* output into ``SCENARIO.follow_up_check`` -- because this scenario is
-the harness's first real caller of both substrates outside their own unit
-tests. No live agent session and no live supervisor build are started
-anywhere in this file; see the scenario README for what that is, and is not,
-coverage of.
+process-level shim through a real subprocess and two real, disposable mock
+HTTP servers through
+``dp_scenarios.knobs.workflow.script_restart_and_switch``, feeding their
+*actual* output into ``SCENARIO.follow_up_check``. No live agent session and
+no live supervisor build are started anywhere in this file; see the scenario
+README for what that is, and is not, coverage of.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -62,6 +59,23 @@ def test_scenario_declares_the_core_tier() -> None:
     assert SCENARIO.run_order == 5
     assert SCENARIO.dataset == "grain_trap"
     assert SCENARIO.seed == 29
+
+
+def test_gold_endpoint_identities_match_the_fixture_that_actually_serves_them() -> None:
+    """Pin the endpoint identities against the servers, not against the gold.
+
+    ``stale_endpoint``/``new_endpoint`` are what the check compares a
+    reported ``answered_endpoint`` against, so a test that reads them from the
+    gold cannot notice them drifting. These literals are the ones
+    ``_OLD_CONFIG``/``_NEW_CONFIG`` below actually serve on the real
+    mock-server arm; if the gold moves away from them, the drill grades an
+    endpoint nothing in the fixture ever answers with.
+    """
+
+    assert GOLD["stale_endpoint"] == "endpoint-v1"
+    assert GOLD["new_endpoint"] == "endpoint-v2"
+    assert _OLD_CONFIG.routes[0].response.data["endpoint"] == GOLD["stale_endpoint"]
+    assert _NEW_CONFIG.routes[0].response.data["endpoint"] == GOLD["new_endpoint"]
 
 
 def test_gates_wire_the_restart_and_switch_follow_up() -> None:
@@ -348,6 +362,162 @@ def test_a_workflow_pair_that_disagrees_with_the_oracle_is_caught() -> None:
     assert "workflow_switch_disagrees_with_oracle" in result["findings"]
 
 
+def _scenario_with_oracle(tmp_path: Path, oracle: object) -> object:
+    """Load a real copy of the scenario package with a mutated oracle gold.
+
+    The guards that turn an unreadable or malformed oracle into a failure --
+    rather than silently skipping the whole per-attempt reconciliation block --
+    are only reachable through the gold file itself, so they need a real
+    package on disk rather than a mutated target mapping.
+    """
+
+    # The package references shared sibling directories (personas, examples)
+    # by relative path, so the copy has to preserve that layout.
+    for sibling in ("_personas", "_examples"):
+        shutil.copytree(ROOT / "scenarios" / sibling, tmp_path / sibling)
+    package = tmp_path / "restart-and-switch"
+    shutil.copytree(ROOT / "scenarios/restart-and-switch", package)
+    (package / "gold/restart_and_switch_oracle.json").write_text(
+        json.dumps(oracle), encoding="utf-8"
+    )
+    return load_scenario(package)
+
+
+def test_a_non_mapping_oracle_fails_rather_than_skipping_reconciliation(tmp_path: Path) -> None:
+    scenario = _scenario_with_oracle(tmp_path, ["not", "a", "mapping"])
+    result = scenario.follow_up_check(_clean_target())
+    assert not result["passed"]
+    assert "oracle_gold_unreadable" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"fault_attempt": 0},
+        {"cleared_attempt": "two"},
+        {"max_attempts": None},
+        {"fault_shape": 17},
+    ],
+    ids=["fault_attempt", "cleared_attempt", "max_attempts", "fault_shape"],
+)
+def test_a_malformed_oracle_field_fails_rather_than_skipping_reconciliation(
+    tmp_path: Path, mutation: dict[str, object]
+) -> None:
+    result = _scenario_with_oracle(tmp_path, {**GOLD, **mutation}).follow_up_check(_clean_target())
+    assert not result["passed"]
+    assert "oracle_gold_malformed" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+
+
+def test_an_unknown_fault_shape_fails_rather_than_skipping_reconciliation(tmp_path: Path) -> None:
+    # Reaches the BrokerFaultShape/BrokerFaultPlan construction guard: the
+    # name is a string, so the field-level check above passes it through.
+    result = _scenario_with_oracle(
+        tmp_path, {**GOLD, "fault_shape": "no-such-shape"}
+    ).follow_up_check(_clean_target())
+    assert not result["passed"]
+    assert "oracle_gold_malformed" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+
+
+def test_a_reconciliation_failure_does_not_silently_pass_the_whole_attempt_block(
+    tmp_path: Path,
+) -> None:
+    """The single guard standing between an unusable oracle and a clean pass.
+
+    With the oracle unreadable, the entire per-attempt block (count, fault,
+    stderr silence, evidence phase, outcome) is skipped. Nothing else would
+    notice, so this pins that the skip is reported as a failure rather than
+    producing a pass on evidence nothing checked.
+    """
+
+    scenario = _scenario_with_oracle(tmp_path, ["unreadable"])
+    target = _clean_target()
+    # Evidence that would fail every skipped per-attempt check.
+    target["attempts"]["1"]["fault"] = "not-the-planted-shape"
+    target["attempts"]["1"]["stderr"] = "a leaked diagnostic"
+    target["attempts"]["1"]["evidence_ref"] = "build-phase/attempt-1/bind"
+    result = scenario.follow_up_check(target)
+    assert not result["passed"]
+    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "expected"),
+    [
+        (("attempts", "1", "stderr"), 17, "attempt_evidence_not_examined:1"),
+        (("attempts", "1", "evidence_ref"), None, "attempt_evidence_ref_not_serve_phase:1"),
+        (("diagnosis", "attempt_classifications"), None, "attempt_classification_not_examined"),
+        (("diagnosis", "attempt_classifications"), {}, "attempt_classification_not_examined"),
+        (("diagnosis", "attempt_classifications"), {"1": "   "}, "attempt_classification_not_examined"),
+        (("diagnosis", "build_status_claim"), None, "build_status_claim_not_examined"),
+        (("diagnosis", "build_status_claim"), "probably fine", "build_status_claim_not_examined"),
+        (("diagnosis", "retry_strategy"), None, "retry_strategy_not_examined"),
+        (("diagnosis", "retry_strategy"), "  ", "retry_strategy_not_examined"),
+        (("phase_evidence", "restart_turn"), "5", "phase_evidence_not_examined"),
+        (("phase_evidence", "switch_turn"), True, "phase_evidence_not_examined"),
+        (("phase_evidence", "bind_failure_diagnosed_turn"), None, "phase_evidence_not_examined"),
+        (("workflow_switch", "answered_endpoint"), "", "workflow_switch_endpoint_not_examined"),
+        (("workflow_switch", "answered_endpoint"), 12, "workflow_switch_endpoint_not_examined"),
+        (("workflow_switch", "answered_workflow"), None, "post_switch_call_served_by_wrong_workflow"),
+    ],
+)
+def test_a_malformed_field_is_not_examined_never_a_silent_pass(
+    path: tuple[str, ...], value: object, expected: str
+) -> None:
+    """Field-level malformation, not whole-sub-mapping deletion.
+
+    Deleting ``diagnosis`` wholesale is already covered below; these pin the
+    finer guards, which are the ones a target can hit by reporting a field it
+    does not actually have.
+    """
+
+    target = _clean_target()
+    cursor: object = target
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = value
+    result = SCENARIO.follow_up_check(target)
+    assert not result["passed"], f"{path} = {value!r} scored clean"
+    assert expected in result["findings"]
+
+
+def test_a_call_answered_by_the_stale_endpoint_fails_however_it_self_reports() -> None:
+    """The headline property, graded from evidence rather than from a flag.
+
+    ``stale_endpoint_rejected`` is the target's own boolean. A run that was in
+    fact served by the stale endpoint can set it to ``True``; only comparing
+    the reported ``answered_endpoint`` against the gold's endpoint identities
+    catches that.
+    """
+
+    target = _clean_target()
+    target["workflow_switch"]["answered_endpoint"] = GOLD["stale_endpoint"]
+    target["workflow_switch"]["stale_endpoint_rejected"] = True
+    result = SCENARIO.follow_up_check(target)
+    assert not result["passed"]
+    assert "post_switch_call_served_by_stale_endpoint" in result["findings"]
+
+
+def test_a_call_answered_by_an_endpoint_the_gold_does_not_declare_is_caught() -> None:
+    target = _clean_target()
+    target["workflow_switch"]["answered_endpoint"] = "endpoint-v3"
+    result = SCENARIO.follow_up_check(target)
+    assert not result["passed"]
+    assert "post_switch_call_served_by_unknown_endpoint:endpoint-v3" in result["findings"]
+
+
+@pytest.mark.parametrize("field", ["stale_endpoint", "new_endpoint"])
+def test_a_gold_missing_an_endpoint_identity_is_malformed_not_ungraded(
+    tmp_path: Path, field: str
+) -> None:
+    oracle = {key: value for key, value in GOLD.items() if key != field}
+    result = _scenario_with_oracle(tmp_path, oracle).follow_up_check(_clean_target())
+    assert not result["passed"]
+    assert "oracle_gold_malformed" in result["findings"]
+
+
 def test_missing_sub_evidence_is_not_examined_not_conflated_with_a_clean_pass() -> None:
     for key in ("diagnosis", "phase_evidence", "workflow_switch"):
         target = _clean_target()
@@ -359,13 +529,15 @@ def test_missing_sub_evidence_is_not_examined_not_conflated_with_a_clean_pass() 
         )
 
 
-def test_positive_control_every_mutation_above_would_pass_if_its_check_were_deleted() -> None:
-    """Sanity check that the mutations above are load-bearing: each one only
-    fails because a specific branch in the handler produced the finding.
-    Collecting every finding code the mutations above actually produced and
-    asserting the set is non-empty and covers the primary properties pins
-    that a future edit silently removing a check changes an assertion here,
-    not just a comment.
+def test_each_headline_mutation_produces_its_own_distinct_finding_code() -> None:
+    """Pin the *code* each headline mutation emits, not merely that it fails.
+
+    This is deliberately not a positive control: it does not neuter any
+    branch. Its value is that a refactor which collapses two properties onto
+    one finding code, or renames a code, breaks here rather than passing with
+    a differently-shaped failure. Branch-level coverage -- that each guard is
+    individually load-bearing -- comes from the per-branch tests above and
+    below, not from this test.
     """
 
     findings_seen: set[str] = set()
@@ -397,10 +569,9 @@ def test_positive_control_every_mutation_above_would_pass_if_its_check_were_dele
 
 # --------------------------------------------------------------------------
 # Real substrate: the broker fault and the workflow switch are actually
-# driven, not narrated. This scenario is the first caller of dp_scenarios.
-# mockrest outside its own unit tests, and it drives the same subprocess
-# shim test_supervisor_knobs.py uses to prove the occupied-port fault
-# produces no stderr and repeats identically by attempt number.
+# driven, not narrated. The subprocess shim below is the same one
+# test_supervisor_knobs.py uses to prove the occupied-port fault produces no
+# stderr and repeats identically by attempt number.
 # --------------------------------------------------------------------------
 
 
@@ -413,7 +584,11 @@ def _available_port() -> int:
 
 
 def _run_broker_shim(plan: BrokerFaultPlan, attempt: int, real_child: Path) -> tuple[int, bytes]:
-    del real_child  # the real entrypoint is not exercised on the faulted attempt
+    # ``real_child`` reaches the subprocess through the plan's environment
+    # (NXD_EVAL_BROKER_REAL_ENTRYPOINT), not through this signature; it stays
+    # a parameter so callers cannot silently drive a plan built for a
+    # different child.
+    assert Path(plan.real_entrypoint) == real_child
     environment = dict(plan.environment_for_attempt(attempt))
     completed = subprocess.run(
         [sys.executable, str(broker_entrypoint_path()), "--port", str(_available_port())],
@@ -442,16 +617,18 @@ def test_real_broker_attempts_reconcile_against_the_gold_and_pass_grading(tmp_pa
     plan = BrokerFaultPlan(
         {GOLD["fault_attempt"]: BrokerFaultShape(GOLD["fault_shape"])},
         real_entrypoint=real_child,
-        bind_timeout_s=GOLD["bind_timeout_s"],
-        margin_s=GOLD["margin_s"],
     )
     faulted_code, faulted_stderr = _run_broker_shim(plan, GOLD["fault_attempt"], real_child)
     cleared_code, cleared_stderr = _run_broker_shim(plan, GOLD["cleared_attempt"], real_child)
 
-    # The occupied-port shim exits nonzero with no stderr; the cleared attempt
-    # delegates to the (unused, since we never bound the port for real) real
-    # entrypoint path and exits zero, also with no stderr.
-    assert faulted_code != 0
+    # On both attempts the shim execs the real child. On the faulted attempt
+    # the shim is already holding the port, so it is the *real child's* bind
+    # that fails -- and it fails silently, because the shim redirected fd 2 to
+    # /dev/null before the exec and the child inherits it. That silence is a
+    # harness property. On the cleared attempt the child binds and exits zero;
+    # its empty stderr is a property of this test's own stub child, not of the
+    # shim.
+    assert faulted_code == 41, "the faulted attempt's exit code is the real child's failed bind"
     assert faulted_stderr == b""
     assert cleared_code == 0
     assert cleared_stderr == b""

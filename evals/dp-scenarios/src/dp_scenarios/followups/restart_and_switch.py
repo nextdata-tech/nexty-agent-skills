@@ -111,26 +111,24 @@ def check(
         fault_attempt = _positive_int(oracle.get("fault_attempt"))
         cleared_attempt = _positive_int(oracle.get("cleared_attempt"))
         max_attempts = _positive_int(oracle.get("max_attempts"))
-        bind_timeout_s = _positive_int(oracle.get("bind_timeout_s"))
-        margin_s = _positive_int(oracle.get("margin_s"))
         fault_shape_name = oracle.get("fault_shape")
         if (
             fault_attempt is None
             or cleared_attempt is None
             or max_attempts is None
-            or bind_timeout_s is None
-            or margin_s is None
             or not isinstance(fault_shape_name, str)
         ):
             findings.append("oracle_gold_malformed")
         else:
             try:
                 fault_shape = BrokerFaultShape(fault_shape_name)
+                # bind_timeout_s/margin_s stay at BrokerFaultPlan's defaults:
+                # only the sleep_past_bind_timeout shape reads them, and this
+                # drill plants an occupied port. Carrying them in the gold
+                # would be a declared constant nothing grades against.
                 plan = BrokerFaultPlan(
                     {fault_attempt: fault_shape},
                     real_entrypoint="oracle-reconciliation-entrypoint",
-                    bind_timeout_s=bind_timeout_s,
-                    margin_s=margin_s,
                 )
             except (ValueError, KnobError):
                 findings.append("oracle_gold_malformed")
@@ -146,11 +144,11 @@ def check(
         if set(attempts) != {fault_attempt, cleared_attempt} or len(attempts) != max_attempts:
             findings.append("attempt_count_disagrees_with_plan")
         for attempt_number, entry in sorted(attempts.items()):
-            try:
-                expected_fault = plan.fault_for_attempt(attempt_number)
-            except KnobError:
-                findings.append(f"attempt_number_out_of_plan:{attempt_number}")
-                continue
+            # Every key reaching here is already a positive int (attempts that
+            # are not were returned as not-examined above), so this call
+            # cannot raise; the bound on which attempts are legal is the
+            # set/len comparison directly above, not the plan lookup.
+            expected_fault = plan.fault_for_attempt(attempt_number)
             expected_fault_value = expected_fault.value if expected_fault is not None else "none"
             declared_fault = entry.get("fault")
             if declared_fault != expected_fault_value:
@@ -191,8 +189,6 @@ def check(
         reported: object = None
         if isinstance(classifications, Mapping) and fault_attempt is not None:
             reported = classifications.get(str(fault_attempt), classifications.get(fault_attempt))
-        elif isinstance(classifications, Mapping):
-            reported = None
         if not isinstance(reported, str) or not reported.strip():
             findings.append("attempt_classification_not_examined")
         elif reported != true_classification:
@@ -246,7 +242,14 @@ def check(
     switch = target.get("workflow_switch")
     expected_from = oracle.get("from_workflow") if isinstance(oracle, Mapping) else None
     expected_to = oracle.get("to_workflow") if isinstance(oracle, Mapping) else None
-    if not isinstance(expected_from, str) or not isinstance(expected_to, str):
+    stale_endpoint = oracle.get("stale_endpoint") if isinstance(oracle, Mapping) else None
+    new_endpoint = oracle.get("new_endpoint") if isinstance(oracle, Mapping) else None
+    if (
+        not isinstance(expected_from, str)
+        or not isinstance(expected_to, str)
+        or not isinstance(stale_endpoint, str)
+        or not isinstance(new_endpoint, str)
+    ):
         findings.append("oracle_gold_malformed")
     elif not isinstance(switch, Mapping):
         findings.append("workflow_switch_not_examined")
@@ -262,6 +265,16 @@ def check(
             findings.append("post_switch_call_served_by_wrong_workflow")
         if not isinstance(answered_endpoint, str) or not answered_endpoint.strip():
             findings.append("workflow_switch_endpoint_not_examined")
+        else:
+            # Endpoint *identity*, re-derived from the gold rather than taken
+            # from the target's own stale_endpoint_rejected flag. A run that
+            # was in fact answered by the stale endpoint fails here even if it
+            # reports the rejection as True, which is the whole point: the
+            # flag is a self-report, this comparison is evidence.
+            if answered_endpoint == stale_endpoint:
+                findings.append("post_switch_call_served_by_stale_endpoint")
+            elif answered_endpoint != new_endpoint:
+                findings.append(f"post_switch_call_served_by_unknown_endpoint:{answered_endpoint}")
         if stale_rejected is not True:
             findings.append("stale_endpoint_not_confirmed_rejected")
 

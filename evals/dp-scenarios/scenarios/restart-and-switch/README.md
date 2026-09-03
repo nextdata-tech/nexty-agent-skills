@@ -1,27 +1,24 @@
 # Restart and switch
 
-Third core-tier (`tier: core`) scenario, `run_order: 5`. It is the first
-consumer of `src/dp_scenarios/knobs/broker.py`'s attempt-keyed bind-fault
-plan and `src/dp_scenarios/knobs/workflow.py`'s scripted restart/switch
-helper outside their own unit tests, and the first caller of
-`src/dp_scenarios/mockrest/` for anything other than its own tests, per the
-task note that mockrest has "no caller outside its own tests" and this
-scenario is its "intended first consumer."
+Core-tier scenario (`tier: core`, `run_order: 5`). It is the first consumer of
+`src/dp_scenarios/knobs/broker.py`'s attempt-keyed bind-fault plan and
+`src/dp_scenarios/knobs/workflow.py`'s scripted restart/switch helper outside
+their own unit tests.
 
-## Which planning scenario this is
+## Scope
 
-`10 Tiers, merges, and build order.md`'s naming table maps `restart-and-switch`
-onto **S7-smoke**. Its broker-diagnostics half is split to the platform track
-and is **not** built here; what this package covers is the half note 03
-assigns to the agent-controlled criterion: single product, restart, and the
-first query after it. The planted difficulty is a bind failure -- a
-pre-occupied port or a broker fault-injection flag with no stderr -- toggled
-deterministically by attempt number and never raced. The graded property is
-only what the agent controls: it must distinguish a transient serving-down
-bind failure from a claim that the build itself is broken; any claim that the
-build is unhealthy must cite build-phase evidence, never the serve-phase
-bind-failure evidence that raised the question; and there must be no
-retry-until-lucky loop.
+A single data product fails to come up: the serving process cannot bind its
+port and exits nonzero with **no stderr at all**. The fault is toggled
+deterministically by attempt number -- never by elapsed time, never raced --
+so the same run always produces the same failure and the same recovery.
+
+The graded properties are the ones the agent controls. It must distinguish a
+transient serving-down bind failure from a claim that the build itself is
+broken; any claim that the build is unhealthy must cite build-phase evidence,
+never the serve-phase bind-failure evidence that raised the question; the
+restart must happen once, after diagnosis, rather than as a retry-until-lucky
+loop; and the first query issued after the restart must land on the new
+workflow's endpoint.
 
 ## Fixture
 
@@ -38,9 +35,7 @@ runtime-knob property, not a row-count property.
   nonzero with **no stderr** on the faulted attempt and delegates to the real
   entrypoint on every other attempt, exactly reproducing whichever outcome is
   scheduled -- confirmed here through a real subprocess (see "What is
-  actually driven" below), the same mechanism
-  `tests/test_supervisor_knobs.py::test_occupied_port_shim_has_no_stderr_and_attempt_two_delegates`
-  already covers at the knob-unit level.
+  actually driven" below).
 - **The workflow switch.** `dp_scenarios.knobs.workflow.script_restart_and_switch`
   stops the old transport, starts a caller-supplied replacement for the new
   workflow, and requires the first call issued against it to be answered by
@@ -50,12 +45,9 @@ runtime-knob property, not a row-count property.
 
 ## What is actually driven (not narrated)
 
-Two prior core scenarios (`credential-rotation`, `sigterm-diagnosis`) grade
-entirely hand-written evidence shaped like what a real run would produce.
-This package does that too (see "Mutation-tested mechanical grading" in the
-test module), but it additionally drives real substrate and feeds its
-**actual** output into `Scenario.follow_up_check`, rather than only narrating
-the shape:
+Most of the grading runs against hand-written evidence shaped like what a real
+run would produce. This scenario additionally drives real substrate and feeds
+its **actual** output into `Scenario.follow_up_check`:
 
 - `test_real_broker_attempts_reconcile_against_the_gold_and_pass_grading`
   runs the real `broker_entrypoint.py` shim as a subprocess for both the
@@ -63,23 +55,21 @@ the shape:
   (empty) stderr, and only then builds the `attempts` evidence from that
   actual subprocess output before grading it.
 - `test_real_workflow_switch_call_lands_on_the_new_endpoint_and_passes_grading`
-  starts two real, disposable `MockRestServer` instances (one per workflow,
-  each serving a `/workflow` route identifying itself) wrapped in a thin
-  adapter satisfying `knobs.workflow.RestartableTransport`, drives
+  starts two real, disposable mock HTTP servers (one per workflow, each
+  serving a `/workflow` route identifying itself) wrapped in a thin adapter
+  satisfying `knobs.workflow.RestartableTransport`, drives
   `script_restart_and_switch` for real, issues a real HTTP `GET` against the
   restarted server as the "first call," and grades the resulting
   `WorkflowSwitchEvidence.to_dict()` unmodified.
 
-Both tests assert the harness's real substrate is load-bearing, not merely
-declared, for exactly the two units the task flagged as having no caller
-outside their own tests.
+Both tests assert the harness's real substrate is load-bearing rather than
+merely declared.
 
 ## Execution: what "runs locally" means here
 
-Per the task, no authenticated live Claude Desktop E2E run was attempted for
-this scenario -- that needs credentials this environment does not have. No
-live `nxd-desktop-supervisor` build or live agent session is started either.
-What runs is the **deterministic/replay path**: `Scenario.follow_up_check`
+No authenticated live agent session, live supervisor build, or live desktop
+session is run for this scenario. What runs is the
+**deterministic/replay path**: `Scenario.follow_up_check`
 grades evidence shaped like what a real broker restart and a real agent
 session would produce, using the real broker shim and real mock HTTP servers
 described above to *produce* representative evidence, not to run an actual
@@ -124,9 +114,15 @@ with the stale one explicitly rejected.
   restart (`restart_attempted_before_diagnosis`), and the post-switch call
   must not be recorded before the restart it depends on
   (`switch_call_before_restart`).
-- **The post-restart call lands on the new workflow.** `workflow_switch` must
-  agree with the gold's `from_workflow`/`to_workflow`, `answered_workflow`
-  must equal `to_workflow`, and `stale_endpoint_rejected` must be `True`.
+- **The post-restart call lands on the new workflow's endpoint.**
+  `workflow_switch` must agree with the gold's `from_workflow`/`to_workflow`,
+  and `answered_workflow` must equal `to_workflow`. The reported
+  `answered_endpoint` is compared against the gold's `stale_endpoint` and
+  `new_endpoint` identities: a call actually answered by the stale endpoint
+  fails regardless of what the target's own `stale_endpoint_rejected` flag
+  claims, and an endpoint the gold does not declare fails too. That flag is a
+  self-report, so it is checked *in addition to* the identity comparison, not
+  instead of it.
 - A missing or malformed input to any of the above is `not-examined`, never
   a silent pass.
 
@@ -139,8 +135,7 @@ with the stale one explicitly rejected.
   itself. The checks grade evidence *shaped like* what such a run would
   produce, and the "real substrate" tests described above produce that shape
   from a genuine subprocess and genuine HTTP servers -- but neither is wired
-  to an actual `nxd-desktop-supervisor` process or an actual desktop MCP
-  session.
+  to an actual supervisor process or an actual desktop session.
 - **The `serve-phase/` / `build-phase/` evidence-ref vocabulary is a fixed
   harness convention checked by string prefix, not a real link to two
   separate log streams.** A real run's build-phase and serve-phase logs are
@@ -154,27 +149,33 @@ with the stale one explicitly rejected.
   retry-strategy checks), not through the required-plant firing-evidence
   mechanism.
 - **`mockrest`'s two-port design (data vs. control) is not exercised by this
-  scenario.** The real `MockRestServer` pair used in the workflow-switch test
-  only serves one `GET /workflow` data route each; the control port,
-  counters, and capability manifest this scenario does not need are never
-  driven. `mockrest` remains untested against its rate-limiting, pagination,
-  auth, and state-machine behaviors by any caller outside its own unit tests.
+  scenario.** The server pair used in the workflow-switch test only serves one
+  `GET /workflow` data route each; the control port, counters, and capability
+  manifest this scenario does not need are never driven. `mockrest`'s
+  rate-limiting, pagination, auth, and state-machine behaviours remain
+  exercised only by its own unit tests.
 - **The occupied-port shim's "attempt 2 delegates to the real entrypoint" is
   not actually exercised end to end here.** The real-substrate broker test
-  runs the shim directly (as `test_supervisor_knobs.py` does) rather than
-  through a live `nxd-desktop-supervisor` invocation, and the delegated
+  runs the shim directly rather than through a live supervisor invocation,
+  and the delegated
   attempt's own bind against the real entrypoint script is a stub that never
   contends for the same port the faulted attempt tried to use -- the two
   attempts are independent processes, not a single restart sequence sharing
   one port across a real supervisor lifecycle.
+- **`script_restart_and_switch` raises rather than recording a stale answer.**
+  Its returned `stale_endpoint_rejected` is therefore `True` on every
+  successful return and is not independent evidence of anything. The grading
+  above does not rely on it: endpoint identity is re-derived from the gold.
+  The gold's endpoint identities are in turn pinned against the mock-server
+  configs that actually serve them, so neither side can drift alone.
 - **Repeatability is declared, not measured.** `repeatability.tier:
   deterministic, epochs: 5` with `certification.rule: wilson_lower_bound`
   (lower bound 0.90, confidence 0.95) is a declaration in `scenario.yaml`,
   matching `sigterm-diagnosis`'s tier for the same reason (the mechanism is
-  fully deterministic by attempt number). No repeated-trial run across 5
+  fully deterministic by attempt number). No repeated-trial run across five
   epochs was executed as part of this change; the harness's own
   repeatability-runner tests (`tests/test_grading_statistics.py`) exercise
   that machinery generically, not against this scenario specifically.
-- **`grantkit` is not exercised here**, matching `credential-rotation`'s and
-  `sigterm-diagnosis`'s note 10 T1/core scope (LLM-free except B1's fixture;
-  this is not a grant- or LLM-budget scenario).
+- **`grantkit` is not exercised here.** Like the other two core scenarios,
+  this is not a grant- or LLM-budget scenario, so it does not call `grantkit`'s
+  cumulative budget checker.
