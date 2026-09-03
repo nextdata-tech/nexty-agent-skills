@@ -51,6 +51,17 @@ construction — `TransformWindowSizing.from_plans` proves the naive plan
 exceeds twice the window while the bounded plan stays under half — never by
 row counts.
 
+`scenarios/sigterm-diagnosis/` (`tier: core`, `run_order: 4`) is the second
+core-tier scenario and the first caller of `src/dp_scenarios/knobs/`: a
+budget-bound source plan whose naive attempt is SIGTERM-killed by
+construction, graded against a reconciled call-count arithmetic and a
+declared true cause rather than the runtime's own misreported one.
+`scenarios/restart-and-switch/` (`tier: core`, `run_order: 5`) is the third:
+an attempt-keyed, no-stderr bind fault paired with a scripted workflow
+switch, and the first caller of `src/dp_scenarios/mockrest/` outside its own
+unit tests. Both run through the deterministic/replay path only — see each
+package's own `README.md`.
+
 The smoke tier runs the agent under test only: no judge model, no field-mapper
 provider calls, no export. It **does** serve and query, because on lean desktop a
 read-only serving session is a local bearer-gated child process — no cluster, no
