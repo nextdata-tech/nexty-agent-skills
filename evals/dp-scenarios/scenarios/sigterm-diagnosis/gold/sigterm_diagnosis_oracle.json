@@ -1,0 +1,12 @@
+{
+  "dataset": "grain_trap",
+  "seed": 29,
+  "naive_order_count": 20,
+  "naive_total_calls": 20,
+  "bounded_total_calls": 1,
+  "active_order_count": 18,
+  "per_call_latency_ms": 50,
+  "true_cause": "supervisor_transform_window_timeout",
+  "declared_filter": "status=active",
+  "notes": "naive_order_count/naive_total_calls is grain_trap's fixed order count (4 regions x 5 orders, seed-independent): the naive plan issues one call per order, no server-side filter. active_order_count is the order count minus the tombstones injector's floor(0.10 * 20) = 2 rows it marks status=deleted (also seed-independent: the injector uses a fixed floor-based count, only which rows are chosen is randomized) -- this is the row count the bounded attempt must land, not a call count. bounded_total_calls is the declared call count for the bounded attempt: one bulk, server-side status=active query returns every matching row in a single page, so it is 1 regardless of how many rows that page contains. naive_order_count/active_order_count are reconciled in tests/test_scenario_sigterm_diagnosis.py against an independent recount of a freshly generated grain_trap fixture's orders.csv, not against this file's own numbers. per_call_latency_ms is a declared constant, not a measurement, and dp_scenarios.knobs.TransformWindowSizing.from_plans proves by construction that naive_total_calls at this latency exceeds twice the resulting window while bounded_total_calls stays at or under half of it."
+}

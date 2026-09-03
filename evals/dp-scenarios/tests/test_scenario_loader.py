@@ -41,6 +41,7 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
         "parent-child-grain-trap",
         "zero-row-optional-output",
         "credential-rotation",
+        "sigterm-diagnosis",
     }
     for scenario in scenarios:
         assert get_dataset(scenario.dataset).name == scenario.dataset
@@ -57,17 +58,19 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
             "grain_and_aggregation",
             "optional_required_outputs",
             "credential_rotation",
+            "sigterm_diagnosis",
         }
         generated = scenario.generate_fixture(tmp_path / scenario.id)
         for name, path in scenario.gold.items():
             assert path.is_file()
-        if scenario.gates["follow-up"].kind == "credential_rotation":
+        if scenario.gates["follow-up"].kind in {"credential_rotation", "sigterm_diagnosis"}:
             # credential-rotation's committed gold documents facts about the
-            # live Postgres closure (orphan/negative-quantity counts,
-            # reconciled directly against pgfixture in
-            # test_scenario_credential_rotation.py); it is not reproduced by
-            # the plain CSV synthgen path the other two scenarios use, so it
-            # is not compared byte-for-byte against `generate_fixture` here.
+            # live Postgres closure, and sigterm-diagnosis's documents facts
+            # about the SIGTERM/transform-window drill (both reconciled
+            # directly against their own regenerated evidence in their
+            # dedicated test modules); neither is reproduced by the plain CSV
+            # synthgen path the other two scenarios use, so neither is
+            # compared byte-for-byte against `generate_fixture` here.
             continue
         for name, path in scenario.gold.items():
             generated_path = scenario.gold_path(name, generated.out_dir)
@@ -319,10 +322,15 @@ def test_loader_rejects_a_non_positive_turn_budget(tmp_path: Path) -> None:
 def test_discovery_does_not_need_a_python_registry() -> None:
     discovered = load_scenarios(SCENARIO_ROOT)
     # Ordered by each package's declared run_order: zero-row-optional-output (1),
-    # parent-child-grain-trap (2), credential-rotation (3).
+    # parent-child-grain-trap (2), credential-rotation (3), sigterm-diagnosis (4).
     direct = tuple(
         load_scenario(SCENARIO_ROOT / name)
-        for name in ("zero-row-optional-output", "parent-child-grain-trap", "credential-rotation")
+        for name in (
+            "zero-row-optional-output",
+            "parent-child-grain-trap",
+            "credential-rotation",
+            "sigterm-diagnosis",
+        )
     )
     assert tuple(item.id for item in discovered) == tuple(item.id for item in direct)
 
@@ -340,6 +348,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "zero-row-optional-output")
     shutil.rmtree(root / "parent-child-grain-trap")
     shutil.rmtree(root / "credential-rotation")
+    shutil.rmtree(root / "sigterm-diagnosis")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -362,6 +371,7 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.rmtree(root / "zero-row-optional-output")
     shutil.rmtree(root / "parent-child-grain-trap")
     shutil.rmtree(root / "credential-rotation")
+    shutil.rmtree(root / "sigterm-diagnosis")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -408,6 +418,7 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
         "parent-child-grain-trap",
         "zero-row-optional-output",
         "credential-rotation",
+        "sigterm-diagnosis",
     }
     smoke = select_tier(scenarios, "smoke")
     assert {scenario.id for scenario in smoke} == {
@@ -415,7 +426,7 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
         "zero-row-optional-output",
     }
     core = select_tier(scenarios, "core")
-    assert {scenario.id for scenario in core} == {"credential-rotation"}
+    assert {scenario.id for scenario in core} == {"credential-rotation", "sigterm-diagnosis"}
 
 
 def test_select_tier_preserves_declared_run_order() -> None:
