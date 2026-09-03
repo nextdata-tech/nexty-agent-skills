@@ -31,6 +31,7 @@ EXPECTED_CROSS_CHECKS = {
     "grain_and_aggregation": (False, False),
     "credential_rotation": (False, False),
     "sigterm_diagnosis": (False, False),
+    "restart_and_switch": (False, False),
     "optional_required_outputs": (True, True),
 }
 
@@ -42,6 +43,7 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "optional_required_outputs": True,
     "credential_rotation": False,
     "sigterm_diagnosis": False,
+    "restart_and_switch": False,
 }
 
 

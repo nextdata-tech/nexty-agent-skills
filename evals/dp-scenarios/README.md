@@ -7,7 +7,7 @@ The suite runs scenarios the way a BI analyst actually works — a vague first
 message, corrections mid-stream, disputes after the fact — and grades the runs
 mechanically, without trusting the agent's own narrative.
 
-## Scope of this checkout: the smoke tier, plus the first two core-tier scenarios
+## Scope of this checkout: the smoke tier, plus three core-tier scenarios
 
 The smoke tier runs on every skill, runtime, or generator change, takes minutes,
 and spends nearly nothing on models. The tiers above it are the core tier
@@ -29,27 +29,33 @@ The smoke tier contains three scenarios, run in the order each declares through
    internal self-consistency is not enough, because self-consistent wrong numbers
    agree with each other.
 
-Two core-tier scenarios ship here. Each is the first real caller of a build
+Three core-tier scenarios ship here. Each is the first real caller of a build
 unit that until then had no consumer outside its own tests — the condition
 under which a unit's tests quietly start asserting its self-report instead of
-its behaviour. Both run through the deterministic/replay path only; neither
+its behaviour. All three run through the deterministic/replay path only; none
 has been driven by a live agent session. See each scenario's own `README.md`
 for what it covers and what it does not.
 
-`scenarios/credential-rotation/` (`tier: core`) is the first caller of
-`src/dp_scenarios/pgfixture/`: a disposable, owned Postgres container with a
-command-stepped credential rotation, graded against connection-level evidence
-rather than the fixture's own narrative. Its README also records the B5/B10
-naming decision the planning notes leave contradictory.
+`scenarios/credential-rotation/` (`tier: core`, `run_order: 3`) is the first
+caller of `src/dp_scenarios/pgfixture/`: a disposable, owned Postgres
+container with a command-stepped credential rotation, graded against
+connection-level evidence rather than the fixture's own narrative.
 
-`scenarios/sigterm-diagnosis/` (`tier: core`) is the first caller of
-`src/dp_scenarios/knobs/`. The graded difficulty is the *diagnosis*, not the
-failure: the naive plan is SIGTERM-killed with no staging marker, and the
-attribution must land on the supervisor transform window rather than on
+`scenarios/sigterm-diagnosis/` (`tier: core`, `run_order: 4`) is the first
+caller of `src/dp_scenarios/knobs/`. The graded difficulty is the *diagnosis*,
+not the failure: the naive plan is SIGTERM-killed with no staging marker, and
+the attribution must land on the supervisor transform window rather than on
 memory, a client RPC deadline, or a code bug. The overrun is guaranteed by
 construction — `TransformWindowSizing.from_plans` proves the naive plan
 exceeds twice the window while the bounded plan stays under half — never by
 row counts.
+
+`scenarios/restart-and-switch/` (`tier: core`, `run_order: 5`) is the first
+caller of `src/dp_scenarios/knobs/broker.py` and `knobs/workflow.py` outside
+their own unit tests: an attempt-keyed, no-stderr bind fault paired with a
+scripted restart and workflow switch. The agent must distinguish serving-down from build-broken,
+cite build-phase evidence for any unhealthy-build claim, and change the plan
+rather than retry until lucky.
 
 The smoke tier runs the agent under test only: no judge model, no field-mapper
 provider calls, no export. It **does** serve and query, because on lean desktop a
@@ -60,14 +66,14 @@ run on every change.
 
 ### Approval boundary
 
-T0 does not qualify the job-loop's prose-first authoring lifecycle. In particular,
+The smoke tier does not qualify the job-loop's prose-first authoring lifecycle. In particular,
 it does not require a vague opening prompt to produce an approved
 `dp-blueprint.md` (called `dp-spec.md` in older material), nor does it run an
 independent user-presence approval gate before materialization. The job-loop skill
 and closure validators define that artifact contract; this harness records only
 the scripted scenario phases and the artifacts available to its smoke gates.
 Mapper approval is a separate supervisor admission boundary and is not reproduced
-by the T0 operator.
+by the smoke-tier operator.
 
 ### Runtime control plans
 
@@ -128,9 +134,9 @@ uv run --project evals/dp-scenarios python -m dp_scenarios.runner.cli \
 ```
 
 The smoke tier is `drift-canary` → `zero-row-optional-output` →
-`parent-child-grain-trap`. `credential-rotation` and `sigterm-diagnosis` both
-declare `tier: core` and neither is pulled into a smoke run — one needs a
-Docker Postgres, which the smoke tier must not require.
+`parent-child-grain-trap`. `credential-rotation`, `sigterm-diagnosis` and
+`restart-and-switch` all declare `tier: core` and none is pulled into a smoke
+run — one needs a Docker Postgres, which the smoke tier must not require.
 
 `scripts/run_local_claude.py` applies the same boundary: with no `--scenario`
 it runs `--tier smoke` (the default) rather than every package on disk, since
