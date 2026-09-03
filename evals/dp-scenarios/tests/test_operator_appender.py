@@ -237,6 +237,26 @@ def test_non_fact_outcome_claim_is_string_typed() -> None:
         row_payload(turn(action_kind="self_check", phase=4, claim={"outcome": 1}))
 
 
+def test_operator_unmatched_claim_is_boolean_typed() -> None:
+    with pytest.raises(AppenderError, match="operator_unmatched must be a boolean"):
+        row_payload(turn(action_kind="intake", phase=1, claim={"operator_unmatched": "yes"}))
+
+    payload = row_payload(turn(action_kind="intake", phase=1, claim={"operator_unmatched": True}))
+    assert payload["claim"] == {"operator_unmatched": True}
+
+
+def test_operator_answered_from_ground_truth_claim_is_boolean_typed() -> None:
+    with pytest.raises(AppenderError, match="operator_answered_from_ground_truth must be a boolean"):
+        row_payload(
+            turn(action_kind="intake", phase=1, claim={"operator_answered_from_ground_truth": "yes"})
+        )
+
+    payload = row_payload(
+        turn(action_kind="intake", phase=1, claim={"operator_answered_from_ground_truth": True})
+    )
+    assert payload["claim"] == {"operator_answered_from_ground_truth": True}
+
+
 def test_supervisor_rows_are_copied_from_reader_and_not_agent_text() -> None:
     rows: list[object] = []
     reader = StaticSupervisorRecordReader(facts())

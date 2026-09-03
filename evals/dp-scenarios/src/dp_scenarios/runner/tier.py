@@ -618,8 +618,14 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
 
     turns = []
     tool_call_count = 0
+    unmatched_turn_count = 0
+    ground_truth_turn_count = 0
     for turn in run_result.turns:
         tool_call_count += len(turn.tool_calls)
+        if not turn.match.matched:
+            unmatched_turn_count += 1
+        if turn.match.ground_truth:
+            ground_truth_turn_count += 1
         turns.append(
             {
                 "turn": turn.turn,
@@ -638,6 +644,12 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                     {"path": _json_safe(file.path), "content": _json_safe(file.content)}
                     for file in turn.files_touched
                 ],
+                # A reader must be able to tell how often the operator went
+                # off script (matched=False) versus answered from a declared
+                # ground-truth brief, not just read byte-identical replies.
+                "operator_matched_rule_id": turn.match.rule_id,
+                "operator_matched": turn.match.matched,
+                "operator_answered_from_ground_truth": turn.match.ground_truth,
             }
         )
     _write_json(
@@ -649,6 +661,8 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
             "fired_plant_ids": list(run_result.fired_plant_ids),
             "ungraded_criteria": sorted(run_result.ungraded_criteria),
             "tool_call_count": tool_call_count,
+            "operator_unmatched_turn_count": unmatched_turn_count,
+            "operator_ground_truth_turn_count": ground_truth_turn_count,
             "turns": turns,
         },
     )

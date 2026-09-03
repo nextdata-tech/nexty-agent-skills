@@ -5,7 +5,14 @@ state transitions in the engine.  This separation makes repeated trials
 byte-stable while allowing persona cards to carry realistic pressure.
 """
 
-from .answer_sheet import AnswerSheet, AnswerSheetError, DecisionAnswer, answer_sheet_from_mapping, load_answer_sheet
+from .answer_sheet import (
+    AnswerSheet,
+    AnswerSheetError,
+    DecisionAnswer,
+    GroundTruthFact,
+    answer_sheet_from_mapping,
+    load_answer_sheet,
+)
 from .appender import (
     AppenderError,
     StaticSupervisorRecordReader,
@@ -49,6 +56,7 @@ __all__ = [
     "Attachment",
     "Category",
     "DecisionAnswer",
+    "GroundTruthFact",
     "EventCard",
     "EventInjection",
     "EventSchedule",

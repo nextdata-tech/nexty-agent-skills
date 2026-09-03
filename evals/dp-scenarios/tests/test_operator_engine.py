@@ -494,6 +494,49 @@ def test_event_outcomes_counter_snapshots_and_session_gap_are_durable() -> None:
     assert claim["counter_snapshots"] == [{"calls": 3}]
     assert claim["session_gap_seconds"] == 14_400
 
+
+def test_ledger_rows_record_unmatched_and_ground_truth_answered_turns() -> None:
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "engine-ground-truth-test",
+            "opening_message": "Improve weekly visibility.",
+            "turns": ["Improve weekly visibility.", "Please continue.", "Please continue again."],
+            "source_answers": {"source": "The approved source is the business record."},
+            "decision_answers": {},
+            "status_answers": {},
+            "opening_forbidden_terms": ["source", "driver", "mechanism"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+            "ground_truth": {
+                "value_col": {"terms": ["value", "column"], "fact": "It is the recognized dollar amount."},
+            },
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turns=sheet.turns,
+        turn_budget=3,
+        phase_by_turn={1: 1, 2: 2, 3: 3},
+    )
+    responses = [
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="What is the endpoint retry policy?"),
+        TurnResult(agent_message="Yes, please proceed.", reported=True),
+    ]
+    result = OperatorEngine(script, InMemoryTransport(responses)).run()
+
+    ground_truth_row, unmatched_row, matched_row = result.ledger_rows[:3]
+    assert ground_truth_row["matched_rule_id"] == "ground_truth.value_col"
+    assert ground_truth_row["claim"] == {"operator_answered_from_ground_truth": True}
+    assert unmatched_row["matched_rule_id"] == "unmatched.source_question"
+    assert unmatched_row["claim"] == {"operator_unmatched": True}
+    assert "operator_unmatched" not in (matched_row["claim"] or {})
+    assert "operator_answered_from_ground_truth" not in (matched_row["claim"] or {})
+
+
 def test_intake_failure_is_recorded_when_opening_turn_is_not_source_question() -> None:
     script = make_script(turns=("Improve weekly visibility.",))
     result = OperatorEngine(

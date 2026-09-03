@@ -213,8 +213,16 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
     return scenario, recordings
 
 
-def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build a populated replay for the zero-row scenario, including follow-up evidence."""
+def populated_zero_row_recordings(
+    tmp_path: Path, *, opening_agent_message: str | None = None
+) -> tuple[object, list[ReplayRecording]]:
+    """Build a populated replay for the zero-row scenario, including follow-up evidence.
+
+    ``opening_agent_message`` overrides what the agent says on turn 1. It
+    exists so a caller can drive a question the scripted answer bank does not
+    cover through the *real* shipped answer sheet; the default preserves the
+    original transcript for every other caller.
+    """
 
     scenario = load_scenario(ROOT / "scenarios/zero-row-optional-output")
     generated = scenario.generate_fixture(tmp_path / "zero-row-fixture")
@@ -261,7 +269,7 @@ def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRe
             for path, value in artifacts.items()
         )
         responses = [
-            TurnResult(agent_message="How did January go?"),
+            TurnResult(agent_message=opening_agent_message or "How did January go?"),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
             TurnResult(agent_message="The build is ready."),
@@ -1252,3 +1260,96 @@ def test_a_malformed_transcript_shape_is_scanned_whole_not_skipped(turns: list[o
                     call.setdefault("result", {"content": "NAME-SENTINEL-abc"})
     blob = json.dumps(tier_module._leakable_turn_surfaces(turns))
     assert "not-a-mapping" in blob or "NAME-SENTINEL-abc" in blob or "not-a-sequence" in blob
+def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path: Path) -> None:
+    """A reader must be able to tell how many turns the operator answered
+
+    from its declared brief versus how many it could not answer at all, not
+    just read byte-identical operator replies (the deadlock this guards
+    against left no distinguishing trace in earlier observations).
+    """
+
+    opening = "Improve visibility."
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "obs-test",
+            "opening_message": opening,
+            "turns": [opening, "Please continue.", "Please continue again."],
+            "source_answers": {"source": "Use the source."},
+            "decision_answers": {},
+            "status_answers": {},
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+            "ground_truth": {
+                "value_col": {"terms": ["value", "column"], "fact": "It is the recognized dollar amount."},
+            },
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turns=sheet.turns,
+        turn_budget=3,
+        phase_by_turn={1: 1, 2: 2, 3: 3},
+    )
+    responses = [
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="What is the endpoint retry policy?"),
+        TurnResult(agent_message="Yes, please proceed.", reported=True),
+    ]
+    result = OperatorEngine(script, InMemoryTransport(responses)).run()
+
+    tier_module._write_operator_observations(tmp_path, result)
+    payload = json.loads((tmp_path / "operator-observations.json").read_text())
+
+    assert payload["operator_ground_truth_turn_count"] == 1
+    assert payload["operator_unmatched_turn_count"] == 1
+    assert payload["turns"][0]["operator_answered_from_ground_truth"] is True
+    assert payload["turns"][0]["operator_matched"] is True
+    assert payload["turns"][0]["operator_matched_rule_id"] == "ground_truth.value_col"
+    assert payload["turns"][1]["operator_matched"] is False
+    assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
+    assert payload["turns"][1]["operator_matched_rule_id"] == "unmatched.source_question"
+    assert payload["turns"][2]["operator_matched"] is True
+
+
+def test_a_shipped_brief_actually_fires_in_a_scenario_level_run(tmp_path: Path) -> None:
+    """The ground-truth brief is exercised through a real shipped scenario.
+
+    Unit tests build their own answer sheets, and the existing replays never
+    ask anything the scripted answer bank fails to cover -- so before this,
+    every committed brief could be deleted with the suite still green and the
+    capability was inert in the packages it shipped in. This drives the real
+    zero-row scenario through TierRunner with an agent turn asking exactly the
+    kind of column-semantics question the first live run deadlocked on, and
+    asserts the operator answered it from the brief.
+
+    It deliberately does not assert a clean verdict: the point is that the
+    brief fired and was recorded, not that this altered transcript still
+    satisfies every gate.
+    """
+
+    scenario, recordings = populated_zero_row_recordings(
+        tmp_path, opening_agent_message="What does the value column actually represent?"
+    )
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    run = result.scenario_runs[0]
+    rows = [json.loads(line) for line in run.ledger_bytes.splitlines()]
+    rule_ids = [row.get("matched_rule_id") for row in rows]
+    assert "ground_truth.value_column" in rule_ids, (
+        f"no ground-truth answer reached the ledger; rule ids were {rule_ids!r}"
+    )
+    assert any(
+        isinstance(row.get("claim"), Mapping)
+        and row["claim"].get("operator_answered_from_ground_truth") is True
+        for row in rows
+    )

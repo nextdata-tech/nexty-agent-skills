@@ -8,12 +8,14 @@ after a deterministic matcher selects the corresponding question.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 import yaml
+
+from .text_match import term_present
 
 
 class AnswerSheetError(ValueError):
@@ -34,6 +36,12 @@ ANSWER_SHEET_KEYS = frozenset(
         "obstacle_terms",
     }
 )
+
+# ``ground_truth`` is deliberately optional: most scenario packages have no
+# brief and must keep validating and matching exactly as before.  Only a
+# package that declares one opts into brief-backed answers for otherwise
+# unmatched questions (see MatcherBank._unmatched).
+OPTIONAL_ANSWER_SHEET_KEYS = frozenset({"ground_truth"})
 
 
 def _mapping(value: object, location: str) -> dict[str, Any]:
@@ -86,6 +94,29 @@ class DecisionAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class GroundTruthFact:
+    """One fact the operator actually knows and may state when asked.
+
+    Ground-truth entries are not scripted replies: they exist so an
+    unanticipated question still has a correct answer available instead of a
+    fabricated or a confidently irrelevant one.  Every declared term must
+    appear in the question before a fact is used, the same discipline as a
+    declared business decision, so an author is pushed toward specific
+    multi-term matches rather than the single generic word that caused a
+    confident false match in the field.
+    """
+
+    fact_id: str
+    terms: tuple[str, ...]
+    fact: str
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return the canonical ground-truth entry."""
+
+        return {"terms": list(self.terms), "fact": self.fact}
+
+
+@dataclass(frozen=True, slots=True)
 class AnswerSheet:
     """Immutable answer material and the two-layer intake contract."""
 
@@ -99,6 +130,7 @@ class AnswerSheet:
     opening_forbidden_terms: tuple[str, ...]
     open_decision_markers: tuple[str, ...]
     obstacle_terms: tuple[str, ...]
+    ground_truth: Mapping[str, GroundTruthFact] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def turn_one(self) -> str:
@@ -142,6 +174,27 @@ class AnswerSheet:
                 return key, answer
         return None
 
+    def answer_for_ground_truth(self, question: str) -> tuple[str, str] | None:
+        """Return a declared fact whose every term appears in the question.
+
+        Returns ``None`` — never a guess — when no fact's full term set is
+        present, including when no ``ground_truth`` brief was declared at
+        all (an empty mapping has nothing to iterate). Each declared term is
+        matched on a whole-word boundary (multi-word terms use substring
+        containment), the same discipline the matcher applies to obstacle
+        terms, so a generic word cannot fire on a longer word that merely
+        contains it (``product`` must not match ``production``, ``column``
+        must not match ``columns``) and produce a confidently irrelevant
+        answer.
+        """
+
+        lowered = question.casefold()
+        for fact_id in sorted(self.ground_truth):
+            fact = self.ground_truth[fact_id]
+            if all(term_present(term, lowered) for term in fact.terms):
+                return fact_id, fact.fact
+        return None
+
     def contains_open_decision_marker(self, artifact: str) -> bool:
         """Report whether an artifact still carries a declared open marker."""
 
@@ -163,6 +216,7 @@ class AnswerSheet:
             "opening_forbidden_terms": list(self.opening_forbidden_terms),
             "open_decision_markers": list(self.open_decision_markers),
             "obstacle_terms": list(self.obstacle_terms),
+            "ground_truth": {key: value.to_mapping() for key, value in self.ground_truth.items()},
         }
 
 
@@ -195,11 +249,28 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
     return result
 
 
+def _ground_truth_mapping(value: object) -> dict[str, GroundTruthFact]:
+    raw = _mapping(value, "answer_sheet.ground_truth")
+    result: dict[str, GroundTruthFact] = {}
+    for fact_id, entry in raw.items():
+        identifier = _string(fact_id, "answer_sheet.ground_truth key")
+        data = _mapping(entry, f"answer_sheet.ground_truth.{identifier}")
+        _unknown(data, {"terms", "fact"}, f"answer_sheet.ground_truth.{identifier}")
+        if set(data) != {"terms", "fact"}:
+            raise AnswerSheetError(
+                f"answer_sheet.ground_truth.{identifier} requires terms and fact"
+            )
+        terms = _strings(data["terms"], f"answer_sheet.ground_truth.{identifier}.terms")
+        fact = _string(data["fact"], f"answer_sheet.ground_truth.{identifier}.fact")
+        result[identifier] = GroundTruthFact(identifier, terms, fact)
+    return result
+
+
 def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
     """Validate and construct an answer sheet from a mapping."""
 
     raw = _mapping(value, "answer_sheet")
-    _unknown(raw, ANSWER_SHEET_KEYS, "answer_sheet")
+    _unknown(raw, ANSWER_SHEET_KEYS | OPTIONAL_ANSWER_SHEET_KEYS, "answer_sheet")
     missing = sorted(ANSWER_SHEET_KEYS - set(raw))
     if missing:
         raise AnswerSheetError(f"answer_sheet is missing key(s): {', '.join(missing)}")
@@ -219,6 +290,11 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
     turns = _strings(raw["turns"], "answer_sheet.turns")
     if turns[0] != opening:
         raise AnswerSheetError("answer_sheet.turns[0] must equal opening_message")
+    # ground_truth is optional; when absent, no fact is ever consulted and the
+    # legacy unmatched-question behavior is preserved exactly.  When present,
+    # even an empty mapping is validated the same strict way as every other
+    # section, so a malformed brief is always a load error, never a silent skip.
+    ground_truth = _ground_truth_mapping(raw["ground_truth"]) if "ground_truth" in raw else {}
     return AnswerSheet(
         version=version,
         scenario_id=_string(raw["scenario_id"], "answer_sheet.scenario_id"),
@@ -230,6 +306,7 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         opening_forbidden_terms=forbidden,
         open_decision_markers=_strings(raw["open_decision_markers"], "answer_sheet.open_decision_markers"),
         obstacle_terms=_strings(raw["obstacle_terms"], "answer_sheet.obstacle_terms", allow_empty=True),
+        ground_truth=MappingProxyType(ground_truth),
     )
 
 
@@ -246,9 +323,11 @@ def load_answer_sheet(path: str | Path) -> AnswerSheet:
 
 __all__ = [
     "ANSWER_SHEET_KEYS",
+    "OPTIONAL_ANSWER_SHEET_KEYS",
     "AnswerSheet",
     "AnswerSheetError",
     "DecisionAnswer",
+    "GroundTruthFact",
     "answer_sheet_from_mapping",
     "load_answer_sheet",
 ]
