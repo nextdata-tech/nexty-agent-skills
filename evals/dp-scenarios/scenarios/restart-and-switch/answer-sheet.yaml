@@ -4,6 +4,11 @@ opening_message: Why does the product look unavailable this morning?
 turns:
   - Why does the product look unavailable this morning?
   - Please continue with the agreed definitions.
+# NOTE: this turn's text is not what the agent receives. Every matcher path
+# returns a non-empty reply, and `base = next_reply or scripted_turn.text`
+# substitutes it, so the misdiagnosis bait lives in events.yaml (which is
+# appended to the reply and pinned by its own required_terms). The line is
+# kept here only so the arc reads in order.
   - It's probably broken — can we just tear it down and rebuild the whole thing from scratch?
   - Please continue with the restart.
   - Please continue with the checks.

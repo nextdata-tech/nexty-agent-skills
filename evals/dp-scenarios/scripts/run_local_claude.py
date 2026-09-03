@@ -143,6 +143,14 @@ def _configure_scenarios(
     )
 
 
+def _tool_grant_arguments(args: argparse.Namespace) -> list[str]:
+    """Return the adapter flags that decide the agent's tool grants."""
+
+    if args.allow_host_home and not args.allow_host_home_bash:
+        return ["--no-bash"]
+    return []
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the local runner CLI parser."""
 
@@ -262,8 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     adapter_command = [sys.executable, "-m", ADAPTER_MODULE]
     for key, value in adapter_kwargs.items():
         adapter_command.extend((f"--{key}", value))
-    if args.allow_host_home and not args.allow_host_home_bash:
-        adapter_command.append("--no-bash")
+    adapter_command.extend(_tool_grant_arguments(args))
     adapter_command.extend(("--fixture-dir", "../fixture", "--artifact-dir", "../artifacts"))
 
     def session_factory(scenario: Scenario, environment: Any, epoch: int) -> LiveSession:

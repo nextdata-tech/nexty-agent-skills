@@ -1241,10 +1241,19 @@ class TierRunner:
                 transport_closed = False
                 primary_error: BaseException | None = None
                 try:
+                    # The planted markers live in the generated fixture, not in
+                    # the scenario's operator block: most scenarios declare
+                    # ``operator.sentinel: null`` and still plant PII.  Hand
+                    # them to the engine so redaction of agent text before an
+                    # external provider covers the markers grading actually
+                    # looks for.  Redaction only: these deliberately do not
+                    # widen the in-engine sentinel scan, because a marker in a
+                    # tool result the agent legitimately read is not a leak.
                     engine = OperatorEngine(
                         scenario.script,
                         transport,
                         generated_operator=generated_operator,
+                        extra_sentinels=sorted(marker_values(environment.generated_fixture_manifest)),
                     )
                     run_result = engine.run()
                     if isinstance(transport, ReplaySession) and transport.remaining_turns:

@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Pattern
 
-from .answer_sheet import AnswerSheet
+from .answer_sheet import AnswerSheet, script_turn_text
 from .persona import PersonaCard
 from .text_match import contains_any_term
 
@@ -47,6 +47,17 @@ class MatchResult:
     matched: bool = True
     obstacle_question: bool = False
     ground_truth: bool = False
+    approval_requested: bool = False
+    """Whether the agent solicited approval, orthogonally to ``category``.
+
+    Agents present a spec and ask a factual question in the same breath --
+    "Please approve the blueprint. Also, what does updatedAt mean on a deal?"
+    Making approval a first-match *category* stole exactly those messages from
+    the source/decision/ground-truth lookup, so the operator answered a stock
+    approval line instead of the fact it knows, precisely when the fact
+    mattered most. The solicitation is therefore recorded as a flag on
+    whatever category actually resolves the reply.
+    """
 
     @property
     def matched_rule_id(self) -> str:
@@ -79,7 +90,19 @@ DEFAULT_OBSTACLE_TERMS = (
     "secret",
 )
 
+# The unambiguous solicitation verbs. This is read as an orthogonal flag on
+# every result (see MatchResult.approval_requested), not as a category that
+# outranks the factual lookups. "looks good" is deliberately absent: it is
+# ordinary conversational filler ("the data looks good so far") and reading it
+# as a request for sign-off is a false positive far more often than not.
+APPROVAL_REQUEST_PATTERN = re.compile(r"\b(approve[sd]?|approval|sign\s*off)\b", re.IGNORECASE)
+
 _RULES = (
+    # _RULES is first-match-wins and the factual rules come first on purpose.
+    # Whether the agent also asked for approval is carried alongside the
+    # category, so a message that both presents a spec and asks a real
+    # question is still answered from the source bank, the decision bank, or
+    # the ground-truth brief.
     _Rule(
         "source.question",
         Category.SOURCE_QUESTION,
@@ -91,7 +114,14 @@ _RULES = (
     _Rule(
         "approval.request",
         Category.APPROVAL_REQUEST,
-        re.compile(r"\b(approve|approval|sign\s*off|looks\s+good|proceed|publish|ship)\b", re.IGNORECASE),
+        APPROVAL_REQUEST_PATTERN,
+    ),
+    # Weaker, more ambiguous approval vocabulary, kept under its own rule id so
+    # a transcript reader can tell which of the two fired.
+    _Rule(
+        "approval.proceed",
+        Category.APPROVAL_REQUEST,
+        re.compile(r"\b(proceed|publish|ship)\b", re.IGNORECASE),
     ),
     _Rule(
         "decision.request",
@@ -120,7 +150,14 @@ def _contains_declared_term(value: str | bytes, terms: tuple[str, ...]) -> bool:
 
 
 def _reachable_reply_material(persona: PersonaCard, answer_sheet: AnswerSheet) -> tuple[str, ...]:
-    values: list[str] = [answer_sheet.opening_message, *answer_sheet.turns, persona.fallback]
+    # A turn may be declared as a mapping carrying the substitution switch, so
+    # take its text rather than the declaration: the obstacle scan must still
+    # see every string that can actually reach the agent.
+    values: list[str] = [
+        answer_sheet.opening_message,
+        *(script_turn_text(turn) for turn in answer_sheet.turns),
+        persona.fallback,
+    ]
     values.extend(reply for category in sorted(persona.reply_bank) for reply in persona.reply_bank[category])
     values.extend(answer_sheet.source_answers.values())
     values.extend(answer.answer for answer in answer_sheet.decision_answers.values())
@@ -197,11 +234,22 @@ class MatcherBank:
         if _contains_term(message, self.question_obstacle_terms):
             raise MatcherError("the generated operator surface contains an obstacle term")
 
+    @staticmethod
+    def _with_approval_flag(result: MatchResult, message: str) -> MatchResult:
+        """Attach the orthogonal solicitation flag to an already-chosen result."""
+
+        if result.approval_requested or not APPROVAL_REQUEST_PATTERN.search(message):
+            return result
+        return replace(result, approval_requested=True)
+
     def classify(self, message: str) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 
         if not isinstance(message, str):
             raise TypeError("agent message must be a string")
+        return self._with_approval_flag(self._classify(message), message)
+
+    def _classify(self, message: str) -> MatchResult:
         is_question = "?" in message or bool(re.match(r"\s*(who|what|where|when|why|how|can|could|should|is|are|do|does)\b", message, re.IGNORECASE))
         decision = self.answer_sheet.answer_for_decision(message)
         if decision is not None:
@@ -227,12 +275,33 @@ class MatcherBank:
     def reply_for(self, message: str) -> MatchResult:
         """Classify one message and choose its fixed reply."""
 
+        return self._with_approval_flag(self._reply_for(message), message)
+
+    def _reply_for(self, message: str) -> MatchResult:
         classified = self.classify(message)
         if classified.category is Category.OTHER:
             return classified
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
             return classified
         if classified.category is Category.SOURCE_QUESTION:
+            # The brief is consulted before the source answers, not only after
+            # them. A ground-truth fact fires only when its *whole* declared
+            # term set is present, so a matching fact is strictly more specific
+            # than a source answer, which fires on a single topic key name.
+            # Consulting the sheet first let one generic key ("data") shadow
+            # every specific fact an author added precisely because the source
+            # answer was the wrong answer to that question. Scenarios that
+            # declare no brief are unaffected: an empty mapping never matches.
+            found = self.answer_sheet.answer_for_ground_truth(message)
+            if found is not None:
+                key, fact = found
+                return MatchResult(
+                    Category.SOURCE_QUESTION,
+                    f"ground_truth.{key}",
+                    fact,
+                    answer_key=key,
+                    ground_truth=True,
+                )
             source = self.answer_sheet.answer_for_source(message)
             if source is not None:
                 key, answer = source
@@ -309,6 +378,7 @@ def classify_and_reply(
 
 
 __all__ = [
+    "APPROVAL_REQUEST_PATTERN",
     "Category",
     "DEFAULT_OBSTACLE_TERMS",
     "MatchResult",

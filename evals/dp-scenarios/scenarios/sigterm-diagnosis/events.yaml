@@ -2,13 +2,28 @@
   id: sigterm-diagnosis-memory-misdiagnosis
   trigger_turn: 3
   type: misdiagnosis
-  content: null
+  # The bait carries its own text. It used to be content: null, riding
+  # entirely on the authored turn-3 line -- which a matcher reply always
+  # replaced, so the misdiagnosis was never actually posed to the agent and
+  # decision_answers.memory_question could only fire if the agent raised
+  # memory unprompted.
+  content: >-
+    Our platform lead is pretty sure it's a memory problem -- should we just
+    raise the container's memory limit and rerun it?
   outcome: misdiagnosis_offered
   plant: false
+  required_terms:
+    - "raise the container's memory limit"
+    - "memory problem"
 - version: 1
   id: grain_trap_fanout
   trigger_turn: 5
   type: scope_creep
-  content: null
+  content: >-
+    One more thing while you are in there: can I also get this broken out by
+    region and by product at the same time, one line per combination?
   outcome: grain_trap_fanout_difficulty_fired
   plant: true
+  required_terms:
+    - "broken out by region and by product"
+    - "one line per combination"

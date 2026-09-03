@@ -68,9 +68,13 @@ def test_intake_passes_and_reports_ordering_code() -> None:
         {"turn": 2, "action_kind": "spec_approved"},
         {"turn": 3, "action_kind": "codegen"},
     )
+    # Codegen strictly earlier than the approval is the violation. The
+    # same turn is not: an operator approval is transmitted at the top of
+    # a turn and the agent acts in the rest of it, so authoring right
+    # after "approved, go ahead" shares the approval's turn number.
     bad = _ledger(
         {"turn": 3, "action_kind": "spec_approved"},
-        {"turn": 3, "action_kind": "codegen"},
+        {"turn": 2, "action_kind": "codegen"},
     )
     assert gate_intake(good).passed
     result = gate_intake(bad)
@@ -99,7 +103,11 @@ def test_intake_empty_or_observationally_unexamined_input_cannot_pass() -> None:
             "observations": {
                 "turns": [
                     {"turn": 3, "files_touched": [], "tool_calls": []},
-                    {"turn": 4, "files_touched": [], "tool_calls": ["build"]},
+                    {
+                        "turn": 4,
+                        "files_touched": [{"path": "closure/spec.py", "content": "m"}],
+                        "tool_calls": [],
+                    },
                 ]
             },
         }
@@ -113,6 +121,99 @@ def test_intake_empty_or_observationally_unexamined_input_cannot_pass() -> None:
         }
     )
     assert "intake_codegen_missing" in no_observed_codegen.codes
+
+
+def _live_shaped_run(*, approval_turn: int, closure_turn: int) -> dict[str, object]:
+    """A ledger plus observations in the shape a live agent run produces.
+
+    Turn 1 is the read-only orientation turn the live adapter's system prompt
+    asks for; turn 2 writes the root-level blueprint that is submitted for
+    approval.  Neither is codegen.
+    """
+
+    return {
+        "rows": [
+            {"turn": approval_turn, "action_kind": "spec_approved"},
+            {"turn": closure_turn, "action_kind": "codegen"},
+        ],
+        "observations": {
+            "turns": [
+                {
+                    "turn": 1,
+                    "files_touched": [],
+                    "tool_calls": [{"name": "Read", "arguments": {"file_path": "infra-profile.yaml"}}],
+                },
+                {
+                    "turn": 2,
+                    "files_touched": [{"path": "dp-blueprint.md", "content": "spec"}],
+                    "tool_calls": [{"name": "Write", "arguments": {"file_path": "dp-blueprint.md"}}],
+                },
+                {
+                    "turn": closure_turn,
+                    "files_touched": [{"path": "closure/spec.py", "content": "code"}],
+                    "tool_calls": [{"name": "Write", "arguments": {"file_path": "closure/spec.py"}}],
+                },
+            ]
+        },
+    }
+
+
+def test_intake_passes_when_a_live_run_reads_and_drafts_a_spec_before_approval() -> None:
+    """Pre-approval reads and blueprint writes must not count as codegen.
+
+    This is the live-run shape: the agent orients with a read on turn 1 and
+    writes the blueprint on turn 2, both strictly before the approval on
+    turn 4.  Inferring codegen from either made the gate unpassable for any
+    real run.
+    """
+
+    result = gate_intake(_live_shaped_run(approval_turn=4, closure_turn=5))
+    assert result.passed, result.codes
+    assert result.points == GATE_POINTS["intake"]
+
+
+def test_intake_still_catches_closure_authoring_before_approval() -> None:
+    """The ordering check must survive the narrowed inference.
+
+    Authoring the closure on turn 3 with approval only on turn 4 is the real
+    violation, and it is caught from observations alone -- the ledger here
+    records no codegen row at all, so the finding can only come from the
+    inference.
+    """
+
+    run = {
+        "rows": [{"turn": 4, "action_kind": "spec_approved"}],
+        "observations": {
+            "turns": [
+                {"turn": 3, "files_touched": [{"path": "closure/spec.py", "content": "code"}], "tool_calls": []},
+            ]
+        },
+    }
+    result = gate_intake(run)
+    assert not result.passed
+    assert "intake_approval_not_before_codegen" in result.codes
+    assert result.points == 0
+
+
+def test_intake_codegen_inference_ignores_non_authoring_observations() -> None:
+    """Only a closure write is authoring evidence; nothing else substitutes."""
+
+    def codes(turn: dict[str, object]) -> tuple[str, ...]:
+        return gate_intake(
+            {"rows": [{"turn": 2, "action_kind": "spec_approved"}], "observations": {"turns": [turn]}}
+        ).codes
+
+    # Reads, root-level spec writes, and malformed entries are not codegen.
+    assert "intake_codegen_missing" in codes({"turn": 3, "tool_calls": [{"name": "Read"}]})
+    assert "intake_codegen_missing" in codes({"turn": 3, "tool_calls": [{"name": "Write"}], "files_touched": []})
+    assert "intake_codegen_missing" in codes({"turn": 3, "files_touched": [{"path": "dp-blueprint.md"}]})
+    assert "intake_codegen_missing" in codes({"turn": 3, "files_touched": [{"path": "closure-notes.md"}]})
+    assert "intake_codegen_missing" in codes({"turn": 3, "files_touched": ["not-a-mapping"]})
+    assert "intake_codegen_missing" in codes({"turn": 3, "files_touched": [{"path": 17}]})
+    assert "intake_codegen_missing" in codes({"turn": 3, "files_touched": "closure/spec.py"})
+
+    # A nested closure write is authoring, wherever it sits in the tree.
+    assert "intake_codegen_missing" not in codes({"turn": 3, "files_touched": [{"path": "a/closure/b/spec.py"}]})
 
 
 def test_intake_rejects_missing_codegen_and_non_ledger_input() -> None:
@@ -439,3 +540,43 @@ def test_a_legacy_alias_renames_finding_codes_instead_of_raising() -> None:
     for code in result.codes:
         assert not code.startswith("intake_"), f"{code} kept its canonical prefix"
         assert code.startswith("g1_"), f"{code} was not renamed to the legacy prefix"
+
+
+def test_intake_allows_codegen_on_the_approval_turn_itself() -> None:
+    """The operator approves at the top of a turn; the agent acts in the rest of it.
+
+    A live run recorded spec_approved and the first closure write both at
+    turn 4 -- the operator transmitted "approved, go ahead" and the agent
+    did exactly that. Demanding a strictly later codegen turn failed the
+    agent for correct behaviour, so the same turn must be allowed.
+    """
+
+    result = gate_intake(
+        {
+            "rows": [
+                {"turn": 4, "action_kind": "spec_approved"},
+                {"turn": 4, "action_kind": "codegen"},
+            ],
+            "observations": {"turns": []},
+        }
+    )
+
+    assert result.passed, result.codes
+    assert "intake_approval_not_before_codegen" not in result.codes
+
+
+def test_intake_still_rejects_codegen_on_an_earlier_turn_than_the_approval() -> None:
+    """The complement: authoring before any approval is still the violation."""
+
+    result = gate_intake(
+        {
+            "rows": [
+                {"turn": 4, "action_kind": "spec_approved"},
+                {"turn": 3, "action_kind": "codegen"},
+            ],
+            "observations": {"turns": []},
+        }
+    )
+
+    assert not result.passed
+    assert "intake_approval_not_before_codegen" in result.codes
