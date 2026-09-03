@@ -409,9 +409,14 @@ def test_every_shipped_event_card_that_declares_text_actually_transmits_it() -> 
         for card_id, card in declared.items():
             for term in getattr(card, "required_terms", ()) or ():
                 assert term in sent, f"{package.name}: {card_id} never transmitted {term!r}"
-            checked += 1
+                checked += 1
 
-    assert checked >= 3, "expected the shipped packages to declare textual event cards"
+    # Counts terms actually asserted, not cards iterated. Counting cards made
+    # the floor unfalsifiable: a card with content and no required_terms --
+    # zero-row-optional-output/optional_zero_row is one today -- bumped the
+    # counter while asserting nothing, so required_terms could have been
+    # dropped from most cards with this test still green.
+    assert checked >= 14, f"only {checked} required terms asserted across the shipped packages"
 
 
 @pytest.mark.parametrize(

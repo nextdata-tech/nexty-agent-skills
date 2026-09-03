@@ -30,7 +30,7 @@ is the same failure this scenario exists to catch from the other direction.
 ## Conversation
 
 The operator runs a ten-turn arc across the seven graded phases: probe, the
-impossible ask, approval, build, the proxy ask, and the final check. Four
+impossible ask, approval, build, the proxy ask, and the final check. Three
 turns are declared in `answer-sheet.yaml` as mappings rather than plain
 strings, because a plain turn is substitutable and a matcher reply replaces
 it:

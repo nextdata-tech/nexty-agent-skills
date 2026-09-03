@@ -879,11 +879,7 @@ class OperatorEngine:
             snapshots = tuple(_snapshot(reader) for reader in self.counter_readers)
             phase = self._turn_phase(index)
             approval_artifact = result.approval_artifact
-            artifact_text = (
-                approval_artifact.decode("utf-8", errors="replace")
-                if isinstance(approval_artifact, bytes)
-                else approval_artifact or ""
-            )
+            artifact_text = _artifact_text(approval_artifact)
             approval_marker = match.approval_requested and self.script.answer_sheet.contains_open_decision_marker(artifact_text)
             claim: dict[str, object] = {}
             if match.approval_requested:
