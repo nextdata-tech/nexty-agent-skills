@@ -66,10 +66,11 @@ def script_turn_text(turn: object) -> str:
     """Return the operator text a declared script turn carries.
 
     A turn is either a plain string or a mapping that also declares the
-    reply-substitution switch ``ScriptTurn`` already understands.  The
-    mapping form is what lets a scenario mark an ask that a matcher reply
-    must never replace; without it the switch exists in the engine but is
-    unreachable from scenario data.
+    switches ``ScriptTurn`` understands: ``substitute_reply``, which marks an
+    ask a matcher reply must never replace, and ``approval``, which declares
+    that transmitting this turn *is* the operator approving the spec.  Without
+    the mapping form both switches exist in the engine but are unreachable
+    from scenario data.
     """
 
     if isinstance(turn, str):
@@ -95,7 +96,7 @@ def _script_turns(value: object, location: str) -> tuple[str | Mapping[str, obje
             continue
         if not isinstance(item, Mapping):
             raise AnswerSheetError(f"{location}[{index}] must be a string or a mapping")
-        allowed = {"text", "message", "substitute_reply", "use_reply"}
+        allowed = {"text", "message", "substitute_reply", "use_reply", "approval"}
         unknown = sorted(str(name) for name in set(item) - allowed)
         if unknown:
             raise AnswerSheetError(f"{location}[{index}] contains unknown key(s): {', '.join(unknown)}")
@@ -112,6 +113,9 @@ def _script_turns(value: object, location: str) -> tuple[str | Mapping[str, obje
         switch = item.get("substitute_reply", item.get("use_reply", True))
         if not isinstance(switch, bool):
             raise AnswerSheetError(f"{location}[{index}].substitute_reply must be a boolean")
+        approval = item.get("approval", False)
+        if not isinstance(approval, bool):
+            raise AnswerSheetError(f"{location}[{index}].approval must be a boolean")
         result.append(dict(item))
     if not result:
         raise AnswerSheetError(f"{location} must not be empty")

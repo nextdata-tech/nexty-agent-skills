@@ -9,7 +9,7 @@ fixture:
   plant: grain_trap_fanout
 coverage:
   variant: mock-rest-pipeline-capability-shortfall
-  untested: This package has not been driven by a live authenticated Claude Desktop session; the capability-shortfall drill (impossible metrics refused, proxy metrics labeled on both surfaces, supported metrics cited with probe evidence, and the nested PII sentinel never landing in data or query results) is graded here from supplied evidence shaped like what a real live run would produce, and separately, the mock source and its route table are exercised for real over HTTP -- but no live agent turn has ever driven that traffic end to end.
+  untested: The capability-shortfall drill (impossible metrics refused, proxy metrics labeled on both surfaces, supported metrics cited with probe evidence, and the nested PII sentinel never landing in data or query results) is graded here from supplied evidence shaped like what a real live run would produce; separately, the mock source and its route table are exercised for real over HTTP. Live running has since demonstrated the transport half -- real agent turns have driven real GET /deals traffic against the mock source and route fidelity has graded on that traffic. It has not yet demonstrated the drill itself -- no live run has produced a graded capability verdict, so every capability judgement below is still supplied-evidence coverage rather than observed live behaviour.
 turn_budget: 10
 repeatability:
   tier: demonstrated-once
@@ -23,7 +23,7 @@ events: events.yaml
 phase_map:
   1: 1
   2: 2
-  3: 2
+  3: 3
   4: 3
   5: 4
   6: 5

@@ -40,7 +40,8 @@ from dp_scenarios.followups import FollowUpContext
 from dp_scenarios.followups.capability_shortfall import check as capability_shortfall_check
 from dp_scenarios.operator import EventType
 from dp_scenarios.operator.answer_sheet import script_turn_text
-from dp_scenarios.operator.transport import TouchedFile, TurnResult
+from dp_scenarios.operator.engine import OperatorEngine, OperatorScript, ScriptTurn
+from dp_scenarios.operator.transport import InMemoryTransport, TouchedFile, TurnResult
 from dp_scenarios.runner import CanaryResult, PinnedVersions, TierRunner
 from dp_scenarios.runner.environment import MockSourceHandle
 from dp_scenarios.runner.session import LiveSession
@@ -210,21 +211,119 @@ def test_the_two_graded_asks_are_never_replaced_by_a_matcher_reply() -> None:
         assert turn["substitute_reply"] is False
 
 
-def test_the_spec_approval_is_transmitted_verbatim_in_a_phase_that_admits_it() -> None:
-    """Intake cannot pass without a transmitted approval.
+"""The agent messages below say nothing about approval on purpose.
 
-    A spec_approved ledger row is written only when the agent's message is
-    classified APPROVAL_REQUEST, and only in a phase whose vocabulary admits
-    that action kind (phase 3 is the earliest). If a matcher reply replaces
-    the operator's approval, the gate can only ever report
-    intake_spec_approval_missing -- which is what the first live runs did.
+They are the conversational shape a real live run produced: the agent asked
+for approval at the natural moment (turn 3), was approved by the operator on
+turn 4, and then simply got on with building. When the spec_approved ledger
+row was minted from the *agent's* wording, that run recorded no approval at
+all and intake could only report intake_spec_approval_missing.
+"""
+_AGENT_MESSAGES_WITHOUT_APPROVAL_WORDING = (
+    "Where do the deal records come from?",
+    "I have read the infra profile. Is the blueprint acceptable to you?",
+    "Thanks -- building it now.",
+    "The build is running.",
+    "The build finished.",
+    "Here is what I can and cannot tell you about recent movement.",
+    "Working on it.",
+    "The final check is done.",
+    "Anything else?",
+    "All finished.",
+)
+
+
+def _run_shipped_script(script: object) -> object:
+    """Drive one resolved script with a transport that never says "approved"."""
+
+    return OperatorEngine(
+        script,  # type: ignore[arg-type]
+        InMemoryTransport(
+            [TurnResult(agent_message=text) for text in _AGENT_MESSAGES_WITHOUT_APPROVAL_WORDING]
+        ),
+    ).run()
+
+
+def _spec_approved_rows(result: object) -> list[Mapping[str, object]]:
+    return [row for row in result.ledger_rows if row.get("action_kind") == "spec_approved"]  # type: ignore[attr-defined]
+
+
+def test_the_transmitted_operator_approval_is_what_writes_the_spec_approved_row() -> None:
+    """The approval row records what the operator sent, not what the agent said.
+
+    Every agent message in this run avoids the approval vocabulary entirely,
+    so nothing the agent says could mint the row. The operator's declared
+    approval turn must produce it anyway, carrying the operator's own
+    transmitted sentence as the evidence.
     """
+
+    result = _run_shipped_script(SCENARIO.operator_script)
+
+    approvals = _spec_approved_rows(result)
+    assert len(approvals) == 1
+    row = approvals[0]
+    assert row["turn"] == 4
+    assert row["phase"] == 3
+    assert row["artifact_ref"] == "That looks good to me -- approved. Go ahead and build it."
+    assert row["qualification"] == "strong"
+
+
+def test_a_script_with_no_declared_approval_turn_writes_no_spec_approved_row() -> None:
+    """The other half of the property: no operator approval, no approval row.
+
+    Same transport, same phases, same text -- only the ``approval``
+    declaration is dropped. A row that survives this is being minted by
+    something other than the operator's act.
+    """
+
+    stripped = OperatorScript.from_components(
+        SCENARIO.persona,
+        SCENARIO.answer_sheet,
+        events=SCENARIO.operator_script.events,
+        turns=tuple(
+            ScriptTurn(turn.text, turn.substitute_reply)
+            for turn in SCENARIO.operator_script.turns
+        ),
+        turn_budget=SCENARIO.turn_budget,
+        phase_by_turn=SCENARIO.phase_map,
+        required_plants=tuple(SCENARIO.operator_script.required_plants),
+    )
+
+    result = _run_shipped_script(stripped)
+
+    assert _spec_approved_rows(result) == []
+
+
+def test_an_agent_echoing_approval_adds_no_second_approval_row() -> None:
+    """A script that declares its own approval owns approval outright.
+
+    The legacy path -- minting the row from the agent soliciting approval --
+    survives only for scripts that declare no approving turn, where no better
+    signal exists. Leaving it live alongside a declared approval would put the
+    agent's vocabulary back in charge of how many approvals a run recorded,
+    which is the defect this fix exists to remove.
+    """
+
+    messages = list(_AGENT_MESSAGES_WITHOUT_APPROVAL_WORDING)
+    messages[4] = "Approved, thanks -- building now."
+
+    result = OperatorEngine(
+        SCENARIO.operator_script,
+        InMemoryTransport([TurnResult(agent_message=text) for text in messages]),
+    ).run()
+
+    approvals = _spec_approved_rows(result)
+    assert [row["turn"] for row in approvals] == [4]
+
+
+def test_the_approval_turn_is_still_transmitted_verbatim() -> None:
+    """The approval is also non-substitutable: a matcher reply must not replace it."""
 
     turn = SCENARIO.answer_sheet.turns[3]
     assert isinstance(turn, Mapping)
     assert turn["substitute_reply"] is False
-    assert "approved" in script_turn_text(turn).casefold()
-    assert SCENARIO.phase_map[4] == 3
+    assert turn["approval"] is True
+    assert script_turn_text(turn) == "That looks good to me -- approved. Go ahead and build it."
 
 
 def test_source_answers_describe_a_read_only_current_state_source() -> None:

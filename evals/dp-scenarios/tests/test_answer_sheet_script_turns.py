@@ -23,6 +23,7 @@ from dp_scenarios.operator.answer_sheet import (
     answer_sheet_from_mapping,
     script_turn_text,
 )
+from dp_scenarios.operator.engine import ScriptTurn
 from dp_scenarios.operator.matcher import MatcherBank, MatcherError
 from dp_scenarios.operator.persona import load_persona
 
@@ -105,12 +106,38 @@ def test_a_clean_mapping_turn_builds_a_bank() -> None:
         {"text": "Fine.", "substitute_reply": "no"},
         {"text": "Fine.", "unexpected": True},
         {"text": "Fine.", "message": "Fine."},
+        {"text": "Fine.", "approval": "yes"},
         42,
     ],
 )
 def test_a_malformed_turn_declaration_is_rejected_at_load(turn: object) -> None:
     with pytest.raises(AnswerSheetError):
         _sheet(["How is our pipeline moving?", turn])
+
+
+def test_a_turn_may_declare_itself_the_operator_approval() -> None:
+    """The declaration the engine mints the spec_approved row from.
+
+    A validator that accepted a declaration ``ScriptTurn`` later rejected, or
+    that dropped one it silently did not understand, would fail deep in a run
+    rather than at load -- the opposite of fail-closed.
+    """
+
+    sheet = _sheet(
+        [
+            "How is our pipeline moving?",
+            {"text": "Approved -- go ahead.", "substitute_reply": False, "approval": True},
+        ]
+    )
+    turn = sheet.turns[1]  # type: ignore[attr-defined]
+    assert isinstance(turn, Mapping)
+    assert turn["approval"] is True
+    assert ScriptTurn.from_value(turn).approval is True
+
+
+def test_a_turn_that_declares_no_approval_is_not_an_approval() -> None:
+    for turn in ("Please continue.", {"text": "Please continue.", "substitute_reply": False}):
+        assert ScriptTurn.from_value(turn).approval is False
 
 
 def test_the_opening_check_reads_a_mapping_turns_text() -> None:
