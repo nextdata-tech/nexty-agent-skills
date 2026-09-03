@@ -772,6 +772,34 @@ def _closure_artifact(artifact_root: Path) -> Path | Mapping[str, object]:
 _PRODUCT_TOOL_PREFIXES = ("mcp__nxd-desktop__",)
 
 
+def _leakable_transcript_delta_lines(delta: str) -> list[str]:
+    """Split a rendered transcript_delta into its leakable lines.
+
+    Each segment is appended as one list entry and the whole list is
+    "\n".join-ed (claude_adapter.py), so a multi-line assistant or tool_use
+    block's own internal newlines produce continuation lines carrying no
+    prefix of their own -- only the first line of a block is prefixed. A
+    per-line prefix filter therefore drops every continuation line
+    regardless of which block it belongs to, including the agent's own
+    prose, which this module's docstring says is always leakable. This
+    instead tracks which block is currently open and classifies
+    continuation lines by it: everything is kept until a [tool_result] line
+    opens, then everything is dropped until the next recognized
+    [assistant]/[tool_use:] line reopens keeping.
+    """
+
+    kept: list[str] = []
+    keep_current = True
+    for line in delta.splitlines():
+        if line.startswith("[assistant] ") or line.startswith("[tool_use:"):
+            keep_current = True
+        elif line.startswith("[tool_result] "):
+            keep_current = False
+        if keep_current:
+            kept.append(line)
+    return kept
+
+
 def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
     """Return the parts of a transcript a sentinel must never reach.
 
@@ -791,20 +819,7 @@ def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
         leakable.append(turn.get("agent_message"))
         delta = turn.get("transcript_delta")
         if isinstance(delta, str):
-            # transcript_delta interleaves [assistant]/[tool_use:...]/
-            # [tool_result] lines, and a [tool_result] line does not itself
-            # name the tool that produced it -- unlike the structured
-            # tool_calls below, a line-prefix filter here cannot tell a
-            # product-tool result from a source-tool one. [assistant] and
-            # [tool_use:...] lines are always safe (the agent's own prose and
-            # the arguments it supplied), so only those are kept; every
-            # [tool_result] line is dropped, and a product tool's result is
-            # still scanned via the structured tool_calls loop below.
-            leakable.extend(
-                line
-                for line in delta.splitlines()
-                if line.startswith("[assistant] ") or line.startswith("[tool_use:")
-            )
+            leakable.extend(_leakable_transcript_delta_lines(delta))
         elif delta is not None:
             leakable.append(delta)
         touched = turn.get("files_touched")
@@ -812,7 +827,10 @@ def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
             for file in touched:
                 # Every touched file's content is a write, never exempt --
                 # unlike a tool result, a write is a leak however it happens.
-                leakable.append(file.get("content") if isinstance(file, Mapping) else file)
+                # A mapping missing the expected "content" key is malformed,
+                # not empty, so it is scanned whole rather than silently
+                # dropped (matching the turn-level policy above).
+                leakable.append(file.get("content") if isinstance(file, Mapping) and "content" in file else file)
         elif touched is not None:
             leakable.append(touched)
         calls = turn.get("tool_calls")
@@ -831,25 +849,66 @@ def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
 
 
 _OPERATOR_OBSERVATIONS_NAME = "operator-observations.json"
+_SESSION_REPLAY_NAME = "session-replay.json"
+
+
+def _turns_from_operator_observations(payload: Mapping[str, object]) -> Sequence[object] | None:
+    """``operator-observations.json``'s turn entries are already turn-result-shaped."""
+
+    turns = payload.get("turns")
+    if isinstance(turns, Sequence) and not isinstance(turns, (str, bytes, bytearray)):
+        return turns
+    return None
+
+
+def _turns_from_session_replay(payload: Mapping[str, object]) -> Sequence[object] | None:
+    """``session-replay.json``'s turn entries wrap the turn result under ``"result"``.
+
+    Unlike ``operator-observations.json``, each entry is
+    ``{"operator_message": ..., "result": <turn-result shape>}``
+    (``RecordedTurn.to_dict``), so the result has to be unwrapped before
+    ``_leakable_turn_surfaces`` -- which expects the flat shape -- can read it.
+    """
+
+    turns = payload.get("turns")
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return None
+    results: list[object] = []
+    for turn in turns:
+        # A malformed entry is not silently skipped -- append it whole so a
+        # shape this unwrapping cannot classify is still scanned.
+        results.append(turn.get("result") if isinstance(turn, Mapping) else turn)
+    return results
+
+
+# Harness-written files under ``artifact_root`` known to carry a raw,
+# unfiltered turns list. Named explicitly rather than detected by shape,
+# because these are fixed harness filenames, not arbitrary scenario data --
+# a new file gaining this shape needs a deliberate entry here, not a
+# heuristic that might also match a materialized closure file.
+_RAW_TURN_CARRIERS: dict[str, Callable[[Mapping[str, object]], Sequence[object] | None]] = {
+    _OPERATOR_OBSERVATIONS_NAME: _turns_from_operator_observations,
+    _SESSION_REPLAY_NAME: _turns_from_session_replay,
+}
 
 
 def _artifacts_surface_bytes(artifact_root: Path) -> bytes | None:
     """Concatenate every artifact file, substituting the leakable view of
-    ``operator-observations.json`` for its raw bytes.
+    each known raw-turn-carrying file (see ``_RAW_TURN_CARRIERS``) for its
+    raw bytes.
 
-    That file legitimately retains full, unfiltered tool-call results on disk
-    -- ``gold_access_scan`` and the construction gate both need the real
-    structure. Handing the whole ``artifact_root`` directory to
-    ``sentinel_byte_scan`` as one surface re-reads exactly the bytes
-    ``_leakable_turn_surfaces`` excludes from the ``"transcript"`` surface, so
-    the exemption was bypassed rather than removed -- this is the actual gate
-    behaviour, not the isolated-function behaviour the earlier fix's tests
-    checked. Every other file under ``artifact_root`` (session replay, the
+    Those files legitimately retain full, unfiltered tool-call results on
+    disk -- ``gold_access_scan`` and the construction gate both need the real
+    structure from ``operator-observations.json``, and a replayable
+    ``session-replay.json`` needs to be byte-faithful. Handing the whole
+    ``artifact_root`` directory to ``sentinel_byte_scan`` as one surface
+    re-reads exactly the bytes ``_leakable_turn_surfaces`` excludes from the
+    ``"transcript"`` surface, so the exemption would be bypassed rather than
+    removed for either file. Every other file under ``artifact_root`` (the
     materialized closure, query results) still scans raw, because a leak into
     any of those is a real leak into the product.
     """
 
-    observations_path = artifact_root / _OPERATOR_OBSERVATIONS_NAME
     chunks: list[bytes] = []
     try:
         children = sorted(artifact_root.rglob("*"))
@@ -858,10 +917,11 @@ def _artifacts_surface_bytes(artifact_root: Path) -> bytes | None:
     for child in children:
         if not child.is_file():
             continue
-        if child == observations_path:
+        extractor = _RAW_TURN_CARRIERS.get(child.name) if child.parent == artifact_root else None
+        if extractor is not None:
             payload = _load_json(child)
-            turns = payload.get("turns") if isinstance(payload, Mapping) else None
-            if isinstance(turns, Sequence) and not isinstance(turns, (str, bytes, bytearray)):
+            turns = extractor(payload) if isinstance(payload, Mapping) else None
+            if turns is not None:
                 chunks.append(json.dumps(_leakable_turn_surfaces(turns), ensure_ascii=False).encode("utf-8"))
                 continue
         try:
