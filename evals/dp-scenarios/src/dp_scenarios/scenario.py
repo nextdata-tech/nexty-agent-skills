@@ -39,6 +39,9 @@ from .grading import (
     gold_rowset,
 )
 from .grading.statistics import RepeatabilityTier, repeatability_plan
+from .mockrest.config import ConfigError as MockRestConfigError
+from .mockrest.config import ScenarioConfig as MockRouteTable
+from .mockrest.config import load_config as load_route_table
 from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
 from .operator.answer_sheet import AnswerSheet, load_answer_sheet
 from .synthgen import GenerationResult, generate_dataset, get_dataset
@@ -158,6 +161,13 @@ class Scenario:
     gold: Mapping[str, Path]
     gold_refs: Mapping[str, str]
     operator_script: OperatorScript
+    # An optional mockrest route table validated at load time.  A declaring
+    # scenario is the one ``environment._scenario_route_config`` finds (it
+    # looks for this exact attribute name), which is what lets the runner
+    # start a real mock source and compute route_fidelity instead of leaving
+    # it "not-applicable". ``None`` means this scenario names no source, the
+    # same as every scenario before this field existed.
+    route_table: MockRouteTable | None = None
 
     @property
     def id(self) -> str:
@@ -607,6 +617,11 @@ _SCENARIO_KEYS = {
     "gold",
     "operator",
 }
+# Genuinely optional top-level keys: absent by default across every existing
+# package, so they live outside ``_SCENARIO_KEYS`` rather than being added to
+# it, which would make every existing scenario.yaml fail the "missing key(s)"
+# check the moment this key exists at all.
+_OPTIONAL_SCENARIO_KEYS = {"route_table"}
 _FIXTURE_KEYS = {"dataset", "seed", "variant", "plant"}
 _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
@@ -876,7 +891,7 @@ def load_scenario(path: str | Path) -> Scenario:
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ScenarioError(f"could not read scenario declaration {declaration_path}: {exc}") from exc
     raw = _mapping(raw_value, "scenario")
-    _unknown(raw, _SCENARIO_KEYS, "scenario")
+    _unknown(raw, _SCENARIO_KEYS | _OPTIONAL_SCENARIO_KEYS, "scenario")
     missing = sorted(_SCENARIO_KEYS - set(raw))
     if missing:
         raise ScenarioError(f"scenario is missing key(s): {', '.join(missing)}")
@@ -940,6 +955,7 @@ def load_scenario(path: str | Path) -> Scenario:
     gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
     _run_kind_hook(gates, "validate_fixture_gold", gates["follow-up"].settings, gold)
     _validate_certification_gold(repeatability, gates["follow-up"].kind, gold)
+    route_table = _parse_route_table(raw.get("route_table"))
     script = OperatorScript.from_components(
         persona,
         answer_sheet,
@@ -972,6 +988,7 @@ def load_scenario(path: str | Path) -> Scenario:
         gold=gold,
         gold_refs=gold_refs,
         operator_script=script,
+        route_table=route_table,
     )
 
 
@@ -1054,6 +1071,24 @@ def _validate_certification_gold(
             raise ScenarioError(
                 f"certification gate {gate} requires scoreable gold artifact {artifact!r}"
             )
+
+
+def _parse_route_table(value: object) -> MockRouteTable | None:
+    """Validate an optional inline mockrest route table at load time.
+
+    Parsing (not merely storing) the mapping here means a malformed route
+    table fails the same way every other scenario defect does -- at load,
+    with a ``ScenarioError`` naming the problem -- rather than surfacing much
+    later as an opaque ``ConfigError`` the first time a run tries to start
+    the source.
+    """
+
+    if value is None:
+        return None
+    try:
+        return load_route_table(value)
+    except MockRestConfigError as exc:
+        raise ScenarioError(f"route_table is invalid: {exc}") from exc
 
 
 def _naive_rows(value: object) -> list[dict[str, object]] | None:
