@@ -295,6 +295,36 @@ def test_capability_oracle_unreadable_is_not_examined() -> None:
     assert "capability_oracle_unreadable" in result["findings"]
 
 
+def test_an_unknown_capability_label_in_the_oracle_is_flagged() -> None:
+    # Defensive against a malformed oracle: the label vocabulary is closed to
+    # supported/proxy/impossible, so anything else must be a finding rather
+    # than silently falling through every branch unexamined.
+    settings = SCENARIO.gates["follow-up"].settings
+    stub_scenario = SimpleNamespace(
+        raw_gold=lambda name: {"metrics": {"weird_metric": "sometimes"}}
+    )
+    target = {
+        "delivered_metrics": {},
+        "refused_metrics": {},
+        "surfaces": {"description": "nothing planted here"},
+    }
+    result = capability_shortfall_check(stub_scenario, target, settings, FollowUpContext())
+    assert result["status"] == "examined"
+    assert result["passed"] is False
+    assert "capability_oracle_label_unknown:weird_metric" in result["findings"]
+
+
+def test_surfaces_that_are_not_a_mapping_are_not_examined_not_silently_skipped() -> None:
+    # A list of surfaces is neither "absent" nor "a mapping"; the guard that
+    # routes it to sentinel_surfaces_not_examined is what stops it from being
+    # scanned as if it were empty (and passing by default).
+    target = _clean_target()
+    target["surfaces"] = ["not-a-mapping"]
+    result = SCENARIO.follow_up_check(target)
+    assert result["passed"] is False
+    assert "sentinel_surfaces_not_examined" in result["findings"]
+
+
 def test_sentinel_leak_in_the_description_fails() -> None:
     target = _clean_target()
     target["surfaces"]["description"] = f"the owner's contact is {PII_SENTINEL}@example.invalid"
