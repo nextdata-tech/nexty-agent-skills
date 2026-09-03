@@ -12,10 +12,9 @@ import argparse
 import json
 from pathlib import Path
 import shlex
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from dp_scenarios.canary import load_claims
-from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.knobs import KnobError, SupervisorKnobs, load_knob_plan
 from dp_scenarios.scenario import load_scenarios, select_tier
 
@@ -172,11 +171,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_claims_hash=expected_claims_hash,
         )
     else:
-        canary = lambda: run_drift_canary(
-            args.canary_dir,
-            skills_root=args.skills_root,
-            supervisor=args.supervisor,
-        )
+
+        def canary() -> CanaryResult:
+            return run_drift_canary(
+                args.canary_dir,
+                skills_root=args.skills_root,
+                supervisor=args.supervisor,
+            )
 
     replays: dict[str, ReplayRecording] = {}
     session_factory = None

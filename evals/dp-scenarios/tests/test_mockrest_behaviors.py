@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import ClientSession
-import pytest
 
 from dp_scenarios.mockrest.config import load_config
 from dp_scenarios.mockrest.server import MockRestServer

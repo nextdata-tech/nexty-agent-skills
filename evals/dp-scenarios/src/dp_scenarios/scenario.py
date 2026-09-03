@@ -22,7 +22,6 @@ import yaml
 
 from .grading import (
     GATE_PHASES,
-    GATE_POINTS,
     Finding,
     GoldRowSet,
     GateResult,

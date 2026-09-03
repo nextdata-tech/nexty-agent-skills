@@ -560,7 +560,6 @@ def load_config(source: str | Path | Mapping[str, Any]) -> ScenarioConfig:
         raise ConfigError("scenario.auth is present but no route requires authentication")
     if any(route.auth_required for route in routes) and auth is None:
         raise ConfigError("authenticated routes require scenario.auth")
-    families = {route.state_family for route in routes if route.states}
     family_initials: dict[str, str] = {}
     for route in routes:
         if route.states:

@@ -589,9 +589,9 @@ def _legacy_gate(result: GateResult, key: str) -> GateResult:
     canonical_prefix = canonical.replace("-", "_")
     findings = tuple(
         Finding(
-            code.replace(f"{canonical_prefix}_", f"{old_prefix}_", 1)
-            if code.startswith(f"{canonical_prefix}_")
-            else code,
+            finding.code.replace(f"{canonical_prefix}_", f"{old_prefix}_", 1)
+            if finding.code.startswith(f"{canonical_prefix}_")
+            else finding.code,
             finding.detail,
             finding.value,
         )

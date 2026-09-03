@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
 from .claims import Baseline, Claim, ClaimsDocument, sha256_bytes
 
