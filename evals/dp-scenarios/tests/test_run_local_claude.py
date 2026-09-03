@@ -80,6 +80,73 @@ def test_local_runner_host_home_flag_and_bash_require_a_second_opt_in() -> None:
         module.main(["--allow-host-home-bash"])
 
 
+@pytest.mark.parametrize(
+    ("cli_arguments", "bash_withheld"),
+    [
+        (["--allow-host-home"], True),
+        (["--allow-host-home", "--allow-host-home-bash"], False),
+        ([], False),
+    ],
+)
+def test_host_home_without_bash_reaches_claude_as_a_denial(
+    cli_arguments: list[str], bash_withheld: bool
+) -> None:
+    """Follow the flag all the way to the argv the agent process is spawned with.
+
+    The parsed flag, the adapter flag, and the adapter's own boolean were all
+    already correct while a live ``--allow-host-home`` run still made five
+    Bash calls against the real host HOME: nothing on the chain ever denied
+    the tool, it was only left off an auto-approval list.  This test asserts
+    the end of the chain -- what Claude Code is actually told.
+    """
+
+    from dp_scenarios.runner import claude_adapter
+
+    module = _load_runner_module()
+    args = module.build_parser().parse_args(cli_arguments)
+    adapter_flags = module._tool_grant_arguments(args)
+
+    adapter_args = claude_adapter.build_parser().parse_args(
+        [
+            "--claude", "/usr/bin/true",
+            "--plugin-dir", ".",
+            "--repo-root", ".",
+            "--fixture-dir", ".",
+            "--artifact-dir", ".",
+            "--desktop-supervisor", "/usr/bin/true",
+            "--desktop-python", "/usr/bin/true",
+            *adapter_flags,
+        ]
+    )
+    adapter = claude_adapter.ClaudeCodeAdapter(
+        claude=Path("/usr/bin/true"),
+        model="test",
+        effort="low",
+        plugin_dir=Path("."),
+        repo_root=Path("."),
+        fixture_dir=Path("."),
+        artifact_dir=Path("."),
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path("/usr/bin/true"),
+        claude_config_dir=None,
+        timeout_s=5,
+        max_budget_usd=None,
+        append_system_prompt="test",
+        allow_bash=not adapter_args.no_bash,
+    )
+    argv = adapter.build_claude_command(
+        mcp_config=Path("mcp.json"), strict_mcp_config=True, mcp_allowed_tools=""
+    )
+    denied = {
+        tool
+        for index, value in enumerate(argv)
+        if value == "--disallowedTools"
+        for tool in argv[index + 1].split(",")
+    }
+
+    assert ("Bash" in denied) is bash_withheld
+
+
 def test_the_live_entrypoint_defaults_to_the_smoke_tier_not_every_package() -> None:
     """Omitting --scenario must not drive the core tier through a live session.
 
