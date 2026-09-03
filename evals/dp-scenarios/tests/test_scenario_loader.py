@@ -26,6 +26,26 @@ def _copy_parent_child_package(tmp_path: Path) -> Path:
     return root / "parent-child-grain-trap"
 
 
+
+def _packages_on_disk() -> set[str]:
+    """Every scenario package directory that declares a scenario.yaml.
+
+    Derived rather than enumerated: a hardcoded list of scenario ids is one
+    shared edit point per new scenario, which is exactly what makes two
+    scenarios authored in parallel conflict over a file they otherwise do not
+    share. The property worth asserting is that discovery finds what is on
+    disk, not that it finds a list someone remembered to update.
+    """
+
+    return {
+        package.name
+        for package in SCENARIO_ROOT.iterdir()
+        if package.is_dir()
+        and not package.name.startswith("_")
+        and (package / "scenario.yaml").is_file()
+    }
+
+
 def _copy_zero_row_package(tmp_path: Path) -> Path:
     root = tmp_path / "scenarios"
     root.mkdir()
@@ -37,12 +57,7 @@ def _copy_zero_row_package(tmp_path: Path) -> Path:
 
 def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_path: Path) -> None:
     scenarios = load_scenarios(SCENARIO_ROOT)
-    assert {scenario.id for scenario in scenarios} == {
-        "parent-child-grain-trap",
-        "zero-row-optional-output",
-        "credential-rotation",
-        "sigterm-diagnosis",
-    }
+    assert {scenario.id for scenario in scenarios} == _packages_on_disk()
     for scenario in scenarios:
         assert get_dataset(scenario.dataset).name == scenario.dataset
         assert scenario.seed == 29
@@ -321,18 +336,12 @@ def test_loader_rejects_a_non_positive_turn_budget(tmp_path: Path) -> None:
 
 def test_discovery_does_not_need_a_python_registry() -> None:
     discovered = load_scenarios(SCENARIO_ROOT)
-    # Ordered by each package's declared run_order: zero-row-optional-output (1),
-    # parent-child-grain-trap (2), credential-rotation (3), sigterm-diagnosis (4).
-    direct = tuple(
-        load_scenario(SCENARIO_ROOT / name)
-        for name in (
-            "zero-row-optional-output",
-            "parent-child-grain-trap",
-            "credential-rotation",
-            "sigterm-diagnosis",
-        )
+    direct = sorted(
+        (load_scenario(SCENARIO_ROOT / name) for name in _packages_on_disk()),
+        key=lambda scenario: scenario.run_order,
     )
-    assert tuple(item.id for item in discovered) == tuple(item.id for item in direct)
+    assert [item.id for item in discovered] == [item.id for item in direct]
+    assert len(direct) == len(_packages_on_disk())
 
 
 def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> None:
@@ -414,19 +423,20 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
     """
 
     scenarios = load_scenarios(SCENARIO_ROOT)
-    assert {scenario.id for scenario in scenarios} == {
-        "parent-child-grain-trap",
-        "zero-row-optional-output",
-        "credential-rotation",
-        "sigterm-diagnosis",
-    }
+    assert {scenario.id for scenario in scenarios} == _packages_on_disk()
+
     smoke = select_tier(scenarios, "smoke")
-    assert {scenario.id for scenario in smoke} == {
-        "parent-child-grain-trap",
-        "zero-row-optional-output",
-    }
     core = select_tier(scenarios, "core")
-    assert {scenario.id for scenario in core} == {"credential-rotation", "sigterm-diagnosis"}
+
+    # The tiers partition the packages: every scenario lands in exactly one,
+    # and neither tier is empty. Stated as a partition rather than as two
+    # literal id sets so that adding a scenario cannot silently land it in
+    # both tiers or in neither.
+    assert {scenario.id for scenario in smoke}.isdisjoint({scenario.id for scenario in core})
+    assert {scenario.id for scenario in (*smoke, *core)} == _packages_on_disk()
+    assert smoke and core
+    assert all(scenario.tier == "smoke" for scenario in smoke)
+    assert all(scenario.tier == "core" for scenario in core)
 
 
 def test_select_tier_preserves_declared_run_order() -> None:

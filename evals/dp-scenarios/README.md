@@ -83,6 +83,25 @@ Workflow switching remains a programmatic control because its replacement
 transport and endpoint observation must be supplied by the caller. A CLI plan
 that declares one is rejected rather than silently running with the switch off.
 
+### Adding a scenario
+
+A scenario package is additive: it needs no edit to a shared file, so two
+scenarios can be authored in parallel without conflicting.
+
+1. `scenarios/<name>/` — `scenario.yaml` (unique `run_order`, declared `tier`),
+   `answer-sheet.yaml`, `events.yaml`, `gold/`, and a `README.md` stating the
+   fixture, execution, goal, assertions and limitations.
+2. `src/dp_scenarios/followups/<kind>.py` — the follow-up check. Define
+   `check(scenario, target, settings, context)` and `register()` a
+   `FollowUpKind` naming its gold keys, any certification gold, and a settings
+   validator. `followups/__init__.py` imports every module beside it, so
+   nothing needs to list the new kind.
+3. `tests/test_scenario_<name>.py` — property tests. Mutation-test them: break
+   each check and confirm a test fails.
+
+The loader tests derive the expected package set from disk rather than
+enumerating ids, so a new package needs no test edit either.
+
 ### Selecting a tier
 
 `load_scenarios` loads every package under a scenario root; the tier a package

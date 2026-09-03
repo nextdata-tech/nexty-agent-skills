@@ -9,19 +9,28 @@ from becoming an unmeasured pass.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
 
 import yaml
 
-from .knobs import KnobError, PlanShape, TransformWindowSizing
+from . import followups
+from .followups import FollowUpContext, FollowUpError
+from .support import (
+    _MISSING,
+    _count_rows,
+    _manifest_row_counts,
+    _mapping,
+    _read_document,
+    _required_flag,
+    _string,
+    _unknown,
+    ScenarioError,
+)
 from .grading import (
     GATE_PHASES,
     Finding,
@@ -30,37 +39,21 @@ from .grading import (
     gate_follow_up,
     gate_query,
     gold_rowset,
-    sentinel_byte_scan,
 )
 from .grading.statistics import RepeatabilityTier, repeatability_plan
-from .operator import EventSchedule, EventType, OperatorScript, PersonaCard, load_event_cards, load_persona
+from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
 from .operator.answer_sheet import AnswerSheet, load_answer_sheet
 from .synthgen import GenerationResult, generate_dataset, get_dataset
 
 
-class ScenarioError(ValueError):
-    """Raised when a scenario package is incomplete or internally inconsistent."""
 
 
-_MISSING = object()
 
 
-def _mapping(value: object, location: str) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ScenarioError(f"{location} must be a mapping")
-    return dict(value)
 
 
-def _unknown(value: Mapping[str, object], allowed: set[str], location: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise ScenarioError(f"{location} contains unknown key(s): {', '.join(unknown)}")
 
 
-def _string(value: object, location: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ScenarioError(f"{location} must be a non-empty string")
-    return value
 
 
 def _strings(value: object, location: str, *, allow_empty: bool = False) -> tuple[str, ...]:
@@ -390,23 +383,22 @@ class Scenario:
                     row_count_oracle = closure["row_count_oracle"]
                 elif "row_counts" in closure:
                     row_count_oracle = closure["row_counts"]
-        if binding.kind == "grain_and_aggregation":
-            result: dict[str, object] = dict(_grain_follow_up(target, binding.settings))
-        elif binding.kind == "optional_required_outputs":
-            result = dict(
-                self._zero_row_follow_up(
-                    target,
-                    binding.settings,
-                    fixture_dir=fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
-                    row_count_oracle=row_count_oracle,
-                )
-            )
-        elif binding.kind == "credential_rotation":
-            result = dict(self._credential_rotation_follow_up(target, binding.settings))
-        elif binding.kind == "sigterm_diagnosis":
-            result = dict(self._sigterm_diagnosis_follow_up(target, binding.settings))
+        context = FollowUpContext(
+            fixture_dir=fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
+            row_count_oracle=row_count_oracle,
+        )
+        try:
+            kind = followups.get(binding.kind)
+        except FollowUpError:
+            # A kind the loader accepted but no module registers can only mean
+            # a package registered under one name and graded under another.
+            result: dict[str, object] = {
+                "status": "not-examined",
+                "passed": False,
+                "findings": ["unknown_follow_up_kind"],
+            }
         else:
-            result = {"status": "not-examined", "passed": False, "findings": ["unknown_follow_up_kind"]}
+            result = dict(kind.handler(self, target, binding.settings, context))
         if query_rows is not None and self.has_scoreable_answer_gold:
             assessment = self.score_query(
                 query_rows,
@@ -605,472 +597,8 @@ class Scenario:
 
     fired_plants_check = check_fired_plants
 
-    def _credential_rotation_follow_up(
-        self,
-        target: object,
-        settings: Mapping[str, object],
-    ) -> Mapping[str, object]:
-        """Grade the live-Postgres credential-rotation drill from supplied evidence.
 
-        ``target`` is a mapping produced by the caller from a real
-        ``PostgresFixture`` run (never the fixture's own narrative): a
-        ``rotation_records`` sequence of ``{"step", "observations"}`` entries
-        as returned by ``RotationRecord.to_dict()``, a ``surfaces`` mapping of
-        transcript/log/error/closure byte surfaces for the marker-byte scan,
-        and a ``diff`` mapping describing exactly which closure paths and
-        attributes changed.  Every property is re-derived from that evidence;
-        none of it is taken on the caller's word.
-        """
 
-        if not isinstance(target, Mapping):
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["credential_rotation_not_examined"],
-            }
-
-        records_raw = target.get("rotation_records")
-        if (
-            not isinstance(records_raw, Sequence)
-            or isinstance(records_raw, (str, bytes, bytearray))
-            or not records_raw
-        ):
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["rotation_records_not_examined"],
-            }
-        records: dict[int, Mapping[str, object]] = {}
-        for entry in records_raw:
-            if not isinstance(entry, Mapping):
-                return {
-                    "status": "not-examined",
-                    "passed": False,
-                    "findings": ["rotation_records_not_examined"],
-                }
-            step = entry.get("step")
-            observations = entry.get("observations")
-            if (
-                isinstance(step, bool)
-                or not isinstance(step, int)
-                or not isinstance(observations, Mapping)
-            ):
-                return {
-                    "status": "not-examined",
-                    "passed": False,
-                    "findings": ["rotation_records_not_examined"],
-                }
-            records[step] = observations
-
-        findings: list[str] = []
-        if {0, 1, 2} - set(records):
-            findings.append("rotation_records_incomplete")
-
-        # Constraint: information_schema hides the lookup schema, but
-        # pg_catalog.pg_namespace/pg_class are readable by PUBLIC.  A record
-        # that reports the schema as unconditionally invisible is wrong, and
-        # is exactly the false claim a prior version of this fixture made.
-        # Step 2's observation keys are prefixed "new_credential_" (they
-        # describe the freshly issued credential, not the role generically);
-        # every other step uses the unprefixed names.
-        for step, observations in sorted(records.items()):
-            prefix = "new_credential_" if step == 2 else ""
-            # Both catalog probes are graded.  ``pg_class`` carries the table
-            # and ``pg_namespace`` carries the schema; the round-1 review
-            # finding this fixture exists to prevent was specifically that
-            # pg_namespace is PUBLIC-readable, so a record claiming the schema
-            # is invisible is wrong.  Grading only the relation probe would
-            # leave the namespace claim unchecked.
-            relations_visible = observations.get(f"{prefix}lookup_relations_catalog_visible")
-            namespace_visible = observations.get(f"{prefix}lookup_catalog_visible")
-            info_schema_visible = observations.get(f"{prefix}lookup_information_schema_visible")
-            if (
-                relations_visible is not True
-                or namespace_visible is not True
-                or info_schema_visible is not False
-            ):
-                findings.append(f"catalog_visibility_property_violated:{step}")
-            # Least privilege is the load-bearing property, not merely the
-            # visibility split: the lookup schema stays unreadable at every
-            # step, including after the rotation re-grants inventory access.
-            # A rotation that silently widened the role's grants would
-            # otherwise pass this gate clean.
-            if observations.get(f"{prefix}lookup_query_denied") is not True:
-                findings.append(f"lookup_schema_readable_at_step:{step}")
-
-        step1 = records.get(1)
-        if step1 is not None:
-            if step1.get("login_succeeds") is not True:
-                findings.append("step1_login_unexpectedly_lost")
-            if step1.get("inventory_query_succeeds") is not False:
-                findings.append("step1_select_not_revoked")
-
-        step2 = records.get(2)
-        if step2 is not None:
-            # Constraint: the rotation must not be bypassable.  The old
-            # credential must no longer authenticate at all once rotated; a
-            # prior version handed the evaluation role the superuser
-            # password, so this is checked directly rather than trusted.
-            if step2.get("old_credential_login_succeeds") is not False:
-                findings.append("rotation_bypassable_old_credential_still_authenticates")
-            if step2.get("new_credential_inventory_query_succeeds") is not True:
-                findings.append("rotation_left_new_credential_unusable")
-
-        # The marker is the real sentinel carried by this scenario's own
-        # scripted credential_fumble event card, never a value invented here,
-        # so the scan is checked against exactly what the operator "pasted".
-        markers = tuple(
-            card.sentinel
-            for card in self.events.cards
-            if card.event_type is EventType.CREDENTIAL_FUMBLE and card.sentinel
-        )
-        surfaces = target.get("surfaces")
-        if not markers:
-            findings.append("secret_hygiene_not_examined")
-        elif not isinstance(surfaces, Mapping) or not surfaces:
-            findings.append("secret_hygiene_not_examined")
-        else:
-            scan = sentinel_byte_scan(surfaces, markers)
-            if not scan.examined:
-                findings.append("secret_hygiene_not_examined")
-            elif not scan.passed:
-                findings.append("secret_marker_leaked")
-
-        # The declared diagnostics gold is graded, not merely shipped: B5's
-        # pass criterion is that orphans and negative quantities are reported
-        # as data rather than cleaned away, so the counts the run reports are
-        # compared against the committed gold.
-        expected_diagnostics = self.raw_gold("diagnostics")
-        reported = target.get("diagnostics")
-        if not isinstance(expected_diagnostics, Mapping):
-            findings.append("diagnostics_gold_unreadable")
-        elif not isinstance(reported, Mapping):
-            findings.append("diagnostics_not_examined")
-        else:
-            for key in ("orphan_line_item_count", "negative_quantity_count"):
-                expected = expected_diagnostics.get(key)
-                actual = reported.get(key)
-                if isinstance(actual, bool) or not isinstance(actual, int):
-                    findings.append(f"diagnostics_not_examined:{key}")
-                elif actual != expected:
-                    findings.append(f"diagnostics_disagree_with_gold:{key}")
-
-        allowed_path = _string(settings.get("allowed_diff_path"), "follow-up.allowed_diff_path")
-        allowed_attribute = _string(
-            settings.get("allowed_diff_attribute"), "follow-up.allowed_diff_attribute"
-        )
-        diff = target.get("diff")
-        if not isinstance(diff, Mapping):
-            findings.append("diff_not_examined")
-        else:
-            changed_paths = diff.get("changed_paths")
-            changed_attributes = diff.get("changed_attributes")
-            if not isinstance(changed_paths, Sequence) or isinstance(
-                changed_paths, (str, bytes, bytearray)
-            ):
-                findings.append("diff_not_examined")
-            else:
-                other_paths = sorted({path for path in changed_paths if path != allowed_path})
-                if other_paths:
-                    findings.append("diff_touches_non_credential_files")
-                if not isinstance(changed_attributes, Sequence) or isinstance(
-                    changed_attributes, (str, bytes, bytearray)
-                ):
-                    findings.append("diff_not_examined")
-                elif list(changed_attributes) != [allowed_attribute]:
-                    findings.append("diff_not_confined_to_credential_attribute")
-
-        return {"status": "examined", "passed": not findings, "findings": findings}
-
-    def _sigterm_diagnosis_follow_up(
-        self,
-        target: object,
-        settings: Mapping[str, object],
-    ) -> Mapping[str, object]:
-        """Grade the SIGTERM-diagnosis drill from supplied evidence.
-
-        ``target`` is a mapping shaped like what a real supervisor run and a
-        real agent diagnosis would produce: a ``run_records`` mapping with
-        ``naive`` (killed) and ``bounded`` (completed) entries, a
-        ``run_plan`` describing the declared call counts and latency behind
-        those two attempts, ``landed_counts`` for the bounded attempt,
-        ``transform_source`` (the transform script text), a ``diagnosis``
-        (claimed cause and remedy), and ``phase_evidence`` describing turn
-        ordering.  Every property is re-derived from that evidence; none of
-        it is taken on the caller's word, and the call-count arithmetic is
-        reconciled against ``dp_scenarios.knobs.TransformWindowSizing`` and
-        the committed gold rather than trusted as self-consistent.
-        """
-
-        if not isinstance(target, Mapping):
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["sigterm_diagnosis_not_examined"],
-            }
-
-        records = target.get("run_records")
-        if not isinstance(records, Mapping) or "naive" not in records or "bounded" not in records:
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["run_records_not_examined"],
-            }
-        naive_record = records.get("naive")
-        bounded_record = records.get("bounded")
-        if not isinstance(naive_record, Mapping) or not isinstance(bounded_record, Mapping):
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["run_records_not_examined"],
-            }
-
-        findings: list[str] = []
-
-        # Constraint: the naive (unfiltered) attempt is guaranteed by
-        # construction to overrun the transform window and is genuinely
-        # SIGTERM-killed with no staging marker; the bounded (source-filtered)
-        # attempt genuinely completes.  A record claiming anything else for
-        # either attempt is wrong evidence, not a stylistic difference.
-        if naive_record.get("outcome") != "sigterm" or naive_record.get("signal") != 15:
-            findings.append("naive_run_not_sigterm")
-        if bounded_record.get("outcome") != "completed":
-            findings.append("bounded_run_did_not_complete")
-
-        # The declared call-count arithmetic is reconciled against the shared
-        # TransformWindowSizing contract and the committed gold, never
-        # trusted merely because it is internally self-consistent: a target
-        # could report bounds_hold=True for numbers that do not match what
-        # the fixture actually generates.
-        oracle = self.raw_gold("diagnostics")
-        plan = target.get("run_plan")
-        if not isinstance(oracle, Mapping):
-            findings.append("diagnostics_gold_unreadable")
-        elif not isinstance(plan, Mapping):
-            findings.append("run_plan_not_examined")
-        else:
-            naive_calls = plan.get("naive_total_calls")
-            bounded_calls = plan.get("bounded_total_calls")
-            latency = plan.get("per_call_latency_ms")
-            if (
-                isinstance(naive_calls, bool)
-                or not isinstance(naive_calls, int)
-                or isinstance(bounded_calls, bool)
-                or not isinstance(bounded_calls, int)
-                or isinstance(latency, bool)
-                or not isinstance(latency, int)
-            ):
-                findings.append("run_plan_not_examined")
-            else:
-                if naive_calls != oracle.get("naive_total_calls"):
-                    findings.append("run_plan_disagrees_with_gold:naive_total_calls")
-                if bounded_calls != oracle.get("bounded_total_calls"):
-                    findings.append("run_plan_disagrees_with_gold:bounded_total_calls")
-                if latency != oracle.get("per_call_latency_ms"):
-                    findings.append("run_plan_disagrees_with_gold:per_call_latency_ms")
-                try:
-                    sizing = TransformWindowSizing.from_plans(
-                        PlanShape("naive", naive_calls),
-                        PlanShape("bounded", bounded_calls),
-                        per_call_latency_ms=latency,
-                    )
-                except KnobError:
-                    findings.append("run_plan_arithmetic_bounds_violated")
-                else:
-                    if not sizing.arithmetic()["bounds_hold"]:
-                        findings.append("run_plan_arithmetic_bounds_violated")
-
-        # B5/B8's "report scope as data, don't truncate it" property, applied
-        # to the bounded attempt's landed row count: it must equal the
-        # oracle count of orders that satisfy the declared filter, not merely
-        # however many rows a LIMIT/head/islice happened to keep.
-        landed = target.get("landed_counts")
-        if isinstance(oracle, Mapping):
-            if not isinstance(landed, Mapping):
-                findings.append("landed_counts_not_examined")
-            else:
-                actual = landed.get("bounded_rows")
-                if isinstance(actual, bool) or not isinstance(actual, int):
-                    findings.append("landed_counts_not_examined")
-                elif actual != oracle.get("active_order_count"):
-                    findings.append("landed_count_disagrees_with_oracle")
-
-        # Mechanical scan for scope truncation: a hand-rolled row limit is a
-        # different (and wrong) way to make the bounded attempt fit, because
-        # it discards rows the declared filter would have kept.
-        source = target.get("transform_source")
-        if not isinstance(source, str) or not source.strip():
-            findings.append("transform_source_not_examined")
-        else:
-            truncation_patterns = (r"\bLIMIT\b", r"\.head\(", r"\bislice\(", r"\[\s*:\s*\d+\s*\]")
-            if any(re.search(pattern, source) for pattern in truncation_patterns):
-                findings.append("scope_truncation_detected")
-
-        # The diagnosis must name the true cause -- never a client RPC
-        # deadline, an OOM/budget-exhaustion misattribution (NEX-937's
-        # surfaced-remedy bug is exactly this trap), or a "code bug" guess --
-        # and the remedy must be the declared source-side filter, not a
-        # truncation workaround.
-        true_cause = _string(settings.get("true_cause"), "follow-up.true_cause")
-        declared_filter = _string(settings.get("declared_filter"), "follow-up.declared_filter")
-        diagnosis = target.get("diagnosis")
-        if not isinstance(diagnosis, Mapping):
-            findings.append("diagnosis_not_examined")
-        else:
-            reported_cause = diagnosis.get("failure_cause")
-            if not isinstance(reported_cause, str) or not reported_cause.strip():
-                findings.append("diagnosis_not_examined")
-            elif reported_cause != true_cause:
-                findings.append(f"diagnosis_misattributed:{reported_cause}")
-            remedy = diagnosis.get("remedy_filter")
-            if not isinstance(remedy, str) or not remedy.strip():
-                findings.append("remedy_not_examined")
-            elif remedy != declared_filter:
-                findings.append("remedy_not_source_side_filter")
-
-        # S3's "run record inspected before any re-run" and "no retry loops
-        # burning the window" properties: the inspection must have happened
-        # on an earlier turn than the re-run, and the re-run must not simply
-        # repeat the naive plan.
-        phase = target.get("phase_evidence")
-        if not isinstance(phase, Mapping):
-            findings.append("phase_evidence_not_examined")
-        else:
-            inspected_turn = phase.get("run_record_inspected_turn")
-            rerun_turn = phase.get("rerun_turn")
-            rerun_used_same_plan = phase.get("rerun_used_same_plan")
-            if (
-                isinstance(inspected_turn, bool)
-                or not isinstance(inspected_turn, int)
-                or isinstance(rerun_turn, bool)
-                or not isinstance(rerun_turn, int)
-                or not isinstance(rerun_used_same_plan, bool)
-            ):
-                findings.append("phase_evidence_not_examined")
-            else:
-                if inspected_turn >= rerun_turn:
-                    findings.append("run_record_not_inspected_before_rerun")
-                if rerun_used_same_plan:
-                    findings.append("blind_retry_without_plan_change")
-
-        return {"status": "examined", "passed": not findings, "findings": findings}
-
-    def _zero_row_follow_up(
-        self,
-        target: object,
-        settings: Mapping[str, object],
-        *,
-        fixture_dir: str | Path | None = None,
-        row_count_oracle: object = _MISSING,
-    ) -> Mapping[str, object]:
-        resources = _mapping(settings.get("resources"), "follow-up.resources")
-        declared_required = {
-            resource: _required_flag(value, f"follow-up.resources.{resource}")
-            for resource, value in resources.items()
-        }
-        findings: list[str] = []
-
-        closure_target = target
-        if isinstance(target, Mapping) and "closure" in target:
-            closure_target = target.get("closure")
-            if row_count_oracle is _MISSING:
-                row_count_oracle = target.get("row_count_oracle", target.get("row_counts", _MISSING))
-
-        requiredness_document = _read_document(
-            closure_target,
-            _string(settings.get("document"), "follow-up.document"),
-        )
-        observed_required = _requiredness_from_document(
-            requiredness_document,
-            _string(settings.get("requiredness_path"), "follow-up.requiredness_path"),
-        )
-        if observed_required is None:
-            return {
-                "status": "not-examined",
-                "passed": False,
-                "findings": ["requiredness_not_examined"],
-            }
-        if observed_required != declared_required:
-            findings.append("requiredness_artifact_mismatch")
-
-        count_source = "not-examined"
-        actual_counts: dict[str, int] | None = None
-        malformed_resources: set[str] = set()
-        if row_count_oracle is not _MISSING:
-            count_source = "row_count_oracle"
-            actual_counts = _row_count_mapping(row_count_oracle)
-            if actual_counts is None:
-                return {
-                    "status": "not-examined",
-                    "passed": False,
-                    "findings": ["resource_counts_not_examined"],
-                }
-        elif isinstance(fixture_dir, (str, Path)):
-            manifest = _read_document(fixture_dir, "fixture-manifest.json")
-            actual_counts = _manifest_row_counts(manifest)
-            if actual_counts is None:
-                count_source = "closure_data"
-            else:
-                count_source = "fixture_manifest"
-        elif isinstance(closure_target, Mapping):
-            # Preserve the direct mapping API as an explicit oracle input.
-            actual_counts = _row_count_mapping(closure_target)
-            if actual_counts is None:
-                count_source = "closure_data"
-        if actual_counts is None and isinstance(closure_target, (str, Path)):
-            count_source = "closure_data"
-            root = Path(closure_target)
-            data_root = root / "data"
-            if not root.is_dir() or not data_root.is_dir():
-                return {
-                    "status": "not-examined",
-                    "passed": False,
-                    "findings": ["resource_counts_not_examined"],
-                }
-            actual_counts = {}
-            for resource in resources:
-                path = data_root / f"{resource}.csv"
-                if not path.is_file():
-                    continue
-                try:
-                    with path.open(encoding="utf-8", newline="") as handle:
-                        reader = csv.DictReader(handle)
-                        if not reader.fieldnames or any(
-                            not isinstance(field, str) or not field.strip() for field in reader.fieldnames
-                        ):
-                            malformed_resources.add(resource)
-                            continue
-                        actual_counts[resource] = sum(1 for _ in reader)
-                except (OSError, UnicodeError, csv.Error):
-                    malformed_resources.add(resource)
-            findings.extend(f"resource_malformed:{resource}" for resource in sorted(malformed_resources))
-        if actual_counts is None:
-            return {"status": "not-examined", "passed": False, "findings": ["resource_counts_not_examined"]}
-
-        expected_counts = _count_rows(self.raw_gold("counts", fixture_dir))
-        for resource, required in declared_required.items():
-            if resource not in actual_counts:
-                if resource in malformed_resources:
-                    continue
-                if required is False:
-                    findings.append("optional_resource_absent")
-                else:
-                    findings.append("required_resource_absent")
-        if actual_counts != expected_counts:
-            findings.append("resource_count_mismatch")
-        optional = [resource for resource, required in declared_required.items() if required is False]
-        if any(resource in actual_counts and actual_counts[resource] != 0 for resource in optional):
-            findings.append("optional_placeholder_row")
-        return {
-            "status": "examined",
-            "passed": not findings,
-            "findings": findings,
-            "actual_counts": actual_counts,
-            "expected_counts": expected_counts,
-            "required": declared_required,
-            "observed_required": observed_required,
-            "count_source": count_source,
-        }
 
 
 ScenarioDeclaration = Scenario
@@ -1104,16 +632,7 @@ _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",
 }
-_GOLD_KEYS_BY_FOLLOW_UP = {
-    "grain_and_aggregation": frozenset({"answer", "control_total", "diagnostics"}),
-    "optional_required_outputs": frozenset({"counts", "diagnostics"}),
-    "credential_rotation": frozenset({"diagnostics"}),
-    "sigterm_diagnosis": frozenset({"diagnostics"}),
-}
-_CERTIFICATION_GOLD_BY_FOLLOW_UP = {
-    "optional_required_outputs": {"build": "counts", "query": "answer"},
-    "grain_and_aggregation": {"query": "answer"},
-}
+
 
 
 def _canonical_hash(value: object) -> str:
@@ -1280,39 +799,15 @@ def _parse_gates(value: object) -> Mapping[str, GateSpec]:
             kind = _string(mapping.pop("kind", None), f"gates.{name}.kind")
             settings = MappingProxyType(mapping)
         parsed[name] = GateSpec(name, kind, settings)
-    if parsed["follow-up"].kind not in {
-        "grain_and_aggregation",
-        "optional_required_outputs",
-        "credential_rotation",
-        "sigterm_diagnosis",
-    }:
-        raise ScenarioError("gates.follow-up must declare a supported scenario-specific follow-up")
-    if parsed["follow-up"].kind == "credential_rotation":
-        settings = parsed["follow-up"].settings
-        _string(settings.get("allowed_diff_path"), "follow-up.allowed_diff_path")
-        _string(settings.get("allowed_diff_attribute"), "follow-up.allowed_diff_attribute")
-    if parsed["follow-up"].kind == "sigterm_diagnosis":
-        settings = parsed["follow-up"].settings
-        _string(settings.get("true_cause"), "follow-up.true_cause")
-        _string(settings.get("declared_filter"), "follow-up.declared_filter")
-    if parsed["follow-up"].kind == "grain_and_aggregation":
-        _string(parsed["follow-up"].settings.get("document"), "gates.follow-up.document")
-    if parsed["follow-up"].kind == "optional_required_outputs":
-        settings = parsed["follow-up"].settings
-        if settings.get("count_source") != "row_count_oracle":
-            raise ScenarioError("follow-up.count_source must be row_count_oracle")
-        _string(settings.get("document"), "follow-up.document")
-        _string(settings.get("requiredness_path"), "follow-up.requiredness_path")
-        resources = _mapping(settings.get("resources"), "follow-up.resources")
-        for resource, declaration in resources.items():
-            _required_flag(declaration, f"follow-up.resources.{resource}")
-        plant_evidence = _mapping(settings.get("plant_evidence"), "follow-up.plant_evidence")
-        for plant, declaration in plant_evidence.items():
-            evidence = _mapping(declaration, f"follow-up.plant_evidence.{plant}")
-            _string(evidence.get("resource"), f"follow-up.plant_evidence.{plant}.resource")
-            row_count = evidence.get("row_count")
-            if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
-                raise ScenarioError(f"follow-up.plant_evidence.{plant}.row_count must be a non-negative integer")
+    follow_up = parsed["follow-up"]
+    if not followups.is_registered(follow_up.kind):
+        raise ScenarioError(
+            "gates.follow-up must declare a supported scenario-specific follow-up; "
+            f"{follow_up.kind!r} is not registered (have: {sorted(followups.registered_names())})"
+        )
+    validate = followups.get(follow_up.kind).validate_settings
+    if validate is not None:
+        validate(follow_up.settings)
     return MappingProxyType(parsed)
 
 
@@ -1322,7 +817,7 @@ def _parse_gold(
     follow_up_kind: str,
 ) -> tuple[Mapping[str, Path], Mapping[str, str]]:
     raw = _mapping(value, "gold")
-    expected = _GOLD_KEYS_BY_FOLLOW_UP[follow_up_kind]
+    expected = followups.get(follow_up_kind).gold_keys
     actual = set(raw)
     if actual != expected:
         missing = sorted(expected - actual)
@@ -1521,81 +1016,12 @@ def select_tier(scenarios: Sequence[Scenario], tier: str) -> tuple[Scenario, ...
     return selected
 
 
-def _read_document(value: object, document_name: str | None = None) -> object:
-    if isinstance(value, Mapping):
-        return value
-    path = Path(value) if isinstance(value, (str, Path)) else None
-    if path is None or not path.exists():
-        return _MISSING
-    if path.is_file():
-        candidates = [path]
-    elif document_name is not None:
-        document = Path(document_name)
-        if document.is_absolute() or ".." in document.parts:
-            return _MISSING
-        candidates = [path / document]
-    else:
-        return _MISSING
-    candidates = [candidate for candidate in candidates if candidate.is_file()]
-    documents: list[Mapping[str, object]] = []
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate.read_text(encoding="utf-8")) if candidate.suffix.lower() == ".json" else yaml.safe_load(candidate.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError, yaml.YAMLError):
-            continue
-        if isinstance(parsed, Mapping):
-            documents.append(dict(parsed))
-    if not documents:
-        return _MISSING
-    merged: dict[str, object] = {}
-    for document in documents:
-        merged.update(document)
-    return merged
 
 
-def _lookup(value: object, dotted_path: str) -> object:
-    current = value
-    for part in dotted_path.split("."):
-        if not isinstance(current, Mapping) or part not in current:
-            return _MISSING
-        current = current[part]
-    return current
 
 
-def _grain_follow_up(closure: object, settings: Mapping[str, object]) -> Mapping[str, object]:
-    document = _read_document(closure, _string(settings.get("document"), "follow-up.document"))
-    if document is _MISSING:
-        return {"status": "not-examined", "passed": False, "findings": ["closure_not_examined"]}
-    grain_path = _string(settings.get("grain_path"), "follow-up.grain_path")
-    aggregation_path = _string(settings.get("aggregation_path"), "follow-up.aggregation_path")
-    expected_grain = _string(settings.get("expected_grain"), "follow-up.expected_grain")
-    expected_aggregation = _string(settings.get("expected_aggregation"), "follow-up.expected_aggregation")
-    observed_grain = _lookup(document, grain_path)
-    observed_aggregation = _lookup(document, aggregation_path)
-    findings: list[str] = []
-    if observed_grain is _MISSING:
-        findings.append("grain_not_declared")
-    elif observed_grain != expected_grain:
-        findings.append("grain_mismatch")
-    if observed_aggregation is _MISSING:
-        findings.append("aggregation_not_declared")
-    elif observed_aggregation != expected_aggregation:
-        findings.append("aggregation_mismatch")
-    return {
-        "status": "examined",
-        "passed": not findings,
-        "findings": findings,
-        "grain": observed_grain if observed_grain is not _MISSING else None,
-        "aggregation": observed_aggregation if observed_aggregation is not _MISSING else None,
-    }
 
 
-def _required_flag(value: object, location: str) -> bool:
-    declaration = _mapping(value, location)
-    required = declaration.get("required")
-    if not isinstance(required, bool):
-        raise ScenarioError(f"{location}.required must be boolean")
-    return required
 
 
 def _declared_required(settings: Mapping[str, object]) -> dict[str, bool]:
@@ -1606,56 +1032,10 @@ def _declared_required(settings: Mapping[str, object]) -> dict[str, bool]:
     }
 
 
-def _requiredness_from_document(document: object, path: str) -> dict[str, bool] | None:
-    if document is _MISSING:
-        return None
-    raw = _lookup(document, path)
-    if not isinstance(raw, Mapping) or not raw:
-        return None
-    result: dict[str, bool] = {}
-    for resource, value in raw.items():
-        if not isinstance(resource, str):
-            return None
-        if isinstance(value, bool):
-            result[resource] = value
-            continue
-        if isinstance(value, Mapping) and isinstance(value.get("required"), bool):
-            result[resource] = value["required"]
-            continue
-        return None
-    return result
 
 
-def _row_count_mapping(value: object) -> dict[str, int] | None:
-    if not isinstance(value, Mapping):
-        return None
-    candidate: object = value
-    for key in ("row_count_oracle", "per_model_row_counts", "row_counts", "counts"):
-        nested = value.get(key)
-        if isinstance(nested, Mapping):
-            candidate = nested
-            break
-    if not isinstance(candidate, Mapping) or not candidate:
-        return None
-    result: dict[str, int] = {}
-    for resource, count in candidate.items():
-        if (
-            not isinstance(resource, str)
-            or isinstance(count, bool)
-            or not isinstance(count, int)
-            or count < 0
-        ):
-            return None
-        result[resource] = count
-    return result
 
 
-def _manifest_row_counts(manifest: object) -> dict[str, int] | None:
-    if isinstance(manifest, Mapping):
-        table_counts = manifest.get("table_row_counts")
-        if isinstance(table_counts, Mapping):
-            return _row_count_mapping(table_counts)
-    return _row_count_mapping(manifest)
 
 
 def _validate_fixture_gold(
@@ -1690,7 +1070,7 @@ def _validate_certification_gold(
 ) -> None:
     """Reject certification claims whose scoreable gold is not declared."""
 
-    required_gold = _CERTIFICATION_GOLD_BY_FOLLOW_UP.get(follow_up_kind, {})
+    required_gold = followups.get(follow_up_kind).certification_gold
     for gate in repeatability.gates:
         artifact = required_gold.get(gate)
         if artifact is not None and artifact not in gold:
@@ -1699,21 +1079,6 @@ def _validate_certification_gold(
             )
 
 
-def _count_rows(value: object) -> dict[str, int]:
-    if not isinstance(value, list):
-        raise ScenarioError("count gold must be a list of rows")
-    result: dict[str, int] = {}
-    for row in value:
-        if (
-            not isinstance(row, Mapping)
-            or not isinstance(row.get("resource"), str)
-            or isinstance(row.get("row_count"), bool)
-            or not isinstance(row.get("row_count"), int)
-            or row["row_count"] < 0
-        ):
-            raise ScenarioError("count gold rows require resource and integer row_count")
-        result[row["resource"]] = row["row_count"]
-    return result
 
 
 def _diagnostic_rows(value: object) -> list[dict[str, object]]:
