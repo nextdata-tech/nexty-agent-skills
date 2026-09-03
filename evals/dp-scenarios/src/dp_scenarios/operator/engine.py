@@ -505,6 +505,14 @@ def _snapshot(reader: object) -> Mapping[str, object]:
 
 
 
+def _artifact_text(artifact: str | bytes | None) -> str:
+    """Return an approval artifact as text, empty when the agent supplied none."""
+
+    if isinstance(artifact, bytes):
+        return artifact.decode("utf-8", errors="replace")
+    return artifact or ""
+
+
 def _qualification_for(
     match: MatchResult | None,
     claim: Mapping[str, object] | None,
@@ -574,8 +582,10 @@ class OperatorEngine:
         self.generated_operator = generated_operator
         # Planted markers live in the generated fixture, not in the scenario's
         # operator block: a scenario may declare no ``operator.sentinel`` and
-        # still plant PII the agent can echo back.  Redaction before an
-        # external provider, and the in-engine scan, must cover both.
+        # still plant PII the agent can echo back.  These widen redaction
+        # before an external provider only; ``_scan`` keeps tripping on the
+        # declared sentinels alone, since a marker in a read tool result is
+        # something the agent may legitimately see and must not fail a run.
         self.extra_sentinels = tuple(
             value.encode("utf-8") if isinstance(value, str) else bytes(value)
             for value in extra_sentinels
@@ -674,9 +684,15 @@ class OperatorEngine:
             else:
                 claim["approval_out_of_phase"] = True
             detail = "operator approved the spec"
-            if operator_approval_text:
-                artifact_ref = operator_approval_text
-            else:
+            artifact_ref = operator_approval_text or None
+            # Whether the operator approved and whether the agent had anything
+            # to approve are two different facts, and the row must carry both.
+            # Keying this claim on the operator's own sentence would make it
+            # unreachable -- an approval turn always has text, or
+            # validate_outgoing_message would have rejected it before send --
+            # and a run where the agent presented nothing at all would then be
+            # indistinguishable from one that presented a spec.
+            if not _artifact_text(approval_artifact):
                 claim["approval_without_artifact"] = True
         elif match is not None and match.approval_requested and not self._script_declares_approval:
             # Legacy path: the script never declares who approves, so the only
@@ -686,11 +702,7 @@ class OperatorEngine:
             if claim is None:
                 claim = {"open_decision_marker": approval_marker}
             claim = dict(claim) if isinstance(claim, Mapping) else {}
-            approval_artifact_text = (
-                approval_artifact.decode("utf-8", errors="replace")
-                if isinstance(approval_artifact, bytes)
-                else approval_artifact or ""
-            )
+            approval_artifact_text = _artifact_text(approval_artifact)
             if "spec_approved" in PHASE_ACTION_KINDS[phase]:
                 action_kind = "spec_approved"
             else:

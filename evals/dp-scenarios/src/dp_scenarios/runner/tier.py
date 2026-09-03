@@ -1245,8 +1245,10 @@ class TierRunner:
                     # the scenario's operator block: most scenarios declare
                     # ``operator.sentinel: null`` and still plant PII.  Hand
                     # them to the engine so redaction of agent text before an
-                    # external provider, and the in-engine scan, cover the
-                    # markers grading actually looks for.
+                    # external provider covers the markers grading actually
+                    # looks for.  Redaction only: these deliberately do not
+                    # widen the in-engine sentinel scan, because a marker in a
+                    # tool result the agent legitimately read is not a leak.
                     engine = OperatorEngine(
                         scenario.script,
                         transport,

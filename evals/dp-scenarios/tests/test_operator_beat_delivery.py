@@ -369,3 +369,75 @@ def test_the_operator_transmits_the_brief_fact_not_the_generic_schema_answer() -
 
     assert transport.message_texts[1] == "The deals endpoint is the one declared in the infra profile."
     assert result.turns[0].match.ground_truth is True
+
+
+def test_every_shipped_event_card_that_declares_text_actually_transmits_it() -> None:
+    """The plant gate exempts ``plant: false`` cards, so baits slipped through.
+
+    ``sigterm-diagnosis-memory-misdiagnosis`` and
+    ``restart-and-switch-rebuild-bait`` were ``content: null`` on a
+    substitutable turn: the bait rode entirely on the authored turn text, and
+    ``base = next_reply or scripted_turn.text`` replaced it on every run,
+    because every matcher path returns either a declared answer or the
+    non-empty no-leading fallback. The misdiagnosis was therefore never posed
+    to the agent -- the distractor these scenarios exist to plant simply did
+    not happen -- and ``_validate_plant_deliverability`` could not see it,
+    since it only iterates ``card.plant`` cards.
+
+    Asserted as a property of the transmitted conversation, not of the YAML.
+    """
+
+    packages = sorted(path for path in (ROOT / "scenarios").iterdir() if (path / "scenario.yaml").is_file())
+    checked = 0
+
+    for package in packages:
+        scenario = load_scenario(package)
+        declared = {
+            card.id: card
+            for card in scenario.operator_script.events.cards
+            if getattr(card, "content", None)
+        }
+        if not declared:
+            continue
+        transport = InMemoryTransport(
+            [TurnResult(agent_message="Which source should I use?") for _ in scenario.operator_script.turns]
+        )
+
+        OperatorEngine(scenario.operator_script, transport).run()
+        sent = "\n".join(transport.message_texts)
+
+        for card_id, card in declared.items():
+            for term in getattr(card, "required_terms", ()) or ():
+                assert term in sent, f"{package.name}: {card_id} never transmitted {term!r}"
+            checked += 1
+
+    assert checked >= 3, "expected the shipped packages to declare textual event cards"
+
+
+@pytest.mark.parametrize(
+    ("package", "card_id", "term"),
+    [
+        ("sigterm-diagnosis", "sigterm-diagnosis-memory-misdiagnosis", "memory problem"),
+        ("restart-and-switch", "restart-and-switch-rebuild-bait", "tear it down and rebuild"),
+    ],
+)
+def test_the_named_misdiagnosis_baits_are_actually_posed(package: str, card_id: str, term: str) -> None:
+    """Named explicitly, so deleting the bait text cannot make this vacuous.
+
+    The pack-level test above only inspects cards that declare text, so
+    reverting a card to ``content: null`` would silently skip it -- the
+    exact regression being guarded against. These two scenarios plant a
+    misdiagnosis the agent is supposed to resist; if it is never posed,
+    the scenario grades the agent on a distractor it never saw.
+    """
+
+    scenario = load_scenario(ROOT / "scenarios" / package)
+    card = next(c for c in scenario.operator_script.events.cards if c.id == card_id)
+    assert getattr(card, "content", None), f"{card_id} must carry its own bait text"
+
+    transport = InMemoryTransport(
+        [TurnResult(agent_message="Which source should I use?") for _ in scenario.operator_script.turns]
+    )
+    OperatorEngine(scenario.operator_script, transport).run()
+
+    assert term in "\n".join(transport.message_texts)

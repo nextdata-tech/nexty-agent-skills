@@ -1,7 +1,15 @@
 # Driver operator + inspectable run output — design for review
 
-Status: **draft, pre-implementation**. This document is the thing under review;
-no code has been written against it yet.
+Status: **Part 1 landed; Part 2 not started.** The renderer described in Part 1
+shipped as `runner/transcript.py` + `scripts/render_conversation.py`. Two details
+of Part 1 as written did *not* ship: the renderer is not yet called from
+`_retain_evidence_bundle`, and there is no `conversation.md` /
+`conversation.md.error` output name -- the script writes wherever `--out`
+points. Part 2 (the driver operator) remains a design under review, and the
+live runs since have narrowed what it needs to do: the ground-truth brief
+handles fact retrieval well, so the residual is persona behaviour the scripted
+operator structurally cannot produce (approving, pushing a wrong theory,
+re-deciding later).
 
 ## Why
 
@@ -227,16 +235,18 @@ ever caught a real regression here. So:
 
 ## Known-adjacent defects (not fixed by this design)
 
-Found by the same run; listed so the reviewer does not assume they are covered:
+Found by the same run. Two of the three were fixed in the PR that landed
+Part 1; only the efficiency note is still open.
 
-- **`--allow-host-home` does not remove Bash.** `claude_adapter.py:500-505`
+- **FIXED.** ~~`--allow-host-home` does not remove Bash.~~ `claude_adapter.py:500-505`
   omits Bash from `--allowedTools`, but that flag is an *allow* list, not a
   *deny* — `claude --help` documents `--disallowedTools` as the deny. The run
   made 5 Bash calls with the real host `HOME`. Zero test coverage
   (`grep -rn "no_bash|allow_bash" tests/` is empty). Security-relevant.
-- **The mock source is unreachable by the agent.** Its URL is exported only as
+- **FIXED** (an `infra-profile.yaml` is now materialised into the agent
+  workspace). ~~The mock source is unreachable by the agent.~~ Its URL was exported only as
   `NXD_EVAL_SOURCE_URL` (`environment.py:658`); no skill, prompt, or operator
   line tells the agent it exists. `server-counters.json` recorded `total: 0`.
   This blocks the scenario independently of the operator.
-- **`efficiency: turns=1.0` while 7 turns ran.** Suspected accounting bug,
-  unconfirmed.
+- **Not a bug.** `efficiency: turns=1.0` is `turns / turn_budget` (7/7), the
+  budget-consumed ratio, not a turn count.

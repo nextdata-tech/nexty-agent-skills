@@ -268,6 +268,44 @@ def test_the_transmitted_operator_approval_is_what_writes_the_spec_approved_row(
     assert row["qualification"] == "strong"
 
 
+def test_the_approval_row_still_records_whether_the_agent_had_anything_to_approve() -> None:
+    """Two different facts: the operator approved, and a spec existed to approve.
+
+    Minting the row from the operator's act must not discard the second. If
+    ``approval_without_artifact`` were keyed on the operator's own sentence it
+    would be unreachable -- an approval turn always has text, or
+    ``validate_outgoing_message`` would have rejected it before sending -- and
+    a run where the agent presented nothing at all would be indistinguishable
+    from one that presented a blueprint.
+    """
+
+    approved_nothing = OperatorEngine(
+        SCENARIO.operator_script,
+        InMemoryTransport(
+            [TurnResult(agent_message=text) for text in _AGENT_MESSAGES_WITHOUT_APPROVAL_WORDING]
+        ),
+    ).run()
+    row = _spec_approved_rows(approved_nothing)[0]
+    assert row["claim"].get("approval_without_artifact") is True
+
+    messages = list(_AGENT_MESSAGES_WITHOUT_APPROVAL_WORDING)
+    presented = OperatorEngine(
+        SCENARIO.operator_script,
+        InMemoryTransport(
+            [
+                TurnResult(
+                    agent_message=text,
+                    approval_artifact="dp-blueprint.md@rev2" if index == 3 else None,
+                )
+                for index, text in enumerate(messages)
+            ]
+        ),
+    ).run()
+    presented_row = _spec_approved_rows(presented)[0]
+    assert "approval_without_artifact" not in presented_row["claim"]
+    assert presented_row["artifact_ref"] == "That looks good to me -- approved. Go ahead and build it."
+
+
 def test_a_script_with_no_declared_approval_turn_writes_no_spec_approved_row() -> None:
     """The other half of the property: no operator approval, no approval row.
 
