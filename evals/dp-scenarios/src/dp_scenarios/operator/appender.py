@@ -97,6 +97,7 @@ _NON_FACT_CLAIM_KEYS = frozenset(
         "approval_out_of_phase",
         "counter_snapshots",
         "event_outcomes",
+        "events_not_transmitted",
         "open_decision_marker",
         "outcome",
         "session_gap_seconds",
@@ -153,6 +154,10 @@ def _validate_non_fact_claim(value: object) -> None:
         outcomes = value["event_outcomes"]
         if not isinstance(outcomes, (list, tuple)) or any(not isinstance(item, str) for item in outcomes):
             raise AppenderError("event_outcomes must be a list of strings")
+    if "events_not_transmitted" in value:
+        undelivered = value["events_not_transmitted"]
+        if not isinstance(undelivered, (list, tuple)) or any(not isinstance(item, str) for item in undelivered):
+            raise AppenderError("events_not_transmitted must be a list of strings")
     if "counter_snapshots" in value:
         snapshots = value["counter_snapshots"]
         if not isinstance(snapshots, (list, tuple)) or any(not isinstance(item, Mapping) for item in snapshots):

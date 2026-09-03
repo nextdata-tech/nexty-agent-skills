@@ -139,12 +139,20 @@ class AnswerSheet:
         return self.opening_message
 
     def answer_for_source(self, question: str) -> tuple[str, str] | None:
-        """Return a fixed source answer when its declared key is mentioned."""
+        """Return a fixed source answer when its declared key is mentioned.
+
+        The key is matched on a whole-word boundary, the same discipline the
+        ground-truth brief and the obstacle scan use. Plain substring
+        containment let the one-word key ``data`` fire inside ``database``,
+        ``metadata`` and ``data product`` -- in a real live run that answered
+        three separate questions with the same schema fact, because a key
+        name is a topic label, not a declared term set.
+        """
 
         lowered = question.casefold()
         for key in sorted(self.source_answers):
             answer = self.source_answers[key]
-            if key.casefold() in lowered:
+            if term_present(key, lowered):
                 return key, answer
         return None
 
