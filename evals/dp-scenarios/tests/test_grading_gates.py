@@ -68,9 +68,13 @@ def test_intake_passes_and_reports_ordering_code() -> None:
         {"turn": 2, "action_kind": "spec_approved"},
         {"turn": 3, "action_kind": "codegen"},
     )
+    # Codegen strictly earlier than the approval is the violation. The
+    # same turn is not: an operator approval is transmitted at the top of
+    # a turn and the agent acts in the rest of it, so authoring right
+    # after "approved, go ahead" shares the approval's turn number.
     bad = _ledger(
         {"turn": 3, "action_kind": "spec_approved"},
-        {"turn": 3, "action_kind": "codegen"},
+        {"turn": 2, "action_kind": "codegen"},
     )
     assert gate_intake(good).passed
     result = gate_intake(bad)
@@ -536,3 +540,43 @@ def test_a_legacy_alias_renames_finding_codes_instead_of_raising() -> None:
     for code in result.codes:
         assert not code.startswith("intake_"), f"{code} kept its canonical prefix"
         assert code.startswith("g1_"), f"{code} was not renamed to the legacy prefix"
+
+
+def test_intake_allows_codegen_on_the_approval_turn_itself() -> None:
+    """The operator approves at the top of a turn; the agent acts in the rest of it.
+
+    A live run recorded spec_approved and the first closure write both at
+    turn 4 -- the operator transmitted "approved, go ahead" and the agent
+    did exactly that. Demanding a strictly later codegen turn failed the
+    agent for correct behaviour, so the same turn must be allowed.
+    """
+
+    result = gate_intake(
+        {
+            "rows": [
+                {"turn": 4, "action_kind": "spec_approved"},
+                {"turn": 4, "action_kind": "codegen"},
+            ],
+            "observations": {"turns": []},
+        }
+    )
+
+    assert result.passed, result.codes
+    assert "intake_approval_not_before_codegen" not in result.codes
+
+
+def test_intake_still_rejects_codegen_on_an_earlier_turn_than_the_approval() -> None:
+    """The complement: authoring before any approval is still the violation."""
+
+    result = gate_intake(
+        {
+            "rows": [
+                {"turn": 4, "action_kind": "spec_approved"},
+                {"turn": 3, "action_kind": "codegen"},
+            ],
+            "observations": {"turns": []},
+        }
+    )
+
+    assert not result.passed
+    assert "intake_approval_not_before_codegen" in result.codes

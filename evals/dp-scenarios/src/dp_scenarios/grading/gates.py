@@ -221,8 +221,15 @@ def gate_intake(ledger: object) -> GateResult:
         findings.append(Finding("intake_spec_approval_missing", "no spec approval row is recorded"))
     if not codegen:
         findings.append(Finding("intake_codegen_missing", "no codegen row is recorded"))
-    if approvals and codegen and min(approvals) >= min(codegen):
-        findings.append(Finding("intake_approval_not_before_codegen", "approval turn must be strictly earlier", {"approval": min(approvals), "codegen": min(codegen)}))
+    # Codegen may not start on a turn *earlier* than the approval, but it may
+    # start on the same one. An operator approval is transmitted at the top of
+    # a turn and the agent's response to it is the rest of that same turn, so
+    # authoring immediately after being told "approved, go ahead" lands on the
+    # approval's own turn number. Requiring a strictly later turn failed the
+    # agent for doing exactly the right thing, which a live run demonstrated:
+    # spec_approved and the first closure write were both recorded at turn 4.
+    if approvals and codegen and min(codegen) < min(approvals):
+        findings.append(Finding("intake_approval_not_before_codegen", "codegen turn precedes the approval", {"approval": min(approvals), "codegen": min(codegen)}))
     return _result("intake", not findings, findings)
 
 
