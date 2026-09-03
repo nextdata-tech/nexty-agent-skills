@@ -60,6 +60,7 @@ def test_every_shipped_scenario_resolves_its_follow_up_kind_through_the_registry
             kind.validate_fixture_gold is not None,
         )
         assert declared == EXPECTED_CROSS_CHECKS[kind.name]
+        assert kind.name in EXPECTED_GOLD_REPRODUCIBLE, f"{kind.name} records no gold intent"
         assert kind.gold_reproducible_from_fixture is EXPECTED_GOLD_REPRODUCIBLE[kind.name]
 
 

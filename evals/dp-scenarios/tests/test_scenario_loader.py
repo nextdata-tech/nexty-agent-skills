@@ -94,8 +94,10 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
             # This kind's gold records something the CSV generator does not
             # produce -- live Postgres facts, or declared runtime constants --
             # so it cannot be compared byte-for-byte against a regenerated
-            # fixture. Each such kind reconciles its own gold against
-            # independently recounted evidence in its dedicated test module.
+            # fixture. Its counts are reconciled against independently
+            # recounted evidence in the kind's own test module, and the fields
+            # it duplicates from scenario.yaml are checked by
+            # test_gold_never_disagrees_with_the_declaration_it_duplicates.
             continue
         for name, path in scenario.gold.items():
             generated_path = scenario.gold_path(name, generated.out_dir)
@@ -104,9 +106,17 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
             compared.append(f"{scenario.id}:{name}")
 
     # The opt-out above is a `continue`, so it can swallow the byte comparison
-    # entirely -- flipping the kind flag's default would silently skip every
-    # scenario and leave this test green on an empty loop.
-    assert compared, "no scenario's gold was compared against a regenerated fixture"
+    # entirely. Asserting the exact set rather than truthiness: a single kind
+    # opting out wrongly drops its artifacts from this list while leaving a
+    # non-empty one behind, which a truthiness check would not notice.
+    expected_comparisons = {
+        f"{scenario.id}:{name}"
+        for scenario in scenarios
+        if followups.get(scenario.gates["follow-up"].kind).gold_reproducible_from_fixture
+        for name in scenario.gold
+    }
+    assert set(compared) == expected_comparisons
+    assert expected_comparisons, "no scenario's gold was compared against a regenerated fixture"
 
 
 @pytest.mark.parametrize("missing", sorted({
@@ -492,3 +502,37 @@ def test_a_tier_that_matches_no_scenario_is_an_error_not_an_empty_clean_run() ->
     scenarios = select_tier(load_scenarios(SCENARIO_ROOT), "core")
     with pytest.raises(ScenarioError):
         select_tier(scenarios, "smoke")
+
+
+def test_gold_never_disagrees_with_the_declaration_it_duplicates() -> None:
+    """A gold artifact that restates scenario.yaml must restate it correctly.
+
+    Several gold files carry a second copy of facts the declaration already
+    owns -- the dataset and seed the fixture was generated from, and (for
+    sigterm-diagnosis) the true cause and declared filter the follow-up
+    settings define. The handler reads those from the settings, never from the
+    gold, so an unchecked copy can drift out of agreement and mislead the next
+    reader without failing anything.
+    """
+
+    checked: list[str] = []
+    for scenario in load_scenarios(SCENARIO_ROOT):
+        settings = scenario.gates["follow-up"].settings
+        for name in scenario.gold:
+            document = scenario.raw_gold(name)
+            if not isinstance(document, dict):
+                continue
+            if "dataset" in document:
+                assert document["dataset"] == scenario.dataset, f"{scenario.id}:{name} dataset"
+                checked.append(f"{scenario.id}:{name}:dataset")
+            if "seed" in document:
+                assert document["seed"] == scenario.seed, f"{scenario.id}:{name} seed"
+                checked.append(f"{scenario.id}:{name}:seed")
+            for key, declared in settings.items():
+                if key in document and isinstance(declared, (str, int, float, bool)):
+                    assert document[key] == declared, f"{scenario.id}:{name} {key}"
+                    checked.append(f"{scenario.id}:{name}:{key}")
+
+    # Guard the loop itself: if no gold duplicated anything, this test would
+    # pass while asserting nothing at all.
+    assert checked, "no gold artifact duplicated a declared field"
