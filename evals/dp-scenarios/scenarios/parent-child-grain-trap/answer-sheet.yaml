@@ -54,3 +54,16 @@ opening_forbidden_terms:
   - record
 open_decision_markers: ["[DECISION NEEDED]"]
 obstacle_terms: []
+# Facts the operator actually knows, consulted only when a question the
+# answer sheet above does not cover still needs a real answer instead of a
+# fabricated or confidently irrelevant one. See AGENTS.md Track A.
+ground_truth:
+  order_amount_column:
+    terms: [order_amount]
+    fact: order_amount is the total dollar amount for that order; it is fixed per order, not per line item.
+  order_amount_column_spaced:
+    terms: [order amount]
+    fact: order_amount is the total dollar amount for that order; it is fixed per order, not per line item.
+  product_column:
+    terms: [product, column]
+    fact: product on each line item is a descriptive label only; it plays no part in the required regional revenue figure.
