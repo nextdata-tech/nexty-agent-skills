@@ -258,6 +258,74 @@ class MockSourceHandle:
     close = stop
 
 
+#: The in-world name every scenario already uses for the file that tells an
+#: operator's agent where a configured source lives.
+SOURCE_PROFILE_FILENAME = "infra-profile.yaml"
+
+
+def _endpoint_key(path: str) -> str:
+    """Return the profile attribute key for one advertised endpoint path."""
+
+    slug = "".join(
+        character if character.isalnum() else "_" for character in path.strip("/")
+    ).strip("_")
+    return f"endpoint_{slug or 'root'}"
+
+
+def advertised_endpoints(routes: Sequence[Any]) -> tuple[str, ...]:
+    """Return the endpoint paths a configured source would be handed over with.
+
+    Only routes a real profile could name are advertised: a parameter-free
+    ``GET`` that serves a successful body.  Error-only routes, forbidden
+    writes, and templated paths stay out, because in the real world you learn
+    those by calling the API, and because a scenario that grades honest
+    probing must not have its answer written into the handover.
+    """
+
+    seen: list[str] = []
+    for route in routes:
+        if getattr(route, "method", "").upper() != "GET":
+            continue
+        if getattr(route, "status", 200) != 200 or getattr(route, "write_forbidden", False):
+            continue
+        path = getattr(route, "path", "")
+        if not isinstance(path, str) or not path.startswith("/") or "{" in path:
+            continue
+        if getattr(route, "response", None) is None and not getattr(route, "states", {}):
+            continue
+        if path not in seen:
+            seen.append(path)
+    return tuple(seen)
+
+
+def render_source_profile(base_url: str, endpoints: Sequence[str]) -> str:
+    """Render the agent-visible infra profile for a run-local API source."""
+
+    lines = [
+        "apiVersion: infra.nextdata.com/v1",
+        "kind: Profile",
+        "metadata:",
+        "  name: scenario-local",
+        "spec:",
+        "  services:",
+        "    - name: api-source",
+        "      driver: nxd:generic-secrets:1.0.0",
+        "      attributes:",
+        "        - key: base_url",
+        f"          value: {json.dumps(base_url)}",
+        "          public: true",
+    ]
+    for path in endpoints:
+        lines.extend(
+            [
+                f"        - key: {_endpoint_key(path)}",
+                f"          value: {json.dumps(path)}",
+                "          public: true",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _scenario_route_config(scenario: Scenario) -> object | None:
     """Read only public route declarations when a scenario exposes one."""
 
@@ -300,6 +368,7 @@ class RunEnvironment:
     _generated_fixture_manifest: Mapping[str, object] | None = field(default=None, init=False, repr=False)
     _home: Path | None = field(default=None, init=False, repr=False)
     _live_transport: Any | None = field(default=None, init=False, repr=False)
+    _source_profile_path: Path | None = field(default=None, init=False, repr=False)
 
     def __enter__(self) -> "RunEnvironment":
         return self.prepare()
@@ -368,6 +437,7 @@ class RunEnvironment:
                 raise EnvironmentError("broker_fault requires a live desktop environment")
             if route_config is not None:
                 self._mock_source = MockSourceHandle(route_config, control_secret=self.control_secret).start()
+                self._write_source_profile()
             if self.live_command is not None:
                 if self.supervisor_command is None:
                     raise EnvironmentError("live desktop environment requires a supervisor_command")
@@ -586,6 +656,47 @@ class RunEnvironment:
         return self._manifest
 
     @property
+    def workspace_dir(self) -> Path:
+        """Return the directory the agent process runs in."""
+
+        if self._temporary is None:
+            raise EnvironmentError("environment has not been prepared")
+        return self.live_cwd or (Path(self._temporary.name) / "agent")
+
+    @property
+    def source_profile_path(self) -> Path | None:
+        """Return the agent-visible infra profile, when a source is running."""
+
+        return self._source_profile_path
+
+    def _write_source_profile(self) -> None:
+        """Hand the running source to the agent the way an operator would.
+
+        The URL is also exported as ``NXD_EVAL_SOURCE_URL``, but nothing tells
+        an agent that a private environment variable exists, so an environment
+        variable alone is not a handover.  A profile file in the workspace is:
+        it is the artifact the scenarios' operators already refer to, it is
+        found by the ordinary Read/Glob tools, and it survives a run with no
+        shell.  It carries only what a real handover carries -- the base URL
+        and the endpoints the source is documented to serve.
+        """
+
+        source = self._mock_source
+        if source is None:
+            return
+        workspace = self.workspace_dir
+        workspace.mkdir(parents=True, exist_ok=True)
+        path = workspace / SOURCE_PROFILE_FILENAME
+        path.write_text(
+            render_source_profile(
+                source.server.data_url,
+                advertised_endpoints(source.server.config.routes),
+            ),
+            encoding="utf-8",
+        )
+        self._source_profile_path = path
+
+    @property
     def mock_source(self) -> MockSourceHandle | None:
         """Return the optional source handle owned by this environment."""
 
@@ -656,6 +767,8 @@ class RunEnvironment:
             values.update({"HOME": host_home, "USERPROFILE": host_home})
         if self._mock_source is not None:
             values["NXD_EVAL_SOURCE_URL"] = self._mock_source.server.data_url
+        if self._source_profile_path is not None:
+            values["NXD_EVAL_SOURCE_PROFILE"] = str(self._source_profile_path)
         return MappingProxyType(values)
 
     @property
@@ -690,6 +803,7 @@ class RunEnvironment:
         self._oracle = None
         self._generated_fixture_manifest = None
         self._home = None
+        self._source_profile_path = None
         if first_error is not None:
             raise first_error
 

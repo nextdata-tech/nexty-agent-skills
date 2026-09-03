@@ -190,9 +190,29 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 Use `--allow-host-home` only when the host credential store is required for the
 authenticated local run. This gives the entire Claude agent process the real
 host `HOME`, including any host configuration and credential files that its
-tools can reach. The runner therefore removes Bash from the allowed tool set
-in this mode. Add `--allow-host-home-bash` only when the scenario genuinely
-needs shell access and you accept that broader exposure. This entrypoint is
+tools can reach. In this mode the runner denies the shell tools (`Bash`,
+`BashOutput`, `KillShell`) on the agent process's `--disallowedTools` list.
+That flag, not `--allowedTools`, is what withholds a tool: `--allowedTools` is
+an auto-approval list, and a tool merely left off it stays available for a
+settings source or permission mode to approve — which is how an earlier
+`--allow-host-home` run that claimed "Bash removed" still ran Bash against the
+real host `HOME`. Add `--allow-host-home-bash` only when the scenario genuinely
+needs shell access and you accept that broader exposure.
+
+The denial covers the shell surface only. Other tools this adapter does not
+grant (for example `WebFetch`, `WebSearch`, `NotebookEdit`) are omitted from
+`--allowedTools` but not denied, so treat "not granted" as "not auto-approved",
+not as "unreachable". Deny rules also apply to the tools a `Task` subagent can
+use, so a denied shell stays denied one level down.
+
+A scenario whose source is the run-local mock REST server hands that source to
+the agent the way an operator would: the runner writes an `infra-profile.yaml`
+into the agent's workspace with the source's `base_url` and the endpoints it is
+documented to serve, and exports its path as `NXD_EVAL_SOURCE_PROFILE`
+alongside the existing `NXD_EVAL_SOURCE_URL`. Only parameter-free `GET` routes
+that serve a successful body are advertised; error-only routes, forbidden
+writes, and templated paths stay out, so a scenario that grades honest probing
+does not find its answer in the handover. This entrypoint is
 intentionally not a hosted CI workflow yet; CI runs the deterministic harness
 and replay tests, while live Claude/Desktop qualification remains a
 developer-controlled local operation.

@@ -426,3 +426,105 @@ for line in sys.stdin:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+
+
+def _spawned_claude_argv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    allow_bash: bool,
+) -> list[str]:
+    """Return the argv the adapter really hands to ``subprocess.Popen``."""
+
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    claude.chmod(0o700)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir(exist_ok=True)
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir(exist_ok=True)
+    mcp_config = tmp_path / "mcp.json"
+    mcp_config.write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "agent"
+    workspace.mkdir(exist_ok=True)
+    monkeypatch.chdir(workspace)
+
+    captured: dict[str, list[str]] = {}
+
+    class FakeProcess:
+        stdout = None
+        stderr = None
+        stdin = None
+        pid = 0
+
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["argv"] = list(command)
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    adapter = ClaudeCodeAdapter(
+        claude=claude,
+        model="test",
+        effort="low",
+        plugin_dir=plugin_dir,
+        repo_root=Path(__file__).resolve().parents[3],
+        fixture_dir=fixture_dir,
+        artifact_dir=tmp_path / "artifacts",
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path(sys.executable),
+        claude_config_dir=None,
+        timeout_s=5,
+        max_budget_usd=None,
+        append_system_prompt="test",
+        allow_bash=allow_bash,
+        mcp_config=mcp_config,
+        allowed_tools="mcp__nxd-desktop__build_data_product",
+    )
+    adapter.start()
+    return captured["argv"]
+
+
+def _flag_values(argv: list[str], flag: str) -> list[str]:
+    return [argv[index + 1] for index, value in enumerate(argv) if value == flag]
+
+
+def test_withheld_bash_is_denied_on_the_spawned_argv_not_merely_left_unlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting a tool from --allowedTools does not withhold it; only deny does.
+
+    ``--allowedTools`` is Claude Code's auto-approval list.  A tool absent
+    from it remains available -- a project settings source or a permission
+    mode can approve it -- which is how an ``--allow-host-home`` run that
+    documented "Bash removed" still made five Bash calls against the real
+    host HOME.  The guarantee has to be spelled on ``--disallowedTools``.
+    """
+
+    argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=False)
+
+    denied = _flag_values(argv, "--disallowedTools")
+    assert denied, "no --disallowedTools flag: an unlisted tool is not a denied tool"
+    denied_tools = {tool for value in denied for tool in value.split(",")}
+    assert {"Bash", "BashOutput", "KillShell"} <= denied_tools
+    allowed_tools = {
+        tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
+    }
+    assert "Bash" not in allowed_tools
+
+
+def test_granting_bash_denies_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A normal run must not acquire a deny rule that blocks its own shell."""
+
+    argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=True)
+
+    denied_tools = {
+        tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")
+    }
+    assert "Bash" not in denied_tools
+    allowed_tools = {
+        tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
+    }
+    assert "Bash" in allowed_tools

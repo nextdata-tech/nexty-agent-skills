@@ -35,7 +35,10 @@ from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
 DEFAULT_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
 
 Work only in the current workspace. The generated fixture is available at the
-path named by NXD_EVAL_FIXTURE_DIR. Keep the authored data-product closure in
+path named by NXD_EVAL_FIXTURE_DIR. When this run has a configured API source,
+its infra profile is the infra-profile.yaml file at the workspace root; read it
+for the base URL and the endpoints it lists, and call the source yourself to
+learn anything the profile does not state. Keep the authored data-product closure in
 the workspace's closure/ directory and keep any blueprint at the workspace
 root. Use the nxd-desktop MCP tools for self-check, build, serving, inspection,
 and governed queries; do not invoke nxd-desktop-supervisor from Bash. Follow
@@ -49,6 +52,14 @@ of objects with exactly these keys: action_kind (self_check or
 adversarial_review), turn (positive integer), outcome (non-empty string), and
 evidence_ref (string). Do not add any other keys.
 """
+
+
+#: The whole shell surface.  ``Bash`` starts a shell; ``BashOutput`` and
+#: ``KillShell`` read from and signal one.  When Bash is withheld -- the
+#: ``--allow-host-home`` default, where the agent process holds the real host
+#: ``HOME`` -- all three are denied together so no part of the surface stays
+#: reachable.
+SHELL_TOOLS = ("Bash", "BashOutput", "KillShell")
 
 
 class ClaudeAdapterError(RuntimeError):
@@ -470,33 +481,24 @@ class ClaudeCodeAdapter:
         self._build_context: dict[str, object] = {}
         self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
 
-    def start(self) -> None:
-        """Start the private MCP config and Claude process."""
+    def build_claude_command(
+        self,
+        *,
+        mcp_config: Path | str,
+        strict_mcp_config: bool,
+        mcp_allowed_tools: str,
+    ) -> list[str]:
+        """Return the exact Claude Code argv this adapter would spawn.
 
-        if self._process is not None:
-            return
-        required_paths = [(self.claude, "claude"), (self.plugin_dir, "plugin directory")]
-        if self.mcp_config is None:
-            required_paths.extend(((self.desktop_supervisor, "desktop supervisor"), (self.desktop_python, "desktop Python")))
-        for path, label in required_paths:
-            if not path.exists():
-                raise ClaudeAdapterError(f"{label} does not exist: {path}")
-        self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        if self.mcp_config is None:
-            self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
-            state_dir = Path(self._temp.name) / "desktop-state"
-            stdio = self._desktop_stdio_type(
-                [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
-                server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
-            )
-            self._stdio = stdio.start()
-            mcp_config = self._stdio.config_path
-            strict_mcp_config = True
-            mcp_allowed_tools = self._stdio.allowed_tools_csv
-        else:
-            mcp_config = self.mcp_config
-            strict_mcp_config = self.strict_mcp_config
-            mcp_allowed_tools = self.allowed_tools or ""
+        ``--allowedTools`` is an auto-approval list, not a capability
+        restriction: leaving a tool out of it does not deny that tool, it
+        only means the CLI would otherwise ask before running it -- and a
+        project settings source, a permission mode, or a future CLI default
+        can answer that question for us.  Every tool this adapter means to
+        withhold is therefore named on ``--disallowedTools``, which is the
+        only flag that denies.
+        """
+
         allowed_tools = [
             "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite", "Skill", "Task",
             mcp_allowed_tools,
@@ -533,12 +535,56 @@ class ClaudeCodeAdapter:
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        denied_tools = self.denied_tools()
+        if denied_tools:
+            command.extend(("--disallowedTools", ",".join(denied_tools)))
         if strict_mcp_config:
             command.insert(command.index("--permission-mode"), "--strict-mcp-config")
         if self.effort:
             command.extend(("--effort", self.effort))
         if self.max_budget_usd is not None:
             command.extend(("--max-budget-usd", str(self.max_budget_usd)))
+        return command
+
+    def denied_tools(self) -> tuple[str, ...]:
+        """Return the tools this adapter denies outright for this run."""
+
+        if self.allow_bash:
+            return ()
+        return SHELL_TOOLS
+
+    def start(self) -> None:
+        """Start the private MCP config and Claude process."""
+
+        if self._process is not None:
+            return
+        required_paths = [(self.claude, "claude"), (self.plugin_dir, "plugin directory")]
+        if self.mcp_config is None:
+            required_paths.extend(((self.desktop_supervisor, "desktop supervisor"), (self.desktop_python, "desktop Python")))
+        for path, label in required_paths:
+            if not path.exists():
+                raise ClaudeAdapterError(f"{label} does not exist: {path}")
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        if self.mcp_config is None:
+            self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
+            state_dir = Path(self._temp.name) / "desktop-state"
+            stdio = self._desktop_stdio_type(
+                [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
+                server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
+            )
+            self._stdio = stdio.start()
+            mcp_config = self._stdio.config_path
+            strict_mcp_config = True
+            mcp_allowed_tools = self._stdio.allowed_tools_csv
+        else:
+            mcp_config = self.mcp_config
+            strict_mcp_config = self.strict_mcp_config
+            mcp_allowed_tools = self.allowed_tools or ""
+        command = self.build_claude_command(
+            mcp_config=mcp_config,
+            strict_mcp_config=strict_mcp_config,
+            mcp_allowed_tools=mcp_allowed_tools,
+        )
         environment = dict(os.environ)
         if self.claude_config_dir is not None:
             environment["CLAUDE_CONFIG_DIR"] = str(self.claude_config_dir)
@@ -852,6 +898,7 @@ __all__ = [
     "ClaudeAdapterError",
     "ClaudeCodeAdapter",
     "DEFAULT_SYSTEM_PROMPT",
+    "SHELL_TOOLS",
     "build_parser",
     "main",
     "parse_claude_events",
