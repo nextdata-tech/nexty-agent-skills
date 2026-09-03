@@ -612,13 +612,34 @@ _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
-_SCENARIO_TIERS = frozenset({"smoke", "T0", "core"})
+_SCENARIO_TIERS = frozenset({"smoke", "T0", "core", "live"})
+# The tiers whose scenarios cannot be graded from a recording. A live-tier
+# scenario's pass criteria are what an agent *did* across turns, so replaying
+# a stored session grades the recording rather than the agent. Naming the set
+# here rather than testing ``tier == "live"`` at each call site keeps the two
+# CLIs from drifting apart on what "live" means.
+_LIVE_ONLY_TIERS = frozenset({"live"})
 # The legacy spelling maps onto the tier it is an alias for, so selection
 # treats the two as one tier rather than as two that never intersect.
 _TIER_ALIASES = {"T0": "smoke"}
 # Public alias: the CLIs offer these as argparse choices, so a bad --tier is
 # a usage error rather than a traceback out of select_tier.
 SCENARIO_TIERS = _SCENARIO_TIERS
+
+
+def requires_live_session(tier: str) -> bool:
+    """Return whether a tier can only be run against a live agent session.
+
+    ``core`` grades supplied evidence and ``smoke`` can be replayed, so both
+    are runnable without an authenticated session. ``live`` cannot: its
+    scenarios grade multi-turn agent behaviour, which a recording cannot
+    produce. Callers use this to refuse a replay-mode run rather than to
+    produce a clean-looking report over evidence no agent generated.
+    """
+
+    return _TIER_ALIASES.get(tier, tier) in _LIVE_ONLY_TIERS
+
+
 _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",
@@ -1059,6 +1080,7 @@ __all__ = [
     "ScenarioError",
     "load_scenario",
     "SCENARIO_TIERS",
+    "requires_live_session",
     "load_scenarios",
     "select_tier",
     "scenario_script_hash",

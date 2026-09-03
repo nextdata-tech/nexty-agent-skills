@@ -10,7 +10,14 @@ import yaml
 
 from dp_scenarios import followups
 from dp_scenarios.grading import GATE_PHASES
-from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios, select_tier
+from dp_scenarios.scenario import (
+    SCENARIO_TIERS,
+    ScenarioError,
+    load_scenario,
+    load_scenarios,
+    requires_live_session,
+    select_tier,
+)
 from dp_scenarios.synthgen import get_dataset
 
 
@@ -569,3 +576,25 @@ def test_select_tier_treats_the_legacy_t0_spelling_as_smoke(tmp_path: Path) -> N
     assert smoke_package.name in smoke_ids, "a T0 package was dropped from the smoke tier"
     # And the alias resolves in both directions.
     assert {scenario.id for scenario in select_tier(scenarios, "T0")} == smoke_ids
+
+
+def test_live_is_the_only_tier_that_cannot_be_replayed() -> None:
+    """Pin the live-only set against every declared tier, not against itself.
+
+    ``requires_live_session`` decides whether the deterministic CLI refuses a
+    replay run. Asserting only that ``"live"`` is live-only would let the
+    predicate widen to every tier -- which would refuse every existing replay
+    run -- without failing here.
+    """
+
+    live_only = {tier for tier in SCENARIO_TIERS if requires_live_session(tier)}
+    assert live_only == {"live"}
+    assert not requires_live_session("T0"), "the legacy smoke spelling is replayable"
+
+
+def test_no_shipped_package_declares_the_live_tier_yet() -> None:
+    # The tier exists before any package uses it, so this pins that fact
+    # rather than leaving a silently-empty tier to be discovered at run time.
+    assert "live" not in set(EXPECTED_TIERS.values())
+    with pytest.raises(ScenarioError, match="no scenario declares tier 'live'"):
+        select_tier(load_scenarios(ROOT / "scenarios"), "live")
