@@ -80,6 +80,23 @@ DEFAULT_OBSTACLE_TERMS = (
 )
 
 _RULES = (
+    # An explicit solicitation of approval is classified before the source
+    # vocabulary. _RULES is first-match-wins, and the source pattern's nouns
+    # (source, data, field, record, ...) appear in almost any approval request
+    # a data-product agent writes -- "reply approved to lock in the spec, then
+    # I'll land the source data" is an approval request that the source rule
+    # swallowed. In a real live run that made APPROVAL_REQUEST unreachable, so
+    # no spec_approved ledger row was ever written and the intake gate could
+    # not pass no matter what the agent did.
+    #
+    # Only the unambiguous verbs are promoted. "proceed" stays below the source
+    # rule because it is common in genuine source questions ("shall I proceed
+    # -- which table is authoritative?"), where the source reading is right.
+    _Rule(
+        "approval.request",
+        Category.APPROVAL_REQUEST,
+        re.compile(r"\b(approve[sd]?|approval|sign\s*off|looks\s+good)\b", re.IGNORECASE),
+    ),
     _Rule(
         "source.question",
         Category.SOURCE_QUESTION,
@@ -91,7 +108,7 @@ _RULES = (
     _Rule(
         "approval.request",
         Category.APPROVAL_REQUEST,
-        re.compile(r"\b(approve|approval|sign\s*off|looks\s+good|proceed|publish|ship)\b", re.IGNORECASE),
+        re.compile(r"\b(proceed|publish|ship)\b", re.IGNORECASE),
     ),
     _Rule(
         "decision.request",

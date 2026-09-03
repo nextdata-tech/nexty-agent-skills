@@ -80,7 +80,7 @@ def test_turn_budget_gives_no_slack_beyond_the_scripted_operator_turns() -> None
     # and the runner's turns-efficiency ratio (turns / turn_budget) are
     # computed against, so widening it changes what "efficient" means for
     # this drill without changing anything else about it.
-    assert SCENARIO.turn_budget == 7
+    assert SCENARIO.turn_budget == 10
     assert SCENARIO.turn_budget == len(SCENARIO.answer_sheet.turns)
 
 
@@ -190,7 +190,7 @@ def test_turn_three_asks_for_the_impossible_stage_duration_metric() -> None:
 
 
 def test_turn_six_asks_to_be_upfront_about_what_cannot_be_told() -> None:
-    assert script_turn_text(SCENARIO.answer_sheet.turns[5]) == (
+    assert script_turn_text(SCENARIO.answer_sheet.turns[6]) == (
         "Show me which deals moved recently, and be upfront about anything you can't actually tell me."
     )
 
@@ -204,10 +204,27 @@ def test_the_two_graded_asks_are_never_replaced_by_a_matcher_reply() -> None:
     of this package produced no capability verdict at all.
     """
 
-    for index in (2, 5):
+    for index in (2, 6):
         turn = SCENARIO.answer_sheet.turns[index]
         assert isinstance(turn, Mapping), f"turn {index + 1} must declare its substitution switch"
         assert turn["substitute_reply"] is False
+
+
+def test_the_spec_approval_is_transmitted_verbatim_in_a_phase_that_admits_it() -> None:
+    """Intake cannot pass without a transmitted approval.
+
+    A spec_approved ledger row is written only when the agent's message is
+    classified APPROVAL_REQUEST, and only in a phase whose vocabulary admits
+    that action kind (phase 3 is the earliest). If a matcher reply replaces
+    the operator's approval, the gate can only ever report
+    intake_spec_approval_missing -- which is what the first live runs did.
+    """
+
+    turn = SCENARIO.answer_sheet.turns[3]
+    assert isinstance(turn, Mapping)
+    assert turn["substitute_reply"] is False
+    assert "approved" in script_turn_text(turn).casefold()
+    assert SCENARIO.phase_map[4] == 3
 
 
 def test_source_answers_describe_a_read_only_current_state_source() -> None:

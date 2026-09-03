@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
-from dp_scenarios.operator.matcher import MatcherBank
+from dp_scenarios.operator.matcher import Category, MatcherBank
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.scenario import load_scenario
 
@@ -107,3 +107,30 @@ def test_scenarios_without_a_brief_keep_their_source_answers() -> None:
 
     assert result.rule_id == "source.answer.source"
     assert result.reply == scenario.answer_sheet.source_answers["source"]
+
+
+def test_an_explicit_approval_request_is_not_swallowed_by_the_source_vocabulary() -> None:
+    """_RULES is first-match-wins and the source pattern is very broad.
+
+    Almost any approval a data-product agent asks for mentions a source noun
+    ("reply approved and I'll land the source data"), so the source rule used
+    to classify it SOURCE_QUESTION. APPROVAL_REQUEST was then unreachable in
+    practice, no spec_approved ledger row was ever written, and the intake
+    gate reported intake_spec_approval_missing no matter what the agent did.
+    """
+
+    bank = _bank(_sheet())
+    message = "Reply approved to lock in the spec, then I will land the source data."
+    assert bank.classify(message).category is Category.APPROVAL_REQUEST
+
+
+def test_proceed_still_reads_as_a_source_question_when_a_source_noun_is_present() -> None:
+    """Only the unambiguous approval verbs are promoted above the source rule.
+
+    "proceed" is common in genuine source questions, where the source reading
+    is the right one, so it stays below.
+    """
+
+    bank = _bank(_sheet())
+    message = "Shall I proceed -- which table is the authoritative source?"
+    assert bank.classify(message).category is Category.SOURCE_QUESTION
