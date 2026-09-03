@@ -87,6 +87,25 @@ def _default_desktop_python() -> Path:
     return Path.home() / ".nxd" / "desktop-venv" / "bin" / "python"
 
 
+def resolve_desktop_python(selected: Path | None) -> Path:
+    """Return the interpreter the desktop supervisor should spawn.
+
+    Deliberately absolute-but-unresolved.  A virtualenv's ``bin/python`` is a
+    symlink to the base interpreter, so resolving it hands the supervisor the
+    base interpreter instead -- the same executable, but without the venv's
+    site-packages.  A live run on 2026-09-03 lost every build to exactly that:
+    the venv carried PyYAML 6.0.3, the resolved base did not, so
+    ``build_data_product`` failed for any closure and the build, query,
+    narrowing and capability gates all recorded not-examined.  The path must
+    stay the venv's own so ``sys.prefix`` lands inside it.
+    """
+
+    candidate = (selected or _default_desktop_python()).expanduser().absolute()
+    if not candidate.is_file() or not candidate.stat().st_mode & 0o111:
+        raise TierError(f"desktop Python is not executable: {candidate}")
+    return candidate
+
+
 def _select_scenarios(all_scenarios: Sequence[Scenario], selected: Sequence[str]) -> tuple[Scenario, ...]:
     if not selected:
         return tuple(all_scenarios)
@@ -210,9 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.epochs,
     )
     supervisor = resolve_supervisor(args.supervisor)
-    desktop_python = (args.desktop_python or _default_desktop_python()).expanduser().resolve()
-    if not desktop_python.is_file() or not desktop_python.stat().st_mode & 0o111:
-        raise TierError(f"desktop Python is not executable: {desktop_python}")
+    desktop_python = resolve_desktop_python(args.desktop_python)
     claude = _resolve_executable(args.claude, "claude")
     # Let Claude Code use its normal host-authenticated configuration unless
     # the caller explicitly selects another config directory.  Setting
