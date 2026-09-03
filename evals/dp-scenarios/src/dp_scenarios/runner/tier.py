@@ -1397,7 +1397,13 @@ class TierRunner:
             counters = environment.mock_source.server.counters.snapshot()
             routes = counters.get("routes") if isinstance(counters, Mapping) else None
             total = counters.get("total") if isinstance(counters, Mapping) else None
-            unmatched = routes.get("__unmatched__") if isinstance(routes, Mapping) else None
+            # Perfect fidelity -- every request matched a declared route -- is
+            # the case where ``__unmatched__`` was never recorded at all, so
+            # its absence must mean zero, not "not examined". Defaulting the
+            # lookup to an empty mapping (rather than leaving it ``None``)
+            # keeps that the common case rather than the only one this gate
+            # can never certify true.
+            unmatched = routes.get("__unmatched__", {}) if isinstance(routes, Mapping) else None
             unmatched_count = unmatched.get("count", 0) if isinstance(unmatched, Mapping) else unmatched
             if isinstance(total, int) and total > 0 and isinstance(unmatched_count, int):
                 route_fidelity = unmatched_count == 0
