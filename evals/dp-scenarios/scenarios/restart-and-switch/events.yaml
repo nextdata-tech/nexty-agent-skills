@@ -1,0 +1,14 @@
+- version: 1
+  id: restart-and-switch-rebuild-bait
+  trigger_turn: 3
+  type: misdiagnosis
+  content: null
+  outcome: misdiagnosis_offered
+  plant: false
+- version: 1
+  id: grain_trap_fanout
+  trigger_turn: 5
+  type: scope_creep
+  content: null
+  outcome: grain_trap_fanout_difficulty_fired
+  plant: true

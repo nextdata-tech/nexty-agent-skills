@@ -1,0 +1,48 @@
+version: 1
+id: restart-and-switch
+tier: core
+run_order: 5
+fixture:
+  dataset: grain_trap
+  seed: 29
+  variant: broker-restart-workflow-switch
+  plant: grain_trap_fanout
+coverage:
+  variant: broker-restart-workflow-switch
+  untested: This variant does not exercise a live supervisor build or a live agent session; the attempt-keyed bind fault, the diagnosis, and the post-restart workflow-switch call are graded from supplied evidence shaped like what a real broker restart and a real agent session would produce (the deterministic/replay path), not from an actual live supervisor process or a live Claude Desktop session.
+turn_budget: 8
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: wilson_lower_bound
+    gates: [build]
+    lower_bound: 0.90
+    confidence: 0.95
+persona: ../_personas/impatient.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+required_plants:
+  - grain_trap_fanout
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: restart_and_switch
+    true_classification: serving_down
+gold:
+  oracle: gold/restart_and_switch_oracle.json
+operator:
+  sentinel: null
+  obstacle_terms: []
