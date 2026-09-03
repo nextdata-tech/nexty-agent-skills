@@ -59,7 +59,8 @@ open_decision_markers: ["[DECISION NEEDED]"]
 obstacle_terms: []
 # Facts the operator actually knows, consulted only when a question the
 # answer sheet above does not cover still needs a real answer instead of a
-# fabricated or confidently irrelevant one. See AGENTS.md Track A.
+# fabricated or confidently irrelevant one. See GroundTruthFact in
+# src/dp_scenarios/operator/answer_sheet.py for the matching contract.
 ground_truth:
   value_column:
     terms: [value, column]

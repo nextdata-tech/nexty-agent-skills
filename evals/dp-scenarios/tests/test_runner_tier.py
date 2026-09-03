@@ -213,8 +213,16 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
     return scenario, recordings
 
 
-def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build a populated replay for the zero-row scenario, including follow-up evidence."""
+def populated_zero_row_recordings(
+    tmp_path: Path, *, opening_agent_message: str | None = None
+) -> tuple[object, list[ReplayRecording]]:
+    """Build a populated replay for the zero-row scenario, including follow-up evidence.
+
+    ``opening_agent_message`` overrides what the agent says on turn 1. It
+    exists so a caller can drive a question the scripted answer bank does not
+    cover through the *real* shipped answer sheet; the default preserves the
+    original transcript for every other caller.
+    """
 
     scenario = load_scenario(ROOT / "scenarios/zero-row-optional-output")
     generated = scenario.generate_fixture(tmp_path / "zero-row-fixture")
@@ -261,7 +269,7 @@ def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRe
             for path, value in artifacts.items()
         )
         responses = [
-            TurnResult(agent_message="How did January go?"),
+            TurnResult(agent_message=opening_agent_message or "How did January go?"),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
             TurnResult(agent_message="The build is ready."),
@@ -1305,3 +1313,43 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
     assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
     assert payload["turns"][1]["operator_matched_rule_id"] == "unmatched.source_question"
     assert payload["turns"][2]["operator_matched"] is True
+
+
+def test_a_shipped_brief_actually_fires_in_a_scenario_level_run(tmp_path: Path) -> None:
+    """The ground-truth brief is exercised through a real shipped scenario.
+
+    Unit tests build their own answer sheets, and the existing replays never
+    ask anything the scripted answer bank fails to cover -- so before this,
+    every committed brief could be deleted with the suite still green and the
+    capability was inert in the packages it shipped in. This drives the real
+    zero-row scenario through TierRunner with an agent turn asking exactly the
+    kind of column-semantics question the first live run deadlocked on, and
+    asserts the operator answered it from the brief.
+
+    It deliberately does not assert a clean verdict: the point is that the
+    brief fired and was recorded, not that this altered transcript still
+    satisfies every gate.
+    """
+
+    scenario, recordings = populated_zero_row_recordings(
+        tmp_path, opening_agent_message="What does the value column actually represent?"
+    )
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    run = result.scenario_runs[0]
+    rows = [json.loads(line) for line in run.ledger_bytes.splitlines()]
+    rule_ids = [row.get("matched_rule_id") for row in rows]
+    assert "ground_truth.value_column" in rule_ids, (
+        f"no ground-truth answer reached the ledger; rule ids were {rule_ids!r}"
+    )
+    assert any(
+        isinstance(row.get("claim"), Mapping)
+        and row["claim"].get("operator_answered_from_ground_truth") is True
+        for row in rows
+    )
