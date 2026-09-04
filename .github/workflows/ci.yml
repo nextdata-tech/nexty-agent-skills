@@ -40,12 +40,7 @@ jobs:
           for stem in nexty-desktop nexty-datamesh nexty-agent-skills; do
             pack="build/${stem}-v${version}.zip"
             test -f "$pack"
-            unzip -p "$pack" .claude-plugin/plugin.json | python3 -c '
-            import json, sys
-            plugin = json.load(sys.stdin)
-            assert "skills" not in plugin
-            assert "skills/" in "".join(__import__("subprocess").check_output(["unzip", "-Z1", sys.argv[1]], text=True))
-            ' "$pack"
+            unzip -p "$pack" .claude-plugin/plugin.json | python3 -c 'import json,sys; plugin=json.load(sys.stdin); assert "skills" not in plugin; assert "skills/" in "".join(__import__("subprocess").check_output(["unzip", "-Z1", sys.argv[1]], text=True))' "$pack"
             if unzip -Z1 "$pack" | grep -q '\.zip$'; then
               echo "::error::${stem} plugin ZIP must not contain nested ZIPs"
               exit 1
