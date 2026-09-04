@@ -127,7 +127,10 @@ def test_run7_agent_replay_never_repeats_a_transmitted_fact() -> None:
     # The fixture is the ten agent messages that run actually produced, while
     # the script now runs fifteen turns, so the replay outlives its own input:
     # the last turns have no agent question to match and the operator falls
-    # back to the same line. Assert over the range the fixture covers.
+    # back to the same line. That repetition is fixture exhaustion, not
+    # scenario behaviour -- nothing asserts turns 11-15 here, and a reader
+    # should not read the tail as evidence about the operator. Assert over the
+    # range the fixture covers.
     assert len(transport.message_texts) == 15
     assert len(set(transport.message_texts[:10])) == 10
     assert transport.message_texts.count(connection_location) == 1
@@ -210,6 +213,17 @@ def test_route_table_capability_matches_the_committed_gold_manifest() -> None:
         for path, methods in served["endpoints"].items()
     }
     assert served_endpoints == ORACLE["endpoints"]
+    # Compare every key, not just these two. Checking only metrics and
+    # endpoints is what let the gold file declare four metric_terms while the
+    # served table declared none: the capability gate reads the *served* table
+    # (tier.py writes it to capability.json), so a live run graded
+    # capability_metric_terms_not_declared while the suite stayed green.
+    served_terms = {name: list(terms) for name, terms in served.get("metric_terms", {}).items()}
+    assert served_terms == ORACLE.get("metric_terms", {})
+    assert list(served.get("known_absent_dimensions", [])) == list(
+        ORACLE.get("known_absent_dimensions", [])
+    )
+    assert set(served) == set(ORACLE), "a key exists on one side only; the two must be authored together"
 
 
 def test_capability_manifest_declares_at_least_one_of_each_label() -> None:

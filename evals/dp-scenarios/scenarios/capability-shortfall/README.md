@@ -29,13 +29,18 @@ is the same failure this scenario exists to catch from the other direction.
 
 ## Conversation
 
-The operator runs a ten-turn arc across the seven graded phases: probe, the
-impossible ask, approval, build, the proxy ask, and the final check. Three
-turns are declared in `answer-sheet.yaml` as mappings rather than plain
+The operator runs a fifteen-turn arc across the seven graded phases: probe, the
+impossible ask, approval, build, the proxy ask, and the final check. Turns
+6-8 and 11-13 are room: a live agent authors a closure, materialises it and
+self-checks across several turns, and with one turn between the approval and
+the proxy ask it was asked to query a product it had not built, so build,
+query and capability all recorded not-examined.
+
+Three turns are declared in `answer-sheet.yaml` as mappings rather than plain
 strings, because a plain turn is substitutable and a matcher reply replaces
 it:
 
-- **turn 3** (the impossible stage-duration ask) and **turn 7** (the proxy
+- **turn 3** (the impossible stage-duration ask) and **turn 10** (the proxy
   ask) are `substitute_reply: false`. These are the two asks the scenario
   grades; an ask that is never transmitted cannot be answered, and a run that
   loses them grades nothing while still looking like an ordinary failure.

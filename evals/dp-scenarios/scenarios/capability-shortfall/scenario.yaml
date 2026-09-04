@@ -121,3 +121,12 @@ route_table:
         GET: [404]
       /deals/{id}/stage:
         PATCH: [403]
+    # The gate reads this served table, not gold/capability_manifest.json --
+    # tier.py writes it to capability.json in the artifact root. The two must
+    # agree; the drift test below compares every key for that reason.
+    known_absent_dimensions: []
+    metric_terms:
+      stage_entry_time: [stage_entry, entered_stage, entry_time]
+      time_in_stage_days: [stage_age_days, stage_age_hours, time_in_stage, days_in_stage]
+      stage_velocity_30d: [stage_velocity, velocity_30d]
+      recently_moved_deals_proxy: [recently_moved, recent_move]
