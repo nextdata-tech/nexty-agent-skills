@@ -213,3 +213,40 @@ def test_encoding_requires_a_file_and_ports_must_be_distinct() -> None:
                 "routes": [{"path": "/rows", "response": {"json": []}}],
             }
         )
+
+
+def test_metric_terms_survive_the_round_trip_into_the_artifact_snapshot() -> None:
+    """The gate reads `capability.json` from the artifact root, not the gold file.
+
+    `as_dict` is what `tier.py` writes there. It emitted metrics, endpoints and
+    known_absent_dimensions only, so a manifest declaring `metric_terms` parsed
+    fine and then lost them on the way to the one consumer that needs them: a
+    live driven run graded `capability_metric_terms_not_declared` while the gold
+    manifest declared four of them.
+    """
+
+    manifest = CapabilityManifest.from_mapping(
+        {
+            "metrics": {"time_in_stage_days": "impossible", "deal_count": "supported"},
+            "endpoints": {"/deals": {"GET": [200]}},
+            "metric_terms": {"time_in_stage_days": ["stage_age_days", "time_in_stage"]},
+        }
+    )
+
+    assert manifest.metric_terms == {"time_in_stage_days": ("stage_age_days", "time_in_stage")}
+    assert manifest.as_dict()["metric_terms"] == {
+        "time_in_stage_days": ["stage_age_days", "time_in_stage"]
+    }
+
+
+def test_metric_terms_must_name_a_declared_metric() -> None:
+    """A typo in a term key would otherwise silently grade nothing."""
+
+    with pytest.raises(CapabilityError, match="undeclared metric"):
+        CapabilityManifest.from_mapping(
+            {
+                "metrics": {"deal_count": "supported"},
+                "endpoints": {},
+                "metric_terms": {"tyme_in_stage_days": ["stage_age_days"]},
+            }
+        )
