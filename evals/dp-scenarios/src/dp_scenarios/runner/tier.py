@@ -809,12 +809,29 @@ def _capability_gate_result(
     if "capability_metrics_not_examined" not in from_spec.codes:
         # A spec with metric labels exists, so grade it the strict way.
         return from_spec
-    return gate_capability_from_decisions(
-        _decisions_artifact(artifact_root),
-        capability,
-        _implementation_text(artifact_root),
-        required=required,
-    )
+    # Grade each closure on its own evidence. Concatenating them let a
+    # confirmed ruling in one job govern a column shipped by another, and a
+    # stale abandoned job's models.py make a column count as implemented --
+    # runs have left more than one job directory, because the agent names the
+    # job itself. The worst verdict across closures wins, so an ungoverned
+    # shortfall in any of them is still a failure.
+    closures = _closure_dirs(artifact_root)
+    if not closures:
+        return gate_capability_from_decisions(None, capability, "", required=required)
+    results = [
+        gate_capability_from_decisions(
+            _closure_decisions([closure]),
+            capability,
+            _closure_implementation_text([closure]),
+            required=required,
+        )
+        for closure in closures
+    ]
+    failed = [result for result in results if result.examined and not result.passed]
+    if failed:
+        return failed[0]
+    examined = [result for result in results if result.examined]
+    return examined[0] if examined else results[0]
 
 
 def _closure_dirs(artifact_root: Path) -> tuple[Path, ...]:
@@ -845,9 +862,13 @@ def _closure_dirs(artifact_root: Path) -> tuple[Path, ...]:
 def _decisions_artifact(artifact_root: Path) -> tuple[Mapping[str, str], ...] | None:
     """Return the governed decision rows the build materialised, if any."""
 
+    return _closure_decisions(_closure_dirs(artifact_root))
+
+
+def _closure_decisions(closures: Sequence[Path]) -> tuple[Mapping[str, str], ...] | None:
     rows: list[Mapping[str, str]] = []
     found = False
-    for closure in _closure_dirs(artifact_root):
+    for closure in closures:
         table = closure / "data" / "nxd_decisions" / "nxd_decisions.csv"
         if not table.is_file():
             continue
@@ -865,9 +886,27 @@ def _implementation_text(artifact_root: Path) -> str:
     ``nxd_decisions`` is copied into the evidence bundle.
     """
 
+    return _closure_implementation_text(_closure_dirs(artifact_root))
+
+
+#: Files in a closure that name the columns the build actually ships.
+#: ``transform/main.py`` is where derived columns are computed, so omitting it
+#: hid exactly the columns this gate asks about. ``dp-spec.approved.md`` was
+#: retired in v0.38.0 in favour of ``dp-blueprint.approved.md``; both are listed
+#: so older retained bundles still read.
+_IMPLEMENTATION_FILES: tuple[str, ...] = (
+    "models.py",
+    "spec.py",
+    "transform/main.py",
+    "dp-blueprint.approved.md",
+    "dp-spec.approved.md",
+)
+
+
+def _closure_implementation_text(closures: Sequence[Path]) -> str:
     chunks: list[str] = []
-    for closure in _closure_dirs(artifact_root):
-        for name in ("models.py", "spec.py", "dp-spec.approved.md"):
+    for closure in closures:
+        for name in _IMPLEMENTATION_FILES:
             candidate = closure / name
             if candidate.is_file():
                 try:

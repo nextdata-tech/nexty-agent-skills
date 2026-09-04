@@ -656,16 +656,66 @@ def test_capability_fails_a_shortfall_the_build_implements_but_never_governs() -
     assert "capability_shortfall_not_governed" in result.codes
 
 
-def test_capability_requires_the_governing_decision_to_be_confirmed() -> None:
-    """A proposed-but-unconfirmed ruling is not governance."""
+def test_capability_accepts_the_status_an_agent_authored_ruling_actually_lands_at() -> None:
+    """`proposed` is the pack's documented default, not a failure to govern.
+
+    `nxd-generate-data-product/reference/llm-judgments.md` says an agent-authored
+    ruling lands `status = proposed` + `provenance = agent_authored` and becomes
+    `confirmed` only once a user reviews it. Requiring `confirmed` graded the
+    user's review rather than the agent's governance.
+    """
 
     implementation = "stage_age_days = ...\n"
     proposed = [{**row, "status": "proposed"} for row in _governed_rows()]
 
-    result = gate_capability_from_decisions(proposed, _shortfall_capability(), implementation)
+    assert gate_capability_from_decisions(proposed, _shortfall_capability(), implementation).passed is True
+
+    # A deferral records no model, so it governs nothing.
+    blocked = [{**row, "status": "blocked"} for row in _governed_rows()]
+    blocked_result = gate_capability_from_decisions(blocked, _shortfall_capability(), implementation)
+    assert blocked_result.passed is False
+    assert "capability_shortfall_not_governed" in blocked_result.codes
+
+
+def test_capability_binds_on_applies_to_not_on_prose_that_merely_mentions_a_term() -> None:
+    """A ruling that names a metric in passing does not govern it.
+
+    Matching `ruling` and `detail` meant "pipeline velocity is out of scope"
+    marked stage_velocity_30d governed, turning a real ungoverned shortfall into
+    a pass.
+    """
+
+    rows = [
+        {
+            "decision_id": "scope_note",
+            "status": "confirmed",
+            "provenance": "user_confirmed",
+            # Contains the exact term, so this test fails if prose is bound on.
+            "ruling": "stage_velocity_30d is out of scope for this release.",
+            "applies_to": "deals_with_stage_age",
+            "detail": "",
+        }
+    ]
+
+    result = gate_capability_from_decisions(rows, _shortfall_capability(), "stage_velocity_30d = ...\n")
 
     assert result.passed is False
     assert "capability_shortfall_not_governed" in result.codes
+
+
+def test_capability_is_not_examined_when_no_source_was_available_to_read() -> None:
+    """Empty implementation text is an absence of evidence, not a pass.
+
+    Falling through made every metric "not implemented", produced no findings,
+    and returned a *passing, examined* gate -- a clean capability pass for a
+    build the harness never looked at.
+    """
+
+    result = gate_capability_from_decisions(_governed_rows(), _shortfall_capability(), "")
+
+    assert result.passed is False
+    assert result.examined is False
+    assert "capability_implementation_not_examined" in result.codes
 
 
 def test_capability_does_not_demand_a_ruling_for_a_metric_the_build_never_implements() -> None:
@@ -677,8 +727,19 @@ def test_capability_does_not_demand_a_ruling_for_a_metric_the_build_never_implem
     assert result.passed is True
 
 
-def test_capability_is_not_examined_when_the_build_emitted_no_decisions() -> None:
-    result = gate_capability_from_decisions(None, _shortfall_capability(), "stage_age_days = ...")
+def test_capability_fails_rather_than_abstains_when_a_shortfall_ships_with_no_decisions() -> None:
+    """Rows absent *and* the column present is the definitively ungoverned case.
 
-    assert result.examined is False
-    assert "capability_decisions_not_examined" in result.codes
+    Reporting not-examined there let the clearest failure the gate exists to
+    catch read as an absence of evidence.
+    """
+
+    shipped = gate_capability_from_decisions(None, _shortfall_capability(), "stage_age_days = ...")
+    assert shipped.examined is True
+    assert shipped.passed is False
+    assert "capability_shortfall_not_governed" in shipped.codes
+
+    # No rulings and nothing implemented: nothing needed governing.
+    quiet = gate_capability_from_decisions(None, _shortfall_capability(), "deal_count = 1\n")
+    assert quiet.examined is False
+    assert "capability_decisions_not_examined" in quiet.codes
