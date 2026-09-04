@@ -206,11 +206,11 @@ Close your laptop, come back in three weeks, new session:
 
 > Open my orders product and show me last week's revenue.
 
-Nexty reconnects in seconds. It does not rebuild. Your terms, rules, and decisions are all still there.
+Nexty finds the data product and reconnects in seconds. Your terms, rules, and decisions are all still there.
 
 ### Sharing
 
-After each build Nexty writes a **release page**: one self-contained HTML file describing the product, its numbers, its definitions, and what it promises. Works offline.
+After each build Nexty writes a **blueprint page**: one self-contained markdown file describing the data product, its logic, its definitions, and what it promises.
 
 > Give me the blueprint for this data product.
 
@@ -222,7 +222,7 @@ It will. Revenue gets redefined, a region splits, a new product line appears. Dr
 
 > Marketplace revenue needs to be reported separately from direct now. Update the product.
 
-Nexty amends the plan, shows you what changed, and rebuilds. You are not starting over.
+Nexty amends the blueprint, shows you what changed, and rebuilds. You are not starting over.
 
 ---
 
