@@ -35,6 +35,14 @@ inputs:
     description: 'When set, the manifest must carry this semantic_tree_sha.'
     required: false
     default: ''
+  expect_rpc_tree_sha:
+    description: 'When set, the manifest must carry this rpc_tree_sha.'
+    required: false
+    default: ''
+  expect_source_sha:
+    description: 'When set, the manifest source_sha must equal this NXD revision.'
+    required: false
+    default: ''
   require_mcp_provenance:
     description: >-
       When 'true', refuse a manifest with no semantic_tree_sha / rpc_tree_sha /
@@ -168,6 +176,8 @@ runs:
         ARTIFACT_RUN_ID: ${{ steps.resolve.outputs.run_id }}
         EXPECT_FIELD_MAPPER_TREE_SHA: ${{ inputs.expect_field_mapper_tree_sha }}
         EXPECT_SEMANTIC_TREE_SHA: ${{ inputs.expect_semantic_tree_sha }}
+        EXPECT_RPC_TREE_SHA: ${{ inputs.expect_rpc_tree_sha }}
+        EXPECT_SOURCE_SHA: ${{ inputs.expect_source_sha }}
         REQUIRE_MCP_PROVENANCE: ${{ inputs.require_mcp_provenance }}
       run: |
         set -euo pipefail
@@ -194,6 +204,14 @@ runs:
         if [ -n "$EXPECT_SEMANTIC_TREE_SHA" ]; then
           jq -e --arg expected "$EXPECT_SEMANTIC_TREE_SHA" \
             '.semantic_tree_sha == $expected' "$manifest" >/dev/null
+        fi
+        if [ -n "$EXPECT_RPC_TREE_SHA" ]; then
+          jq -e --arg expected "$EXPECT_RPC_TREE_SHA" \
+            '.rpc_tree_sha == $expected' "$manifest" >/dev/null
+        fi
+        if [ -n "$EXPECT_SOURCE_SHA" ]; then
+          jq -e --arg expected "$EXPECT_SOURCE_SHA" \
+            '.source_sha == $expected' "$manifest" >/dev/null
         fi
         if [ "$REQUIRE_MCP_PROVENANCE" = "true" ]; then
           # Fail closed. An artifact that predates the MCP provenance fields is

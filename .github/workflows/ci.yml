@@ -156,10 +156,12 @@ jobs:
           echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
       # Resolve / download / verify / install now live in a shared composite
       # action so the semantic-contract job and the nightly canary consume NXD
-      # artifacts through exactly the same code. The behaviour and the failure
-      # messages are unchanged: the token check that used to be the trailing
-      # step is the action's first step, so an absent secret still fails the job
-      # with the same sentence instead of skipping.
+      # artifacts through exactly the same code. The resolver deliberately
+      # considers only completed successful main runs; that makes the lookup
+      # deterministic and excludes artifacts from failed or in-progress runs.
+      # The token check that used to be the trailing step is the action's first
+      # step, so an absent secret still fails the job with the same sentence
+      # instead of skipping.
       - name: Consume the published NXD artifact
         id: nxd-artifact
         uses: ./.github/actions/nxd-artifact
@@ -223,6 +225,8 @@ jobs:
           semantic_tree_sha="$(git rev-parse HEAD:components/nxd_py/data_product/nxd/experimental/semantic)"
           echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
           echo "semantic_tree_sha=$semantic_tree_sha" >> "$GITHUB_OUTPUT"
+          rpc_tree_sha="$(git rev-parse HEAD:components/nxd_py/drivers/nxd/drivers/rpc)"
+          echo "rpc_tree_sha=$rpc_tree_sha" >> "$GITHUB_OUTPUT"
       - name: Consume the published NXD artifact
         id: nxd-artifact
         uses: ./.github/actions/nxd-artifact
@@ -233,6 +237,8 @@ jobs:
           selector_label: semantic tree ${{ steps.nxd-source.outputs.semantic_tree_sha }}
           expect_field_mapper_tree_sha: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
           expect_semantic_tree_sha: ${{ steps.nxd-source.outputs.semantic_tree_sha }}
+          expect_rpc_tree_sha: ${{ steps.nxd-source.outputs.rpc_tree_sha }}
+          expect_source_sha: ${{ env.NXD_PINNED_SHA }}
           require_mcp_provenance: 'true'
           install_project_dir: evals/mcp
       - name: Extract the eval MCP surface

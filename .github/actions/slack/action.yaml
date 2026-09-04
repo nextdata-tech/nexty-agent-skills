@@ -21,7 +21,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: rtCamp/action-slack-notify@v2
+    - uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2
       env:
         SLACK_WEBHOOK: ${{ inputs.slack_webhook }}
         # The " in *<label>*" clause is built inside the expression rather than

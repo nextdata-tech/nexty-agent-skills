@@ -36,11 +36,6 @@
       "tool": "describe_model",
       "parameter": "name",
       "reason": "Production's RPC-to-pydantic conversion leaves an undescribed nullable field out of the JSON Schema's required set, so name reads as optional over the wire even though describe_model cannot answer without it. The eval server types it as a plain str, hence required. The eval side is the stricter of the two and is the behaviour scenarios should grade; this entry records that the laxer production schema is known and deliberate."
-    },
-    {
-      "tool": "run_semantic_query",
-      "parameter": "measures",
-      "reason": "Same conversion detail as describe_model.name: measures carries a description, and the converter marks a described nullable field optional. Production's own tool description states measures is REQUIRED, and the compiler refuses a selection without it, so the eval server's required-by-signature form matches the real contract more closely than the generated schema does."
     }
   ]
 }

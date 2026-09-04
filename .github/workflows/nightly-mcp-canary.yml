@@ -22,11 +22,6 @@ on:
     # 05:20 UTC — after NXD's own main pipeline has had the night to publish.
     - cron: '20 5 * * *'
   workflow_dispatch:
-    inputs:
-      debug_enabled:
-        description: 'Keep the server log verbose'
-        type: boolean
-        default: false
 
 permissions:
   contents: read

@@ -73,7 +73,9 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for_listener(port: int, process: subprocess.Popen[bytes], deadline: float) -> None:
+def _wait_for_listener(
+    port: int, process: subprocess.Popen[bytes], deadline: float
+) -> None:
     """Block until the server accepts a connection, or fail closed.
 
     A server that exits during startup is reported as such rather than as a
@@ -91,7 +93,9 @@ def _wait_for_listener(port: int, process: subprocess.Popen[bytes], deadline: fl
                 return
         except OSError:
             time.sleep(0.5)
-    raise CanaryFailure(f"the semantic MCP server did not accept connections on port {port} within the startup budget")
+    raise CanaryFailure(
+        f"the semantic MCP server did not accept connections on port {port} within the startup budget"
+    )
 
 
 async def _drive(url: str) -> dict[str, Any]:
@@ -105,13 +109,19 @@ async def _drive(url: str) -> dict[str, Any]:
             listed = await session.list_tools()
             tools = list(listed.tools)
 
-            refusal = await _call(session, "run_semantic_query", {"measures": ["__nxd_canary_unknown_measure__"]})
+            refusal = await _call(
+                session,
+                "run_semantic_query",
+                {"measures": ["__nxd_canary_unknown_measure__"]},
+            )
 
             models = await _call(session, "list_models", {})
             model_name = _first_model(models)
             described = await _call(session, "describe_model", {"name": model_name})
             metric_name = _first_metric(described, model_name)
-            compiled = await _call(session, "run_semantic_query", {"measures": [metric_name]})
+            compiled = await _call(
+                session, "run_semantic_query", {"measures": [metric_name]}
+            )
 
     return {
         "tools": tools,
@@ -132,29 +142,39 @@ async def _call(session: Any, name: str, arguments: dict[str, Any]) -> Any:
     """
     result = await session.call_tool(name, arguments)
     if getattr(result, "isError", False):
-        raise CanaryFailure(f"the {name!r} tool call errored at the protocol level: {result}")
+        raise CanaryFailure(
+            f"the {name!r} tool call errored at the protocol level: {result}"
+        )
 
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict) and "result" in structured:
         return structured["result"]
 
-    texts = [block.text for block in result.content if getattr(block, "type", None) == "text"]
+    texts = [
+        block.text for block in result.content if getattr(block, "type", None) == "text"
+    ]
     if not texts:
         raise CanaryFailure(f"the {name!r} tool call returned no text content")
     try:
         decoded = [json.loads(text) for text in texts]
     except json.JSONDecodeError as exc:
-        raise CanaryFailure(f"the {name!r} tool call returned non-JSON text: {texts[0][:200]}") from exc
+        raise CanaryFailure(
+            f"the {name!r} tool call returned non-JSON text: {texts[0][:200]}"
+        ) from exc
     return decoded[0] if len(decoded) == 1 else decoded
 
 
 def _first_model(models: Any) -> str:
     if not isinstance(models, list) or not models:
-        raise CanaryFailure("list_models returned no models; the canary cannot pick a valid selection")
+        raise CanaryFailure(
+            "list_models returned no models; the canary cannot pick a valid selection"
+        )
     entry = models[0]
     name = entry.get("name") if isinstance(entry, dict) else None
     if not isinstance(name, str) or not name:
-        raise CanaryFailure(f"the first list_models entry has no usable name: {entry!r}")
+        raise CanaryFailure(
+            f"the first list_models entry has no usable name: {entry!r}"
+        )
     return name
 
 
@@ -164,7 +184,9 @@ def _first_metric(described: Any, model_name: str) -> str:
         raise CanaryFailure(f"describe_model({model_name!r}) returned no metrics")
     name = metrics[0].get("name") if isinstance(metrics[0], dict) else None
     if not isinstance(name, str) or not name:
-        raise CanaryFailure(f"the first metric of {model_name!r} has no usable name: {metrics[0]!r}")
+        raise CanaryFailure(
+            f"the first metric of {model_name!r} has no usable name: {metrics[0]!r}"
+        )
     return name
 
 
@@ -181,13 +203,17 @@ def _check_behaviour(observed: dict[str, Any]) -> list[str]:
 
     compiled = observed["compiled"]
     sql = compiled.get("compiled_sql") if isinstance(compiled, dict) else None
-    if not isinstance(sql, str) or not sql.strip():
+    if isinstance(compiled, dict) and str(compiled.get("error", "")).startswith(
+        "compile refused"
+    ):
+        failures.append(
+            f"the genuine compiler refused a selection taken from describe_model: {compiled['error']}"
+        )
+    elif not isinstance(sql, str) or not sql.strip():
         failures.append(
             f"run_semantic_query on the valid selection {observed['metric']!r} produced no compiled SQL; "
             f"got {compiled!r}. The genuine compiler did not run."
         )
-    elif isinstance(compiled, dict) and str(compiled.get("error", "")).startswith("compile refused"):
-        failures.append(f"the genuine compiler refused a selection taken from describe_model: {compiled['error']}")
 
     return failures
 
@@ -234,7 +260,11 @@ def run(
     _emit_provenance(manifest_path)
 
     exceptions = load_exceptions()
-    contract = load_contract_document(contract_path) if contract_path else load_installed_contract()
+    contract = (
+        load_contract_document(contract_path)
+        if contract_path
+        else load_installed_contract()
+    )
 
     port = _free_port()
     http_path = f"/{dp}/rpcs/{rpc_port}/mcp"
@@ -253,7 +283,9 @@ def run(
         rpc_port,
     ]
     print(f"canary: starting {' '.join(command)}", flush=True)
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
     try:
         _wait_for_listener(port, process, time.monotonic() + STARTUP_TIMEOUT_SECONDS)
         observed = asyncio.run(_drive(f"http://127.0.0.1:{port}{http_path}"))
@@ -302,7 +334,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="production contract path; defaults to the installed nxd-data_product's",
     )
-    parser.add_argument("--manifest", type=Path, default=None, help="the NXD artifact manifest, for the run summary")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="the NXD artifact manifest, for the run summary",
+    )
     parser.add_argument("--dp", default=DEFAULT_DP)
     parser.add_argument("--rpc-port", default=DEFAULT_RPC_PORT)
     args = parser.parse_args(argv)
@@ -329,7 +366,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
             print(f"canary: FAIL — {message}", file=sys.stderr)
         return 1
     except OSError as exc:
-        print(f"canary: FAIL — could not reach the semantic MCP server: {exc}", file=sys.stderr)
+        print(
+            f"canary: FAIL — could not reach the semantic MCP server: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
 

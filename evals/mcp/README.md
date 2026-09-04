@@ -147,24 +147,23 @@ The descriptions are pinned on the producer's side instead, where the strings
 live: NXD's contract test asserts the published segments against the
 descriptions its factory and its extracted entrypoints actually register.
 
-Two choices worth knowing about, both recorded in `contract_exceptions.json`:
-`describe_model.name` and `run_semantic_query.measures` are REQUIRED here and
-optional in production's generated JSON Schema. That is an artefact of NXD's
-RPC-to-pydantic conversion marking a described nullable field optional; the tool
-descriptions and the compiler both treat them as required, so the eval side is
-the stricter and more faithful of the two. The eval carries the same structural
-`dimension`/`op`/`value` filter shape; semantic validation of those values remains
-the compiler behaviour this stand-in exercises.
+One choice worth knowing about, recorded in `contract_exceptions.json`:
+`describe_model.name` is REQUIRED here and optional in production's generated
+JSON Schema. The eval server is the stricter side because `describe_model`
+cannot answer without a name. `run_semantic_query.measures` is now required in
+the production wire model as well, so it has no exception. The eval carries the
+same structural `dimension`/`op`/`value` filter shape; semantic validation of
+those values remains the compiler behaviour this stand-in exercises.
 
 ### Working on it
 
 ```bash
 # checker unit tests (stdlib only, no NXD wheels needed)
-uv run --locked --project evals/mcp pytest -q
+uv run --locked --directory evals/mcp pytest -q
 
 # extract this server's surface and check it against a contract on disk
-uv run --locked --project evals/mcp python evals/mcp/contract_surface.py --out /tmp/surface.json
-uv run --locked --project evals/mcp python evals/mcp/contract_check.py \
+uv run --locked --directory evals/mcp python contract_surface.py --out /tmp/surface.json
+uv run --locked --directory evals/mcp python contract_check.py \
   --surface /tmp/surface.json --contract <nxd>/components/nxd_py/data_product/nxd/experimental/semantic/mcp_contract.json
 ```
 
