@@ -70,7 +70,11 @@ those two phases rather than an accident of how they were added.
   Desktop human-authorization check: the current supervisor must independently
   admit the mapper build before it can create a run.
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
-  supervisor's execution minus the kernel.
+  supervisor's execution minus the kernel. When the transform declares
+  `transform_state`, the helper invokes it a second time against the same
+  scratch database after a strict JSON state fold, and requires unchanged table
+  materialization and row counts. The first run's row counts remain the only
+  Phase B count evidence; the second run is a state-boundary verification.
 - **Phase C — closure-record gate** (Step 6a). A closure can be structurally
   valid and still be an insufficient handoff, and this is the phase that catches
   it. What changed with the snapshot design: sufficiency is now a

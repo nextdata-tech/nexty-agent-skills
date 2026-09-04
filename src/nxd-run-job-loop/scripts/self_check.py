@@ -1,5 +1,5 @@
 # self_check.py
-import ast, hashlib, json, os, re, stat, sys, tempfile, time, traceback, types
+import ast, hashlib, inspect, json, os, re, stat, sys, tempfile, time, traceback, types
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,7 +48,9 @@ _codes("info", "agent", "struct.unverified")
 _codes("error", "agent",
        "runtime.import_failed", "runtime.transform_raised",
        "runtime.assert_failed", "runtime.base_models_mismatch",
-       "runtime.transform_incomplete", "runtime.model_table_missing")
+       "runtime.transform_incomplete", "runtime.model_table_missing",
+       "runtime.state_unserializable", "runtime.state_not_persisted",
+       "runtime.state_flat_write", "runtime.rerun_row_count_changed")
 _codes("info", "agent", "runtime.row_count", "runtime.dry_run_not_runnable")
 _codes("error", "agent",
        "closure.spec_snapshot_missing", "closure.lock_missing",
@@ -1751,6 +1753,77 @@ else:
 class DuckDbOutput:
     path: str; schema: str; model_tables: dict; models: dict = field(default_factory=dict)
 
+GENERIC_STATE_KEY = "__nxd_generic__"
+
+
+class FakeTransformState(dict):
+    """A small offline model of the current MultiModelTransformState handle.
+
+    The self-check runs outside the kernel, so it cannot use the real provider.
+    Keep the important runtime boundaries here: a single-model handle is
+    pre-bound, multi-model flat writes remain readable for this invocation but
+    are not captured, ``for_model`` validates declared names, and ``generic``
+    is created lazily under the reserved wire key.
+    """
+
+    def __init__(self, declared, prior=None):
+        prior = json.loads(json.dumps(prior or {}, allow_nan=False))
+        self._declared = list(declared)
+        self._bags = {m: dict(prior.get(m, {})) for m in self._declared}
+        self._generic = None
+        if GENERIC_STATE_KEY in prior:
+            self._generic = dict(prior[GENERIC_STATE_KEY])
+        self._bound = self._declared[0] if len(self._declared) == 1 else None
+        if self._bound is not None:
+            dict.__init__(self, self._bags[self._bound])
+            self._bags[self._bound] = self
+        else:
+            dict.__init__(self)
+        self.dropped_flat_write = False
+
+    def for_model(self, name):
+        if name not in self._bags:
+            raise KeyError(f"unknown model {name!r}; declared: {sorted(self._bags)}")
+        if name == self._bound:
+            return self
+        return self._bags[name]
+
+    def generic(self):
+        if self._generic is None:
+            self._generic = {}
+        return self._generic
+
+    def models(self):
+        return list(self._declared)
+
+    def _note_flat_write(self):
+        if self._bound is None:
+            self.dropped_flat_write = True
+
+    def __setitem__(self, key, value):
+        # Match the runtime's dict-like flat handle: the value is visible during
+        # this call, but no declared model captures it for folding.
+        self._note_flat_write()
+        dict.__setitem__(self, key, value)
+
+    def update(self, *args, **kwargs):
+        values = dict(*args, **kwargs)
+        if values:
+            self._note_flat_write()
+        dict.update(self, values)
+
+    def setdefault(self, key, default=None):
+        self._note_flat_write()
+        return dict.setdefault(self, key, default)
+
+    def persist(self):
+        snapshot = {m: dict(self._bags[m]) for m in self._declared}
+        if self._generic is not None:
+            snapshot[GENERIC_STATE_KEY] = dict(self._generic)
+        # The kernel's wire boundary is strict JSON; NaN/Infinity are not valid
+        # persisted state even though Python's default encoder accepts them.
+        return json.loads(json.dumps(snapshot, allow_nan=False))
+
 berrors, btracebacks = [], []
 def berr(code, msg, at="", ev=None, tb=""):
     berrors.append(msg)
@@ -1834,6 +1907,13 @@ try:
 except Exception as exc:
     berr("runtime.import_failed",
          f"transform/main.py: import failed — {type(exc).__name__}: {exc}",
+         "transform/main.py", tb=traceback.format_exc())
+    fail_b()
+try:
+    uses_transform_state = "transform_state" in inspect.signature(ingest).parameters
+except (TypeError, ValueError) as exc:
+    berr("runtime.transform_raised",
+         f"transform/main.py: could not inspect ingest signature — {exc}",
          "transform/main.py", tb=traceback.format_exc())
     fail_b()
 
@@ -2002,46 +2082,59 @@ out = DuckDbOutput(path=str(run / "data.duckdb"), schema="main",
 # losing them silently to an expected KeyError is how a missing contract wiring
 # or a hardcoded policy value reaches a build.
 dry_run_runnable = True
-try:
-    dry_run_secrets = (
-        {"csv_source": str(Path("data").resolve())}
-        if Path("data").is_dir() else {}
-    )
-    ingest(duckdb=out, secrets=dry_run_secrets)
-except KeyError as exc:
-    if not dry_run_waived(exc, network_declared):
-        berr("runtime.transform_raised",
-             f"transform/main.py: KeyError: {exc}",
+dry_run_secrets = (
+    {"csv_source": str(Path("data").resolve())}
+    if Path("data").is_dir() else {}
+)
+
+
+def run_transform(state=None):
+    """Execute one transform invocation with the same argument boundary."""
+    global dry_run_runnable
+    state_kwargs = {}
+    if state is not None:
+        state_kwargs["transform_state"] = state
+    try:
+        ingest(duckdb=out, secrets=dry_run_secrets, **state_kwargs)
+    except KeyError as exc:
+        if not dry_run_waived(exc, network_declared):
+            berr("runtime.transform_raised",
+                 f"transform/main.py: KeyError: {exc}",
+                 "transform/main.py", tb=traceback.format_exc())
+        else:
+            dry_run_runnable = False
+            diag("s2_transform", "runtime.dry_run_not_runnable",
+                 f"the dry run could not execute: this closure declares "
+                 f"{sorted(declared_sources) or ['a network source']} and reads "
+                 f"{exc} out of `secrets`, which the offline harness cannot supply. "
+                 f"Phase B is NOT RUNNABLE here and reports nothing about the "
+                 f"transform - verify it with check_data_product, which runs the "
+                 f"real closure under the supervisor's interpreter. Phases C, D and "
+                 f"E still run below.",
+                 path=cpath("transform/main.py"),
+                 evidence={"missing_secret": str(exc),
+                           "declared_sources": sorted(declared_sources)})
+    except AssertionError as exc:
+        # A fired assert is the transform's OWN invariant rejecting the data it
+        # produced. That is the check working, not the check being wrong.
+        berr("runtime.assert_failed",
+             f"transform/main.py: an assert fired during the dry run — {exc}",
              "transform/main.py", tb=traceback.format_exc())
-    else:
-        dry_run_runnable = False
-        diag("s2_transform", "runtime.dry_run_not_runnable",
-             f"the dry run could not execute: this closure declares "
-             f"{sorted(declared_sources) or ['a network source']} and reads "
-             f"{exc} out of `secrets`, which the offline harness cannot supply. "
-             f"Phase B is NOT RUNNABLE here and reports nothing about the "
-             f"transform - verify it with check_data_product, which runs the "
-             f"real closure under the supervisor's interpreter. Phases C, D and "
-             f"E still run below.",
-             path=cpath("transform/main.py"),
-             evidence={"missing_secret": str(exc),
-                       "declared_sources": sorted(declared_sources)})
-except AssertionError as exc:
-    # A fired assert is the transform's OWN invariant rejecting the data it
-    # produced. That is the check working, not the check being wrong.
-    berr("runtime.assert_failed",
-         f"transform/main.py: an assert fired during the dry run — {exc}",
-         "transform/main.py", tb=traceback.format_exc())
-except Exception as exc:
-    berr("runtime.transform_raised",
-         f"transform/main.py: {type(exc).__name__}: {exc}",
-         "transform/main.py", tb=traceback.format_exc())
+    except Exception as exc:
+        berr("runtime.transform_raised",
+             f"transform/main.py: {type(exc).__name__}: {exc}",
+             "transform/main.py", tb=traceback.format_exc())
+
+
+first_state = FakeTransformState(PHYSICAL_MODELS) if uses_transform_state else None
+run_transform(first_state)
 if berrors:
     fail_b()
 import duckdb
 con = duckdb.connect(out.path, read_only=True) if dry_run_runnable else None
 absent_optional_models = set()
 actual_tables = None
+first_materialized = {}
 if dry_run_runnable:
     try:
         actual_tables = {
@@ -2070,12 +2163,14 @@ def is_missing_table_error(exc):
 for m in (PHYSICAL_MODELS if dry_run_runnable else ()):  # unquoted main.<name> — the invariant, physically
     if actual_tables is not None and m in optional and m not in actual_tables:
         record_absent_optional(m)
+        first_materialized[m] = False
         continue
     try:
         n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     except Exception as exc:
         if actual_tables is None and m in optional and is_missing_table_error(exc):
             record_absent_optional(m)
+            first_materialized[m] = False
             continue
         berr("runtime.model_table_missing",
              f"main.{m} is a declared physical model but is not queryable after "
@@ -2083,6 +2178,7 @@ for m in (PHYSICAL_MODELS if dry_run_runnable else ()):  # unquoted main.<name> 
              f"{type(exc).__name__}: {exc}", "transform/main.py", {"model": m})
         continue
     say(m, n_rows)
+    first_materialized[m] = True
     ROW_COUNTS.append({"table": m, "row_count": n_rows})
     diag("s2_transform", "runtime.row_count", f"{m}: {n_rows} rows",
          path=cpath(f"transform/main.py:{m}"),
@@ -2093,6 +2189,98 @@ if dry_run_runnable and not (run / ".transform-complete").exists():
          "not finish", "transform/main.py")
 if berrors:
     fail_b()
+
+# A stateful transform is the one case where a single successful dry run is not
+# enough: the cursor contract is about the boundary between runs. Reuse the
+# same scratch database and run directory, but carry only the JSON-folded state
+# from the first invocation. Do not duplicate the first run's row-count evidence
+# in ROW_COUNTS; the second pass is a verification of unchanged rerun behavior.
+if dry_run_runnable and uses_transform_state:
+    first_counts = {
+        entry["table"]: entry["row_count"]
+        for entry in ROW_COUNTS
+    }
+    landed_rows = any(count > 0 for count in first_counts.values())
+    if first_state.dropped_flat_write:
+        berr("runtime.state_flat_write",
+             "transform_state was indexed flat while multiple physical models "
+             "are declared; the write is visible only during this invocation and "
+             "is not captured for persistence — use for_model() or generic()",
+             "transform/main.py")
+    try:
+        persisted_state = first_state.persist()
+    except Exception as exc:
+        persisted_state = None
+        berr("runtime.state_unserializable",
+             f"transform_state could not be JSON-serialized after the first run — "
+             f"{type(exc).__name__}: {exc}", "transform/main.py",
+             tb=traceback.format_exc())
+    if landed_rows and not any(bool((persisted_state or {}).get(key))
+                               for key in PHYSICAL_MODELS) \
+            and not (persisted_state or {}).get(GENERIC_STATE_KEY):
+        berr("runtime.state_not_persisted",
+             "the transform landed rows but persisted no transform_state value; "
+             "a successful incremental run must advance a JSON-serializable "
+             "cursor (use a sentinel even when a successful batch is empty)",
+             "transform/main.py")
+    if berrors:
+        fail_b()
+
+    con.close()
+    (run / ".transform-complete").unlink(missing_ok=True)
+    second_state = FakeTransformState(PHYSICAL_MODELS, prior=persisted_state)
+    run_transform(second_state)
+    if berrors:
+        fail_b()
+    con = duckdb.connect(out.path, read_only=True)
+    second_actual_tables = {
+        row[0] for row in con.execute("SHOW TABLES").fetchall()
+    }
+    second_counts = {}
+    second_materialized = {}
+    for m in PHYSICAL_MODELS:
+        if m in optional and m not in second_actual_tables:
+            second_counts[m] = 0
+            second_materialized[m] = False
+            continue
+        try:
+            second_counts[m] = con.execute(
+                f"SELECT COUNT(*) FROM main.{m}"
+            ).fetchone()[0]
+            second_materialized[m] = True
+        except Exception as exc:
+            berr("runtime.model_table_missing",
+                 f"main.{m} is a declared physical model but is not queryable "
+                 f"after the verification rerun — {type(exc).__name__}: {exc}",
+                 "transform/main.py", {"model": m, "run": 2})
+    if second_state.dropped_flat_write:
+        berr("runtime.state_flat_write",
+             "transform_state was indexed flat during the verification rerun "
+             "while multiple physical models are declared; use for_model() or "
+             "generic()", "transform/main.py")
+    if second_counts != first_counts or second_materialized != first_materialized:
+        berr("runtime.rerun_row_count_changed",
+             f"the unchanged verification rerun changed materialization or row "
+             f"counts: first={first_materialized}/{first_counts}, "
+             f"second={second_materialized}/{second_counts}", "transform/main.py",
+             {"first_counts": first_counts, "second_counts": second_counts,
+              "first_materialized": first_materialized,
+              "second_materialized": second_materialized})
+    if not (run / ".transform-complete").exists():
+        berr("runtime.transform_incomplete",
+             "the verification rerun returned without writing .transform-complete",
+             "transform/main.py")
+    try:
+        second_state.persist()
+    except Exception as exc:
+        berr("runtime.state_unserializable",
+             f"transform_state could not be JSON-serialized after the verification "
+             f"rerun — {type(exc).__name__}: {exc}", "transform/main.py",
+             tb=traceback.format_exc())
+    if berrors:
+        fail_b()
+    say(f"state round-trip ok — transform dry-run EXECUTED twice; unchanged "
+        f"rerun preserved {first_counts}")
 if not dry_run_runnable:
     close_stage("s2_transform", "skipped",
                 reason="dry_run_not_runnable", unverified=len(unverified))
@@ -2106,8 +2294,11 @@ else:
     close_stage("s2_transform", "passed",
                 models_counted=len(PHYSICAL_MODELS),
                 optional_tables_absent=sorted(absent_optional_models),
+                state_round_trip=bool(uses_transform_state),
                 unverified=len(unverified))
-    say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
+    say(f"phase B ok — transform dry-run EXECUTED"
+    f"{' twice for state round-trip' if uses_transform_state else ''}; "
+    f"models.py/spec.py checked "
     f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
     f"executed — no nxd wheel installable here); {len(unverified)} "
     f"unverified entries listed above. A spec fault only the real wheel or "

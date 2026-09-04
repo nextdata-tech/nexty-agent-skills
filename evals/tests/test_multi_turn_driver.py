@@ -439,6 +439,24 @@ def test_unconditional_turn_fires_without_the_sentinel(fake_cli, tmp_path):
     assert ok and metrics["turns_sent"] == 2 and metrics["skipped_turns"] == []
 
 
+def test_followup_workspace_setup_runs_before_delivery(fake_cli, tmp_path):
+    seen = []
+
+    def setup(workspace, turn_index):
+        seen.append((turn_index, (workspace / "new-input.txt").exists()))
+        (workspace / "new-input.txt").write_text("staged", encoding="utf-8")
+
+    ok, trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 60,
+        followup_turns=[eb.FollowupTurn(text="second")],
+        before_followup_turn=setup,
+    )
+    assert ok, metrics
+    assert seen == [(2, False)]
+    assert metrics["turns_sent"] == 2
+    assert "saw: second" in trace
+
+
 def test_a_wedged_turn_times_out_and_kills_the_process(fake_cli, tmp_path):
     """The kill must happen BEFORE returning: the caller's cleanup guard sweeps
     pid files in its `finally`, and a CLI still alive then can re-write one

@@ -251,7 +251,56 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "optional-empty-output-aggregate-desktop": frozenset({
         "check_optional_empty_aggregate.py",
     }),
+    # The incremental scenario's delta and deterministic checker are runner-side
+    # oracle material. The agent receives only the initial export; the runner
+    # adds the delta immediately before the third transform invocation.
+    "incremental-transform-state": frozenset({
+        "check_incremental_state.py",
+        "delta",
+    }),
 }
+
+INCREMENTAL_FOLLOWUP_WORKSPACE_SETUP_ID = (
+    "incremental-transform-state:stage-delta-before-followup"
+)
+
+
+def _stage_incremental_delta_before_followup(
+    scenario_dir: Path, workspace: Path, turn_index: int
+) -> None:
+    """Add the withheld source delta immediately before incremental turn 2.
+
+    The delta is runner-owned oracle input: it must be absent from the initial
+    workspace, but the agent must see it after the scripted user says the
+    source has gained rows. ``run_one`` removes this staged copy after the
+    agent finishes, before the deterministic checker replays its own timeline.
+    """
+    if scenario_dir.name != "incremental-transform-state" or turn_index != 2:
+        return
+    source = scenario_dir / "fixtures" / "delta" / "part-0003.csv"
+    target = workspace / "data_product" / "data" / "events" / source.name
+    if not source.is_file():
+        raise FileNotFoundError(f"incremental delta fixture missing: {source}")
+    if target.exists():
+        raise FileExistsError(
+            f"incremental delta target already exists before follow-up: {target}"
+        )
+    if not target.parent.is_dir():
+        raise FileNotFoundError(
+            f"incremental delta target directory missing before follow-up: "
+            f"{target.parent}"
+        )
+    shutil.copy2(source, target)
+
+
+def _remove_incremental_delta_after_agent(
+    scenario_dir: Path, workspace: Path
+) -> None:
+    """Restore the base export before the checker replays its three runs."""
+    if scenario_dir.name != "incremental-transform-state":
+        return
+    target = workspace / "data_product" / "data" / "events" / "part-0003.csv"
+    target.unlink(missing_ok=True)
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
 _SOURCE_ISOLATION_MARKER_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
@@ -2047,7 +2096,8 @@ def _fixtures_fingerprint(scenario_dir: Path) -> str:
 def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
                      backend: str, model: str, effort: str,
                      followup_turns: list[FollowupTurn] | None = None,
-                     source_isolation_identity: dict[str, object] | None = None) -> str:
+                     source_isolation_identity: dict[str, object] | None = None,
+                     workspace_setup_id: str | None = None) -> str:
     """Cache key for an agent run. Independent of the judge and of checks.json's
     GRADING fields, so iterating on the rubric reuses the expensive agent
     transcript. Includes the agent backend so switching provider (claude ↔
@@ -2088,6 +2138,8 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
         ))
     if source_isolation_identity is not None:
         parts.append(json.dumps(source_isolation_identity, sort_keys=True))
+    if workspace_setup_id is not None:
+        parts.append(workspace_setup_id)
     for part in parts:
         h.update(part.encode())
         h.update(b"\x00")
@@ -2453,10 +2505,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
     cache_file = None
     if cache_dir:
+        workspace_setup_id = (
+            INCREMENTAL_FOLLOWUP_WORKSPACE_SETUP_ID
+            if followup_turns and name == "incremental-transform-state"
+            else None
+        )
         key = _agent_cache_key(
             skill_set, scenario_dir, prompt, agent_backend.name,
             agent_model, args.agent_effort, followup_turns,
             source_isolation_identity=isolation_identity,
+            workspace_setup_id=workspace_setup_id,
         )
         cache_file = cache_dir / f"agent-{key}.json"
 
@@ -2497,6 +2555,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # byte what it was, and a backend that never sees the kwarg cannot be
         # perturbed by multi-turn support existing.
         turn_kwargs = {"followup_turns": followup_turns} if followup_turns else {}
+        if followup_turns and name == "incremental-transform-state":
+            turn_kwargs["before_followup_turn"] = (
+                lambda workspace, turn_index: _stage_incremental_delta_before_followup(
+                    scenario_dir, workspace, turn_index
+                )
+            )
         source_audit_kwargs = (
             {
                 "source_audit_markers": list(isolation.markers),
@@ -2704,6 +2768,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 failure = source_audit_failure(metrics)
                 if failure is not None:
                     return failure
+
+            if ok and name == "incremental-transform-state":
+                _remove_incremental_delta_after_agent(scenario_dir, ws)
 
             # Read the produced files INSIDE the `with`, while the temporary
             # workspace still exists. Outside it the directory is already

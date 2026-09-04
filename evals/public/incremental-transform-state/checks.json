@@ -1,5 +1,6 @@
 {
   "name": "Incremental Load of an Append-Only Source on the desktop runtime",
+  "ci_skip": "scripts a follow-up turn and runs the produced transform three times; the automatic PR gate runs the codex backend, which cannot drive multi-turn. Run with --agent-backend claude.",
   "skills": [
     "nxd-generate-data-product"
   ],
@@ -68,5 +69,21 @@
       "id": "no-scheduler-framing",
       "check": "The agent does NOT explain the behavior in terms of a schedule or cron (e.g. 'each scheduled run', 'nightly'). The desktop runtime has no scheduler; re-runs are user-initiated refine cycles on the same workflow."
     }
-  ]
+  ],
+  "turns": [
+    {
+      "when": "always",
+      "text": "The source export has just gained data/events/part-0003.csv with event_id 101..140. Re-run the transform through the same desktop workflow. Confirm that the existing rows remain, exactly 40 new rows land, the final total is 140, and the cursor advances to 140 without moving dlt state out of the run directory."
+    }
+  ],
+  "workspace_files": [
+    "data_product/transform/main.py"
+  ],
+  "deterministic_check": {
+    "script": "check_incremental_state.py",
+    "deps": [
+      "dlt[duckdb]==1.28.2",
+      "duckdb==1.5.4"
+    ]
+  }
 }
