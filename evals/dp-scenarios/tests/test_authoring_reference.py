@@ -20,7 +20,7 @@ import pytest
 
 from dp_scenarios.grading.gates import GATE_PHASES
 from dp_scenarios.operator.answer_sheet import ANSWER_SHEET_KEYS, OPTIONAL_ANSWER_SHEET_KEYS
-from dp_scenarios.scenario import _SCENARIO_KEYS, _SCENARIO_TIERS
+from dp_scenarios.scenario import _SCENARIO_KEYS, _SCENARIO_TIERS, load_scenarios
 
 # tests/ -> dp-scenarios/ -> evals/ -> repo root. Resolved from this file rather
 # than the working directory: CI runs pytest from evals/dp-scenarios and a
@@ -147,9 +147,15 @@ def test_the_contributor_check_still_pins_what_nothing_else_does() -> None:
     # Derived, not restated: the module docstring rules out restating, and a
     # literal 29 here would stay green through a fixture rebaseline while
     # telling contributors to pin the old value.
-    from dp_scenarios.scenario import load_scenario
-
-    shipped_seed = load_scenario(_REPO_ROOT / "evals/dp-scenarios/scenarios/capability-shortfall").seed
+    #
+    # Derived from *every* shipped package rather than one named it, because
+    # that is the property the skills teach -- "every shipped package uses this
+    # seed", not "capability-shortfall does". Naming one package would also
+    # break this test if that package were ever renamed or retired.
+    shipped = load_scenarios(_REPO_ROOT / "evals/dp-scenarios/scenarios")
+    seeds = {scenario.seed for scenario in shipped}
+    assert len(seeds) == 1, f"the shipped packages no longer agree on a seed: {sorted(seeds)}"
+    shipped_seed = seeds.pop()
 
     for text in _skill_texts():
         assert f"s.seed == {shipped_seed}" in text, (
