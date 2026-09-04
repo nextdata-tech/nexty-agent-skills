@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-04 | nxd-run-job-loop: incremental transform state persistence checks | NO_EVAL | — | [`2026-09-04-nxd-run-job-loop-incremental-state`](entries/2026-09-04-nxd-run-job-loop-incremental-state.md) |
+| 2026-09-04 | incremental E2E: named-pack closure and installability boundaries | NO_EVAL | — | [`2026-09-04-incremental-e2e-pack-closure`](entries/2026-09-04-incremental-e2e-pack-closure.md) |
 | 2026-09-01 | nxd-generate-data-product: optional empty dlt outputs and aggregate count path | NO_EVAL | — | [`2026-09-01-nxd-generate-data-product-optional-empty-outputs`](entries/2026-09-01-nxd-generate-data-product-optional-empty-outputs.md) |
 | 2026-08-31 | supervisor approval transport and mapper review outcome contract | NO_EVAL | — | [`2026-08-31-approval-proof-alignment`](entries/2026-08-31-approval-proof-alignment.md) |
 | 2026-08-26 | inference: agent-side while exploring, bundled through the seam once packaged | NO_EVAL | — | [`2026-08-26-inference-bundled-once-packaged`](entries/2026-08-26-inference-bundled-once-packaged.md) |

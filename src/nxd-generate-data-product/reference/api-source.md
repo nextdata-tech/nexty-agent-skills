@@ -80,14 +80,13 @@ resources_config = [
 ]
 ```
 
-`data_selector` is optional only when the response itself is already the row
-list. It is required semantically for an envelope: without it, pagination
-metadata can be treated as row data, the resource can fail while extracting, or
-the landed table can carry `page`, `per_page`, `total`, and `pages` as columns.
-Repeat the selector for every resource whose response has the same envelope.
-An equivalent mapping that extracts the array before handing rows to dlt is
-acceptable, but do not replace the declared REST connector with a hand-written
-HTTP loop.
+`data_selector` is configuration-optional only when the response itself is
+already the row list. It is response-shape-required for an envelope: use it, or
+an equivalent mapping that extracts the array before handing rows to dlt, and
+verify that `page`, `per_page`, `total`, and `pages` do not land as row
+columns. Repeat the selector for every resource whose response has the same
+envelope. Do not replace the declared REST connector with a hand-written HTTP
+loop.
 
 ### Paginator `type` values — copy these exactly
 

@@ -288,7 +288,8 @@ jobs:
 
       # build-skills.sh writes one zip per skill plus the uploadable named plugin
       # zips into build/. It only prints an "OVER CAP" status; it never
-      # exits non-zero, so we grep.
+      # exits non-zero, so we grep. The archive validator then checks the
+      # exact pack membership, manifest shape, and packaged relative links.
       - name: Build skill zips and enforce the 200-entry Claude Desktop cap
         run: |
           set -euo pipefail
@@ -298,6 +299,7 @@ jobs:
             echo "::error::one or more skills exceed the 200-entry Claude Desktop cap"
             exit 1
           fi
+          python3 scripts/validate_archives.py --root .
 
       # The green report from release-evals. Downloaded before assembling assets
       # so `evals.json` ships with the release; nxd's submodule bump reads it as

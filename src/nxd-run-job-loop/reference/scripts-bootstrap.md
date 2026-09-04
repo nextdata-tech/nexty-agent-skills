@@ -32,20 +32,29 @@ searched = list(roots)
 plugin_src = plugins / "**/src/nxd-run-job-loop"
 plugin_skills = plugins / "**/skills/nxd-run-job-loop"
 searched += [plugin_src, plugin_skills]
-roots += list(plugins.glob("**/src/nxd-run-job-loop"))
-roots += list(plugins.glob("**/skills/nxd-run-job-loop"))
+def _version_key(root):
+    parts = root.parents[1].name.split(".")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return (-1, -1, -1)
+    return tuple(int(part) for part in parts)
+
+
+plugin_candidates = [
+    *plugins.glob("**/src/nxd-run-job-loop"),
+    *plugins.glob("**/skills/nxd-run-job-loop"),
+]
+roots += sorted(plugin_candidates, key=lambda root: (_version_key(root), str(root)), reverse=True)
+
+
 for mount in (home, home / "mnt"):
     local_plugins = mount / ".local-plugins"
-    def _version_key(root):
-        parts = root.parents[1].name.split(".")
-        if len(parts) != 3 or not all(part.isdigit() for part in parts):
-            return (-1, -1, -1)
-        return tuple(int(part) for part in parts)
+    cached_candidates = []
     for plugin_name in ("nexty-desktop", "nexty-datamesh", "nexty-agent-skills"):
         cached_pattern = local_plugins / f"cache/nexty/{plugin_name}/*/skills/nxd-run-job-loop"
         searched.append(cached_pattern)
         cached = list(local_plugins.glob(str(cached_pattern.relative_to(local_plugins))))
-        roots += sorted(cached, key=_version_key, reverse=True)
+        cached_candidates += cached
+    roots += sorted(cached_candidates, key=lambda root: (_version_key(root), str(root)), reverse=True)
 claude = home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
 plugin_patterns = [
     claude / f"*/*/cowork_plugins/cache/nexty/{plugin_name}/*/skills/nxd-run-job-loop"
@@ -53,9 +62,11 @@ plugin_patterns = [
 ]
 skills_plugin_pattern = claude / "skills-plugin/*/*/*/skills/nxd-run-job-loop"
 searched += [*plugin_patterns, skills_plugin_pattern]
+desktop_candidates = []
 for pattern in plugin_patterns:
-    roots += list(claude.glob(str(pattern.relative_to(claude))))
-roots += list(claude.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop"))
+    desktop_candidates += list(claude.glob(str(pattern.relative_to(claude))))
+desktop_candidates += list(claude.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop"))
+roots += sorted(desktop_candidates, key=lambda root: (_version_key(root), str(root)), reverse=True)
 for root in roots:
     skill = root / "SKILL.md"
     if ((root / "scripts/dp_diagnostics.py").is_file()

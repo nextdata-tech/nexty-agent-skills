@@ -64,6 +64,7 @@ PASSES: list[str] = []
 
 MATERIALIZE_TIMEOUT_S = 300
 ENVELOPE_METADATA_COLUMNS = frozenset({"page", "per_page", "total", "pages"})
+ENVELOPE_FACT = "landed:envelope-metadata-absent"
 VALID_TOKEN = "bcn_live_9f3ac2e7d84b41f0a6c5d2e19b7f0033"
 # Mirrors stub_beacon_api.REQUIRED_USER_AGENT. Duplicated the same way
 # VALID_TOKEN is, so the static checks can run before the stub is loaded;
@@ -681,11 +682,10 @@ def main() -> int:
         }
         leaked = {table: columns for table, columns in envelope_columns.items() if columns}
         check(
-            "landed:envelope-data-selector",
+            ENVELOPE_FACT,
             not leaked,
             f"pagination metadata leaked into landed row tables: {leaked}; "
-            "the response envelope must be selected at `data` (or equivalently "
-            "mapped to rows) before dlt writes the resource",
+            "the landed row tables must not carry the response envelope metadata",
         )
 
         # ---- nested field flattened: result must be a flat scalar column --

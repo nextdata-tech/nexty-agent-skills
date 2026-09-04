@@ -25,6 +25,14 @@ DO_SUBMODULE=1
 ASSUME_YES=0
 DRY_RUN=0
 VERBOSE=0
+SKILL_LIST_FILE=""
+
+cleanup_skill_list() {
+  if [[ -n "${SKILL_LIST_FILE:-}" ]]; then
+    rm -f "$SKILL_LIST_FILE"
+  fi
+}
+trap cleanup_skill_list EXIT
 
 info() { printf '\033[34m==>\033[0m %s\n' "$*" >&2; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*" >&2; }
@@ -58,6 +66,9 @@ Options:
   --skills "a b c"       Restrict Claude Code to a subset of skills
   --plugin desktop|datamesh|all
                          Select the local Desktop, deployed DataMesh, or compatibility set
+                         for code when --skills is absent and for Desktop/Cowork archives
+  --skills and --plugin desktop|datamesh are mutually exclusive; --skills selects
+                         explicit Claude Code skills, while --plugin selects a complete pack
   --no-validate          Skip scripts/validate_skills.py (not recommended)
   --no-submodule         Do not initialize the bundled examples submodule
   --zip                  Deprecated compatibility alias; ZIP is now the Desktop/Cowork path
@@ -140,25 +151,46 @@ selected_skills() {
 
 marketplace_skill_names() {
   local plugin_name="$1"
-  python3 - "$ROOT/.claude-plugin/marketplace.json" "$plugin_name" <<'PY'
+  python3 - "$ROOT" "$ROOT/.claude-plugin/marketplace.json" "$plugin_name" <<'PY'
 import json
 import sys
+from pathlib import Path
 
-marketplace_path, plugin_name = sys.argv[1:]
+root, marketplace_path, plugin_name = sys.argv[1:]
 with open(marketplace_path, encoding="utf-8") as fh:
     marketplace = json.load(fh)
 for plugin in marketplace.get("plugins", []):
     if plugin.get("name") == f"nexty-{plugin_name}":
         if plugin.get("source") != "./src" or plugin.get("strict") is not False:
             raise SystemExit(f"nexty-{plugin_name} is not a canonical skill-bundle entry")
-        for skill in plugin.get("skills", []):
+        skills = plugin.get("skills")
+        if not isinstance(skills, list) or not skills:
+            raise SystemExit(f"nexty-{plugin_name} has no skills list")
+        seen = set()
+        for skill in skills:
             if not isinstance(skill, str) or not skill.startswith("./"):
                 raise SystemExit(f"invalid skill path in nexty-{plugin_name}: {skill!r}")
-            print(skill[2:])
+            name = skill[2:]
+            if not name or "/" in name or name in seen:
+                raise SystemExit(f"duplicate or invalid skill path in nexty-{plugin_name}: {skill!r}")
+            if not (Path(root) / "src" / name / "SKILL.md").is_file():
+                raise SystemExit(f"nexty-{plugin_name} references missing source skill: src/{name}")
+            seen.add(name)
+            print(name)
         break
 else:
     raise SystemExit(f"marketplace entry not found: nexty-{plugin_name}")
 PY
+}
+
+prepare_selected_skills() {
+  [[ -n "${SKILL_LIST_FILE:-}" ]] && return 0
+  SKILL_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/nexty-agent-skills-selected.XXXXXX")" \
+    || die "could not create temporary selected-skill list"
+  if ! selected_skills >"$SKILL_LIST_FILE"; then
+    die "failed to resolve selected skills for --plugin $PLUGIN_SET"
+  fi
+  [[ -s "$SKILL_LIST_FILE" ]] || die "selected skill set is empty: $PLUGIN_SET"
 }
 
 validate_plugin_set() {
@@ -193,6 +225,9 @@ validate_target_options() {
   fi
   if [[ "$has_desktop" -eq 1 && "$SKILLS_REQUESTED" -eq 1 ]]; then
     die "--skills is only supported for Claude Code; Desktop/Cowork use the selected complete plugin set"
+  fi
+  if [[ "$SKILLS_REQUESTED" -eq 1 && "$PLUGIN_SET" != "all" ]]; then
+    die "--skills and --plugin $PLUGIN_SET are mutually exclusive; use --skills for explicit Code skills or --plugin for a complete named set"
   fi
 }
 
@@ -270,7 +305,7 @@ install_code() {
     copy_skill_tree "$SRC_DIR/$skill" "$destination/$skill"
     [[ "$skill" == "nxd-run-job-loop" ]] && write_code_version_stamp "$destination/$skill"
     ok "code: $skill"
-  done < <(selected_skills)
+  done < "$SKILL_LIST_FILE"
   info "Claude Code: skills installed. Restart Claude Code or start it in a project to use them."
 }
 
@@ -282,7 +317,7 @@ uninstall_code() {
       run "rm -rf '$destination/$skill'"
       ok "removed: $skill"
     fi
-  done < <(selected_skills)
+  done < "$SKILL_LIST_FILE"
   [[ -d "$destination" ]] && run "rmdir '$destination' 2>/dev/null || true"
 }
 
@@ -295,7 +330,7 @@ status_code() {
     else
       echo "  · $skill (not installed)"
     fi
-  done < <(selected_skills)
+  done < "$SKILL_LIST_FILE"
 }
 
 plugin_version() {
@@ -321,6 +356,7 @@ desktop_zip() {
   fi
   info "building the Claude Desktop/Cowork plugin ZIP ($PLUGIN_SET)"
   (cd "$ROOT" && bash ./build-skills.sh)
+  [[ -f "$pack" ]] || die "build completed without the expected plugin pack: $pack"
   ok "plugin pack: $pack"
   cat >&2 <<EOF
 
@@ -523,6 +559,9 @@ main() {
   fi
   validate_target_options
   validate_skill_names
+  if [[ "$has_code" -eq 1 ]]; then
+    prepare_selected_skills
+  fi
 
   case "$SUBCMD" in
     install)

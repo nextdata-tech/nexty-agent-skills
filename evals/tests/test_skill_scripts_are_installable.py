@@ -380,11 +380,14 @@ def test_cowork_local_plugins_cache_resolves_desktop_helpers(
 
 
 @pytest.mark.parametrize("mount_prefix", (Path(), Path("mnt")))
+@pytest.mark.parametrize(
+    "plugin_name", ("nexty-desktop", "nexty-datamesh", "nexty-agent-skills")
+)
 def test_cowork_local_plugins_cache_prefers_highest_semver(
-    tmp_path: Path, mount_prefix: Path
+    tmp_path: Path, mount_prefix: Path, plugin_name: str
 ):
     """A mounted cache may retain several versions after plugin upgrades."""
-    cache = tmp_path / mount_prefix / ".local-plugins" / "cache" / "nexty" / "nexty-agent-skills"
+    cache = tmp_path / mount_prefix / ".local-plugins" / "cache" / "nexty" / plugin_name
     for version in ("0.9.0", "0.36.2", "0.10.0"):
         shutil.copytree(
             SRC / "nxd-run-job-loop",
@@ -396,6 +399,63 @@ def test_cowork_local_plugins_cache_prefers_highest_semver(
     assert _bootstrap_resolves(tmp_path, outside) == (
         cache / "0.36.2" / "skills" / "nxd-run-job-loop"
     ).resolve()
+
+
+def test_cowork_local_plugins_cache_orders_candidates_across_named_packs(tmp_path: Path):
+    """Plugin declaration order must not outrank a newer cached version."""
+    candidates = {
+        "nexty-desktop": "0.9.0",
+        "nexty-datamesh": "0.36.2",
+        "nexty-agent-skills": "0.10.0",
+    }
+    for plugin_name, version in candidates.items():
+        shutil.copytree(
+            SRC / "nxd-run-job-loop",
+            tmp_path
+            / ".local-plugins"
+            / "cache"
+            / "nexty"
+            / plugin_name
+            / version
+            / "skills"
+            / "nxd-run-job-loop",
+        )
+    outside = tmp_path / "outside-named-pack-order"
+    outside.mkdir()
+
+    assert _bootstrap_resolves(tmp_path, outside) == (
+        tmp_path
+        / ".local-plugins"
+        / "cache"
+        / "nexty"
+        / "nexty-datamesh"
+        / "0.36.2"
+        / "skills"
+        / "nxd-run-job-loop"
+    ).resolve()
+
+
+@pytest.mark.parametrize("plugin_name", ("nexty-desktop", "nexty-datamesh", "nexty-agent-skills"))
+def test_named_plugin_archive_has_complete_installable_skill_trees(
+    tmp_path: Path, plugin_name: str
+):
+    plugin_set = "all" if plugin_name == "nexty-agent-skills" else plugin_name.removeprefix("nexty-")
+    _install("desktop", tmp_path, "--plugin", plugin_set)
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    archive = REPO / "build" / f"{plugin_name}-v{version}.zip"
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as zf:
+        manifest = json.loads(zf.read(".claude-plugin/plugin.json"))
+        assert manifest["name"] == plugin_name
+        assert "skills" not in manifest
+        skill_names = {
+            name.split("/")[1]
+            for name in zf.namelist()
+            if name.startswith("skills/") and name.count("/") >= 2
+        }
+        assert skill_names
+        for skill in skill_names:
+            assert f"skills/{skill}/SKILL.md" in zf.namelist()
 
 
 def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
@@ -441,6 +501,22 @@ def test_desktop_targets_reject_skill_filters_before_code_mutation(
     )
     assert result.returncode != 0
     assert "--skills is only supported for Claude Code" in result.stderr
+    assert not (tmp_path / ".claude" / "skills").exists()
+
+
+def test_named_plugin_and_explicit_code_skill_filter_are_rejected_together(tmp_path: Path):
+    result = _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--plugin",
+        "desktop",
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
     assert not (tmp_path / ".claude" / "skills").exists()
 
 
@@ -502,6 +578,10 @@ def test_old_bash_empty_arrays_are_guarded_before_expansion():
     assert 'if [[ -n "${TARGETS[0]+set}" ]]; then' in installer
     assert 'if [[ -n "${SKILL_ZIPS[0]+set}" ]]; then' in builder
     assert 'if [[ -n "${prune_args[0]+set}" ]]; then' in builder
+    assert "done < <(" not in installer
+    assert "done < <(" not in builder
+    assert "trap cleanup_staging EXIT" in builder
+    assert "trap cleanup_skill_list EXIT" in installer
 
 
 def test_whole_pack_report_count_matches_archive_members():
