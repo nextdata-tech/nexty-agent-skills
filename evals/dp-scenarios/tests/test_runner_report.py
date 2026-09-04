@@ -64,7 +64,7 @@ def test_efficiency_is_sibling_to_scored_fields_and_never_inside_score(tmp_path:
 
     assert "efficiency" in run
     assert "efficiency" not in run["score"]
-    machine_path, summary_path = write_report(result, json_path=tmp_path / "tier.json", summary_path=tmp_path / "tier.txt")
+    machine_path, summary_path, _ = write_report(result, json_path=tmp_path / "tier.json", summary_path=tmp_path / "tier.txt")
     assert json.loads(machine_path.read_text(encoding="utf-8"))["efficiency_is_reported_only"] is True
     assert summary_path is not None and summary_path.read_text(encoding="utf-8")
 
@@ -231,11 +231,14 @@ def test_write_report_also_writes_a_readable_conversation(tmp_path: Path) -> Non
     ).run()
 
     out = tmp_path / "out"
-    _, summary_target = write_report(
+    _, summary_target, transcripts_returned = write_report(
         result, json_path=out / "report.json", summary_path=out / "summary.txt"
     )
 
     transcripts = sorted(out.glob("conversation-*.md"))
+    # Returned as well as written, so run_local_claude.py can name them on
+    # stdout instead of the reader having to find summary.txt first.
+    assert tuple(sorted(transcripts_returned)) == tuple(transcripts)
     assert transcripts, "no conversation was rendered next to the report"
     body = transcripts[0].read_text(encoding="utf-8")
     assert "OPERATOR>" in body and "AGENT>" in body, "the transcript has no conversation in it"
@@ -250,3 +253,46 @@ def test_write_report_also_writes_a_readable_conversation(tmp_path: Path) -> Non
     for run in result.scenario_runs:
         if run.evidence_bundle_dir:
             assert not list(Path(run.evidence_bundle_dir).glob("conversation-*.md"))
+
+
+def test_a_failed_render_warns_and_still_returns_the_finished_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The fail-safe must not be silent.
+
+    `transcript.py` states the rule for its own output -- "a renderer that
+    silently drops a malformed turn is worse than one that crashes: the reader
+    concludes the turn never happened" -- and it applies one level up. An
+    absent transcript is otherwise indistinguishable from a run that retained
+    no bundle, so a failure has to say so while the tier still completes.
+    """
+
+    from dp_scenarios.runner import report as report_module
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    def explode(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("renderer exploded")
+
+    monkeypatch.setattr(report_module, "render_epoch_conversation", explode)
+
+    out = tmp_path / "out"
+    machine_target, summary_target, conversations = report_module.write_report(
+        result, json_path=out / "report.json", summary_path=out / "summary.txt"
+    )
+
+    # The run survives: both reports are written and the tier is not lost.
+    assert machine_target.is_file()
+    assert summary_target is not None and summary_target.is_file()
+    assert conversations == ()
+
+    warning = capsys.readouterr().err
+    assert "could not render conversation" in warning
+    assert "RuntimeError" in warning, "the operator cannot tell what failed"

@@ -404,12 +404,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_host_home=args.allow_host_home,
             operator_factory=operator_factory,
         ).run()
-        write_report(result, json_path=report_dir / "report.json", summary_path=report_dir / "summary.txt")
+        _, _, conversations = write_report(
+            result, json_path=report_dir / "report.json", summary_path=report_dir / "summary.txt"
+        )
     finally:
         plugin_owner.cleanup()
 
     print(f"report: {report_dir / 'report.json'}")
     print(f"summary: {report_dir / 'summary.txt'}")
+    for conversation in conversations:
+        # stdout is the first place an operator looks after a live run.
+        print(f"conversation: {conversation}")
     return 0 if result.verdict == "clean" else 1
 
 

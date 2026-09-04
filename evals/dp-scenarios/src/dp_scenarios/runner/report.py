@@ -9,6 +9,7 @@ is described as the checks it performed rather than as cryptographic proof.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from typing import Any
@@ -168,14 +169,21 @@ def write_report(
     *,
     json_path: str | Path,
     summary_path: str | Path | None = None,
-) -> tuple[Path, Path | None]:
-    """Write machine JSON and, optionally, a human summary."""
+) -> tuple[Path, Path | None, tuple[Path, ...]]:
+    """Write machine JSON, optionally a human summary, and the transcripts.
 
+    Returns the conversation paths so a caller can name them on stdout, which
+    is the first place an operator looks after a live run. Without that, the
+    only way to learn a transcript exists is to open summary.txt and read to
+    the end.
+    """
+
+    report = machine_report(result)
     machine_target = Path(json_path)
     machine_target.parent.mkdir(parents=True, exist_ok=True)
     try:
         machine_target.write_text(
-            json.dumps(machine_report(result), ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
     except (OSError, TypeError, ValueError) as exc:
@@ -188,7 +196,7 @@ def write_report(
             summary_target.write_text(human_summary(result), encoding="utf-8")
         except OSError as exc:
             raise ReportError(f"could not write human report {summary_target}: {exc}") from exc
-    conversation_targets = write_conversations(result, machine_target.parent, report=machine_report(result))
+    conversation_targets = write_conversations(result, machine_target.parent, report=report)
     if summary_target is not None and conversation_targets:
         # Name them in the summary. A transcript nobody knows to look for is a
         # transcript nobody reads: rendering it required knowing a separate
@@ -200,7 +208,7 @@ def write_report(
                 handle.write("\n".join(lines) + "\n")
         except OSError as exc:
             raise ReportError(f"could not append to {summary_target}: {exc}") from exc
-    return machine_target, summary_target
+    return machine_target, summary_target, conversation_targets
 
 
 def write_conversations(
@@ -213,9 +221,13 @@ def write_conversations(
     file afterwards would leave the recorded digest describing something the
     bundle no longer is.
 
-    A rendering failure must not lose the run. The transcript is a convenience
-    over evidence that is already on disk, so a failure is recorded in the
-    returned path list's absence, not raised over a completed tier.
+    A rendering failure must not lose the run -- the transcript is a
+    convenience over evidence already on disk -- but it must not be silent
+    either. ``transcript.py`` states the rule for its own output: "a renderer
+    that silently drops a malformed turn is worse than one that crashes: the
+    reader concludes the turn never happened." The same applies one level up:
+    absence alone is indistinguishable from a run that retained no bundle, so
+    a failure is reported on stderr and the run continues.
     """
 
     target_dir = Path(directory)
@@ -229,7 +241,12 @@ def write_conversations(
             destination.write_text(
                 render_epoch_conversation(bundle, report=report), encoding="utf-8"
             )
-        except Exception:  # noqa: BLE001 - never lose a finished run to a renderer
+        except Exception as exc:  # noqa: BLE001 - never lose a finished run to a renderer
+            print(
+                f"warning: could not render conversation for {bundle}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
             continue
         written.append(destination)
     return tuple(written)
