@@ -828,7 +828,18 @@ def _closure_dirs(artifact_root: Path) -> tuple[Path, ...]:
 
     if not artifact_root.is_dir():
         return ()
-    return tuple(sorted(path for path in artifact_root.glob("nxd-jobs/*/closure") if path.is_dir()))
+    # Two layouts are both real. A 2026-09-03 run wrote
+    # ``nxd-jobs/deal-stage-age/closure/``; a 2026-09-04 run wrote ``closure/``
+    # directly under the artifact root. Globbing only the nested form silently
+    # found nothing on the flat one -- the same not-examined-forever failure
+    # this gate exists to end -- so match a ``closure`` directory wherever it
+    # sits, rather than encoding one run's shape as the rule.
+    seen: list[Path] = []
+    for pattern in ("closure", "*/closure", "nxd-jobs/*/closure", "*/*/closure"):
+        for path in artifact_root.glob(pattern):
+            if path.is_dir() and path not in seen:
+                seen.append(path)
+    return tuple(sorted(seen))
 
 
 def _decisions_artifact(artifact_root: Path) -> tuple[Mapping[str, str], ...] | None:

@@ -2052,3 +2052,33 @@ def test_a_shipped_brief_actually_fires_in_a_scenario_level_run(tmp_path: Path) 
         and row["claim"].get("operator_answered_from_ground_truth") is True
         for row in rows
     )
+
+
+def test_closure_is_found_in_both_layouts_the_product_writes(tmp_path: Path) -> None:
+    """Two real runs produced two different closure layouts; both must be found.
+
+    A 2026-09-03 run wrote ``nxd-jobs/deal-stage-age/closure/`` and a
+    2026-09-04 run wrote ``closure/`` directly under the artifact root. Globbing
+    only the nested form found nothing on the flat one, which reads exactly like
+    a build that emitted no decisions -- the not-examined-forever failure the
+    decisions gate exists to end.
+    """
+
+    from dp_scenarios.runner.tier import _closure_dirs, _decisions_artifact
+
+    for relative in ("closure", "nxd-jobs/deal-stage-age/closure"):
+        root = tmp_path / relative.replace("/", "-")
+        closure = root / relative
+        table = closure / "data" / "nxd_decisions"
+        table.mkdir(parents=True)
+        (table / "nxd_decisions.csv").write_text(
+            "decision_id,status,provenance,ruling,applies_to,detail\n"
+            "d1,confirmed,agent_authored,r,deals.stage_age_days,x\n",
+            encoding="utf-8",
+        )
+
+        found = _closure_dirs(root)
+        assert found == (closure,), f"{relative} layout was not found"
+        rows = _decisions_artifact(root)
+        assert rows is not None and len(rows) == 1
+        assert rows[0]["decision_id"] == "d1"
