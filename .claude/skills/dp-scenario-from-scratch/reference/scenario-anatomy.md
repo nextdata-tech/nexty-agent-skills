@@ -13,12 +13,17 @@
 
 ## The five files
 
-Everything lives in `evals/dp-scenarios/scenarios/<id>/`. A package is additive:
-it needs no edit to any shared file, so two people can author scenarios at the
-same time without conflicting.
+A contributed package lives in `evals/dp-scenarios/scenarios/_proposed/<id>/`
+until an engineer promotes it to `scenarios/<id>/`. The loader reads only the
+top level of `scenarios/`, so a package one level down is invisible to it —
+and an incomplete package placed directly at the top level makes the *entire*
+scenario root unloadable, failing every test that reads it.
+
+A package is additive: it needs no edit to any shared file, so two people can
+author scenarios at the same time without conflicting.
 
 ```
-scenarios/<id>/
+scenarios/_proposed/<id>/      # promoted to scenarios/<id>/ when ready
   scenario.yaml       what to run, how to grade it
   answer-sheet.yaml   what the operator says and knows
   events.yaml         things injected mid-conversation
@@ -28,25 +33,50 @@ scenarios/<id>/
 
 ## scenario.yaml
 
-The load-bearing fields:
+**Sixteen keys are required.** The loader raises `scenario is missing key(s): …`
+if any is absent, so this is the whole set, not a selection:
 
-| Field | What it does |
+`version` `id` `tier` `run_order` `fixture` `coverage` `turn_budget`
+`repeatability` `persona` `answer_sheet` `events` `phase_map` `required_plants`
+`gates` `gold` `operator`
+
+What each must contain:
+
+| Field | Requirement |
 |---|---|
+| `version` | Integer `1`. |
 | `id` | Must equal the directory name. |
-| `tier` | `draft` for a contributed scenario. `smoke`, `core`, `live` are set by an engineer once it is trusted. |
-| `run_order` | Unique across the tier; scenarios run in this order. |
-| `fixture.dataset` | `grain_trap` or `zero_row_optional`. Data is generated from `seed`, never copied from production. |
-| `fixture.plant` | The defect deliberately seeded into the data. |
-| `turn_budget` | **Exactly** the number of turns in the answer sheet. A test enforces this. |
-| `phase_map` | Turn number to phase number, 1 to 7. |
-| `persona` | A file under `_personas/`. See below. |
-| `gates` | Which checks run. `follow-up.kind` names the drill. |
+| `tier` | One of `smoke`, `core`, `live`, `T0`. **There is no `draft` tier.** Being under `_proposed/` is what marks a package unfinished. |
+| `run_order` | Unique **across the whole root**, not within your tier. Every value 1-6 is already taken, so start at 7 and check first: `grep -h '^run_order:' evals/dp-scenarios/scenarios/*/scenario.yaml`. |
+| `fixture.dataset` | `grain_trap` or `zero_row_optional`. |
+| `fixture.seed` | **Must be `29`.** Asserted for every package, so generated data is comparable. |
+| `fixture.variant` | Required. A name for this scenario's shape of the dataset. |
+| `fixture.plant` | Optional, and unset in every shipped package. The plant usually comes from `events.yaml` instead. |
+| `coverage.variant` | Must equal `fixture.variant` exactly. |
+| `coverage.untested` | Non-empty prose saying what this scenario does *not* establish. |
+| `turn_budget` | The loader only requires it to be **at least** the turn count. Set it **equal** anyway: the efficiency ratio and the budget-exceeded check both read it as the exact script length, so a larger value quietly misreports both. Only `capability-shortfall` has a test pinning the equality. |
+| `phase_map` | Every turn number to a phase, 1-7. |
+| `persona` | A path to a file under `_personas/`. |
+| `answer_sheet` / `events` | Paths to those two files. |
+| `repeatability` | The tier and epoch count. Copy a shipped scenario's block. |
+| `required_plants` | Non-empty. A scenario with no required plant cannot fail for the reason it was written. |
+| `gates` | **All seven keys**: `intake`, `capability`, `narrowing`, `construction`, `build`, `query`, `follow-up`. Not a subset. Leave a value empty for defaults; `follow-up.kind` names the drill. |
 | `gold` | Paths to the truth files. |
-| `required_plants` | Plants that must fire, or the run grades nothing. |
+| `operator` | `sentinel` and `obstacle_terms`. Both may be null/empty, but the key must exist. |
 
 ## answer-sheet.yaml
 
 This is the operator's script and everything it knows.
+
+**Ten keys are required** — the loader raises `answer_sheet is missing key(s): …`:
+
+`version` `scenario_id` `opening_message` `turns` `source_answers`
+`decision_answers` `status_answers` `opening_forbidden_terms`
+`open_decision_markers` `obstacle_terms`
+
+Several may be empty lists or maps, but every key must be present.
+`ground_truth` and `driver_forbidden_terms` are the **only** optional ones —
+and they are the two that carry most of the scenario's substance.
 
 - `opening_message` — the contributor's own vague first words, verbatim.
 - `turns` — a list. A plain string is an ordinary turn. A mapping can declare:
@@ -54,16 +84,14 @@ This is the operator's script and everything it knows.
     **Use this for every question the scenario grades.** An ask that gets
     replaced is an ask that was never made.
   - `approval: true` — transmitting this turn *is* the approval of record.
-- `ground_truth` — the facts the operator can reveal when asked. Each has
-  `terms` (the words in an agent's question that should trigger it) and `fact`
-  (what the operator then says).
-- `driver_forbidden_terms` — vocabulary the agent must discover for itself. The
-  operator is forbidden from using these words. Required if the scenario will
-  ever be run with a model-driven operator.
+- `ground_truth` — facts the operator reveals when asked. Each has `terms` (the
+  words in an agent's question that trigger it) and `fact` (what it then says).
+- `driver_forbidden_terms` — vocabulary the agent must discover for itself.
+  Required if the scenario will ever run with a model-driven operator.
 
-Give the agent room. A live agent needs several turns to author a spec,
-build, and self-check. A scenario that asks for results one turn after approval
-grades nothing, because there is nothing built yet to grade.
+Give the agent room. A live agent needs several turns to author a spec, build,
+and self-check. A scenario that asks for results one turn after approval grades
+nothing, because there is nothing built yet to grade.
 
 Keep every turn's text distinct, and keep "room" turns neutral — `Please
 continue.` and `Go on.` buy time; *"Anything else you want to flag?"* prompts
@@ -108,7 +136,7 @@ Match the contributor's description of how the stakeholder behaves:
 
 ## Rules that are easy to get wrong
 
-- **`turn_budget` must equal the turn count.** Not a ceiling.
+- **Set `turn_budget` equal to the turn count.** The loader only enforces a floor, so a larger value passes silently and misreports the efficiency ratio.
 - **Graded asks need `substitute_reply: false`.** Otherwise the matcher may
   replace the question the scenario exists to ask.
 - **The approval turn is never substituted or authored.** Its text becomes the
@@ -117,3 +145,10 @@ Match the contributor's description of how the stakeholder behaves:
   after any renumbering.
 - **Every gold value comes from the seeded generator**, never from a real
   system.
+- **`required_plants` must be non-empty.** A scenario with no required plant
+  cannot fail for the reason it was written, and the loader test rejects it.
+- **The four that fail loudly and name the whole root, not your package**: `seed: 29`,
+  `coverage.variant == fixture.variant`, non-empty `coverage.untested`, and all
+  seven gate keys. Getting any of them wrong fails a test that names the whole
+  scenario root rather than your package, so check them first when something
+  goes red.

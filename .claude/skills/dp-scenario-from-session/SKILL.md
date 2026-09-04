@@ -69,8 +69,12 @@ Two rules specific to this path:
   credentials. If the drill genuinely needs a sensitive value present, it must
   be a planted marker the harness generates, not a real one.
 
-Mark it a draft: `tier: draft`, and say in the scenario `README.md` that it has
-not been mutation-tested.
+Put the package in **`evals/dp-scenarios/scenarios/_proposed/<id>/`**, not
+directly under `scenarios/`: the loader reads only the top level, so a package
+one level down is invisible to it, while an incomplete one placed directly
+under `scenarios/` makes the whole scenario root unloadable. Declare a real
+tier (`smoke`, `core` or `live`) — there is no `draft` tier — and say in the
+scenario `README.md` that it has not been mutation-tested.
 
 ## When to stop and hand off
 

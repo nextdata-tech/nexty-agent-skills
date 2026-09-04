@@ -63,17 +63,26 @@ Also ask, because it decides whether the scenario is buildable:
 
 ## What you build from their answers
 
-Everything goes in `evals/dp-scenarios/scenarios/<id>/`. Read
-`reference/scenario-anatomy.md` for the file-by-file shape and
-`reference/interview-to-artifacts.md` for how each answer maps onto it.
+Everything goes in **`evals/dp-scenarios/scenarios/_proposed/<id>/`** — not
+directly under `scenarios/`. Read `reference/scenario-anatomy.md` for the
+file-by-file shape and `reference/interview-to-artifacts.md` for how each
+answer maps onto it.
+
+`_proposed/` is where contributed packages wait. The loader reads only the
+top level of `scenarios/`, so a package parked one level down is invisible to
+it — which is what you want, because an incomplete package placed directly
+under `scenarios/` does not merely fail to run: it makes the whole scenario
+root unloadable and every test that reads it goes red at once. An engineer
+moves the directory up when it is ready.
 
 In short: their opening words become the first operator turn; their facts become
 the answer sheet the operator replies from; their mid-stream behaviour becomes
 either a persona or an injected event; the right answer becomes the gold the
 run is graded against.
 
-Mark the scenario a draft. Add `tier: draft` in `scenario.yaml` and say in the
-scenario's `README.md` that it has not been mutation-tested yet.
+Declare a real tier — `smoke`, `core` or `live`; there is no `draft` tier and
+the loader rejects one. Being under `_proposed/` is what marks it unfinished.
+Say in the scenario's `README.md` that it has not been mutation-tested yet.
 
 ## When to stop and hand off
 
