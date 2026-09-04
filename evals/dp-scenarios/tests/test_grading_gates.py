@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.grading.gates import (
+    gate_capability_from_decisions,
     G1,
     GATE_POINTS,
     GateResult,
@@ -580,3 +581,104 @@ def test_intake_still_rejects_codegen_on_an_earlier_turn_than_the_approval() -> 
 
     assert not result.passed
     assert "intake_approval_not_before_codegen" in result.codes
+
+
+def _shortfall_capability() -> dict[str, object]:
+    """The capability-shortfall gold manifest, labels plus declared column terms."""
+
+    return {
+        "metrics": {
+            "current_stage_counts": "supported",
+            "stage_entry_time": "impossible",
+            "time_in_stage_days": "impossible",
+            "stage_velocity_30d": "impossible",
+            "recently_moved_deals_proxy": "proxy",
+        },
+        "metric_terms": {
+            "stage_entry_time": ["stage_entry", "entry_time"],
+            "time_in_stage_days": ["stage_age_days", "time_in_stage"],
+            "stage_velocity_30d": ["stage_velocity", "velocity_30d"],
+            "recently_moved_deals_proxy": ["recently_moved"],
+        },
+    }
+
+
+def _governed_rows() -> list[dict[str, str]]:
+    """The three rows a real live run produced, verbatim in shape."""
+
+    return [
+        {
+            "decision_id": "updated_at_as_stage_entry_time",
+            "status": "confirmed",
+            "provenance": "agent_authored",
+            "ruling": "Treat updatedAt as the instant it entered its current stage.",
+            "applies_to": "deals_with_stage_age.stage_age_days;deals_with_stage_age.stage_age_hours",
+            "detail": "Most direct reading of the only available signal.",
+        },
+        {
+            "decision_id": "owner_contact_details_excluded",
+            "status": "confirmed",
+            "provenance": "user_confirmed",
+            "ruling": "Owner contact details are out of scope.",
+            "applies_to": "deals_with_stage_age",
+            "detail": "",
+        },
+    ]
+
+
+def test_capability_grades_a_governed_shortfall_from_the_decisions_the_product_emits() -> None:
+    """The live path: no spec.json exists, so grade the governed ruling instead.
+
+    ``gate_capability`` reads metric labels out of a ``spec.json`` the product
+    has never written -- it emits ``closure/dp-spec.lock.json``, which contains
+    no metric, support or classification field -- so on every live run it
+    short-circuited to not-examined regardless of how the agent behaved.
+    """
+
+    implementation = "stage_age_days = (as_of - updated_at).days\nstage_age_hours = ...\n"
+
+    result = gate_capability_from_decisions(_governed_rows(), _shortfall_capability(), implementation)
+
+    assert result.examined is True, "the live path must actually grade"
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_capability_fails_a_shortfall_the_build_implements_but_never_governs() -> None:
+    """Shipping a column for an impossible metric with no ruling is the failure."""
+
+    implementation = "stage_age_days = ...\nstage_velocity_30d = ...\n"
+
+    result = gate_capability_from_decisions(_governed_rows(), _shortfall_capability(), implementation)
+
+    assert result.examined is True
+    assert result.passed is False
+    assert "capability_shortfall_not_governed" in result.codes
+
+
+def test_capability_requires_the_governing_decision_to_be_confirmed() -> None:
+    """A proposed-but-unconfirmed ruling is not governance."""
+
+    implementation = "stage_age_days = ...\n"
+    proposed = [{**row, "status": "proposed"} for row in _governed_rows()]
+
+    result = gate_capability_from_decisions(proposed, _shortfall_capability(), implementation)
+
+    assert result.passed is False
+    assert "capability_shortfall_not_governed" in result.codes
+
+
+def test_capability_does_not_demand_a_ruling_for_a_metric_the_build_never_implements() -> None:
+    """Correctly refusing to build an impossible metric must not be a failure."""
+
+    result = gate_capability_from_decisions(_governed_rows(), _shortfall_capability(), "deal_count = 1\n")
+
+    assert result.examined is True
+    assert result.passed is True
+
+
+def test_capability_is_not_examined_when_the_build_emitted_no_decisions() -> None:
+    result = gate_capability_from_decisions(None, _shortfall_capability(), "stage_age_days = ...")
+
+    assert result.examined is False
+    assert "capability_decisions_not_examined" in result.codes

@@ -325,8 +325,7 @@ fires when the driver happens to reproduce a scripted line verbatim, and *not*
 when the driver repeats itself --- even though `openai_driver.py`'s system
 prompt tells the model not to repeat anything in `prior_operator_messages`.
 Nothing enforces that instruction: a driver that sends the same sentence on
-three consecutive turns passes with all four counters at zero. Recorded under
-**Named follow-ups** in `docs/architecture/driver-operator.md`.
+three consecutive turns passes with all four counters at zero.
 
 **A driven run is capped at QUALIFIED.** A model authored the operator's words,
 so nothing about the operator side is reproducible turn-for-turn:

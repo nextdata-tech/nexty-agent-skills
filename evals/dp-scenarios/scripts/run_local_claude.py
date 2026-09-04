@@ -214,7 +214,15 @@ def driver_configuration(
         # The prompt is part of the operator's identity: two runs with the
         # same model and temperature but different system prompts are two
         # different operators and must not pair.
-        driver_sampling_params={"temperature": temperature, "prompt_hash": driver_prompt_hash()},
+        driver_sampling_params={
+            "temperature": temperature,
+            # The cap decides whether a turn produces text at all --
+            # on GPT-5-class models it spans reasoning tokens -- so two
+            # runs that differ by it are two different operators and
+            # must not pair, exactly like the prompt hash.
+            "max_tokens": max_tokens,
+            "prompt_hash": driver_prompt_hash(),
+        },
     )
 
     def factory(scenario: Any, environment: Any, epoch: int) -> DriverOperator:

@@ -160,7 +160,15 @@ def _driver_configuration(
     driver_pins = replace(
         pins,
         driver_model_id=model,
-        driver_sampling_params={"temperature": temperature, "prompt_hash": driver_prompt_hash()},
+        driver_sampling_params={
+            "temperature": temperature,
+            # The cap decides whether a turn produces text at all --
+            # on GPT-5-class models it spans reasoning tokens -- so two
+            # runs that differ by it are two different operators and
+            # must not pair, exactly like the prompt hash.
+            "max_tokens": max_tokens,
+            "prompt_hash": driver_prompt_hash(),
+        },
     )
 
     def factory(scenario: object, environment: object, epoch: int) -> DriverOperator:

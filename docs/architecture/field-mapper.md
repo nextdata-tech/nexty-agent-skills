@@ -43,9 +43,8 @@ See [field-mapper-generality.md](field-mapper-generality.md) for the 13-scenario
 extension that closes this gap — `identity_source: output` plus a row-array
 output mode — is designed but not built.
 
-**Media inputs work for any modality** (landed). Was
-`pdf`-shaped and orphaned; now `media.py` owns `MediaInput` and `MapperInput.media`
-carries it. Exercised live: fixture 07 (PNG) and fixture 08 (a real 2-page PDF whose
+**Media inputs work for any modality.** `media.py` owns `MediaInput` and
+`MapperInput.media` carries it. Exercised live: fixture 07 (PNG) and fixture 08 (a real 2-page PDF whose
 `recorded.json` is a genuine model response).
 
 Both are **media-direct** — media with no landed text — so every citation lands
@@ -106,14 +105,10 @@ lane: cheaper, no grant, right while the rubric is still moving — and a scaffo
 rather than a shipping shape, because the prompt and the reading of the evidence
 stay outside the closure.
 
-> **This section was reversed on 2026-08-26.** It previously read: *"This harness
-> is the sanctioned exception, narrow by design … Where agent-side judging works,
-> the landed-batch channel … remains the default."* The argument that changed it
-> is that self-containment is a property of the logic, not the values: a closure
+> Why the in-closure lane is the shipping shape and not the exception:
+> self-containment is a property of the logic, not the values. A closure
 > shipping frozen agent-authored scores has bought value-stability with the very
 > thing value-stability was for, since nobody receiving it can re-derive them.
-> The record is kept rather than deleted because a design doc that silently
-> reverses itself stops being usable as a record.
 
 ---
 

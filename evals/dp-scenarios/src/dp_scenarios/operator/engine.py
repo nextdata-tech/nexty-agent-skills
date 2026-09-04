@@ -1153,6 +1153,15 @@ class OperatorEngine:
                 driver_beat_substituted = True
                 driver_fallback_transmitted = True
                 operator_mode = "driver_fallback"
+                # This is an operator fallback by every other signal it sets --
+                # the authored words were replaced by the scripted line -- but
+                # it was the one fallback path that never recorded the failure
+                # mode.  The run-level summary reads ``failure_modes`` to decide
+                # whether the driver spoke on every substitutable turn, so
+                # omitting it here made that line claim a fully authored run
+                # while a turn had gone out scripted.
+                if "operator_fallback" not in self.failure_modes:
+                    self.failure_modes.append("operator_fallback")
                 delivered = tuple(
                     injection
                     for injection in injections

@@ -8,14 +8,42 @@
   },
   "endpoints": {
     "/deals": {
-      "GET": [200]
+      "GET": [
+        200
+      ]
     },
     "/deals/history": {
-      "GET": [404]
+      "GET": [
+        404
+      ]
     },
     "/deals/{id}/stage": {
-      "PATCH": [403]
+      "PATCH": [
+        403
+      ]
     }
   },
-  "known_absent_dimensions": []
+  "known_absent_dimensions": [],
+  "metric_terms": {
+    "stage_entry_time": [
+      "stage_entry",
+      "entered_stage",
+      "entry_time"
+    ],
+    "time_in_stage_days": [
+      "stage_age_days",
+      "stage_age_hours",
+      "time_in_stage",
+      "days_in_stage"
+    ],
+    "stage_velocity_30d": [
+      "stage_velocity",
+      "velocity_30d",
+      "velocity"
+    ],
+    "recently_moved_deals_proxy": [
+      "recently_moved",
+      "recent_move"
+    ]
+  }
 }

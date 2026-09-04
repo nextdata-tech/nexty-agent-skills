@@ -1,11 +1,8 @@
 # Generality stress test — does `map(inputs) -> rows` hold?
 
-Scope: the design as intended, with the prototype's then-known defects assumed
-fixed. (They were tracked in a review document during the fix workflow; that
-document is in the branch history, and the load-bearing findings have since
-landed.) This document invents scenarios the harness was not built against and
-determines whether the single primitive and the single call shape survive them.
-Defects are cited only where one is load-bearing for a verdict.
+Scope: the design as intended. This document invents scenarios the harness was
+not built against and determines whether the single primitive and the single
+call shape survive them.
 
 Two structural facts drive most verdicts below, so they are stated once:
 
