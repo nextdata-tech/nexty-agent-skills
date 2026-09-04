@@ -127,8 +127,8 @@ Each failure names the exact key. Fix until it prints `package is sound`.
 invisible until an engineer promotes the directory, and surfaces to them
 rather than to you.
 
-The asserts are not decoration, and the three they add are each unenforced in
-a different way:
+The asserts are not decoration. The three they add are guarded in three
+different ways, and only one of them is guarded anywhere else:
 
 - **`seed: 7`** loads fine. It is checked only by a test that skips
   `_proposed/`, so without the assert it waits until promotion to fail.

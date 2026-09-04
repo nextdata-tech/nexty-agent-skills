@@ -49,8 +49,8 @@ def _section(text: str, start: str, end: str) -> str:
     thing.
     """
 
-    assert start in text, f"the reference no longer contains the anchor {start!r}"
-    assert end in text, f"the reference no longer contains the anchor {end!r}"
+    assert start in text, f"the document no longer contains the anchor {start!r}"
+    assert end in text, f"the document no longer contains the anchor {end!r}"
     return text.split(start)[1].split(end)[0]
 
 
@@ -124,12 +124,13 @@ def test_both_skills_ship_the_same_contributor_check() -> None:
 
     scratch, session = _skill_texts()
 
-    marker = "print('package is sound:'"
-    blocks = []
-    for text in (scratch, session):
-        assert marker in text, "a skill no longer ships the package check"
-        start = text.index("uv run --project evals/dp-scenarios python -c \"\nfrom dp_scenarios.scenario import load_scenario")
-        blocks.append(text[start : text.index(marker, start)])
+    # Compare the fence *and* the paragraph beside it: the prose explaining
+    # which constraints are guarded where is duplicated verbatim too, and a
+    # correction applied to one copy only would leave every needle below intact
+    # while the two skills told contributors different things.
+    start = "uv run --project evals/dp-scenarios python -c"
+    end = "Then run the suite"
+    blocks = [_section(text, start, end) for text in (scratch, session)]
 
     assert blocks[0] == blocks[1], "the two skills' package checks have drifted apart"
 
@@ -143,8 +144,17 @@ def test_the_contributor_check_still_pins_what_nothing_else_does() -> None:
     entirely rather than deferring it.
     """
 
+    # Derived, not restated: the module docstring rules out restating, and a
+    # literal 29 here would stay green through a fixture rebaseline while
+    # telling contributors to pin the old value.
+    from dp_scenarios.scenario import load_scenario
+
+    shipped_seed = load_scenario(_REPO_ROOT / "evals/dp-scenarios/scenarios/capability-shortfall").seed
+
     for text in _skill_texts():
-        assert "s.seed == 29" in text, "the check no longer pins the seed"
+        assert f"s.seed == {shipped_seed}" in text, (
+            f"the check no longer pins the seed the shipped packages use ({shipped_seed})"
+        )
         assert "s.turn_budget == len(s.answer_sheet.turns)" in text, (
             "the check no longer pins turn_budget equality, which nothing else enforces"
         )
