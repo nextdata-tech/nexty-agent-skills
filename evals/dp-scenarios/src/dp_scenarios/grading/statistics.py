@@ -80,6 +80,24 @@ class RepeatabilityReport:
     demonstrated_once: DemonstratedOnce | None = None
 
 
+def _truncated(value: object) -> bool:
+    """Return whether this observation's run stopped before its script ended.
+
+    Before TURN_TIMEOUT was split out of ENVIRONMENT_WEDGE, a run that ran out
+    of time on a turn was INVALID and therefore excluded here, which is what
+    made ``excluded_invalid`` mean "a run in this batch did not complete". The
+    split left the exclusion reading one state, so a truncated run scores
+    PASSED, stays in the denominator, and a batch containing an epoch that
+    never finished its script can be certified -- promoting its clean siblings
+    to CERTIFIED. The per-run guard in ``_promote_certified_run`` does not help
+    there: it protects the truncated run, not the batch.
+    """
+
+    if isinstance(value, Mapping):
+        return bool(value.get("truncated", False))
+    return bool(getattr(value, "truncated", False))
+
+
 def _state(value: object) -> TerminalState | None:
     if isinstance(value, ScoreVector):
         return value.state
@@ -164,7 +182,11 @@ def gate_pass_rates(runs: Sequence[object], *, twins: Mapping[str, str] | None =
     selected, discounted = discount_twins(runs, twins)
     if any(_repeatability_tier(run) is RepeatabilityTier.DEMONSTRATED_ONCE for run in selected):
         raise ValueError("demonstrated-once observations cannot be represented as rates")
-    valid = [run for run in selected if _state(run) is not TerminalState.INVALID]
+    valid = [
+        run
+        for run in selected
+        if _state(run) is not TerminalState.INVALID and not _truncated(run)
+    ]
     if len(valid) < 2:
         raise ValueError("a rate request requires at least two valid observations")
     rates: dict[str, GateRate] = {}

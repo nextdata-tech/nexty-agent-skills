@@ -158,6 +158,41 @@ def test_driver_reasks_a_verbatim_repeat_and_accepts_a_fresh_message() -> None:
     assert provider.calls == 2
 
 
+def test_both_attempts_measure_length_against_the_text_that_would_be_sent() -> None:
+    """``max_chars`` judges the stripped reply on the retry too, not just the first.
+
+    The provider is the one that fell back here: it padded a valid reply with a
+    trailing newline.  Measuring the unstripped response rejects it as too long
+    for whitespace that was never going to be transmitted, so the turn loses
+    the driver's words for a reason the operator can't see.  The first attempt
+    already stripped before measuring; the retry did not.
+    """
+
+    limit = 40
+    at_limit = "b" * limit
+
+    # First attempt trips the check, so the re-ask is the branch under test.
+    provider = FakeProvider(["Please continue!", at_limit + "\n"])
+    result = _operator(provider, max_chars=limit).author(
+        _view(), fallback="Where are we?", check=_repeat_check
+    )
+
+    assert result.used_fallback is False, "a valid retry was rejected for trailing whitespace"
+    assert result.reason != "provider_output_too_long"
+    assert result.text == at_limit
+    assert result.attempts == 2
+
+    # The limit itself still bites on the retry: one character of real content
+    # over, and it falls back.  Without this the test would pass against a
+    # driver that stopped checking the retry length at all.
+    over = FakeProvider(["Please continue!", "b" * (limit + 1)])
+    rejected = _operator(over, max_chars=limit).author(
+        _view(), fallback="Where are we?", check=_repeat_check
+    )
+    assert rejected.used_fallback is True
+    assert rejected.reason == "provider_output_too_long"
+
+
 def test_driver_falls_back_when_the_repeat_survives_the_re_ask() -> None:
     """The live-run defect: the same operator line sent a second time.
 

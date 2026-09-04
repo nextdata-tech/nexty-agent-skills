@@ -1222,6 +1222,11 @@ class TierRunner:
                     "scenario_id": run.scenario_id,
                     "repeatability_tier": scenario.repeatability_tier.value,
                     "gates": run.scored_dict()["score"]["gates"],
+                    # Carried so the batch-level check can exclude a run that
+                    # never finished its script.  ``score.state`` alone cannot
+                    # say it any more: since the TURN_TIMEOUT split a truncated
+                    # run scores PASSED.
+                    "truncated": run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
                 }
                 for run in runs
             ]

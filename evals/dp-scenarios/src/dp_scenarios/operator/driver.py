@@ -205,13 +205,17 @@ class DriverOperator:
         if retry_failure is not None:
             return DriverRender(fallback, True, retry_failure, (first,), 2)
         assert retried is not None
+        # Same rule as the first attempt: strip before measuring, so a re-ask
+        # that returns max_chars of content plus a trailing newline is not
+        # rejected as too long for whitespace that was never going to be sent.
+        retried = retried.strip()
         if len(retried) > self.max_chars:
             return DriverRender(fallback, True, "provider_output_too_long", (first,), 2)
 
         second = check(retried)
         if second is not None:
             return DriverRender(fallback, True, f"driver_{second.kind}_rejected", (first, second), 2)
-        return DriverRender(retried.strip(), False, None, (first,), 2)
+        return DriverRender(retried, False, None, (first,), 2)
 
 
 __all__ = [

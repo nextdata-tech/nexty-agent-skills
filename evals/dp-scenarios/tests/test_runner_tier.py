@@ -315,8 +315,11 @@ def populated_parent_child_recordings(
 ) -> tuple[object, list[ReplayRecording]]:
     """Build populated replay artifacts from the real parent-child-grain-trap package.
 
-    ``truncate_final_turn`` replaces the last turn with a per-turn timeout,
-    leaving every gate examined on the earlier turns passing.  That is the one
+    ``truncate_final_turn`` replaces the last turn of the *last epoch* with a
+    per-turn timeout, leaving every gate examined on the earlier turns passing.
+    Only one epoch, so the batch still has valid observations to rate --- which
+    is also the reachable shape: one epoch running out of time, not all of
+    them.  That is the one
     shape that distinguishes the truncation cap from the ordinary ungraded
     path: the synthetic ``make_scenario`` fixtures never reach PASSED, so a
     timeout test built on them stays green either way.
@@ -373,7 +376,7 @@ def populated_parent_child_recordings(
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
-        if truncate_final_turn:
+        if truncate_final_turn and epoch == scenario.epochs - 1:
             responses[-1] = TurnResult(
                 agent_message="",
                 turn_timed_out=True,
@@ -1011,15 +1014,21 @@ def test_a_truncated_run_cannot_reach_a_clean_verdict(tmp_path: Path) -> None:
         replay_recordings={scenario.id: recordings},
     ).run()
 
-    assert all(run.terminal_state.value == "turn_timeout" for run in result.scenario_runs)
+    truncated = [run for run in result.scenario_runs if run.terminal_state.value == "turn_timeout"]
+    assert len(truncated) == 1
     # The gates examined before the timeout still pass -- this is the run that
     # would otherwise aggregate to "clean" and exit 0.
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
     assert result.verdict != "clean", "a truncated run was reported clean; the runner would exit 0"
     assert result.verdict == "ungraded"
-    assert all(
-        run.qualification.reasons[0] == "turn_timeout_truncated" for run in result.scenario_runs
-    )
+    assert truncated[0].qualification.reasons[0] == "turn_timeout_truncated"
+    # The batch-level check has to see it too: a truncated epoch must not be
+    # rated as a completed one, or its clean siblings get promoted to CERTIFIED
+    # on the strength of a batch containing a run that never finished.
+    rates = result.scenarios[0].repeatability.rates
+    assert rates is not None, "no rate report; the exclusion assertion below would be vacuous"
+    assert rates.excluded_invalid == 1
+    assert result.scenarios[0].repeatability.certified is False
 
 
 def test_turn_budget_exceeded_is_graded_not_stopped() -> None:
