@@ -80,36 +80,6 @@ def test_from_environment_refuses_when_the_key_is_absent(monkeypatch: pytest.Mon
         OpenAIDriverProvider.from_environment(model="m", temperature=0.7)
 
 
-@pytest.mark.parametrize("missing", [None, "", "   "])
-def test_from_environment_refuses_on_its_own_not_through_the_constructor(
-    monkeypatch: pytest.MonkeyPatch, missing: str | None
-) -> None:
-    """The environment read must be guarded where the read happens.
-
-    ``__post_init__`` also rejects a blank ``api_key``, so a
-    ``from_environment`` that defaulted the absent variable to ``""`` would
-    raise the very same error and every test above would still pass. This one
-    disables the constructor's check, leaving only the classmethod's guard
-    standing, and additionally asserts that no provider object is ever built
-    around an absent key.
-    """
-
-    if missing is None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    else:
-        monkeypatch.setenv("OPENAI_API_KEY", missing)
-    constructed: list[object] = []
-    monkeypatch.setattr(
-        OpenAIDriverProvider,
-        "__post_init__",
-        lambda self: constructed.append(self),
-    )
-
-    with pytest.raises(DriverConfigError, match="OPENAI_API_KEY is not set in the environment"):
-        OpenAIDriverProvider.from_environment(model="m", temperature=0.7)
-    assert constructed == []
-
-
 @pytest.mark.parametrize("value", ["", "   ", "\n"])
 def test_from_environment_refuses_a_blank_key(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", value)
@@ -118,8 +88,9 @@ def test_from_environment_refuses_a_blank_key(monkeypatch: pytest.MonkeyPatch, v
         OpenAIDriverProvider.from_environment(model="m", temperature=0.7)
 
 
+@pytest.mark.parametrize("missing", [None, "", "   ", "\n"])
 def test_the_key_guard_lives_in_from_environment_and_not_only_in_the_constructor(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, missing: str | None
 ) -> None:
     """Pin the refusal to the helper rather than to ``__post_init__``.
 
@@ -130,26 +101,31 @@ def test_the_key_guard_lives_in_from_environment_and_not_only_in_the_constructor
     constructor is relaxed to allow an empty key (a local or proxied
     endpoint), at which point a missing environment variable would build an
     unauthenticated provider instead of refusing. Ask a subclass that
-    validates nothing, so only the helper's guard can raise.
+    validates nothing, so only the helper's guard can raise, and count
+    constructions so the guard is shown to refuse *before* building rather
+    than to build and then reject.
     """
+
+    constructed: list[OpenAIDriverProvider] = []
 
     class Permissive(OpenAIDriverProvider):
         __slots__ = ()
 
         def __post_init__(self) -> None:
+            constructed.append(self)
             object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     assert Permissive.from_environment(model="m", temperature=0.7).api_key == "sk-test"
+    assert len(constructed) == 1
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    if missing is None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", missing)
     with pytest.raises(DriverConfigError, match="OPENAI_API_KEY is not set in the environment"):
         Permissive.from_environment(model="m", temperature=0.7)
-
-    for blank in ("", "   ", "\n"):
-        monkeypatch.setenv("OPENAI_API_KEY", blank)
-        with pytest.raises(DriverConfigError, match="OPENAI_API_KEY is not set in the environment"):
-            Permissive.from_environment(model="m", temperature=0.7)
+    assert len(constructed) == 1
 
 
 def test_from_environment_reads_only_the_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:
