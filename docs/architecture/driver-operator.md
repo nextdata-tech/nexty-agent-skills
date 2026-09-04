@@ -167,6 +167,16 @@ the beat. It must **never** receive:
 and the agent message must stay sentinel-redacted before it leaves the process,
 as `generated.py` already requires.
 
+The redaction set is the union of the operator script's own sentinel, the
+sentinels of live event cards, the generated fixture manifest's markers, and
+every marker a scenario's **gates** declare (`scenario.declared_sentinels`).
+The manifest alone is not the inventory: `capability-shortfall` — the only
+scenario that can run a driver — declares `operator.sentinel: null` and plants
+its graded `pii_sentinel` in the mock-source route table, which
+`marker_values` never reads. Redaction is symmetric: authored text carrying a
+marker is rejected by the same ladder that catches an obstacle, so nothing
+planted goes out in the operator's own turn either.
+
 ### The two risks I most want reviewed
 
 **1. The driver solves the task for the agent.** An LLM told "you are a BI
@@ -276,7 +286,13 @@ forbidden set for free by putting the term in a fallback the driver never used.
 **Served-fact memory is keyed by selection, across every sheet section.** A
 fact is marked served when it is selected, not when a later scan finds its
 words in the transmitted text. Live run 7 re-sent the same infra-profile line
-on turns 8, 9 and 10 and the agent said so.
+on turns 8, 9 and 10 and the agent said so. The selected key is recorded only
+when it was also *transmitted*, so an authored turn that replaced the scripted
+answer consumes nothing; driver-authored words add nothing to the memory at
+all. A fact's `terms` are the question's trigger terms, so scanning authored
+text for them would mark a fact served whenever the driver echoed the agent's
+own word — and `served_reply_keys` is cleared only by a `fresh_session` card,
+so that echo would withhold the answer for the rest of the run.
 
 **A leading-term trip is fallback-and-record, not a scenario failure.** The
 driver re-asks once with a `rejection_notice`; a second trip transmits the

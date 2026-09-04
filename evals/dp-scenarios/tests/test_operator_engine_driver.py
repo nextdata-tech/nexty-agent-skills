@@ -247,9 +247,12 @@ def test_driver_fact_memory_and_beat_recomposition_are_recorded() -> None:
 
     def provider(view: DriverView) -> str:
         views.append(view)
+        # Turn 2 leaks a forbidden term on both attempts, so the *scripted*
+        # ground-truth answer is what actually reaches the agent; turn 3 keeps
+        # missing a mandatory beat term.
         return (
-            "The grain is clear; understood."
-            if len(views) == 1
+            "Let us discuss the join."
+            if view.turn == 2
             else "I will not take on this scope."
         )
 
@@ -265,7 +268,13 @@ def test_driver_fact_memory_and_beat_recomposition_are_recorded() -> None:
     assert views[0].known_facts == (
         ("grain_fact", "The grain is one row per account; FACT-ONLY-MARKER."),
     )
-    assert "ground_truth.grain_fact" in views[1].facts_already_stated
+    # The fact is remembered as stated because it was *transmitted* on the
+    # fallback -- not because a scan found the question's own trigger word in
+    # some authored sentence -- and the immediate re-ask is suppressed.
+    assert transport.message_texts[1] == "The grain is one row per account; FACT-ONLY-MARKER."
+    assert result.turns[1].driver_leading_rejected is True
+    assert result.turns[1].operator_repeat_suppressed is True
+    assert views[2].facts_already_stated == ("ground_truth.grain_fact",)
     assert result.fired_event_ids == ("scope-creep",)
     assert "events_not_transmitted" not in (result.ledger_rows[1]["claim"] or {})
     assert result.ledger_rows[2]["claim"]["driver_beat_substituted"] is True
@@ -277,10 +286,52 @@ def test_driver_fact_memory_and_beat_recomposition_are_recorded() -> None:
     # and the beat terms were still missing.
     assert result.turns[2].driver_fallback_reason == "driver_beat_rejected"
     assert result.turns[2].operator_beat_id == "scope-creep"
-    assert len(views) == 3
-    assert views[2].rejection_notice is not None and views[2].rejection_notice.startswith("beat:")
-    assert views[2].beat == DriverBeat("scope-creep", ("scope", "refusal"))
-    assert views[1].rejection_notice is None
+    assert len(views) == 4
+    assert views[1].rejection_notice is not None and views[1].rejection_notice.startswith("leading:")
+    assert views[3].rejection_notice is not None and views[3].rejection_notice.startswith("beat:")
+    assert views[3].beat == DriverBeat("scope-creep", ("scope", "refusal"))
+    assert views[2].rejection_notice is None
+
+
+def test_a_driver_echoing_a_question_term_does_not_mark_the_fact_served() -> None:
+    """Ground-truth ``terms`` trigger the *question*, so they cannot mark it answered.
+
+    A driver that says "grain" while stating nothing must not consume the
+    scripted answer: ``served_reply_keys`` survives to the end of the run
+    (only a ``fresh_session`` card clears it), so marking the fact on an echo
+    would stonewall the agent on that question for the rest of the run.
+    """
+
+    fact = "The grain is one row per account; FACT-ONLY-MARKER."
+    script = make_script(
+        turns=("Improve weekly visibility.", "Please continue.", "Please continue again."),
+    )
+    views: list[DriverView] = []
+
+    def provider(view: DriverView) -> str:
+        views.append(view)
+        return "I am not sure about the grain; ask me later."
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the grain?"),
+            TurnResult(agent_message="I still need the grain, what is it?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+    result = OperatorEngine(script, transport, driver=driver(provider)).run()
+
+    assert views[0].selected_reply == fact
+    assert views[0].facts_already_stated == ()
+    # Turn 2 deflected in the driver's own words; the fact never went out.
+    assert transport.message_texts[1] == "I am not sure about the grain; ask me later."
+    assert result.turns[1].operator_repeat_suppressed is False
+    assert result.ledger_rows[1]["claim"]["operator_answered_from_ground_truth"] is True
+    assert "operator_repeat_suppressed" not in (result.ledger_rows[1]["claim"] or {})
+    # The agent asked twice; the answer is still selected and still offered.
+    assert views[1].facts_already_stated == ()
+    assert views[1].known_facts == (("grain_fact", fact),)
+    assert views[1].selected_reply == fact
 
 
 def test_driver_may_repair_a_missed_beat_on_the_re_ask() -> None:
@@ -354,9 +405,14 @@ def test_engine_recomposes_when_a_contentful_card_is_missing_from_accepted_drive
     result = OperatorEngine(
         script,
         transport,
-        driver=driver(lambda view: "The grain is clear." if view.turn == 2 else "Understood, carry on."),
+        # Turn 2 leaks a forbidden term, so the scripted fact goes out and the
+        # re-ask on turn 2 is suppressed: turn 3 composes from its own scripted
+        # line, the only composition that can carry a card with no material of
+        # its own.
+        driver=driver(lambda view: "Let us discuss the join." if view.turn == 2 else "Understood, carry on."),
     ).run()
 
+    assert transport.message_texts[1] == "The grain is one row per account; FACT-ONLY-MARKER."
     assert transport.message_texts[2] == "Please continue with the card."
     assert result.fired_event_ids == ("content-beat",)
     assert result.ledger_rows[2]["claim"]["driver_beat_substituted"] is True
@@ -567,3 +623,48 @@ def test_an_approval_turn_does_not_consume_the_reply_it_never_transmits() -> Non
     assert all(record.operator_repeat_suppressed is False for record in result.turns)
     approval = next(row for row in result.ledger_rows if row["action_kind"] == "spec_approved")
     assert approval["artifact_ref"] == "The specification is approved."
+
+
+def test_a_driver_that_echoes_a_planted_marker_is_rejected_and_never_transmits_it() -> None:
+    """The redaction invariant is symmetric: nothing planted goes out either.
+
+    Redaction keeps markers out of the driver's view, so an authored one is a
+    coincidence -- but an unguarded one would land in the operator's own turn,
+    in the transcript grading scans, and back in the provider's context on
+    every later turn as a prior operator message.
+    """
+
+    marker = "pii-sentinel-6f3a9c2e"
+    script = make_script(
+        turns=("Improve weekly visibility.", "Please continue.", "Please continue again."),
+    )
+    views: list[DriverView] = []
+
+    def provider(view: DriverView) -> str:
+        views.append(view)
+        if view.turn == 2:
+            return f"Drop the {marker} column before you continue."
+        return "Understood, carry on."
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Which source is authoritative?"),
+            TurnResult(agent_message="Status update."),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+    result = OperatorEngine(
+        script,
+        transport,
+        driver=driver(provider),
+        extra_sentinels=[marker.encode("utf-8")],
+    ).run()
+
+    assert marker not in "\n".join(transport.message_texts)
+    assert transport.message_texts[1] == "The source is the approved business record."
+    assert result.turns[1].driver_obstacle_rejected is True
+    assert result.turns[1].driver_fallback_reason == "driver_obstacle_rejected"
+    # The rejection notice is fed straight back to the provider, so it must
+    # not quote the marker it is rejecting.
+    assert views[1].rejection_notice is not None
+    assert marker not in json.dumps(views[1].to_mapping())

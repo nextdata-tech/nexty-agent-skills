@@ -747,9 +747,20 @@ class OperatorEngine:
         exempt_texts: Sequence[str],
         prior_base_texts: Sequence[str],
         beat: DriverBeat | None,
+        sentinels: Sequence[bytes] = (),
     ) -> DriverViolation | None:
         """Apply the driver rejection ladder in its contractual order."""
 
+        for marker in sentinels:
+            decoded = marker.decode("utf-8", errors="replace")
+            # Redaction keeps markers out of the view, so an authored one is
+            # either a coincidence or a provider that saw it elsewhere; either
+            # way the operator's own turn must not carry a planted marker into
+            # the transcript, the ledger, or the next turn's provider context.
+            # The detail is deliberately marker-free: it is echoed back to the
+            # provider as the rejection notice.
+            if decoded and decoded in text:
+                return DriverViolation("obstacle", "authored message repeats a planted marker")
         try:
             self.matcher.validate_generated_surface(text)
         except MatcherError as exc:
@@ -1071,6 +1082,7 @@ class OperatorEngine:
                         exempt_texts=exempt_texts,
                         prior_base_texts=prior_base_texts,
                         beat=beat,
+                        sentinels=redaction_markers,
                     ),
                 )
                 base = driver_render.text
@@ -1136,11 +1148,17 @@ class OperatorEngine:
                 undelivered_ids = tuple(
                     injection.card_id for injection in injections if injection.card_id not in delivered_ids
                 )
-            if authorable and driver_render is not None and not driver_fallback_transmitted:
-                for key, _fact in driver_known_facts:
-                    fact = self.script.answer_sheet.ground_truth[key]
-                    if all(term_present(term, base.casefold()) for term in fact.terms):
-                        served_reply_keys.add(f"ground_truth.{key}")
+            # Driver-authored words add nothing to the served-fact memory. A
+            # ground-truth fact's ``terms`` are the *question*'s trigger terms
+            # (``AnswerSheet.answer_for_ground_truth`` matches them against the
+            # agent's message), not the fact's content, so scanning authored
+            # text for them marks a fact served whenever the driver echoes the
+            # agent's own word -- "which endpoint do you mean?" would record
+            # the endpoint answer as given and suppress it for the rest of the
+            # run. Memory stays keyed to a *selected* sheet key that was
+            # actually transmitted, which is the rule the block below applies
+            # on every path.
+            #
             # A fact counts as served when it is actually transmitted, not
             # when it is selected. ``selected_base is next_reply`` is the one
             # test for that on every path: a reply selected on the turn before
