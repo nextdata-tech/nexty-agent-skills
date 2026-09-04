@@ -122,7 +122,13 @@ def human_summary(result: TierResult) -> str:
         if summary.repeatability.demonstrated_once is not None:
             lines.append("- repeatability: demonstrated-once; no rate is rendered")
         elif summary.repeatability.rates is not None:
-            lines.append("- per-gate rates:")
+            if not summary.repeatability.rates.rates:
+                # Without this the summary prints a bare "- per-gate rates:"
+                # header with nothing beneath it and never says, in words, the
+                # one fact the reader needs: too few epochs finished to rate.
+                lines.append("- per-gate rates: none; too few epochs completed to rate this batch")
+            else:
+                lines.append("- per-gate rates:")
             for gate, rate in summary.repeatability.rates.rates.items():
                 lines.append(
                     f"  {gate}: {rate.passed}/{rate.examined} = {rate.rate:.3f}; "

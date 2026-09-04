@@ -181,7 +181,7 @@ def test_rates_use_gate_examination_and_zero_automatic_zero_numerators() -> None
     assert typed_report.rates["build"].examined == 2
 
 
-def test_rate_requests_require_two_valid_observations() -> None:
+def test_an_empty_batch_raises_but_an_unratable_one_reports() -> None:
     """No observations is a caller error; too few *completed* ones is a result.
 
     The distinction matters because the second case is reachable from a bad
@@ -193,7 +193,7 @@ def test_rate_requests_require_two_valid_observations() -> None:
     ``excluded_invalid != 0``.
     """
 
-    with pytest.raises(ValueError, match="at least two valid"):
+    with pytest.raises(ValueError, match="at least one observation"):
         gate_pass_rates([])
 
     report = gate_pass_rates([_run(), _run("invalid"), _run("invalid")])

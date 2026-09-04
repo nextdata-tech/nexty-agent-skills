@@ -219,8 +219,8 @@ are still the engine's.
 export OPENAI_API_KEY=...   # the only place the runner reads the key from
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
   --scenario capability-shortfall \
-  --driver-model gpt-4.1 \
-  --driver-temperature 0.7 \
+  --driver-model gpt-5.6-luna \
+  --driver-temperature 1.0 \
   --driver-timeout 60 \
   --output-dir /tmp/dp-scenarios-driven-run
 ```
@@ -230,6 +230,16 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 | `--driver-model` | none | OpenAI model id; omitting it keeps the scripted operator |
 | `--driver-temperature` | `0.7` | sampling temperature, pinned into the manifest |
 | `--driver-timeout` | `60` | seconds allowed for one provider call before the turn falls back |
+
+**GPT-5-class models need `--driver-temperature 1.0`.** They accept only the
+default temperature and reject the field otherwise, so the request omits it
+when it is the default and sends it when it is not — a non-default value fails
+loudly rather than being quietly dropped. The request always uses
+`max_completion_tokens`; those models reject `max_tokens` outright, and the
+older ones accept the newer name, so there is one shape for both. A driven run
+where every authorable turn shows `operator_mode: driver_fallback` with
+`driver_fallback_reason: provider_error:...` is this class of problem: the
+reason now carries the provider's own scrubbed message, so read it first.
 
 The same three flags exist on `dp_scenarios.runner.cli`, where they require
 `--mode live` — replaying a recording re-authors nothing, so a driver there

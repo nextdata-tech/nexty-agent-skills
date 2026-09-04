@@ -27,6 +27,7 @@ from dp_scenarios.operator.driver import (
 )
 from dp_scenarios.operator import driver as driver_module
 from dp_scenarios.operator.generated import GeneratedOperator, OperatorView
+from dp_scenarios.operator.openai_driver import DriverProviderError
 
 
 @pytest.fixture(autouse=True)
@@ -316,3 +317,42 @@ def test_driver_module_reaches_no_transport_directly() -> None:
 
     assert imported.isdisjoint({"aiohttp", "socket", "http", "urllib", "requests", "ssl"})
     assert imported == {"__future__", "collections", "dataclasses", "math", "typing"}
+
+
+def test_a_provider_error_records_why_it_failed_not_just_its_type() -> None:
+    """A failed driven run has to be diagnosable from its own evidence.
+
+    A 22-minute live run against gpt-5.6-luna fell back on all six authorable
+    turns recording only ``provider_error:DriverProviderError``, while the API
+    had replied "Unsupported parameter: 'max_tokens' ..." every time. The reason
+    is what reaches operator-observations.json, so a bare type name means the
+    bundle cannot say why the driver never spoke.
+    """
+
+    def failing(_view: object) -> str:
+        raise DriverProviderError(
+            "provider returned HTTP 400: Unsupported parameter: 'max_tokens'"
+        )
+
+    result = _operator(failing).author(_view(), fallback="Where are we?", check=_repeat_check)
+
+    assert result.used_fallback is True
+    assert result.reason is not None
+    assert result.reason.startswith("provider_error:DriverProviderError")
+    assert "max_tokens" in result.reason, "the bundle cannot explain the failure"
+
+
+def test_an_unscrubbed_exception_type_still_records_only_its_type() -> None:
+    """Only DriverProviderError promises a scrubbed message, so only it is quoted.
+
+    Any other exception could carry a key or a header in its text, so the type
+    name stays the whole reason.
+    """
+
+    def failing(_view: object) -> str:
+        raise RuntimeError("Bearer sk-not-a-real-key leaked into the message")
+
+    result = _operator(failing).author(_view(), fallback="Where are we?", check=_repeat_check)
+
+    assert result.reason == "provider_error:RuntimeError"
+    assert "sk-not-a-real-key" not in (result.reason or "")

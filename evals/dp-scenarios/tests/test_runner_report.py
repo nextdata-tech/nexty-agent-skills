@@ -15,7 +15,14 @@ from dp_scenarios.runner.report import _stable_document, human_summary, machine_
 from dp_scenarios.runner.cli import _canary_from_mapping
 from dp_scenarios.runner.session import RecordedTurn
 
-from test_runner_tier import clean_canary, make_scenario, pins, recording_for, responses_for
+from test_runner_tier import (
+    clean_canary,
+    make_scenario,
+    pins,
+    populated_parent_child_recordings,
+    recording_for,
+    responses_for,
+)
 
 
 def test_demonstrated_once_is_not_rendered_as_a_rate() -> None:
@@ -153,3 +160,49 @@ def test_stable_document_removes_all_non_reproducible_keys_and_keeps_format_vers
 
     result = machine_report(TierRunner([], pins=pins(), canary=clean_canary()).run())
     assert result["report_format_version"] == 1
+
+
+def test_the_operator_surfaces_name_truncation_rather_than_calling_it_invalid(tmp_path: Path) -> None:
+    """The rendered summary and report.json are the point of the truncation split.
+
+    Everything below them was pinned at the RateReport level, but neither
+    operator-facing surface was, so reverting the label or dropping the JSON key
+    would have stayed green -- and the mislabeling would have come back
+    silently. A truncated run scores PASSED with terminal_state=turn_timeout, so
+    filing it under a heading that says "invalid" contradicts its own epoch line.
+    """
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path, truncate_final_turn=True)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    summary = human_summary(result)
+    assert "runs excluded from rates (invalid or truncated): 1" in summary
+    assert "(1 truncated)" in summary, "the reader cannot tell which exclusions were timeouts"
+    assert "invalid runs excluded from rates" not in summary
+
+    report = machine_report(result)
+    repeatability = report["scenarios"][0]["repeatability"]
+    assert repeatability["excluded_truncated"] == 1
+    assert repeatability["excluded_invalid"] == 1
+
+
+def test_an_unratable_batch_says_so_instead_of_printing_an_empty_header(tmp_path: Path) -> None:
+    """A batch too truncated to rate must state that, not show a bare header."""
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path, truncate_every_epoch=True)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    summary = human_summary(result)
+    assert "too few epochs completed to rate this batch" in summary
+    assert "- per-gate rates:\n" not in summary, "bare header with no rows beneath it"
+    assert result.verdict == "ungraded"

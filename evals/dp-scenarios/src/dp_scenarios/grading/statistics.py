@@ -197,7 +197,7 @@ def gate_pass_rates(runs: Sequence[object], *, twins: Mapping[str, str] | None =
         # No observations at all is a caller error, not a run outcome: there is
         # no batch to report on.  Kept as a raise so a wiring mistake stays
         # loud.
-        raise ValueError("a rate request requires at least two valid observations")
+        raise ValueError("a rate request requires at least one observation")
     if len(valid) < 2:
         # Too few completed epochs to rate, which is a *result*, not a usage
         # error: certification already fails on ``excluded_invalid != 0``, so
