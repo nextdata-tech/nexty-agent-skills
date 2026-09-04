@@ -29,7 +29,7 @@ from pathlib import Path
 BASE_ROWS = 100
 DELTA_ROWS = 40
 GENERIC_STATE_KEY = "__nxd_generic__"
-BASE_TIMESTAMP = "2026-07-20T04:40:00Z"
+BASE_TIMESTAMP = "2026-07-27T08:20:00Z"
 DELTA_TIMESTAMP = "2026-07-30T20:20:00Z"
 
 
@@ -300,7 +300,10 @@ def main() -> int:
     if r3["distinct"].get("events") != expected_total:
         failures.append("run3-distinct-events: the delta was not landed exactly once")
     if not _has_cursor_trajectory(r1["state"], r2["state"], r3["state"]):
-        failures.append("cursor-trajectory: no persisted bag/key follows 100 -> 100 -> 140")
+        failures.append(
+            "cursor-trajectory: no persisted bag/key follows a valid "
+            "100 -> 100 -> 140 or timestamp trajectory"
+        )
     if not r3["marker"]:
         failures.append("run3-marker: .transform-complete was not touched")
 
