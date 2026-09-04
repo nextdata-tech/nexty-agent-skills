@@ -226,6 +226,7 @@ def test_incremental_oracle_requires_one_cursor_key_to_follow_the_trajectory():
         {"events": {"max_event_id": "140"}},
     ]
     assert checker._has_cursor_trajectory(*string_states)
+    assert not checker._has_cursor_trajectory(*states[:2])
 
 
 def test_teaches_the_transform_state_kwarg():
