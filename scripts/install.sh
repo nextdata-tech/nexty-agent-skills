@@ -2,7 +2,7 @@
 # install.sh — first-party installer for the Nexty AI Pro skill pack.
 #
 # Installs Claude Code skills into ~/.claude/skills (or a project-local
-# .claude/skills) and builds one uploadable Claude Desktop/Cowork plugin ZIP.
+# .claude/skills) and builds an uploadable Claude Desktop/Cowork plugin ZIP.
 # Desktop's local-agent-session files are app-owned state; this script does not
 # edit them.
 set -euo pipefail
@@ -13,6 +13,7 @@ PLUGIN_JSON="$ROOT/.claude-plugin/plugin.json"
 DESKTOP_SUPPORT="$HOME/Library/Application Support/Claude"
 PLUGIN_NAME="nexty-agent-skills"
 MP_NAME="nexty"
+PLUGIN_SET="all"
 
 SUBCMD="install"
 declare -a TARGETS=()
@@ -24,6 +25,14 @@ DO_SUBMODULE=1
 ASSUME_YES=0
 DRY_RUN=0
 VERBOSE=0
+SKILL_LIST_FILE=""
+
+cleanup_skill_list() {
+  if [[ -n "${SKILL_LIST_FILE:-}" ]]; then
+    rm -f "$SKILL_LIST_FILE"
+  fi
+}
+trap cleanup_skill_list EXIT
 
 info() { printf '\033[34m==>\033[0m %s\n' "$*" >&2; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*" >&2; }
@@ -46,7 +55,7 @@ install.sh — first-party installer for the Nexty AI Pro skill pack.
 
 Targets:
   --code     Claude Code     -> ~/.claude/skills (or ./.claude/skills with --project)
-  --desktop  Claude Desktop  -> build one plugin ZIP for upload in Plugins
+  --desktop  Claude Desktop  -> build the selected plugin ZIP for upload in Plugins
   --cowork   Claude Cowork   -> same plugin-ZIP flow as --desktop
   --all      all targets
 
@@ -54,7 +63,12 @@ Usage: scripts/install.sh [install|uninstall|status|help] [targets] [scope] [opt
 
 Options:
   --uninstall            Alias for the `uninstall` subcommand
-  --skills "a b c"       Restrict Claude Code to a subset of skills (Desktop/Cowork use all)
+  --skills "a b c"       Restrict Claude Code to a subset of skills
+  --plugin desktop|datamesh|all
+                         Select the local Desktop, deployed DataMesh, or compatibility set
+                         for code when --skills is absent and for Desktop/Cowork archives
+  --skills and --plugin desktop|datamesh are mutually exclusive; --skills selects
+                         explicit Claude Code skills, while --plugin selects a complete pack
   --no-validate          Skip scripts/validate_skills.py (not recommended)
   --no-submodule         Do not initialize the bundled examples submodule
   --zip                  Deprecated compatibility alias; ZIP is now the Desktop/Cowork path
@@ -80,6 +94,10 @@ parse_args() {
         SKILLS_REQUESTED=1
         # shellcheck disable=SC2206
         SKILLS=($1)
+        ;;
+      --plugin)
+        shift; [[ $# -gt 0 ]] || die "--plugin needs an argument"
+        PLUGIN_SET="$1"
         ;;
       --no-validate) DO_VALIDATE=0 ;;
       --no-submodule) DO_SUBMODULE=0 ;;
@@ -124,9 +142,66 @@ require_cmd() {
 selected_skills() {
   if [[ -n "${SKILLS[0]+set}" ]]; then
     printf '%s\n' "${SKILLS[@]}"
-  else
+  elif [[ "$PLUGIN_SET" == "all" ]]; then
     for directory in "$SRC_DIR"/*/; do basename "$directory"; done
+  else
+    marketplace_skill_names "$PLUGIN_SET"
   fi
+}
+
+marketplace_skill_names() {
+  local plugin_name="$1"
+  python3 - "$ROOT" "$ROOT/.claude-plugin/marketplace.json" "$plugin_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root, marketplace_path, plugin_name = sys.argv[1:]
+with open(marketplace_path, encoding="utf-8") as fh:
+    marketplace = json.load(fh)
+for plugin in marketplace.get("plugins", []):
+    if plugin.get("name") == f"nexty-{plugin_name}":
+        if plugin.get("source") != "./src" or plugin.get("strict") is not False:
+            raise SystemExit(f"nexty-{plugin_name} is not a canonical skill-bundle entry")
+        skills = plugin.get("skills")
+        if not isinstance(skills, list) or not skills:
+            raise SystemExit(f"nexty-{plugin_name} has no skills list")
+        seen = set()
+        for skill in skills:
+            if not isinstance(skill, str) or not skill.startswith("./"):
+                raise SystemExit(f"invalid skill path in nexty-{plugin_name}: {skill!r}")
+            name = skill[2:]
+            if not name or "/" in name or name in seen:
+                raise SystemExit(f"duplicate or invalid skill path in nexty-{plugin_name}: {skill!r}")
+            if not (Path(root) / "src" / name / "SKILL.md").is_file():
+                raise SystemExit(f"nexty-{plugin_name} references missing source skill: src/{name}")
+            seen.add(name)
+            print(name)
+        break
+else:
+    raise SystemExit(f"marketplace entry not found: nexty-{plugin_name}")
+PY
+}
+
+prepare_selected_skills() {
+  [[ -n "${SKILL_LIST_FILE:-}" ]] && return 0
+  SKILL_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/nexty-agent-skills-selected.XXXXXX")" \
+    || die "could not create temporary selected-skill list"
+  if ! selected_skills >"$SKILL_LIST_FILE"; then
+    die "failed to resolve selected skills for --plugin $PLUGIN_SET"
+  fi
+  [[ -s "$SKILL_LIST_FILE" ]] || die "selected skill set is empty: $PLUGIN_SET"
+}
+
+validate_plugin_set() {
+  case "$PLUGIN_SET" in
+    all) ;;
+    desktop|datamesh)
+      marketplace_skill_names "$PLUGIN_SET" >/dev/null \
+        || die "invalid plugin set: $PLUGIN_SET"
+      ;;
+    *) die "invalid plugin set: $PLUGIN_SET (expected desktop, datamesh, or all)" ;;
+  esac
 }
 
 validate_skill_names() {
@@ -149,7 +224,10 @@ validate_target_options() {
     done
   fi
   if [[ "$has_desktop" -eq 1 && "$SKILLS_REQUESTED" -eq 1 ]]; then
-    die "--skills is only supported for Claude Code; Desktop/Cowork use the complete plugin pack"
+    die "--skills is only supported for Claude Code; Desktop/Cowork use the selected complete plugin set"
+  fi
+  if [[ "$SKILLS_REQUESTED" -eq 1 && "$PLUGIN_SET" != "all" ]]; then
+    die "--skills and --plugin $PLUGIN_SET are mutually exclusive; use --skills for explicit Code skills or --plugin for a complete named set"
   fi
 }
 
@@ -227,7 +305,7 @@ install_code() {
     copy_skill_tree "$SRC_DIR/$skill" "$destination/$skill"
     [[ "$skill" == "nxd-run-job-loop" ]] && write_code_version_stamp "$destination/$skill"
     ok "code: $skill"
-  done < <(selected_skills)
+  done < "$SKILL_LIST_FILE"
   info "Claude Code: skills installed. Restart Claude Code or start it in a project to use them."
 }
 
@@ -239,7 +317,7 @@ uninstall_code() {
       run "rm -rf '$destination/$skill'"
       ok "removed: $skill"
     fi
-  done < <(selected_skills)
+  done < "$SKILL_LIST_FILE"
   [[ -d "$destination" ]] && run "rmdir '$destination' 2>/dev/null || true"
 }
 
@@ -252,7 +330,7 @@ status_code() {
     else
       echo "  · $skill (not installed)"
     fi
-  done < <(selected_skills)
+  done < "$SKILL_LIST_FILE"
 }
 
 plugin_version() {
@@ -260,27 +338,34 @@ plugin_version() {
 }
 
 plugin_pack_path() {
-  echo "$ROOT/build/nexty-agent-skills-v$(plugin_version).zip"
+  local stem
+  case "$PLUGIN_SET" in
+    all) stem="nexty-agent-skills" ;;
+    desktop) stem="nexty-desktop" ;;
+    datamesh) stem="nexty-datamesh" ;;
+  esac
+  echo "$ROOT/build/${stem}-v$(plugin_version).zip"
 }
 
 desktop_zip() {
-  [[ "$SKILLS_REQUESTED" -eq 0 ]] || die "--skills is only supported for Claude Code; Desktop/Cowork use the complete plugin pack"
+  [[ "$SKILLS_REQUESTED" -eq 0 ]] || die "--skills is only supported for Claude Code; Desktop/Cowork use the selected complete plugin set"
   local pack; pack="$(plugin_pack_path)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '\033[35m[dry-run]\033[0m build %s\n' "$pack" >&2
     return 0
   fi
-  info "building the Claude Desktop/Cowork plugin ZIP"
+  info "building the Claude Desktop/Cowork plugin ZIP ($PLUGIN_SET)"
   (cd "$ROOT" && bash ./build-skills.sh)
+  [[ -f "$pack" ]] || die "build completed without the expected plugin pack: $pack"
   ok "plugin pack: $pack"
   cat >&2 <<EOF
 
 Claude Desktop / Cowork — upload this one file:
   1. Open Claude Desktop → Settings → Customize → Plugins.
   2. Choose Add plugin → Upload plugin.
-  3. Upload:
+  3. Upload this plugin set:
      $pack
-  4. Confirm the pack is enabled, fully quit/reopen Claude Desktop, and start a new Cowork task.
+  4. Confirm it is enabled, fully quit/reopen Claude Desktop, and start a new Cowork task.
 
 The ZIP is also the artifact published on the matching GitHub release.
 EOF
@@ -289,7 +374,8 @@ EOF
 desktop_uninstall() {
   cat >&2 <<'EOF'
 Claude Desktop / Cowork installs are managed by Claude Desktop.
-Remove “Nexty AI Pro” from Settings → Customize → Plugins, then restart Claude Desktop.
+Remove the selected Nexty plugin (Nexty Desktop, Nexty DataMesh, or the compatibility
+Nexty AI Pro bundle) from Settings → Customize → Plugins, then restart Claude Desktop.
 EOF
   report_legacy_desktop_state
 }
@@ -298,14 +384,16 @@ legacy_desktop_state_hits() {
   local -a support_roots=("$DESKTOP_SUPPORT")
   [[ -n "${APPDATA:-}" ]] && support_roots+=("$APPDATA/Claude")
   [[ -n "${LOCALAPPDATA:-}" ]] && support_roots+=("$LOCALAPPDATA/Claude")
-  python3 - "$PLUGIN_NAME" "$MP_NAME" "${support_roots[@]}" <<'PY'
+  python3 - "$MP_NAME" "$PLUGIN_NAME" "nexty-desktop" "nexty-datamesh" -- "${support_roots[@]}" <<'PY'
 from pathlib import Path
 import json
 import sys
 
-plugin_name = sys.argv[1]
-marketplace_name = sys.argv[2]
-plugin_key = f"{plugin_name}@{marketplace_name}"
+marketplace_name = sys.argv[1]
+plugin_names = sys.argv[2:5]
+separator = sys.argv.index("--")
+support_roots = sys.argv[separator + 1:]
+plugin_keys = {f"{name}@{marketplace_name}" for name in plugin_names}
 hits = set()
 
 
@@ -365,7 +453,7 @@ def report_registration(data, field, key, path, kind):
         emit(kind, path)
 
 
-for support_root in sys.argv[3:]:
+for support_root in support_roots:
     root = Path(support_root) / "local-agent-mode-sessions"
     if not safe_is_dir(root):
         continue
@@ -380,13 +468,14 @@ for support_root in sys.argv[3:]:
                 if error is not None:
                     emit("legacy-format unreadable cowork_settings.json", settings)
                 else:
-                    report_registration(
-                        data,
-                        "enabledPlugins",
-                        plugin_key,
-                        settings,
-                        "legacy-format enabledPlugins registration",
-                    )
+                    for plugin_key in plugin_keys:
+                        report_registration(
+                            data,
+                            "enabledPlugins",
+                            plugin_key,
+                            settings,
+                            "legacy-format enabledPlugins registration",
+                        )
             if not safe_is_dir(cowork_plugins):
                 continue
 
@@ -396,13 +485,14 @@ for support_root in sys.argv[3:]:
                 if error is not None:
                     emit("legacy-format unreadable installed_plugins.json", installed)
                 else:
-                    report_registration(
-                        data,
-                        "plugins",
-                        plugin_key,
-                        installed,
-                        "legacy-format installed_plugins registration",
-                    )
+                    for plugin_key in plugin_keys:
+                        report_registration(
+                            data,
+                            "plugins",
+                            plugin_key,
+                            installed,
+                            "legacy-format installed_plugins registration",
+                        )
 
             known = cowork_plugins / "known_marketplaces.json"
             if safe_is_file(known):
@@ -412,14 +502,15 @@ for support_root in sys.argv[3:]:
                 elif marketplace_name in data:
                     emit("legacy-format known_marketplaces registration", known)
 
-            cache = cowork_plugins / "cache" / marketplace_name / plugin_name
-            if safe_is_dir(cache):
-                versions = child_directories(cache)
-                if versions:
-                    for version in versions:
-                        emit("legacy-format cache artifact", version)
-                else:
-                    emit("legacy-format cache artifact", cache)
+            for plugin_name in plugin_names:
+                cache = cowork_plugins / "cache" / marketplace_name / plugin_name
+                if safe_is_dir(cache):
+                    versions = child_directories(cache)
+                    if versions:
+                        for version in versions:
+                            emit("legacy-format cache artifact", version)
+                    else:
+                        emit("legacy-format cache artifact", cache)
 
             marketplace = cowork_plugins / "marketplaces" / marketplace_name
             if safe_is_dir(marketplace):
@@ -454,6 +545,7 @@ desktop_status() {
 main() {
   parse_args "$@"
   require_cmd python3
+  validate_plugin_set
 
   local has_code=0 has_desktop=0
   if [[ -n "${TARGETS[0]+set}" ]]; then
@@ -467,6 +559,9 @@ main() {
   fi
   validate_target_options
   validate_skill_names
+  if [[ "$has_code" -eq 1 ]]; then
+    prepare_selected_skills
+  fi
 
   case "$SUBCMD" in
     install)

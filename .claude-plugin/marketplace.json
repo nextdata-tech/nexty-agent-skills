@@ -4,14 +4,59 @@
   "owner": {
     "name": "Nextdata"
   },
-  "description": "Nextdata AI Pro skills for building and querying data products on Nextdata OS.",
+  "description": "Nextdata AI skills for local desktop data-product workflows and deployed DataMesh workflows.",
   "plugins": [
     {
       "name": "nexty-agent-skills",
       "source": "./",
       "displayName": "Nexty AI Pro",
-      "description": "Set up the nxd CLI, analyze your data mesh, and build/query Python data products on Nextdata OS.",
-      "version": "0.43.0",
+      "description": "Compatibility bundle containing the complete Nextdata AI skill set. Prefer Nexty Desktop or Nexty DataMesh for new installs.",
+      "version": "0.44.0",
+      "author": {
+        "name": "Nextdata"
+      }
+    },
+    {
+      "name": "nexty-desktop",
+      "source": "./src",
+      "strict": false,
+      "skills": [
+        "./nxd-analyze-mesh",
+        "./nxd-build-semantic-data-product",
+        "./nxd-generate-data-product",
+        "./nxd-render-static-artifact",
+        "./nxd-review-closure",
+        "./nxd-run-job-loop"
+      ],
+      "displayName": "Nexty Desktop",
+      "description": "Build, serve, query, refine, and export local data products through the Nexty Desktop supervisor.",
+      "version": "0.44.0",
+      "author": {
+        "name": "Nextdata"
+      }
+    },
+    {
+      "name": "nexty-datamesh",
+      "source": "./src",
+      "strict": false,
+      "skills": [
+        "./nxd-add-expectations-and-promises",
+        "./nxd-add-inputs",
+        "./nxd-add-outputs",
+        "./nxd-add-policies",
+        "./nxd-analyze-mesh",
+        "./nxd-build-data-product",
+        "./nxd-build-semantic-data-product",
+        "./nxd-debug-data-product",
+        "./nxd-fix-policy-failures",
+        "./nxd-query-data-product",
+        "./nxd-run-evals",
+        "./nxd-setup-cli",
+        "./nxd-toggle-policies"
+      ],
+      "displayName": "Nexty DataMesh",
+      "description": "Set up, inspect, build, govern, debug, evaluate, and query data products on a deployed Nextdata DataMesh.",
+      "version": "0.44.0",
       "author": {
         "name": "Nextdata"
       }

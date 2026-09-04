@@ -87,8 +87,9 @@ which one and where it comes from.
 > **Descriptions belong inside the role.** `dimension(description=...)` and
 > `metric(description=...)` reach `describe_model`. A `description=` on the
 > enclosing `field()` / `metric_field()` is an attribute description and is
-> **not** shown to the querying agent — see
-> [nxd-generate-data-product's `reference/nxd-spec-api.md`](../../nxd-generate-data-product/reference/nxd-spec-api.md).
+> **not** shown to the querying agent. For the full generator DSL reference,
+> consult `nxd-generate-data-product`'s `reference/nxd-spec-api.md` when that
+> companion skill is installed; it is not a DataMesh bundle dependency.
 
 ### Join
 

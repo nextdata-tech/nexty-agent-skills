@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.43.0
+  version: 0.44.0
 ---
 
 # Nexty Mesh Assets
@@ -27,7 +27,11 @@ Given an infra profile file, this skill connects to the data-bearing services it
 - **Connected** — two assets belong to the same candidate data product when one appears to feed the other: similar schema, related naming, matching partitioning, and output written after input.
 - **Source-aligned data product** — reads from one source and writes to another with *minimal transformation*, keeping a near-identical data model (rename, reformat, repartition — not reshape). Contrast with a *transformed* product that aggregates, joins, or restructures.
 
-This skill discovers candidates only — it does not generate data product specs. Hand the results to **nxd-build-data-product** to scaffold a data product.
+This skill discovers candidates only — it does not generate data product specs.
+The next step depends on the installed bundle: in Nexty Desktop, return the
+resolved locators to **nxd-run-job-loop**; in Nexty DataMesh, hand them to
+**nxd-build-data-product** to scaffold a deployed data product. Never ask a
+consumer skill that is absent from the active bundle to guess the handoff.
 
 ---
 
@@ -44,9 +48,14 @@ Hand out these paths inline when the matching step comes up (drop the link at th
 | Outputs | `tutorials/guides/02-outputs` | Step 5/6 — source-aligned vs transformed output classification |
 | Semantic model | `tutorials/guides/01-semantic-model` | Step 6 — how inferred schemas become input/output models |
 | Scheduling | `tutorials/guides/06-scheduling` | Step 6 — mapping partition granularity to a transform `when` |
-| Create a DP (CLI) | `tutorials/cli/create` | Closing handoff to nxd-build-data-product |
+| Create a DP (CLI) | `tutorials/cli/create` | Closing handoff for the DataMesh bundle |
 
-`app_url` is owned by nxd-setup-cli, which persists it in the nxd registry and writes the active session config to `<session_config>` (`/tmp/...` on POSIX/WSL, `$env:TEMP\...` on Windows PowerShell). Prefer **showing** live state (`nxd ls data-products`, `nxd ls infra-profiles`) over linking a page when it answers the question.
+When the DataMesh bundle includes **nxd-setup-cli**, it owns `app_url`, persists
+it in the nxd registry, and writes the active session config to
+`<session_config>` (`/tmp/...` on POSIX/WSL, `$env:TEMP\...` on Windows
+PowerShell). In Desktop, use the active supervisor/session context instead.
+Prefer **showing** live state (`nxd ls data-products`, `nxd ls infra-profiles`)
+over linking a page when it answers the question.
 
 ---
 
@@ -125,8 +134,17 @@ This skill is **mesh-aware** — the mesh determines the app/api host that ancho
 1. Read `~/.nxd/meshes.json` and find the **selected / active** mesh entry. From it derive:
    - `app_url` — the UI / docs base (`<app_url>/docs/#/<path>`); record which mesh this run belongs to.
    - `api_url` — the base host for absolute infra-profile service URLs (feeds `--api-url`, Step 6).
-2. nxd-setup-cli owns this registry and writes the active session config to `<session_config>`. If that file is present, pass `--config <session_config>` to any `nxd` command below.
-3. **If no active mesh / no `meshes.json`:** point the user at **nxd-setup-cli** to select and configure a mesh first, and link `<app_url>/docs/#/tutorials/cli/setup` (or `getting-started`) if you can resolve any `app_url`. Discovery against a real mesh cannot run until a mesh is selected. The skill can still run in **offline mode** on local files (Step 1b / offline-discovery) with service URLs left relative.
+2. In the DataMesh bundle, **nxd-setup-cli** owns this registry and writes the
+   active session config to `<session_config>`. If that file is present, pass
+   `--config <session_config>` to any `nxd` command below. In Desktop, use the
+   active supervisor/session context instead.
+3. **If no active mesh / no `meshes.json`:** in the DataMesh bundle, point the
+   user at **nxd-setup-cli** to select and configure a mesh first, and link
+   `<app_url>/docs/#/tutorials/cli/setup` (or `getting-started`) if you can
+   resolve any `app_url`. In Desktop, ask for a profile/session or use the
+   offline path below. Discovery against a real mesh cannot run until a mesh
+   is selected. The skill can still run in **offline mode** on local files
+   (Step 1b / offline-discovery) with service URLs left relative.
 
 Carry `api_url` and `app_url` through the whole run. Never substitute a demo host (e.g. `app.<mesh>.example`) for the real one — those forms below are **illustrative placeholders only**, not canonical hosts.
 
@@ -146,7 +164,7 @@ Search / derive, in order:
 
 For each candidate: an infra profile file has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top — confirm with Grep. A **pointer file** (contents are a path or URI) is followed to the real profile — fetch `http(s)://` URIs, read file paths.
 
-Present every candidate found (from the mesh and from local paths) and let the user confirm which to use — or paste a path/URI of their own. Read the chosen file. If neither the mesh nor local paths yield a profile, link `<app_url>/docs/#/tutorials/cli/setup` and point the user at **nxd-setup-cli** to configure the mesh / extension paths before discovery can run.
+Present every candidate found (from the mesh and from local paths) and let the user confirm which to use — or paste a path/URI of their own. Read the chosen file. If neither the mesh nor local paths yield a profile, use **nxd-setup-cli** and link `<app_url>/docs/#/tutorials/cli/setup` only in the DataMesh bundle; in Desktop, ask for a profile/session or use offline discovery before continuing.
 
 #### Step 1b: User documentation
 
@@ -194,7 +212,12 @@ Build an **asset inventory** for the service. For every data asset record:
 - **Size** — object/row count and total bytes where cheap to obtain.
 - **Last modified** — most recent write timestamp.
 
-The inventory must honor the Nextdata OS **one service = one input** and **one unique schema = one input model** convention — this is what makes the results map cleanly onto nxd-build-data-product. For the model behind it, link `<app_url>/docs/#/tutorials/guides/04-inputs` (resolve `<app_url>` per Step 0 / Platform docs).
+The inventory must honor the Nextdata OS **one service = one input** and **one
+unique schema = one input model** convention. In DataMesh, this maps cleanly
+onto **nxd-build-data-product**; in Desktop, pass the same resolved locators to
+**nxd-run-job-loop**. For the model behind it, link
+`<app_url>/docs/#/tutorials/guides/04-inputs` (resolve `<app_url>` per Step 0 /
+Platform docs).
 
 **Group file-based storage by schema fingerprint, not by directory path.** Path-based grouping fails both ways: a bucket laid out as `<data-product>/<port>/...` collapses a whole product into one asset, while a raw partitioned export explodes one dataset into one fragment per partition. Instead — infer each file's schema, then group files that share an identical schema and format into one logical asset. Path segments that *vary within a group* are **partition keys** (`key=value`, date segments, numeric ids) — record them as partitioning, do not split on them. Per the Nextdata OS convention, treat **one infra service as one input** and **each unique schema as its own input model**.
 
@@ -271,9 +294,11 @@ For each ambiguous candidate, the skill must:
       - Snowflake schema with no `_STAGING` / `_TEST` / `_TMP` suffix beats one that has them.
       - Plain schema beats one with a trailing `_<digit>` (numbered copy).
       - Snowflake schema whose tokens overlap the input path's last meaningful segment beats one that doesn't (`DWN_INCREMENTAL2.CUSTOMER_HISTORY` beats `HELLOINCREMENTAL.CUSTOMER_HISTORY` for an input under `dwn-incremental2/`).
-5. **Never let the downstream consumer (nxd-build-data-product) guess.** Pass on resolved input + output locators only.
+5. **Never let the downstream consumer guess.** Pass on resolved input + output
+   locators only. Use **nxd-run-job-loop** in the Desktop bundle or
+   **nxd-build-data-product** in the DataMesh bundle.
 
-Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nxd-build-data-product** to turn a resolved candidate into a real data product, and link `<app_url>/docs/#/tutorials/cli/create` for how a resolved candidate becomes a real data product on the mesh.
+Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nxd-build-data-product** in the DataMesh bundle or **nxd-run-job-loop** in the Desktop bundle, and link `<app_url>/docs/#/tutorials/cli/create` only for the DataMesh path.
 
 ---
 
@@ -298,7 +323,9 @@ If a `driver` string is malformed or its `name` and `driver` fields look swapped
 - **Cost** — prefer metadata (`INFORMATION_SCHEMA`, object listings, table stats) over full scans. Sample with `LIMIT` / single-object reads to infer schema.
 - **Client libraries** — recipes need driver-specific clients (`boto3`, `snowflake-connector-python`, etc.). Install on demand into a temp venv; prefer a CLI already on PATH.
 - **Multiple credentials, one store** — a profile may list several services pointing at the same store with different auth (e.g. `nxd-snowflake`, `nxd-snowflake-keypair`, `nxd-snowflake-pat`). Inspect one; note the others are duplicates.
-- **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nxd-build-data-product.
+- **One service = one input** — keep the inventory aligned to how nextdata
+  models inputs, so results map cleanly onto the active bundle's consumer:
+  **nxd-run-job-loop** in Desktop or **nxd-build-data-product** in DataMesh.
 
 ---
 
@@ -320,4 +347,6 @@ profile — not a bug in the analyzer. Confirm which before retrying.
 Never echo a secret value from a profile while diagnosing — inspect attributes
 in-process, report only the field names. When a service is reachable but a
 *deployed Data Product* built on it is failing, switch to
-**nxd-debug-data-product**.
+**nxd-debug-data-product** in the DataMesh bundle. In Desktop, return the
+failure context to **nxd-run-job-loop** for its supervisor diagnostic route;
+do not hand off to an absent debug skill.

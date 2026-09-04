@@ -63,6 +63,8 @@ FAILURES: list[str] = []
 PASSES: list[str] = []
 
 MATERIALIZE_TIMEOUT_S = 300
+ENVELOPE_METADATA_COLUMNS = frozenset({"page", "per_page", "total", "pages"})
+ENVELOPE_FACT = "landed:envelope-metadata-absent"
 VALID_TOKEN = "bcn_live_9f3ac2e7d84b41f0a6c5d2e19b7f0033"
 # Mirrors stub_beacon_api.REQUIRED_USER_AGENT. Duplicated the same way
 # VALID_TOKEN is, so the static checks can run before the stub is loaded;
@@ -292,6 +294,20 @@ def resolve_result_col(checks_cols: list[str]) -> str | None:
         if low in ("result", "status") or re.fullmatch(r"result_{1,2}status", low):
             return c
     return None
+
+
+def envelope_metadata_columns(columns: list[str]) -> list[str]:
+    """Return pagination-envelope keys that leaked into a landed row table.
+
+    A correct dlt ``data_selector`` (or an equivalent pre-landing mapping)
+    removes the response envelope before rows reach DuckDB. Keep this helper
+    independent of DuckDB so the evaluator can pin the landed-column contract
+    without relying on transcript narration.
+    """
+    return sorted(
+        {column for column in columns if column.casefold() in ENVELOPE_METADATA_COLUMNS},
+        key=str.casefold,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -657,6 +673,19 @@ def main() -> int:
             "landed:pagination-checks-complete",
             n_checks == 37,
             f"landed {n_checks} check rows, expected 37 (same truncation trap)",
+        )
+
+        # ---- response envelope must not land as row data -----------------
+        envelope_columns = {
+            table: envelope_metadata_columns(col_names(db, table))
+            for table in (monitors_table, checks_table)
+        }
+        leaked = {table: columns for table, columns in envelope_columns.items() if columns}
+        check(
+            ENVELOPE_FACT,
+            not leaked,
+            f"pagination metadata leaked into landed row tables: {leaked}; "
+            "the landed row tables must not carry the response envelope metadata",
         )
 
         # ---- nested field flattened: result must be a flat scalar column --

@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.43.0
+  version: 0.44.0
 ---
 
 # nxd-generate-data-product skill
@@ -358,9 +358,7 @@ Raise `RuntimeError` carrying actual-vs-expected. An itemized exclusion means a
 totality alone can pass while every monetary answer is overstated — both, with
 worked code, in [reference/derived-models.md](reference/derived-models.md).
 
-**Other connector types**: Step 3 is identical except the `readers=[...]` body
-and `secrets[...]` key — take those from `reference/` (`file-source.md`,
-`database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
+**Other connector types**: Step 3 is identical except the `readers=[...]` body and `secrets[...]` key — take those from `reference/` (`file-source.md`, `database-source.md`, `api-source.md`); when an API returns a metadata envelope, select its row array with the resource endpoint's `data_selector` before landing. Steps 3a/3b are connector-independent.
 
 ### Step 4 — `spec.py`: models + transform + the `duckdb` output port
 
@@ -450,6 +448,9 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and
 `provenance`) and the Step-3b asserts still run.
 
 ### Step 7 — Self-check before handing off (MANDATORY)
+
+The closure-root self-check is the generator's record gate, distinct from the
+supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
 
 **Step 6b, only when `nxd-review-closure` is installed**: explicitly dispatch one built-in read-only reviewer — never a custom/plugin agent definition — with the closure path and verbatim request, to return claims only; it never edits, builds, serves, transforms, or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
 Then the self-check. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the naming invariant (`models.py` == required `.promise` plus optional `.model` == `PHYSICAL_MODELS` == `main.<name>`), then confirm only `BASE_MODELS` matches `data/`, allowing an absent directory only for a listed optional-empty base model; derived models and semantic views have no source directory. **When a

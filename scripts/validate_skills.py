@@ -42,6 +42,7 @@ KNOWN_TOOLS = frozenset(
 # Canonical spelling for a skill's reference directory. The other spelling
 # (`references/`) is rejected so the pack stays consistent.
 CANONICAL_REFERENCE_DIR = "reference"
+MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)\s]+)")
 
 
 def _strip_quotes(value: str) -> str:
@@ -308,6 +309,34 @@ def _current_pack_skills(skill_sets_text: str) -> list[str] | None:
     return pack
 
 
+def _skill_set_skills(skill_sets_text: str, set_name: str) -> list[str] | None:
+    """Return the ``src/<skill>`` entries in one named skill set."""
+    skills: list[str] | None = None
+    active = False
+    in_skills = False
+    for line in skill_sets_text.splitlines():
+        set_header = re.match(r"^  ([a-zA-Z0-9_]+):\s*$", line)
+        if set_header:
+            active = set_header.group(1) == set_name
+            in_skills = False
+            if active:
+                skills = []
+            continue
+        if not active:
+            continue
+        if re.match(r"^    skills:\s*$", line):
+            in_skills = True
+            continue
+        if re.match(r"^    \S[^:]*:", line):
+            in_skills = False
+            continue
+        if in_skills:
+            item = re.match(r'\s+-\s+"?(src/[^"\s]+)"?\s*$', line)
+            if item and skills is not None:
+                skills.append(item.group(1))
+    return skills
+
+
 def validate_pack_completeness(root: Path) -> list[str]:
     """Every directory under src/ must be in current_pack and the README table."""
     errors: list[str] = []
@@ -339,6 +368,234 @@ def validate_pack_completeness(root: Path) -> list[str]:
                 errors.append(
                     f"README.md: skill {name!r} is missing from the Available Skills table"
                 )
+    return errors
+
+
+def validate_marketplace_skill_bundles(root: Path) -> list[str]:
+    """Validate the named marketplace projections against ``src/``.
+
+    The marketplace intentionally keeps the two customer-facing bundles as
+    skill-bundle plugins backed by the canonical ``src/`` tree. This prevents
+    copied plugin trees from drifting while allowing shared foundation skills
+    to appear in both experiences.
+    """
+    errors: list[str] = []
+    market_path = root / ".claude-plugin" / "marketplace.json"
+    if not market_path.exists():
+        return [f"{market_path}: missing marketplace manifest"]
+    try:
+        market = json.loads(market_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{market_path}: invalid JSON ({exc})"]
+
+    plugins = market.get("plugins", [])
+    if not isinstance(plugins, list):
+        return [f"{market_path}: plugins must be a list"]
+    by_name = {
+        plugin.get("name"): plugin
+        for plugin in plugins
+        if isinstance(plugin, dict) and isinstance(plugin.get("name"), str)
+    }
+    src = root / "src"
+    source_names = {path.name for path in _skill_dirs(src)} if src.is_dir() else set()
+    named_sets: dict[str, set[str]] = {}
+
+    for plugin_name in ("nexty-desktop", "nexty-datamesh"):
+        plugin = by_name.get(plugin_name)
+        if plugin is None:
+            errors.append(f"{market_path}: missing {plugin_name!r} plugin entry")
+            continue
+        if plugin.get("source") != "./src":
+            errors.append(
+                f"{market_path}: {plugin_name!r} must use source './src'"
+            )
+        if plugin.get("strict") is not False:
+            errors.append(
+                f"{market_path}: {plugin_name!r} must set strict to false"
+            )
+        skills = plugin.get("skills")
+        if not isinstance(skills, list) or not skills:
+            errors.append(f"{market_path}: {plugin_name!r} must list skills")
+            continue
+        names: set[str] = set()
+        for skill_ref in skills:
+            if not isinstance(skill_ref, str) or not skill_ref.startswith("./"):
+                errors.append(
+                    f"{market_path}: {plugin_name!r} has invalid skill path {skill_ref!r}"
+                )
+                continue
+            skill_name = skill_ref[2:]
+            if not skill_name or "/" in skill_name or skill_name in names:
+                errors.append(
+                    f"{market_path}: {plugin_name!r} has duplicate or invalid skill path "
+                    f"{skill_ref!r}"
+                )
+                continue
+            names.add(skill_name)
+            if skill_name not in source_names:
+                errors.append(
+                    f"{market_path}: {plugin_name!r} references missing skill src/{skill_name}"
+                )
+        named_sets[plugin_name] = names
+
+    if len(named_sets) == 2:
+        union = named_sets["nexty-desktop"] | named_sets["nexty-datamesh"]
+        missing = sorted(source_names - union)
+        extra = sorted(union - source_names)
+        if missing:
+            errors.append(
+                f"{market_path}: named plugin sets omit source skills: {', '.join(missing)}"
+            )
+        if extra:
+            errors.append(
+                f"{market_path}: named plugin sets reference unknown skills: {', '.join(extra)}"
+            )
+    return errors
+
+
+def validate_named_skill_set_alignment(root: Path) -> list[str]:
+    """Keep named eval packs exactly aligned with marketplace projections."""
+    errors: list[str] = []
+    skill_sets_path = root / "evals" / "skill-sets.yaml"
+    if not skill_sets_path.exists():
+        return errors
+    marketplace_sets = _marketplace_skill_sets(root)
+    skill_sets_text = skill_sets_path.read_text(encoding="utf-8")
+    mappings = {
+        "nexty-desktop": "nexty_desktop",
+        "nexty-datamesh": "nexty_datamesh",
+    }
+    for plugin_name, set_name in mappings.items():
+        marketplace_names = marketplace_sets.get(plugin_name)
+        eval_paths = _skill_set_skills(skill_sets_text, set_name)
+        if marketplace_names is None:
+            continue
+        if eval_paths is None:
+            errors.append(
+                f"{skill_sets_path}: missing named skill set {set_name!r} "
+                f"for marketplace plugin {plugin_name!r}"
+            )
+            continue
+        eval_names = [path.split("/", 1)[1] for path in eval_paths if "/" in path]
+        if len(eval_names) != len(set(eval_names)):
+            errors.append(f"{skill_sets_path}: {set_name} contains duplicate skills")
+        if set(eval_names) != marketplace_names:
+            missing = sorted(marketplace_names - set(eval_names))
+            extra = sorted(set(eval_names) - marketplace_names)
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if extra:
+                details.append(f"extra {', '.join(extra)}")
+            errors.append(
+                f"{skill_sets_path}: {set_name} does not match {plugin_name} "
+                f"marketplace membership ({'; '.join(details)})"
+            )
+    return errors
+
+
+def _markdown_link_target(raw_target: str) -> str | None:
+    """Return a local relative Markdown target, excluding web and anchor links."""
+    target = raw_target.strip()
+    if target.startswith("<") and target.endswith(">"):  # pragma: no cover - regex excludes spaces
+        target = target[1:-1]
+    target = target.split("#", 1)[0].split("?", 1)[0]
+    if not target or target.startswith(("/", "#")):
+        return None
+    if "://" in target or target.startswith(("mailto:", "data:")):
+        return None
+    return target
+
+
+def _marketplace_skill_sets(root: Path) -> dict[str, set[str]]:
+    market_path = root / ".claude-plugin" / "marketplace.json"
+    if not market_path.exists():
+        return {}
+    try:
+        plugins = json.loads(market_path.read_text(encoding="utf-8")).get("plugins", [])
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[str, set[str]] = {}
+    for plugin in plugins:
+        if not isinstance(plugin, dict):
+            continue
+        name = plugin.get("name")
+        skills = plugin.get("skills")
+        if name not in {"nexty-desktop", "nexty-datamesh"} or not isinstance(skills, list):
+            continue
+        result[name] = {
+            skill[2:]
+            for skill in skills
+            if isinstance(skill, str) and skill.startswith("./") and "/" not in skill[2:]
+        }
+    return result
+
+
+def validate_bundle_reference_closure(root: Path) -> list[str]:
+    """Ensure relative skill/reference links stay inside each named bundle.
+
+    A relative link into another ``src/<skill>`` directory is a hard package
+    dependency. Plain prose may describe an optional handoff and is therefore
+    intentionally not treated as a dependency by this check.
+    """
+    errors: list[str] = []
+    src = root / "src"
+    if not src.is_dir():
+        return errors
+    source_names = {path.name for path in _skill_dirs(src)}
+    skill_sets_path = root / "evals" / "skill-sets.yaml"
+    if not skill_sets_path.exists():
+        return errors
+    marketplace_sets = _marketplace_skill_sets(root)
+    for plugin_name, bundle in marketplace_sets.items():
+        bundle_names = bundle
+        for skill_name in sorted(bundle_names):
+            skill_dir = src / skill_name
+            if not skill_dir.is_dir():
+                continue
+            for document in sorted(skill_dir.rglob("*.md")):
+                # build-skills.sh deliberately prunes this submodule's
+                # housekeeping docs from Desktop archives; they are not part
+                # of the shipped reference closure to validate here.
+                if "nextdata-public-examples" in document.parts:
+                    continue
+                text = document.read_text(encoding="utf-8")
+                for match in MARKDOWN_LINK_RE.finditer(text):
+                    target = _markdown_link_target(match.group(1))
+                    if target is None:
+                        continue
+                    candidate = (document.parent / target).resolve()
+                    try:
+                        relative = candidate.relative_to(src.resolve())
+                    except ValueError:
+                        errors.append(
+                            f"{document}: relative link {target!r} points outside the "
+                            "source skill pack and is not a packaged source member"
+                        )
+                        continue
+                    if not relative.parts:
+                        errors.append(
+                            f"{document}: relative link {target!r} points to the "
+                            "source root, not a packaged source member"
+                        )
+                        continue
+                    referenced_skill = relative.parts[0]
+                    if referenced_skill not in source_names:
+                        errors.append(
+                            f"{document}: relative link {target!r} points to missing "
+                            f"source skill src/{referenced_skill}"
+                        )
+                    elif referenced_skill not in bundle_names:
+                        errors.append(
+                            f"{document}: relative link {target!r} crosses the "
+                            f"{plugin_name} bundle to src/{referenced_skill}; "
+                            "add the skill to the bundle or make the handoff non-relative"
+                        )
+                    elif not candidate.exists():
+                        errors.append(
+                            f"{document}: relative link {target!r} is dangling in "
+                            f"the {plugin_name} bundle"
+                        )
     return errors
 
 
@@ -415,6 +672,9 @@ def main() -> int:
     errors.extend(validate_reference_tocs(root))
     errors.extend(validate_evals(root))
     errors.extend(validate_pack_completeness(root))
+    errors.extend(validate_marketplace_skill_bundles(root))
+    errors.extend(validate_named_skill_set_alignment(root))
+    errors.extend(validate_bundle_reference_closure(root))
     errors.extend(validate_version_consistency(root))
 
     if errors:

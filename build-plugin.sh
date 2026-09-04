@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Package the Claude Code plugin into a single zip:
+# Package the legacy aggregate Claude Code plugin into a single direct-use zip.
+# The two named Claude Code plugins are skill-bundle entries in marketplace.json
+# and are installed through the `nexty` marketplace; this script remains the
+# compatibility/direct-plugin path:
 #   build/plugin/nexty-agent-skills-plugin-v<version>.zip
 #
 # Layout is the documented plugin format (https://code.claude.com/docs/en/plugins):

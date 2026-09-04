@@ -75,8 +75,9 @@ From a clone of this repo, the first-party installer handles every Claude target
 git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
 cd nexty-agent-skills
 ./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
-./scripts/install.sh --desktop     # Claude Desktop / Cowork: build one plugin ZIP to upload
-./scripts/install.sh --all         # Code install + one Desktop/Cowork plugin ZIP
+./scripts/install.sh --desktop --plugin desktop   # local Desktop workflow ZIP
+./scripts/install.sh --desktop --plugin datamesh  # deployed DataMesh workflow ZIP
+./scripts/install.sh --all         # Code install + compatibility Desktop/Cowork ZIP
 ```
 
 `scripts/install.sh` validates the pack (`scripts/validate_skills.py`), initializes the
@@ -96,11 +97,15 @@ location for each agent automatically. On Windows PowerShell, run the same comma
 
 This repository also includes Claude Code plugin metadata:
 
-- `.claude-plugin/plugin.json` describes the plugin itself.
-- `.claude-plugin/marketplace.json` describes a small marketplace named `nexty`.
-- `src/` remains the source of truth for the skills loaded by the plugin.
+- `.claude-plugin/plugin.json` carries the authoritative version and author metadata.
+- `.claude-plugin/marketplace.json` describes one marketplace named `nexty`.
+- `src/` remains the single source of truth; the marketplace exposes two named skill-bundle
+  plugins backed by that tree, plus a compatibility aggregate for existing installs.
 
-Use this path when you want customers or field engineers to install the whole Nexty skill pack through Claude Code's plugin flow instead of copying individual skill folders.
+`nexty-desktop` contains the local supervisor workflow. `nexty-datamesh` contains the
+deployed-platform workflow. `nxd-analyze-mesh` and `nxd-build-semantic-data-product` are
+shared foundation skills and intentionally appear in both sets. `nexty-agent-skills` remains
+available as the compatibility aggregate for existing installs.
 
 #### Own marketplace
 
@@ -108,6 +113,14 @@ This is the lowest-friction customer-sharing option. The marketplace lives in th
 
 ```
 /plugin marketplace add nextdata-tech/nexty-agent-skills
+/plugin install nexty-desktop@nexty       # local Nexty Desktop workflow
+# or
+/plugin install nexty-datamesh@nexty      # deployed DataMesh workflow
+```
+
+Existing installations can continue using the compatibility aggregate:
+
+```
 /plugin install nexty-agent-skills@nexty
 ```
 
@@ -115,7 +128,7 @@ To iterate on a local checkout, point Claude Code at your clone instead:
 
 ```
 /plugin marketplace add ./path/to/nexty-agent-skills
-/plugin install nexty-agent-skills@nexty
+/plugin install nexty-desktop@nexty
 ```
 
 Before sharing marketplace install instructions with a customer, validate the plugin:
@@ -153,11 +166,12 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 ```
 
 **Targets** (default `--code`): `--code` `--desktop` `--cowork` `--all`.
+Use `--plugin desktop|datamesh|all` to select a named set; `all` is the compatibility aggregate.
 
 | Target | What it does |
 |--------|--------------|
 | `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
-| `--desktop` / `--cowork` | Builds one `nexty-agent-skills-v<version>.zip` containing the complete plugin. Upload that ZIP in Claude Desktop's Plugins UI on macOS or Windows. |
+| `--desktop` / `--cowork` | Builds `nexty-desktop-v<version>.zip`, `nexty-datamesh-v<version>.zip`, or the compatibility `nexty-agent-skills-v<version>.zip`, depending on `--plugin`. Upload the selected ZIP in Claude Desktop's Plugins UI. |
 
 **Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
 
@@ -168,7 +182,8 @@ scripts/install.sh --code                       # global Claude Code install (de
 scripts/install.sh --code --project             # current project only
 scripts/install.sh --code --skills "nxd-setup-cli nxd-build-data-product"
 scripts/install.sh --code --skills "nxd-run-job-loop nxd-generate-data-product" # generator + its runtime helper skill
-scripts/install.sh --desktop                    # build the one Desktop/Cowork plugin ZIP
+scripts/install.sh --desktop --plugin desktop   # build the local Desktop plugin ZIP
+scripts/install.sh --desktop --plugin datamesh  # build the deployed DataMesh plugin ZIP
 scripts/install.sh --desktop --zip              # same flow; --zip is a compatibility alias
 scripts/install.sh --all                        # every target
 scripts/install.sh status --code                # show what's installed
@@ -183,8 +198,9 @@ uses its installed validator, lock writer, and build-record helpers at runtime.
 
 #### How the Claude Desktop / Cowork install works
 
-`scripts/install.sh --desktop` and `--cowork` build the complete plugin at
-`build/nexty-agent-skills-v<version>.zip`. Upload that one file from Claude Desktop's
+`scripts/install.sh --desktop` and `--cowork` build the selected plugin at
+`build/nexty-desktop-v<version>.zip`, `build/nexty-datamesh-v<version>.zip`, or
+the compatibility `build/nexty-agent-skills-v<version>.zip`. Upload that file from Claude Desktop's
 Customize → Plugins → Add plugin → Upload plugin, confirm it is enabled, fully quit/reopen Claude Desktop,
 and start a new Cowork task. This is the same plugin layout used by the hosted release
 asset and works on macOS and Windows; the script does not edit Claude's
@@ -244,6 +260,18 @@ rm -rf .agents .claude/skills skills-lock.json
 ```
 
 ## Available Skills
+
+### Plugin sets
+
+| Plugin | Intended experience | Archive |
+|--------|---------------------|---------|
+| `nexty-desktop` | Local Nexty Desktop supervisor workflows | `build/nexty-desktop-v<version>.zip` |
+| `nexty-datamesh` | Deployed DataMesh workflows | `build/nexty-datamesh-v<version>.zip` |
+| `nexty-agent-skills` | Compatibility aggregate for existing installs | `build/nexty-agent-skills-v<version>.zip` |
+
+The two named plugins share the mesh analyzer and semantic-product foundation skills by
+design. Their membership is declared once in `.claude-plugin/marketplace.json` and the
+build script projects those lists from `src/`.
 
 | Skill | Description |
 |-------|-------------|
@@ -485,17 +513,19 @@ python3 scripts/validate_skills.py
 ./build-skills.sh
 ```
 
-This creates individual skill ZIPs for compatibility and one uploadable whole-pack
-plugin ZIP under `build/`:
+This creates individual skill ZIPs for compatibility and uploadable named plugin ZIPs
+under `build/`:
 
 ```text
-build/nexty-agent-skills-v<version>.zip
+build/nexty-desktop-v<version>.zip
+build/nexty-datamesh-v<version>.zip
+build/nexty-agent-skills-v<version>.zip  # compatibility aggregate
 ```
 
 #### 2. Install the plugin ZIP in Claude Desktop
 
 Claude Desktop does not use `npx skills add ./src --all -y` for this flow. Upload the
-generated whole-pack plugin ZIP through the Desktop UI.
+generated named plugin ZIP through the Desktop UI.
 
 In Claude Desktop:
 
@@ -503,10 +533,11 @@ In Claude Desktop:
 2. Open `Plugins`.
 3. Choose `Add plugin`.
 4. Choose `Upload plugin`.
-5. Upload `build/nexty-agent-skills-v<version>.zip`.
+5. Upload `build/nexty-desktop-v<version>.zip` for the local workflow, or
+   `build/nexty-datamesh-v<version>.zip` for the deployed DataMesh workflow.
 6. Confirm the plugin is enabled.
 
-The whole-pack ZIP is a plugin archive, not a single skill archive. Do not upload it
+Each named ZIP is a plugin archive, not a single skill archive. Do not upload it
 through `Create skill` → `Upload a skill`; that path applies the per-skill 200-entry
 limit. The individual `build/<skill>.zip` artifacts remain available for one-skill
 installs through the Skills UI.
@@ -672,7 +703,7 @@ These are enforced by `scripts/validate_skills.py` in CI (`.github/workflows/ci.
 
 ### Claude Desktop packaging limits
 
-Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise, reports per-skill file counts, and assembles the whole-pack plugin ZIP.
+Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise, reports per-skill file counts, and assembles the named plugin ZIPs.
 
 - **Max 200 entries per skill zip.** Counts files + directory entries. The build script passes `zip -D` to drop empty dir entries and excludes VCS/caches/lockfiles/OS junk. If a bundled examples repo pushes you over, strip per-DP housekeeping (`README.md`, `.python-version`, `pyproject.toml`, `notebooks/`, `tests/`) before code.
 - **No XML / angle-bracket tags in the SKILL.md `description` field.** Placeholders like `<DP>` or `<table>` in the frontmatter description trip the loader. Use plain wording (`a named DP`, `the table`) instead. Body content is fine; only the YAML frontmatter `description:` is parsed strictly.
