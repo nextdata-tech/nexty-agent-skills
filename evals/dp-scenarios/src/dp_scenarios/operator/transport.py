@@ -70,6 +70,7 @@ class TurnResult:
     build_failure_count: int = 0
     reported: bool = False
     environment_wedged: bool = False
+    turn_timed_out: bool = False
     environment_detail: str | None = None
     session_id: str | None = None
 

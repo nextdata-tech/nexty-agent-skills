@@ -43,9 +43,10 @@ from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityReport
-from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
+from dp_scenarios.ledger import LedgerRow, Manifest, NOT_APPLICABLE, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
+    DriverOperator,
     GeneratedOperator,
     OperatorEngine,
     StaticSupervisorRecordReader,
@@ -53,7 +54,7 @@ from dp_scenarios.operator import (
 )
 from dp_scenarios.operator.appender import SupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.transport import Transport
-from dp_scenarios.scenario import Scenario, load_scenarios
+from dp_scenarios.scenario import Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
@@ -250,6 +251,9 @@ class ScenarioSummary:
                 for gate, rate in self.repeatability.rates.rates.items()
             }
             result["repeatability"]["excluded_invalid"] = self.repeatability.rates.excluded_invalid
+            # Addressable separately so a consumer is never told that a run
+            # scoring PASSED with terminal_state=turn_timeout was invalid.
+            result["repeatability"]["excluded_truncated"] = self.repeatability.rates.excluded_truncated
         if self.repeatability.demonstrated_once is not None:
             result["repeatability"]["demonstrated_once"] = self.repeatability.demonstrated_once.as_dict()
         return result
@@ -296,7 +300,7 @@ CanaryFactory: TypeAlias = Callable[[], CanaryResult | Verdict]
 SupervisorReaderFactory: TypeAlias = Callable[..., SupervisorRecordReader | None]
 KnobPlan: TypeAlias = Mapping[tuple[str, int], SupervisorKnobs] | Callable[[Scenario, int], SupervisorKnobs]
 WorkflowRestartFactory: TypeAlias = Callable[[Scenario, RunEnvironment, int, str], Transport]
-GeneratedOperatorFactory: TypeAlias = Callable[..., GeneratedOperator | None]
+OperatorFactory: TypeAlias = Callable[..., GeneratedOperator | DriverOperator | None]
 
 
 def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: ClaimsDocument) -> Verdict:
@@ -443,9 +447,12 @@ def _replay_verification(
     expected: Any,
     *,
     generated_operator: bool,
+    driver: bool = False,
 ) -> tuple[str, str]:
     """Replay scripted turns and compare the two canonical evidence surfaces."""
 
+    if driver:
+        return "not-attempted", "driver operator output is not assumed deterministic"
     if generated_operator:
         return "not-attempted", "generated operator output is not assumed deterministic"
     try:
@@ -479,12 +486,19 @@ def _bundle_digest(root: Path) -> str:
 def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
     """Apply scenario-level repeatability certification to one live run."""
 
+    # The truncation flag has to be re-derived here, not inherited.  Promotion
+    # re-qualifies the run from scratch with repeatability_certified=True, so a
+    # run whose last turn timed out would otherwise be laundered into CERTIFIED
+    # by the very step that is supposed to be the strictest.
     qualification = qualify_run(
         run.score,
         replay_status=run.replay_verification_status,
-        generated_operator=run.qualification.operator_mode == "generated_surface",
+        generated_operator=run.qualification.operator_mode in {"generated_surface", "driver"},
+        driver=run.qualification.operator_mode == "driver",
         repeatability_certified=True,
         validation_mode=run.manifest.validation_mode,
+        operator_mode=run.qualification.operator_mode,
+        truncated=run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
     )
     if qualification.disposition is not QualificationDisposition.CERTIFIED:
         return run
@@ -620,12 +634,23 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
     tool_call_count = 0
     unmatched_turn_count = 0
     ground_truth_turn_count = 0
+    repeat_suppressed_turn_count = 0
+    driver_leading_rejected_count = 0
+    driver_obstacle_rejected_count = 0
+    driver_repeat_rejected_count = 0
+    driver_beat_substituted_count = 0
     for turn in run_result.turns:
         tool_call_count += len(turn.tool_calls)
         if not turn.match.matched:
             unmatched_turn_count += 1
-        if turn.match.ground_truth:
+        if turn.match.ground_truth and not turn.operator_repeat_suppressed:
             ground_truth_turn_count += 1
+        if turn.operator_repeat_suppressed:
+            repeat_suppressed_turn_count += 1
+        driver_leading_rejected_count += int(getattr(turn, "driver_leading_rejected", False))
+        driver_obstacle_rejected_count += int(getattr(turn, "driver_obstacle_rejected", False))
+        driver_repeat_rejected_count += int(getattr(turn, "driver_repeat_rejected", False))
+        driver_beat_substituted_count += int(getattr(turn, "driver_beat_substituted", False))
         turns.append(
             {
                 "turn": turn.turn,
@@ -649,9 +674,22 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 # ground-truth brief, not just read byte-identical replies.
                 "operator_matched_rule_id": turn.match.rule_id,
                 "operator_matched": turn.match.matched,
-                "operator_answered_from_ground_truth": turn.match.ground_truth,
+                "operator_answered_from_ground_truth": turn.match.ground_truth and not turn.operator_repeat_suppressed,
+                "operator_repeat_suppressed": turn.operator_repeat_suppressed,
+                "operator_mode": getattr(turn, "operator_mode", "scripted"),
+                "operator_beat_id": getattr(turn, "operator_beat_id", None),
+                "driver_leading_rejected": getattr(turn, "driver_leading_rejected", False),
+                "driver_obstacle_rejected": getattr(turn, "driver_obstacle_rejected", False),
+                "driver_repeat_rejected": getattr(turn, "driver_repeat_rejected", False),
+                "driver_beat_substituted": getattr(turn, "driver_beat_substituted", False),
+                "driver_fallback_reason": getattr(turn, "driver_fallback_reason", None),
+                "driver_skip_reason": getattr(turn, "driver_skip_reason", None),
+                "driver_forbidden_terms_in_force": getattr(turn, "driver_forbidden_terms_in_force", 0),
+                "driver_forbidden_terms_exempted": getattr(turn, "driver_forbidden_terms_exempted", 0),
             }
         )
+    identity = getattr(run_result, "driver_identity", None)
+    identity = identity if isinstance(identity, Mapping) else {}
     _write_json(
         artifact_root / "operator-observations.json",
         {
@@ -663,6 +701,14 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
             "tool_call_count": tool_call_count,
             "operator_unmatched_turn_count": unmatched_turn_count,
             "operator_ground_truth_turn_count": ground_truth_turn_count,
+            "operator_repeat_suppressed_count": repeat_suppressed_turn_count,
+            "operator_mode": getattr(run_result, "operator_mode", "scripted"),
+            "driver_model_id": identity.get("model_id"),
+            "driver_temperature": identity.get("temperature"),
+            "driver_leading_rejected_count": driver_leading_rejected_count,
+            "driver_obstacle_rejected_count": driver_obstacle_rejected_count,
+            "driver_repeat_rejected_count": driver_repeat_rejected_count,
+            "driver_beat_substituted_count": driver_beat_substituted_count,
             "turns": turns,
         },
     )
@@ -994,7 +1040,7 @@ class TierRunner:
         knob_plan: KnobPlan | None = None,
         workflow_restart_factory: WorkflowRestartFactory | None = None,
         workflow_observer: WorkflowObserver | None = None,
-        operator_factory: GeneratedOperator | GeneratedOperatorFactory | None = None,
+        operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
         allow_host_home: bool = False,
     ) -> None:
         self.scenarios = tuple(scenarios)
@@ -1041,13 +1087,48 @@ class TierRunner:
         scenario: Scenario,
         environment: RunEnvironment,
         epoch: int,
-    ) -> GeneratedOperator | None:
-        """Resolve the optional generated surface without changing engine state."""
+    ) -> GeneratedOperator | DriverOperator | None:
+        """Resolve the optional operator surface without changing engine state."""
 
+        surface = self._resolve_operator_surface(scenario, environment, epoch)
+        self._check_driver_pins(surface)
+        return surface
+
+    def _check_driver_pins(self, surface: object) -> None:
+        """Refuse a run whose manifest pins and operator surface disagree.
+
+        The manifest is the only record a later reader has of who spoke the
+        operator's words.  A driver-authored run stored under scripted pins
+        would be indistinguishable from a scripted one, and scripted pins on a
+        driver run would let a paired comparison treat two different operators
+        as the same arm.  Neither is recoverable after the fact, so both are
+        refused here rather than recorded.
+        """
+
+        declared = self.pins.driver_model_id != NOT_APPLICABLE
+        if declared != isinstance(surface, DriverOperator):
+            raise TierError("manifest driver pins and operator factory disagree")
+        if not declared:
+            return
+        assert isinstance(surface, DriverOperator)
+        if surface.model_id != self.pins.driver_model_id:
+            raise TierError("manifest driver pins and operator factory disagree")
+        temperature = self.pins.driver_sampling_params.get("temperature")
+        if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+            raise TierError("manifest driver pins and operator factory disagree")
+        if float(temperature) != float(surface.temperature):
+            raise TierError("manifest driver pins and operator factory disagree")
+
+    def _resolve_operator_surface(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> GeneratedOperator | DriverOperator | None:
         factory = self.operator_factory
         if factory is None:
             return None
-        if isinstance(factory, GeneratedOperator):
+        if isinstance(factory, (GeneratedOperator, DriverOperator)):
             return factory
         try:
             parameters = inspect.signature(factory).parameters.values()
@@ -1064,8 +1145,8 @@ class TierRunner:
             value = factory(scenario)
         else:
             value = factory()
-        if value is not None and not isinstance(value, GeneratedOperator):
-            raise TierError("operator factory returned no GeneratedOperator")
+        if value is not None and not isinstance(value, (GeneratedOperator, DriverOperator)):
+            raise TierError("operator factory returned no GeneratedOperator or DriverOperator")
         return value
 
     def _canary(self) -> CanaryResult:
@@ -1118,6 +1199,12 @@ class TierRunner:
         """Run one complete tier, returning before any scenario on canary block."""
 
         started = time.monotonic()
+        # Fail before entering any environment.  Without this the run would
+        # spawn a session, author scripted turns, and only then trip the
+        # per-epoch consistency gate -- having already spent the agent tokens
+        # the pins promised a driver would shape.
+        if self.pins.driver_model_id != NOT_APPLICABLE and self.operator_factory is None:
+            raise TierError("manifest driver pins require an operator factory")
         canary = self._canary()
         if canary.blocking:
             reasons = tuple(issue.to_dict() for issue in canary.verdict.issues)
@@ -1138,6 +1225,11 @@ class TierRunner:
                     "scenario_id": run.scenario_id,
                     "repeatability_tier": scenario.repeatability_tier.value,
                     "gates": run.scored_dict()["score"]["gates"],
+                    # Carried so the batch-level check can exclude a run that
+                    # never finished its script.  ``score.state`` alone cannot
+                    # say it any more: since the TURN_TIMEOUT split a truncated
+                    # run scores PASSED.
+                    "truncated": run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
                 }
                 for run in runs
             ]
@@ -1149,11 +1241,27 @@ class TierRunner:
                 runs = tuple(_promote_certified_run(run) for run in runs)
             summaries.append(ScenarioSummary(scenario.id, repeatability, tuple(runs)))
         states = [run.score.state for summary in summaries for run in summary.runs]
+        # A truncated run never reached the end of its script, so the gates it
+        # did examine are not evidence that the run was clean.  Before the
+        # TURN_TIMEOUT split a per-turn timeout was an ENVIRONMENT_WEDGE and
+        # therefore INVALID, so the runner exited 1; the split was meant to
+        # change the *label* only, but it moved timeouts out of the one state
+        # ``_grade`` treats as invalid.  Without this a run whose final turn
+        # timed out could score PASSED on the gates already examined, aggregate
+        # to "clean", and exit 0 -- the qualification cap to OBSERVED lives in
+        # ``qualification.json`` and reaches no caller.  Degrading to "ungraded"
+        # restores the pre-split exit code while keeping the timeout and the
+        # wedge distinguishable in the evidence.
+        truncated = any(
+            run.terminal_state is EngineTerminalState.TURN_TIMEOUT
+            for summary in summaries
+            for run in summary.runs
+        )
         if not states:
             # A tier that examined no scenario is not evidence of a clean run.
             verdict = "failed"
         elif all(state is ScoreTerminalState.PASSED for state in states):
-            verdict = "clean"
+            verdict = "ungraded" if truncated else "clean"
         elif states and all(state in {ScoreTerminalState.PASSED, ScoreTerminalState.UNGRADED} for state in states) and any(
             state is ScoreTerminalState.UNGRADED for state in states
         ):
@@ -1217,6 +1325,17 @@ class TierRunner:
                     )
                 artifact_root = environment.base_dir / "artifacts"
                 artifact_root.mkdir()
+                # Resolve the operator surface before any transport exists.
+                # The consistency gate inside can refuse the run, and a live
+                # session started first would be a spawned agent process that
+                # the refusal then has to unwind.
+                operator_surface = self._generated_operator(scenario, environment, epoch)
+                generated_operator = (
+                    operator_surface if isinstance(operator_surface, GeneratedOperator) else None
+                )
+                driver_operator = (
+                    operator_surface if isinstance(operator_surface, DriverOperator) else None
+                )
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
                 if recording is not None and recording.supervisor_facts is not None:
                     _write_json(artifact_root / "supervisor-facts.json", recording.supervisor_facts)
@@ -1236,7 +1355,6 @@ class TierRunner:
                             turn=turn,
                         ),
                     )
-                generated_operator = self._generated_operator(scenario, environment, epoch)
                 started = time.monotonic()
                 transport_closed = False
                 primary_error: BaseException | None = None
@@ -1246,14 +1364,23 @@ class TierRunner:
                     # ``operator.sentinel: null`` and still plant PII.  Hand
                     # them to the engine so redaction of agent text before an
                     # external provider covers the markers grading actually
-                    # looks for.  Redaction only: these deliberately do not
-                    # widen the in-engine sentinel scan, because a marker in a
-                    # tool result the agent legitimately read is not a leak.
+                    # looks for.  The fixture manifest is not the whole
+                    # inventory -- ``capability-shortfall`` plants its graded
+                    # ``pii_sentinel`` in the mock-source route table, which
+                    # ``marker_values`` never reads -- so the gate declarations
+                    # are unioned in.  Redaction only: these deliberately do
+                    # not widen the in-engine sentinel scan, because a marker
+                    # in a tool result the agent legitimately read is not a
+                    # leak.
                     engine = OperatorEngine(
                         scenario.script,
                         transport,
                         generated_operator=generated_operator,
-                        extra_sentinels=sorted(marker_values(environment.generated_fixture_manifest)),
+                        driver=driver_operator,
+                        extra_sentinels=sorted(
+                            marker_values(environment.generated_fixture_manifest)
+                            | declared_sentinels(scenario)
+                        ),
                     )
                     run_result = engine.run()
                     if isinstance(transport, ReplaySession) and transport.remaining_turns:
@@ -1326,12 +1453,16 @@ class TierRunner:
                     replay,
                     run_result,
                     generated_operator=generated_operator is not None,
+                    driver=driver_operator is not None,
                 )
                 qualification = qualify_run(
                     score,
                     replay_status=replay_status,
                     generated_operator=generated_operator is not None,
+                    driver=driver_operator is not None,
                     validation_mode=environment.manifest.validation_mode,
+                    operator_mode=getattr(run_result, "operator_mode", "scripted"),
+                    truncated=run_result.terminal_state is EngineTerminalState.TURN_TIMEOUT,
                 )
                 bundle_dir: Path | None = None
                 bundle_digest: str | None = None

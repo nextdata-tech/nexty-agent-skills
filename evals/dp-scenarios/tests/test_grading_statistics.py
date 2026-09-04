@@ -76,8 +76,9 @@ def test_declared_repeatability_and_one_shot_have_distinct_surfaces() -> None:
     assert one_shot.rates is None
     with pytest.raises(TypeError, match="demonstrated-once"):
         render_rate(one_shot.demonstrated_once)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="at least two valid"):
-        gate_pass_rates([_run()])
+    # One observation is not a caller error, it is a batch that cannot be
+    # rated: an empty report, not an exception.
+    assert gate_pass_rates([_run()]).rates == {}
     with pytest.raises(ValueError, match="demonstrated-once"):
         gate_pass_rates([_run(tier="demonstrated-once") for _ in range(3)])
 
@@ -181,10 +182,23 @@ def test_rates_use_gate_examination_and_zero_automatic_zero_numerators() -> None
 
 
 def test_rate_requests_require_two_valid_observations() -> None:
+    """No observations is a caller error; too few *completed* ones is a result.
+
+    The distinction matters because the second case is reachable from a bad
+    environment -- a slow agent, a wedged provider, a turn timeout too tight --
+    and `tier.py` calls this bare inside its per-scenario loop.  Raising there
+    cost the operator `report.json` and `summary.txt` for a run that had
+    already spent its agent and driver tokens, which is the moment the evidence
+    is worth most.  Certification is unaffected either way: it already fails on
+    ``excluded_invalid != 0``.
+    """
+
     with pytest.raises(ValueError, match="at least two valid"):
         gate_pass_rates([])
-    with pytest.raises(ValueError, match="at least two valid"):
-        gate_pass_rates([_run(), _run("invalid"), _run("invalid")])
+
+    report = gate_pass_rates([_run(), _run("invalid"), _run("invalid")])
+    assert report.rates == {}
+    assert report.excluded_invalid == 2
 
 
 def test_twins_are_discounted_before_rates() -> None:
@@ -214,9 +228,9 @@ def test_mcnemar_refuses_multi_field_manifests_and_accepts_one_field() -> None:
     multi = {**first, "skill_pack_version": "v2", "supervisor_version": "sup-2"}
     with pytest.raises(ValueError, match="exactly one"):
         paired_mcnemar(first, multi, [_run()], [_run()])
-    with pytest.raises(ValueError, match="fixture and operator"):
+    with pytest.raises(ValueError, match="fixture, operator script and driver"):
         paired_mcnemar(first, {**first, "fixture_dir_hash": "fixture-2"}, [_run()], [_run()])
-    with pytest.raises(ValueError, match="fixture and operator"):
+    with pytest.raises(ValueError, match="fixture, operator script and driver"):
         paired_mcnemar(first, {**first, "operator_script_hash": "operator-2"}, [_run()], [_run()])
 
 
@@ -237,9 +251,56 @@ def test_mcnemar_refuses_validation_mode_as_a_pairing_axis() -> None:
         paired_mcnemar(live, replay, [_run()], [_run()])
 
 
+def test_mcnemar_refuses_driver_model_as_a_pairing_axis() -> None:
+    first = {**_manifest(), "driver_model_id": "gpt-a", "driver_sampling_params": {"temperature": 0}}
+    second = {**first, "driver_model_id": "gpt-b"}
+
+    with pytest.raises(ValueError, match="fixture, operator script and driver"):
+        paired_mcnemar(first, second, [_run()], [_run()])
+
+
 def test_mcnemar_refuses_a_manifest_whose_runtime_knobs_are_unpinned() -> None:
     pinned = _manifest()
     unpinned = {key: value for key, value in pinned.items() if key != "runtime_knobs"}
 
     with pytest.raises(ManifestError, match="runtime_knobs"):
         paired_mcnemar(pinned, unpinned, [_run()], [_run()])
+
+
+def test_a_batch_of_truncated_epochs_still_reports() -> None:
+    """The bad-environment shape must produce a report, not a traceback.
+
+    A systemic cause truncates every epoch, not one: `_run_scenario_epochs` has
+    no early break, so a slow agent or a --turn-timeout too tight for a driven
+    turn runs all five to the same end.  Before this, feeding truncated runs to
+    the `len(valid) < 2` guard raised out of `gate_pass_rates`, which `tier.py`
+    calls bare -- and neither runner catches ValueError, so the operator lost
+    report.json and summary.txt for a run that had already spent its agent and
+    driver tokens.
+    """
+
+    for truncated_count in (4, 5):
+        runs = [_run() for _ in range(5 - truncated_count)]
+        runs += [{**_run(), "truncated": True} for _ in range(truncated_count)]
+
+        report = gate_pass_rates(runs)
+
+        assert report.rates == {}, "a batch with too few completed epochs cannot be rated"
+        assert report.excluded_invalid == truncated_count
+        assert report.excluded_truncated == truncated_count
+
+
+def test_excluded_truncated_separates_a_timeout_from_an_invalid_run() -> None:
+    """`excluded_invalid` counts both, so the two stay separable elsewhere.
+
+    A truncated run scores PASSED with `terminal_state=turn_timeout`; reporting
+    it only under a heading that says "invalid" makes the per-epoch line and
+    the batch line contradict each other.
+    """
+
+    runs = [_run(), _run(), _run(), _run("invalid"), {**_run(), "truncated": True}]
+
+    report = gate_pass_rates(runs)
+
+    assert report.excluded_invalid == 2
+    assert report.excluded_truncated == 1

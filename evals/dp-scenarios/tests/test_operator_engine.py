@@ -8,7 +8,7 @@ import pytest
 from dp_scenarios.ledger import LedgerStore, Manifest, SupervisorFacts, lint, read_ledger
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.appender import AppenderError, StaticSupervisorRecordReader, append_supervisor_facts
-from dp_scenarios.operator.engine import OperatorEngine, OperatorScript, TerminalState, operator_script_hash
+from dp_scenarios.operator.engine import FAILURE_MODES, OperatorEngine, OperatorScript, TerminalState, operator_script_hash
 from dp_scenarios.operator.engine import _operator_context
 from dp_scenarios.operator.events import EventSchedule, event_from_mapping
 from dp_scenarios.operator.generated import GeneratedOperator
@@ -92,6 +92,51 @@ def test_two_fixed_runs_have_byte_identical_messages_and_rows() -> None:
     assert first.ledger_bytes == second.ledger_bytes
     assert first.script_hash == second.script_hash == operator_script_hash(script)
     assert not hasattr(first, "outcome")
+
+
+def test_generated_surface_leaves_an_approval_turn_verbatim() -> None:
+    """An approval turn transmits its declared line on the generated path too.
+
+    ``substitute_reply`` defaults to ``True``, so a scenario that declares an
+    approval turn without overriding it used to hand the approval to the
+    generated operator: the transmitted text -- and therefore
+    ``operator_approval_text``, and therefore the ``spec_approved`` ledger
+    row's ``artifact_ref`` -- became a paraphrase of whatever the matcher had
+    selected, which can be a refusal.  ``authorable`` and ``base`` both carried
+    the guard; this branch did not.
+    """
+
+    approval_line = "That looks good -- approved."
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            "Please continue.",
+            {"text": approval_line, "approval": True},
+        )
+    )
+    seen: list[object] = []
+
+    def provider(view: object) -> str:
+        seen.append(view)
+        return "I am not deciding that."
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Which source is authoritative?"),
+            TurnResult(agent_message="Please approve the definition.", approval_artifact="artifact://a-3"),
+            TurnResult(agent_message="Safe completion.", reported=True),
+        ]
+    )
+    result = OperatorEngine(script, transport, generated_operator=GeneratedOperator(provider)).run()
+
+    assert transport.message_texts[2] == approval_line
+    assert result.turns[2].operator_mode == "scripted"
+    # Turn 2 is an ordinary substitutable turn, so the provider text belongs
+    # there -- the carve-out is specific to the approval.
+    assert transport.message_texts[1] == "I am not deciding that."
+    # The provider was still consulted on the ordinary substitutable turn, so
+    # this is a carve-out for approvals rather than the surface being off.
+    assert len(seen) == 1
 
 
 def test_generated_operator_only_renders_the_engine_selected_reply() -> None:
@@ -288,6 +333,46 @@ def test_terminal_state_failure_modes_and_ungraded_criteria_are_separate() -> No
     assert not invalid.gradeable
     assert sentinel.terminal_state is TerminalState.SENTINEL_TRIP
     assert sentinel.gradeable
+
+
+def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() -> None:
+    script = make_script(
+        turns=("Improve weekly visibility.", "Please continue.", "Approve this."),
+        turn_budget=10,
+        required_plants=("ceiling",),
+    )
+    timed_out = OperatorEngine(
+        script,
+        InMemoryTransport(
+            [
+                TurnResult(agent_message="What is the source?"),
+                TurnResult(turn_timed_out=True, environment_detail="turn took too long"),
+            ]
+        ),
+    ).run()
+
+    assert timed_out.terminal_state is TerminalState.TURN_TIMEOUT
+    assert timed_out.stop_reason == "turn_timeout"
+    assert "turn_timeout" in timed_out.failure_modes
+    assert "environment_wedge" not in timed_out.failure_modes
+    # FAILURE_MODES is the declared vocabulary; a mode the engine emits but
+    # never declares is invisible to any consumer reading that set.
+    assert set(timed_out.failure_modes) <= FAILURE_MODES
+    assert len(timed_out.turns) == 2
+    assert timed_out.ledger_rows
+    assert all(
+        "terminal state: turn_timeout" in row["phase_status_reason"]
+        for row in timed_out.ledger_rows
+        if row["phase_status"] == "not-applicable"
+    )
+
+    wedged = OperatorEngine(
+        script,
+        InMemoryTransport(
+            [TurnResult(agent_message="What is the source?"), TurnResult(environment_wedged=True)]
+        ),
+    ).run()
+    assert wedged.terminal_state is TerminalState.ENVIRONMENT_WEDGE
 
 
 def test_rubber_stamper_approval_records_open_decision_marker() -> None:
@@ -535,6 +620,160 @@ def test_ledger_rows_record_unmatched_and_ground_truth_answered_turns() -> None:
     assert unmatched_row["claim"] == {"operator_unmatched": True}
     assert "operator_unmatched" not in (matched_row["claim"] or {})
     assert "operator_answered_from_ground_truth" not in (matched_row["claim"] or {})
+
+
+def test_a_selected_reply_that_was_never_transmitted_is_not_remembered_as_served() -> None:
+    """Served-fact memory is keyed to transmission, not to selection.
+
+    Turn 2 here is ``substitute_reply: false``, so the answer chosen on turn 1
+    is discarded rather than sent -- the agent has still never been told it.
+    Remembering it at selection time would make the operator withhold, on turn
+    3, a fact it has never once stated, which is the opposite of the defect
+    this memory exists to fix.
+    """
+
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            {"text": "Show me the weekly numbers.", "substitute_reply": False},
+            "Please continue again.",
+        )
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts == (
+        "Improve weekly visibility.",
+        "Show me the weekly numbers.",
+        "The approved source is the business record.",
+    )
+    assert [turn.operator_repeat_suppressed for turn in result.turns] == [False, False, False]
+
+
+def test_repeated_source_answer_selection_is_suppressed() -> None:
+    script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts == (
+        "Improve weekly visibility.",
+        "The approved source is the business record.",
+        "Please continue again.",
+    )
+    assert result.turns[1].operator_repeat_suppressed is True
+    assert result.ledger_rows[1]["claim"] == {"operator_repeat_suppressed": True}
+    assert "operator_answered_from_ground_truth" not in result.ledger_rows[1]["claim"]
+
+
+def test_fresh_session_clears_served_source_answers_before_a_later_transmission() -> None:
+    event = event_from_mapping(
+        {
+            "version": 1,
+            "id": "amnesia",
+            "trigger_turn": 3,
+            "type": "back_after_lunch",
+            "content": "Where were we?",
+            "outcome": "fresh_session_requested",
+            "gap_seconds": 1,
+        }
+    )
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            "Please continue.",
+            "Please continue again.",
+            "Where are we?",
+        ),
+        events=EventSchedule((event,)),
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the status?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    # The agent lost its session on turn 3, so the fact is legitimately needed
+    # again and no turn is suppressed.
+    assert transport.message_texts.count("The approved source is the business record.") == 2
+    assert transport.message_texts[3] == "The approved source is the business record."
+    assert len(transport.started_fresh) == 2
+    assert [turn.operator_repeat_suppressed for turn in result.turns] == [False, False, False, False]
+
+
+def test_served_fact_memory_survives_an_operator_that_paraphrases_the_reply() -> None:
+    """The memory is keyed to the selected sheet key, not to the text sent.
+
+    A generated operator rewrites the selected reply, so no fact text survives
+    as a substring of what goes out. Filling the memory by scanning the
+    transmitted message would therefore leave it permanently empty and the
+    suppression inert on exactly the path Part 2 introduces.
+    """
+
+    script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(
+        script,
+        transport,
+        generated_operator=GeneratedOperator(lambda _view: "Noted, that is where it lives."),
+    ).run()
+
+    assert "The approved source is the business record." not in transport.message_texts[1]
+    assert transport.message_texts == (
+        "Improve weekly visibility.",
+        "Noted, that is where it lives.",
+        "Please continue again.",
+    )
+    assert result.turns[1].operator_repeat_suppressed is True
+
+
+def test_a_repeated_persona_reply_is_never_suppressed() -> None:
+    """Only answer-sheet facts are suppressible.
+
+    Repeating "go ahead" is in character for an operator; withholding it would
+    silence the persona rather than stop a fact being re-served.
+    """
+
+    script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Please approve the blueprint."),
+            TurnResult(agent_message="Please approve the blueprint."),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert result.turns[0].match.rule_id == "persona.approval_request"
+    assert result.turns[1].match.rule_id == "persona.approval_request"
+    assert transport.message_texts[1] == transport.message_texts[2]
+    assert [turn.operator_repeat_suppressed for turn in result.turns] == [False, False, False]
 
 
 def test_intake_failure_is_recorded_when_opening_turn_is_not_source_question() -> None:
@@ -954,3 +1193,60 @@ def test_every_claim_bearing_row_carries_a_qualification() -> None:
         qualification = _qualification_for(None, claim)
         assert qualification in QUALIFICATIONS, claim
         assert qualification is not None, claim
+
+
+def test_engine_refuses_a_driver_without_declared_forbidden_terms() -> None:
+    """Fail at construction, not on the first authored turn.
+
+    Without ``driver_forbidden_terms`` the leading check has nothing to test,
+    so a driver would be free to hand the agent the answer and the run would
+    still be retained as evidence.
+    """
+
+    from dp_scenarios.operator.driver import DriverOperator
+
+    driver = DriverOperator(lambda view: "anything", model_id="m", temperature=0.0)
+    script = make_script()
+    assert script.answer_sheet.driver_forbidden_terms == ()
+
+    with pytest.raises(ValueError, match="driver_forbidden_terms"):
+        OperatorEngine(script, InMemoryTransport([]), driver=driver)
+
+
+def test_engine_accepts_a_driver_when_the_sheet_declares_the_vocabulary() -> None:
+    from dp_scenarios.operator.driver import DriverOperator
+
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "engine-driver",
+            "opening_message": "Improve weekly visibility.",
+            "turns": ["Improve weekly visibility.", "Please continue."],
+            "source_answers": {"source": "The approved source is the business record."},
+            "decision_answers": {"choice": {"terms": ["option"], "answer": "Yes."}},
+            "status_answers": {"status": "The work is still in progress."},
+            "driver_forbidden_terms": ["late delivery rate"],
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona, sheet, turns=sheet.turns, turn_budget=25, phase_by_turn={1: 1, 2: 2}
+    )
+    driver = DriverOperator(lambda view: "anything", model_id="m", temperature=0.0)
+
+    engine = OperatorEngine(script, InMemoryTransport([]), driver=driver)
+
+    assert engine.driver is driver
+
+
+def test_engine_refuses_a_generated_surface_and_a_driver_together() -> None:
+    from dp_scenarios.operator.driver import DriverOperator
+
+    driver = DriverOperator(lambda view: "anything", model_id="m", temperature=0.0)
+    surface = GeneratedOperator(lambda view: "anything")
+
+    with pytest.raises(ValueError, match="never both"):
+        OperatorEngine(make_script(), InMemoryTransport([]), generated_operator=surface, driver=driver)

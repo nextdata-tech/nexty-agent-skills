@@ -15,6 +15,8 @@ from dp_scenarios.runner.session import (
     ReplayMismatch,
     ReplayRecording,
     ReplaySession,
+    turn_result_from_dict,
+    turn_result_to_dict,
 )
 from dp_scenarios.operator.transport import InMemoryTransport, OperatorMessage
 
@@ -123,7 +125,7 @@ def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path) -> None
         replay.send_message("expected")
 
 
-def test_live_timeout_returns_a_recordable_environment_wedge() -> None:
+def test_live_timeout_returns_a_recordable_turn_timeout() -> None:
     session = LiveSession(
         [sys.executable, "-c", "import sys; import time; sys.stdin.readline(); time.sleep(1)"],
         timeout=0.01,
@@ -134,9 +136,15 @@ def test_live_timeout_returns_a_recordable_environment_wedge() -> None:
     finally:
         session.close()
 
-    assert result.environment_wedged
+    assert result.turn_timed_out
+    assert not result.environment_wedged
     assert result.environment_detail == "live session exceeded the 0.010s turn timeout"
     assert result.session_id == "live-session-1"
+    encoded = turn_result_to_dict(result)
+    assert turn_result_from_dict(encoded) == result
+    legacy = dict(encoded)
+    legacy.pop("turn_timed_out")
+    assert turn_result_from_dict(legacy).turn_timed_out is False
 
 
 def test_live_fresh_session_restarts_a_persistent_child() -> None:

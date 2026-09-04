@@ -672,6 +672,45 @@ def _is_row_sequence(value: object) -> bool:
     )
 
 
+def _declared_markers(value: object, *, named: bool) -> Iterable[bytes]:
+    """Yield every string reached under a key that names a sentinel."""
+
+    if isinstance(value, str):
+        if named and value:
+            yield value.encode("utf-8")
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            yield from _declared_markers(
+                item,
+                named=named or "sentinel" in str(key).casefold(),
+            )
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            yield from _declared_markers(item, named=named)
+
+
+def declared_sentinels(scenario: object) -> frozenset[bytes]:
+    """Return every marker a scenario's gates declare, as raw bytes.
+
+    Redaction before an external model provider is unconditional, and the
+    generated fixture manifest is not a complete inventory of what a scenario
+    planted: ``capability-shortfall`` declares its graded ``pii_sentinel``
+    under ``gates.follow-up`` and plants it in the mock-source route table,
+    which ``marker_values`` never reads.  Any gate setting whose key names a
+    sentinel is one, wherever the scenario chose to plant it.  A scenario-like
+    object that declares no gates declares no sentinels.
+    """
+
+    gates = getattr(scenario, "gates", None)
+    if not isinstance(gates, Mapping):
+        return frozenset()
+    return frozenset(
+        marker
+        for gate in gates.values()
+        for marker in _declared_markers(getattr(gate, "settings", {}), named=False)
+    )
+
+
 def scenario_script_hash(script: object) -> str:
     """Hash a resolved script while retaining every persona field."""
 
@@ -1113,6 +1152,7 @@ __all__ = [
     "Scenario",
     "ScenarioDeclaration",
     "ScenarioError",
+    "declared_sentinels",
     "load_scenario",
     "SCENARIO_TIERS",
     "requires_live_session",

@@ -1,15 +1,16 @@
 # Driver operator + inspectable run output — design for review
 
-Status: **Part 1 landed; Part 2 not started.** The renderer described in Part 1
+Status: **Part 1 landed; Part 2 landed.** The renderer described in Part 1
 shipped as `runner/transcript.py` + `scripts/render_conversation.py`. Two details
 of Part 1 as written did *not* ship: the renderer is not yet called from
 `_retain_evidence_bundle`, and there is no `conversation.md` /
 `conversation.md.error` output name -- the script writes wherever `--out`
-points. Part 2 (the driver operator) remains a design under review, and the
-live runs since have narrowed what it needs to do: the ground-truth brief
-handles fact retrieval well, so the residual is persona behaviour the scripted
-operator structurally cannot produce (approving, pushing a wrong theory,
-re-deciding later).
+points. Part 2 shipped as `operator/driver.py` (view, checks, re-ask ladder),
+`operator/openai_driver.py` (the chat-completions provider and the system
+prompt), the `OperatorEngine` authoring path, the manifest driver pins with
+their qualification cap, and the `--driver-model` flags on both runner
+entrypoints. The design below is kept as written; **Decisions taken** records
+where the shipped code deliberately differs from it.
 
 ## Why
 
@@ -166,6 +167,16 @@ the beat. It must **never** receive:
 and the agent message must stay sentinel-redacted before it leaves the process,
 as `generated.py` already requires.
 
+The redaction set is the union of the operator script's own sentinel, the
+sentinels of live event cards, the generated fixture manifest's markers, and
+every marker a scenario's **gates** declare (`scenario.declared_sentinels`).
+The manifest alone is not the inventory: `capability-shortfall` — the only
+scenario that can run a driver — declares `operator.sentinel: null` and plants
+its graded `pii_sentinel` in the mock-source route table, which
+`marker_values` never reads. Redaction is symmetric: authored text carrying a
+marker is rejected by the same ladder that catches an obstacle, so nothing
+planted goes out in the operator's own turn either.
+
 ### The two risks I most want reviewed
 
 **1. The driver solves the task for the agent.** An LLM told "you are a BI
@@ -224,6 +235,123 @@ ever caught a real regression here. So:
   beat; one that returns empty; one that returns a 10k-token essay; a provider
   that times out or 500s mid-run.
 - Every new gate mutation-tested before it is claimed to work.
+
+## Decisions taken
+
+Recorded after implementation. Where these differ from the design above, these
+win: the design was written before the live runs that produced the evidence.
+
+**Authoring is limited to substitutable, non-approval turns after turn one.**
+`substitute_reply: false` already means "this exact sentence goes out" — those
+are the graded asks, and a re-worded graded ask changes what the run measures.
+The approval turn is worse: its ledger row is minted from `message.text`, so a
+driver that authored a hedge or a refusal there would be recorded as
+`spec_approved`. Turn one is the answer sheet's opening message, which the
+script hash pins. Everything else is authorable. Skipped turns record
+`driver_skip_reason` in `{turn_one, non_substitutable, approval}` rather than
+going out unmarked.
+
+**The beat gate is the engine's own delivery predicate, with recomposition.**
+The design proposed checking the authored text for the beat's required terms.
+The shipped gate instead composes the message the way a scripted turn is
+composed and re-uses `_injection_delivered` on the result. A second, private
+notion of "delivered" would have been a place for the two to disagree — the
+engine could record an event as transmitted that the delivery check said was
+not, or the reverse. When delivery fails on an authored message the engine
+recomposes from the scripted fallback and records
+`driver_beat_substituted`; the scripted composition failing is the pre-existing
+`events_not_transmitted` path, unchanged.
+
+**`known_facts` is relevance-gated ground truth only.** The view carries facts
+from `answer_sheet.ground_truth` whose declared terms include at least one term
+present in the current agent message — a superset of what the matcher would
+serve on an all-terms match, never the whole bank, and empty when the agent's
+words touch no fact. `source_answers`, `decision_answers` and `status_answers`
+are deliberately excluded: those are the rubric the run grades against, not
+things the operator knows.
+
+**`driver_forbidden_terms` is a separate, hand-authored answer-sheet key.**
+Reusing `opening_forbidden_terms` would have coupled two different jobs — what
+the opening message must not say, and what a model may never say on any turn.
+The key is required whenever a driver runs: `OperatorEngine` refuses to
+construct with a driver and an empty key, because a leading check with nothing
+to check is a gate that cannot fire.
+
+**Exemptions come only from sanctioned material.** A forbidden term is exempt
+when it appears in the redacted agent message, in a `known_facts` text the
+driver was handed, or in the selected reply. The scripted `fallback` text is
+*not* an exemption source: exempting it would let a scenario author widen the
+forbidden set for free by putting the term in a fallback the driver never used.
+
+**Served-fact memory is keyed by selection, across every sheet section.** A
+fact is marked served when it is selected, not when a later scan finds its
+words in the transmitted text. Live run 7 re-sent the same infra-profile line
+on turns 8, 9 and 10 and the agent said so. The selected key is recorded only
+when it was also *transmitted*, so an authored turn that replaced the scripted
+answer consumes nothing; driver-authored words add nothing to the memory at
+all. A fact's `terms` are the question's trigger terms, so scanning authored
+text for them would mark a fact served whenever the driver echoed the agent's
+own word — and `served_reply_keys` is cleared only by a `fresh_session` card,
+so that echo would withhold the answer for the rest of the run.
+
+**A leading-term trip is fallback-and-record, not a scenario failure.** The
+driver re-asks once with a `rejection_notice`; a second trip transmits the
+scripted fallback and sets `driver_leading_rejected`. Failing the scenario
+would grade the operator's provider rather than the agent, and the run's
+evidence is still valid — the agent never saw the leaked term.
+
+**The replay branch re-authors.** A recording replays the *agent* side; the
+operator side is authored again from the same view. `replay_status` is
+therefore `not-attempted` with the reason "driver operator output is not
+assumed deterministic", and `qualify_run(..., driver=True)` caps the
+disposition at QUALIFIED however many epochs agree.
+
+**Provider identity is pinned including the prompt.**
+`driver_sampling_params` carries `temperature` *and* `prompt_hash`
+(`sha256(SYSTEM_PROMPT)`). Two runs with the same model and temperature but
+different system prompts are two different operators; without the hash a
+paired comparison would treat them as one arm. `PinnedVersions` and the
+manifest refuse a declared driver with empty sampling params and a scripted
+run with non-empty ones, and `TierRunner` refuses a run whose pins and operator
+factory disagree — before any environment is entered.
+
+**The key never leaves the harness process.** It is read only from
+`OPENAI_API_KEY`, never from a file. `OpenAIDriverProvider` is `repr=False`
+with a hand-written `__repr__`, every `DriverProviderError` is scrubbed of the
+key and of the `Authorization` value, `OPENAI_API_KEY` is deliberately absent
+from `_SESSION_ENVIRONMENT_ALLOWLIST`, and `claude_adapter.py` pops it from the
+child environment for the case where the adapter is run directly.
+
+**`turn_timeout` is its own terminal state.** A provider that hangs is not an
+environment wedge; conflating them made a driver outage read as a scenario
+result.
+
+### Named follow-ups
+
+- Persona-authored graded asks. Today a `substitute_reply: false` turn goes out
+  verbatim. Letting a persona re-word one needs a way to assert that the ask
+  still asks the same thing, which grading cannot do model-free today.
+- Paraphrase-level repeat detection. `repeat_violation` is exact-match after
+  normalisation; a driver that says the same thing in different words on two
+  turns is not caught.
+- Transmitted-text repeat detection. `repeat_violation` compares against the
+  engine's *selected* lines, not the messages that actually went out, so a
+  driver repeating its own authored sentence across turns is not caught by any
+  counter. Stricter than the paraphrase gap above, and separate from it.
+- Served-fact memory is inert on the driven path. `served_reply_keys` only
+  fills when the scripted reply was transmitted, which on a driven run means
+  only on a fallback. Consuming the key on driver success alone would be wrong
+  --- a driver may deflect ("I am not sure about the grain, ask me later")
+  while succeeding, and since only a `fresh_session` card clears the set, that
+  would stonewall the agent on the question for the rest of the run. The cost
+  is that `facts_already_stated` stays `()` under a driver and the repeat
+  suppression never fires there. Closing it needs a deterministic test for
+  whether the authored text carried the selection's substance; the answer sheet
+  cannot support one today, because a fact's `terms` trigger the *question*,
+  not the answer.
+- No second-LLM semantic backstop. Grading stays model-free on purpose: a judge
+  model in the grading path would make the harness's verdict depend on a second
+  provider's availability and version.
 
 ## Sequencing
 

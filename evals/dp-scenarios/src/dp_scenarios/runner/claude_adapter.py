@@ -79,6 +79,10 @@ class ClaudeAdapterError(RuntimeError):
         self.events = tuple(events)
 
 
+class ClaudeTurnTimeout(ClaudeAdapterError):
+    """Raised when Claude does not finish one turn before its deadline."""
+
+
 def _load_desktop_stdio(repo_root: Path) -> tuple[type[Any], Any, Any]:
     """Load the shared stdio proxy without making the repo root agent-visible."""
 
@@ -586,6 +590,14 @@ class ClaudeCodeAdapter:
             mcp_allowed_tools=mcp_allowed_tools,
         )
         environment = dict(os.environ)
+        # The operator driver's provider key belongs to the harness process
+        # alone.  RunEnvironment.agent_environment already withholds it by
+        # allowlist, but this adapter is also runnable directly (python -m
+        # dp_scenarios.runner.claude_adapter), and on that path the child would
+        # inherit the whole parent environment.  Contamination is one-way and
+        # unrecoverable: an agent under test that can read the key can call the
+        # same provider the operator does.
+        environment.pop("OPENAI_API_KEY", None)
         if self.claude_config_dir is not None:
             environment["CLAUDE_CONFIG_DIR"] = str(self.claude_config_dir)
         self._process = subprocess.Popen(
@@ -651,7 +663,7 @@ class ClaudeCodeAdapter:
                 suffix = f"; exit_code={state}"
                 if detail:
                     suffix += f"; stderr={detail[-1000:]}"
-                raise ClaudeAdapterError(
+                raise ClaudeTurnTimeout(
                     f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
                     events=events,
                 )
@@ -662,7 +674,7 @@ class ClaudeCodeAdapter:
                 suffix = f"; exit_code={state}"
                 if detail:
                     suffix += f"; stderr={detail[-1000:]}"
-                raise ClaudeAdapterError(
+                raise ClaudeTurnTimeout(
                     f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
                     events=events,
                 )
@@ -680,6 +692,7 @@ class ClaudeCodeAdapter:
         events: Sequence[Mapping[str, object]],
         *,
         environment_detail: str | None = None,
+        turn_timed_out: bool = False,
     ) -> TurnResult:
         """Convert complete or partial stream events into one typed result."""
 
@@ -714,7 +727,8 @@ class ClaudeCodeAdapter:
             build_failed=result.build_failed,
             build_failure_count=result.build_failure_count,
             reported=result.reported,
-            environment_wedged=result.environment_wedged or environment_detail is not None,
+            environment_wedged=(result.environment_wedged or environment_detail is not None) and not turn_timed_out,
+            turn_timed_out=result.turn_timed_out or turn_timed_out,
             environment_detail=safe_detail,
             session_id=result.session_id,
         )
@@ -766,7 +780,11 @@ class ClaudeCodeAdapter:
         except ClaudeAdapterError as exc:
             if not exc.events:
                 raise
-            result = self._finish_turn(exc.events, environment_detail=str(exc))
+            result = self._finish_turn(
+                exc.events,
+                environment_detail=str(exc),
+                turn_timed_out=isinstance(exc, ClaudeTurnTimeout),
+            )
             # The child cannot satisfy another turn after a timeout or an
             # early exit. Close it here while the adapter remains alive so the
             # parent still receives the retained structured wedge.
@@ -883,7 +901,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             except (ClaudeAdapterError, OSError, ValueError) as exc:
                 _write_result(
                     TurnResult(
-                        environment_wedged=True,
+                        turn_timed_out=isinstance(exc, ClaudeTurnTimeout),
+                        environment_wedged=not isinstance(exc, ClaudeTurnTimeout),
                         environment_detail=str(exc),
                         session_id=adapter._session_id,
                     )
@@ -896,6 +915,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "ClaudeAdapterError",
+    "ClaudeTurnTimeout",
     "ClaudeCodeAdapter",
     "DEFAULT_SYSTEM_PROMPT",
     "SHELL_TOOLS",

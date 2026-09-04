@@ -133,6 +133,7 @@ def turn_result_to_dict(result: TurnResult) -> dict[str, object]:
         "build_failure_count": result.build_failure_count,
         "reported": result.reported,
         "environment_wedged": result.environment_wedged,
+        "turn_timed_out": result.turn_timed_out,
         "environment_detail": result.environment_detail,
         "session_id": result.session_id,
     }
@@ -178,6 +179,7 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
         build_failure_count=int(value.get("build_failure_count", 0)),
         reported=bool(value.get("reported", False)),
         environment_wedged=bool(value.get("environment_wedged", False)),
+        turn_timed_out=bool(value.get("turn_timed_out", False)),
         environment_detail=value.get("environment_detail") if isinstance(value.get("environment_detail"), str) else None,
         session_id=value.get("session_id") if isinstance(value.get("session_id"), str) else None,
     )
@@ -572,7 +574,8 @@ class LiveSession:
             # look like a graded failure instead of an infrastructure crash.
             self.close(wait_timeout=min(self.timeout, 5.0))
             return TurnResult(
-                environment_wedged=True,
+                turn_timed_out=True,
+                environment_wedged=False,
                 environment_detail=detail,
                 session_id=f"live-session-{self._session_counter}",
             )

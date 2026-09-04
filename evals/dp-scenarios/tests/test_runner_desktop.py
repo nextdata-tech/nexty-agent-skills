@@ -310,7 +310,10 @@ def test_live_session_cleanup_reaps_turn_child_after_protocol_error(tmp_path: Pa
         child_pid = int(pid_file.read_text(encoding="utf-8"))
         grandchild_pid = int(grandchild_pid_file.read_text(encoding="utf-8"))
         result = live.send_message("mid-session failure")
-        assert result.environment_wedged
+        # A per-turn deadline is a timeout, not a wedged environment: the
+        # artifacts the agent already authored stay gradeable.
+        assert result.turn_timed_out
+        assert not result.environment_wedged
         assert result.environment_detail == "live session exceeded the 0.100s turn timeout"
         live.close()
         _wait_gone(child_pid)

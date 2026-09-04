@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 from typing import Mapping
@@ -20,6 +20,7 @@ from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
 from dp_scenarios.ledger import fixture_dir_hash
 from dp_scenarios.operator import (
+    DriverOperator,
     EventSchedule,
     OperatorEngine,
     OperatorScript,
@@ -36,11 +37,12 @@ from dp_scenarios.runner import (
     TierError,
     TierRunner,
 )
-from dp_scenarios.runner.qualification import QualificationDisposition
+from dp_scenarios.operator.engine import TerminalState as EngineTerminalState
+from dp_scenarios.runner.qualification import QualificationDisposition, qualify_run
 from dp_scenarios.runner.session import LiveSession, SessionError
 from dp_scenarios.runner.report import machine_report
 from dp_scenarios.runner.tier import run_drift_canary
-from dp_scenarios.scenario import FixtureSpec, load_scenario
+from dp_scenarios.scenario import FixtureSpec, GateSpec, load_scenario
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.ledger.lint import LintReport
 
@@ -58,6 +60,9 @@ class FakeScenario:
     epochs: int
     repeatability_tier: RepeatabilityTier
     package_dir: Path = ROOT
+    # Real scenarios declare a gate per phase; a double declares only the
+    # gates a test needs, which is what ``declared_sentinels`` reads.
+    gates: Mapping[str, GateSpec] = field(default_factory=dict)
 
     @property
     def seed(self) -> int:
@@ -138,13 +143,163 @@ def pins() -> PinnedVersions:
     return PinnedVersions("skills-1", "supervisor-1", "wheel-1", "mock-1", "claims-1")
 
 
+def driver_pins() -> PinnedVersions:
+    return replace(
+        pins(),
+        driver_model_id="tier-driver",
+        driver_sampling_params={"temperature": 0.0},
+    )
+
+
 def clean_canary() -> CanaryResult:
     return CanaryResult(Verdict("clean", (), ()), claims_hash="claims-1")
 
 
-def recording_for(scenario: FakeScenario, responses: list[TurnResult]) -> ReplayRecording:
+def test_tier_runner_drives_the_same_operator_factory_on_replay_and_live_paths(tmp_path: Path) -> None:
+    base = make_scenario("driver-tier", turns=3)
+    sheet = answer_sheet_from_mapping(
+        {
+            **base.script.answer_sheet.to_mapping(),
+            "driver_forbidden_terms": ["grain"],
+            "ground_truth": {"grain_fact": {"terms": ["grain"], "fact": "The grain is one row per account."}},
+        }
+    )
+    script = OperatorScript.from_components(
+        base.script.persona,
+        sheet,
+        turns=base.script.turns,
+        turn_budget=3,
+        phase_by_turn=base.script.phase_by_turn,
+    )
+    scenario = replace(base, script=script)
+    responses = [
+        TurnResult(agent_message="What is the source?"),
+        TurnResult(agent_message="Status update."),
+        TurnResult(agent_message="Done.", reported=True),
+    ]
+
+    def make_driver() -> DriverOperator:
+        return DriverOperator(lambda _view: "Understood, carry on.", model_id="tier-driver", temperature=0.0)
+
     recorder = RecordingSession(InMemoryTransport(responses))
-    OperatorEngine(scenario.script, recorder).run()
+    OperatorEngine(script, recorder, driver=make_driver()).run()
+    recording = recorder.recording()
+
+    replayed = TierRunner(
+        [scenario],
+        pins=driver_pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+        operator_factory=make_driver,
+        evidence_root=tmp_path / "replay-evidence",
+    ).run()
+    replay_run = replayed.scenario_runs[0]
+    replay_observations = json.loads(
+        (Path(replay_run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert replay_observations["operator_mode"] == "driver"
+    assert replay_observations["driver_model_id"] == "tier-driver"
+    assert replay_observations["driver_temperature"] == 0.0
+    assert replay_observations["driver_leading_rejected_count"] == 0
+    assert replay_observations["driver_obstacle_rejected_count"] == 0
+    assert replay_observations["driver_repeat_rejected_count"] == 0
+    assert replay_observations["driver_beat_substituted_count"] == 0
+    # Turn 1 is never authorable, so no term is in force there; the two
+    # authorable turns each carry the one declared driver-forbidden term.
+    assert [turn["driver_forbidden_terms_in_force"] for turn in replay_observations["turns"]] == [0, 1, 1]
+    assert [turn["driver_skip_reason"] for turn in replay_observations["turns"]] == ["turn_one", None, None]
+    assert replay_run.qualification.operator_mode == "driver"
+
+    (tmp_path / "live-env").mkdir()
+    live = TierRunner(
+        [scenario],
+        pins=driver_pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(responses),
+        operator_factory=make_driver,
+        environment_root=tmp_path / "live-env",
+        evidence_root=tmp_path / "live-evidence",
+    ).run()
+    live_run = live.scenario_runs[0]
+    live_observations = json.loads(
+        (Path(live_run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert live_observations["operator_mode"] == "driver"
+    assert [turn["operator_mode"] for turn in live_observations["turns"]] == ["scripted", "driver", "driver"]
+
+    rejected_text = "REJECTED-DRIVER-TEXT-GRAIN"
+    def rejecting_driver() -> DriverOperator:
+        return DriverOperator(
+            lambda _view: rejected_text,
+            model_id="tier-driver",
+            temperature=0.0,
+        )
+    rejected_recorder = RecordingSession(InMemoryTransport(responses))
+    OperatorEngine(script, rejected_recorder, driver=rejecting_driver()).run()
+    rejected_recording = rejected_recorder.recording()
+    rejected = TierRunner(
+        [scenario],
+        pins=driver_pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: rejected_recording},
+        operator_factory=rejecting_driver,
+        evidence_root=tmp_path / "rejected-evidence",
+    ).run()
+    rejected_bundle = Path(rejected.scenario_runs[0].evidence_bundle_dir)
+    rejected_observations = json.loads(
+        (rejected_bundle / "artifacts" / "operator-observations.json").read_text()
+    )
+    # Without this the containment assertion below would hold vacuously: it
+    # must be a run in which the driver text really was rejected.
+    assert rejected_observations["driver_leading_rejected_count"] == 2
+    assert all(
+        rejected_text not in path.read_text(encoding="utf-8", errors="replace")
+        for path in rejected_bundle.rglob("*")
+        if path.is_file()
+    )
+
+    scripted = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses)},
+        evidence_root=tmp_path / "scripted-evidence",
+    ).run()
+    scripted_observations = json.loads(
+        (Path(scripted.scenario_runs[0].evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert scripted_observations["operator_mode"] == "scripted"
+    assert scripted_observations["driver_model_id"] is None
+    assert scripted_observations["driver_temperature"] is None
+    assert [
+        scripted_observations[key]
+        for key in (
+            "driver_leading_rejected_count",
+            "driver_obstacle_rejected_count",
+            "driver_repeat_rejected_count",
+            "driver_beat_substituted_count",
+        )
+    ] == [0, 0, 0, 0]
+    assert all(turn["driver_skip_reason"] is None for turn in scripted_observations["turns"])
+
+
+def recording_for(
+    scenario: FakeScenario,
+    responses: list[TurnResult],
+    *,
+    driver: object | None = None,
+) -> ReplayRecording:
+    """Record a run of ``scenario``, optionally with the driver that authored it.
+
+    A driver-authored replay has to be recorded through the same driver: the
+    engine now substitutes the operator's words on substitutable turns, so a
+    recording made by the scripted engine would not match a driven rerun and
+    the mismatch would look like a replay fault rather than a fixture that was
+    built against the wrong operator.
+    """
+
+    recorder = RecordingSession(InMemoryTransport(responses))
+    OperatorEngine(scenario.script, recorder, driver=driver).run()
     return recorder.recording()
 
 
@@ -155,8 +310,22 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
     return responses
 
 
-def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build populated replay artifacts from the real parent-child-grain-trap package."""
+def populated_parent_child_recordings(
+    tmp_path: Path, *, truncate_final_turn: bool = False
+) -> tuple[object, list[ReplayRecording]]:
+    """Build populated replay artifacts from the real parent-child-grain-trap package.
+
+    ``truncate_final_turn`` replaces the last turn of the *last epoch* with a
+    per-turn timeout, leaving every gate examined on the earlier turns passing.
+    Only one epoch, so the batch still has valid observations to rate.  Note
+    this is *not* the only reachable shape: a systemic cause --- a slow agent, a
+    wedged provider, a --turn-timeout too tight for a driven turn --- truncates
+    every epoch, since ``_run_scenario_epochs`` has no early break.  That case
+    is covered by ``test_a_batch_of_truncated_epochs_still_reports``.  That is the one
+    shape that distinguishes the truncation cap from the ordinary ungraded
+    path: the synthetic ``make_scenario`` fixtures never reach PASSED, so a
+    timeout test built on them stays green either way.
+    """
 
     scenario = load_scenario(ROOT / "scenarios/parent-child-grain-trap")
     generated = scenario.generate_fixture(tmp_path / "parent-child-fixture")
@@ -209,6 +378,12 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
+        if truncate_final_turn and epoch == scenario.epochs - 1:
+            responses[-1] = TurnResult(
+                agent_message="",
+                turn_timed_out=True,
+                environment_detail="turn exceeded its budget",
+            )
         recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
     return scenario, recordings
 
@@ -779,6 +954,85 @@ def test_distinct_stop_conditions_remain_distinct(
     assert run.score.state is expected_state
 
 
+@pytest.mark.parametrize("branch", ["session_factory", "replay_recordings"])
+def test_timeout_and_wedge_are_paired_distinct_qualification_outcomes(
+    tmp_path: Path, branch: str
+) -> None:
+    scenario = make_scenario(f"paired-timeout-{branch}", turns=2)
+    timeout_responses = responses_for(scenario)
+    timeout_responses[1] = TurnResult(
+        agent_message="",
+        turn_timed_out=True,
+        environment_detail="turn exceeded its budget",
+    )
+    wedge_responses = responses_for(scenario)
+    wedge_responses[1] = TurnResult(environment_wedged=True, environment_detail="child exited")
+
+    def run_with(responses: list[TurnResult], root: Path):
+        kwargs: dict[str, object] = {
+            "environment_root": root,
+            "evidence_root": root / "evidence",
+        }
+        if branch == "session_factory":
+            kwargs["session_factory"] = lambda *_args: InMemoryTransport(responses)
+        else:
+            recording = recording_for(scenario, responses)
+            kwargs["replay_recordings"] = {scenario.id: recording.write(root / "recording.json")}
+        return TierRunner([scenario], pins=pins(), canary=clean_canary(), **kwargs).run().scenario_runs[0]
+
+    timeout_run = run_with(timeout_responses, tmp_path / "timeout")
+    wedge_run = run_with(wedge_responses, tmp_path / "wedge")
+
+    assert timeout_run.terminal_state.value == "turn_timeout"
+    assert timeout_run.qualification.disposition is QualificationDisposition.OBSERVED
+    assert timeout_run.qualification.reasons[0] == "turn_timeout_truncated"
+    observations = json.loads(
+        (Path(timeout_run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert observations["terminal_state"] == "turn_timeout"
+    assert wedge_run.terminal_state.value == "environment_wedge"
+    assert wedge_run.qualification.disposition is QualificationDisposition.INVALID
+    assert wedge_run.qualification.reasons == ("run_invalid",)
+
+
+def test_a_truncated_run_cannot_reach_a_clean_verdict(tmp_path: Path) -> None:
+    """The truncation cap has to reach ``TierResult.verdict``, not just the bundle.
+
+    ``run_local_claude.py`` and ``runner/cli.py`` both exit ``0 if verdict ==
+    "clean" else 1``, so a cap living only in ``qualification.json`` is a cap
+    nobody enforces.  Built on the *populated* parent-child fixture on purpose:
+    that is the only tier fixture whose runs reach PASSED, so a timeout here
+    genuinely changes the verdict.  On the synthetic ``make_scenario`` fixtures
+    the baseline is already ``ungraded`` and the same assertion passes against
+    the bug.
+    """
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path, truncate_final_turn=True)
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    truncated = [run for run in result.scenario_runs if run.terminal_state.value == "turn_timeout"]
+    assert len(truncated) == 1
+    # The gates examined before the timeout still pass -- this is the run that
+    # would otherwise aggregate to "clean" and exit 0.
+    assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
+    assert result.verdict != "clean", "a truncated run was reported clean; the runner would exit 0"
+    assert result.verdict == "ungraded"
+    assert truncated[0].qualification.reasons[0] == "turn_timeout_truncated"
+    # The batch-level check has to see it too: a truncated epoch must not be
+    # rated as a completed one, or its clean siblings get promoted to CERTIFIED
+    # on the strength of a batch containing a run that never finished.
+    rates = result.scenarios[0].repeatability.rates
+    assert rates is not None, "no rate report; the exclusion assertion below would be vacuous"
+    assert rates.excluded_invalid == 1
+    assert result.scenarios[0].repeatability.certified is False
+
+
 def test_turn_budget_exceeded_is_graded_not_stopped() -> None:
     scenario = make_scenario("budget", turns=2)
     scenario = replace(scenario, turn_budget=1, script=replace(scenario.script, turn_budget=1))
@@ -1043,6 +1297,63 @@ def test_repeatability_certification_promotes_live_run_and_refreshes_bundle(tmp_
     assert promoted.bundle_digest != run.bundle_digest
     assert json.loads((bundle / "qualification.json").read_text(encoding="utf-8"))["disposition"] == "CERTIFIED"
     assert (bundle / "bundle.sha256").read_text(encoding="ascii").strip() == promoted.bundle_digest
+
+
+def test_repeatability_certification_refuses_to_launder_a_truncated_run(tmp_path: Path) -> None:
+    """Certification is scenario-wide; truncation is per-run.
+
+    ``_promote_certified_run`` re-qualifies every run of a certified scenario
+    with ``repeatability_certified=True``.  A run whose turn timed out normally
+    left later plants unfired, so its placement was never actually reached --
+    promoting it would stamp CERTIFIED on evidence the run does not support.
+    The control below is the same run with the same score, promoted.
+    """
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+    run = result.scenario_runs[0]
+    live_manifest = replace(
+        run.manifest,
+        validation_mode="live",
+        supervisor_binary_path="/opt/nxd-desktop-supervisor",
+        session_root="/tmp/desktop-session",
+        session_config_path="/tmp/desktop-session/mcp-config.json",
+        session_config_sha256="sha256:config",
+        session_trace_path="/tmp/desktop-session/trace.jsonl",
+        session_server_result_path="/tmp/desktop-session/server-result.json",
+    )
+    live_run = replace(run, manifest=live_manifest)
+    assert live_run.score.state is ScoreTerminalState.PASSED
+
+    truncated = replace(live_run, terminal_state=EngineTerminalState.TURN_TIMEOUT)
+    promoted_truncated = tier_module._promote_certified_run(truncated)
+    bundle = Path(run.evidence_bundle_dir)
+
+    assert promoted_truncated.qualification.disposition is not QualificationDisposition.CERTIFIED
+    assert json.loads((bundle / "qualification.json").read_text(encoding="utf-8"))["disposition"] != "CERTIFIED"
+    assert (
+        qualify_run(
+            truncated.score,
+            replay_status=truncated.replay_verification_status,
+            generated_operator=False,
+            repeatability_certified=True,
+            validation_mode="live",
+            truncated=True,
+        ).reasons
+        == ("turn_timeout_truncated",)
+    )
+
+    # Control: the identical run, untruncated, does reach CERTIFIED.
+    assert (
+        tier_module._promote_certified_run(live_run).qualification.disposition
+        is QualificationDisposition.CERTIFIED
+    )
 
 
 def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:
@@ -1572,6 +1883,8 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
 
     assert payload["operator_ground_truth_turn_count"] == 1
     assert payload["operator_unmatched_turn_count"] == 1
+    assert payload["operator_repeat_suppressed_count"] == 0
+    assert all(turn["operator_repeat_suppressed"] is False for turn in payload["turns"])
     assert payload["turns"][0]["operator_answered_from_ground_truth"] is True
     assert payload["turns"][0]["operator_matched"] is True
     assert payload["turns"][0]["operator_matched_rule_id"] == "ground_truth.value_col"
@@ -1579,6 +1892,124 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
     assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
     assert payload["turns"][1]["operator_matched_rule_id"] == "unmatched.source_question"
     assert payload["turns"][2]["operator_matched"] is True
+
+
+def test_operator_observations_do_not_count_a_withheld_fact_as_answered(tmp_path: Path) -> None:
+    """A suppressed re-serve sent nothing from the brief, so it must not be
+
+    counted as a turn the operator answered from the brief. Counting it would
+    make a run that stated one fact and then went quiet read identically to a
+    run that answered twice -- exactly the "5 of 7 turns answered from the
+    brief" reading the count exists to support.
+    """
+
+    opening = "Improve visibility."
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "obs-repeat",
+            "opening_message": opening,
+            "turns": [opening, "Please continue.", "Please continue again."],
+            "source_answers": {"source": "Use the source."},
+            "decision_answers": {},
+            "status_answers": {},
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+            "ground_truth": {
+                "value_col": {"terms": ["value", "column"], "fact": "It is the recognized dollar amount."},
+            },
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turns=sheet.turns,
+        turn_budget=3,
+        phase_by_turn={1: 1, 2: 2, 3: 3},
+    )
+    responses = [
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="Understood.", reported=True),
+    ]
+    transport = InMemoryTransport(responses)
+    result = OperatorEngine(script, transport).run()
+
+    tier_module._write_operator_observations(tmp_path, result)
+    payload = json.loads((tmp_path / "operator-observations.json").read_text())
+
+    assert transport.message_texts[1] == "It is the recognized dollar amount."
+    assert transport.message_texts[2] == "Please continue again."
+    assert payload["operator_repeat_suppressed_count"] == 1
+    assert payload["operator_ground_truth_turn_count"] == 1
+    assert payload["turns"][0]["operator_repeat_suppressed"] is False
+    assert payload["turns"][0]["operator_answered_from_ground_truth"] is True
+    assert payload["turns"][1]["operator_repeat_suppressed"] is True
+    assert payload["turns"][1]["operator_matched_rule_id"] == "ground_truth.value_col"
+    assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
+
+
+def test_a_repeated_answer_is_suppressed_end_to_end_through_the_replay_path(tmp_path: Path) -> None:
+    """The whole path, not the writer in isolation.
+
+    ``TierRunner.run()`` owns the artifact root the observations are written
+    under, so the flag is asserted where a grader would read it, alongside the
+    operator text a transcript reader would see.
+    """
+
+    scenario = make_scenario("repeat-replay", turns=3)
+    recording = recording_for(scenario, responses_for(scenario))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    run = result.scenario_runs[0]
+    payload = json.loads(
+        (Path(run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["operator_repeat_suppressed_count"] == 2
+    assert [turn["operator_repeat_suppressed"] for turn in payload["turns"]] == [False, True, True]
+    sent = [turn.operator_message.text for turn in run.replay_recording.turns]
+    assert sent == ["Improve visibility.", "Use the source.", "Please continue 2."]
+
+
+def test_a_repeated_answer_is_suppressed_end_to_end_on_the_live_path(tmp_path: Path) -> None:
+    """The same property on the ``session_factory=`` branch.
+
+    A fix verified only under ``replay_recordings=`` has already been bypassed
+    entirely on the live branch in this package, so both are driven.
+    """
+
+    scenario = make_scenario("repeat-live", turns=3)
+    responses = responses_for(scenario)
+    (tmp_path / "env").mkdir()
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(responses),
+        environment_root=tmp_path / "env",
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    run = result.scenario_runs[0]
+    payload = json.loads(
+        (Path(run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["operator_repeat_suppressed_count"] == 2
+    assert [turn["operator_repeat_suppressed"] for turn in payload["turns"]] == [False, True, True]
+    sent = [turn.operator_message.text for turn in run.replay_recording.turns]
+    assert sent == ["Improve visibility.", "Use the source.", "Please continue 2."]
 
 
 def test_a_shipped_brief_actually_fires_in_a_scenario_level_run(tmp_path: Path) -> None:

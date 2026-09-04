@@ -357,6 +357,44 @@ def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
             pass
 
 
+def test_pinned_driver_identity_is_written_to_the_manifest(tmp_path: Path) -> None:
+    driver_pins = PinnedVersions(
+        "skills-1",
+        "supervisor-1",
+        "wheel-1",
+        "mock-1",
+        "claims-1",
+        driver_model_id="gpt-x",
+        driver_sampling_params={"temperature": 0.7},
+    )
+
+    with RunEnvironment(make_scenario(), driver_pins, root=tmp_path) as environment:
+        assert environment.manifest.driver_model_id == "gpt-x"
+        assert environment.manifest.driver_sampling_params == {"temperature": 0.7}
+
+
+def test_replay_stored_driver_pin_cannot_override_na_pins(tmp_path: Path) -> None:
+    driver_pins = PinnedVersions(
+        "skills-1",
+        "supervisor-1",
+        "wheel-1",
+        "mock-1",
+        "claims-1",
+        driver_model_id="gpt-x",
+        driver_sampling_params={"temperature": 0.7},
+    )
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    with RunEnvironment(make_scenario(), driver_pins, root=source_root) as environment:
+        stored = environment.manifest.to_dict()
+
+    replay_root = tmp_path / "replay"
+    replay_root.mkdir()
+    with pytest.raises(RunEnvironmentError, match="replay manifest mismatch in driver_model_id"):
+        with RunEnvironment(make_scenario(), pins(), root=replay_root, manifest_override=stored):
+            pass
+
+
 def _route_table() -> dict[str, object]:
     """A source shaped like a graded one: one served route, two probe-only."""
 
@@ -454,3 +492,99 @@ def test_the_shipped_capability_scenario_advertises_only_its_deals_endpoint() ->
     profile = render_source_profile("http://127.0.0.1:8123", endpoints)
     assert "endpoint_deals" in profile
     assert "pii-sentinel" not in profile
+
+
+def test_openai_key_never_reaches_the_agent_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The operator driver's provider key is harness-only (contamination I-3).
+
+    The agent under test must not be able to call the same provider that
+    authors its counterpart's turns, nor read a credential it was never given.
+    The allowlist is what keeps it out; this test fails if the name is ever
+    added to ``_SESSION_ENVIRONMENT_ALLOWLIST``.
+    """
+
+    scenario = make_scenario()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-operator-key")
+    with RunEnvironment(scenario, pins(), root=tmp_path) as environment:
+        values = environment.agent_environment
+
+    assert "OPENAI_API_KEY" not in values
+    assert all("sk-live-operator-key" not in value for value in values.values())
+    assert "OPENAI_API_KEY" not in environment_module._SESSION_ENVIRONMENT_ALLOWLIST
+
+
+def test_pinned_driver_fields_default_to_a_scripted_operator() -> None:
+    scripted = pins()
+
+    assert scripted.driver_model_id == "not-applicable"
+    assert dict(scripted.driver_sampling_params) == {}
+
+
+def test_pinned_driver_model_requires_sampling_params_and_the_reverse() -> None:
+    from dataclasses import replace
+
+    scripted = pins()
+
+    with pytest.raises(RunEnvironmentError, match="driver_sampling_params must be a non-empty mapping"):
+        replace(scripted, driver_model_id="gpt-x")
+    with pytest.raises(RunEnvironmentError, match="driver_sampling_params must be empty"):
+        replace(scripted, driver_sampling_params={"temperature": 0.2})
+
+    declared = replace(
+        scripted, driver_model_id="gpt-x", driver_sampling_params={"temperature": 0.2, "prompt_hash": "abc"}
+    )
+    assert declared.driver_model_id == "gpt-x"
+    assert dict(declared.driver_sampling_params) == {"temperature": 0.2, "prompt_hash": "abc"}
+
+
+def test_pins_from_a_mapping_without_driver_fields_are_scripted() -> None:
+    """Absence is unambiguous: the fields did not exist before the driver."""
+
+    values = PinnedVersions.from_mapping(
+        {
+            "skill_pack_version": "s",
+            "supervisor_version": "v",
+            "runtime_wheel_version": "w",
+            "mock_api_version": "mock-1",
+            "canary_claims_hash": "c",
+        }
+    )
+
+    assert values.driver_model_id == "not-applicable"
+    assert dict(values.driver_sampling_params) == {}
+
+
+def test_pins_from_a_mapping_refuse_a_non_mapping_driver_sampling_params() -> None:
+    """A null in the recorded mapping is a defect, not an empty record."""
+
+    with pytest.raises(RunEnvironmentError, match="driver_sampling_params must be a mapping"):
+        PinnedVersions.from_mapping(
+            {
+                "skill_pack_version": "s",
+                "supervisor_version": "v",
+                "runtime_wheel_version": "w",
+                "mock_api_version": "mock-1",
+                "canary_claims_hash": "c",
+                "driver_model_id": "gpt-x",
+                "driver_sampling_params": None,
+            }
+        )
+
+
+def test_pins_from_a_mapping_carry_declared_driver_fields() -> None:
+    values = PinnedVersions.from_mapping(
+        {
+            "skill_pack_version": "s",
+            "supervisor_version": "v",
+            "runtime_wheel_version": "w",
+            "mock_api_version": "mock-1",
+            "canary_claims_hash": "c",
+            "driver_model_id": "gpt-x",
+            "driver_sampling_params": {"temperature": 0.4, "prompt_hash": "abc"},
+        }
+    )
+
+    assert values.driver_model_id == "gpt-x"
+    assert dict(values.driver_sampling_params) == {"temperature": 0.4, "prompt_hash": "abc"}

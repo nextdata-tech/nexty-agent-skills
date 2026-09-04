@@ -52,6 +52,17 @@ def test_appender_serializes_absent_rule_and_event_ids_as_null() -> None:
     assert payload["event_ids"] is None
 
 
+def test_appender_accepts_a_boolean_repeat_suppression_claim() -> None:
+    payload = row_payload(turn(claim={"operator_repeat_suppressed": True}))
+
+    assert payload["claim"] == {"operator_repeat_suppressed": True}
+
+
+def test_appender_rejects_a_non_boolean_repeat_suppression_claim() -> None:
+    with pytest.raises(AppenderError, match="operator_repeat_suppressed must be a boolean"):
+        row_payload(turn(claim={"operator_repeat_suppressed": "yes"}))
+
+
 def test_write_path_keeps_rule_and_event_ids_out_of_free_prose() -> None:
     rows: list[object] = []
     payload = append_turn_row(
@@ -255,6 +266,30 @@ def test_operator_answered_from_ground_truth_claim_is_boolean_typed() -> None:
         turn(action_kind="intake", phase=1, claim={"operator_answered_from_ground_truth": True})
     )
     assert payload["claim"] == {"operator_answered_from_ground_truth": True}
+
+
+def test_driver_claims_have_a_closed_structured_shape() -> None:
+    payload = row_payload(
+        turn(
+            claim={
+                "operator_mode": "driver",
+                "operator_beat_id": "scope-creep",
+                "driver_leading_rejected": True,
+                "driver_beat_substituted": True,
+            }
+        )
+    )
+    assert payload["claim"]["operator_mode"] == "driver"
+    assert payload["claim"]["driver_beat_substituted"] is True
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["driver_leading_rejected", "driver_obstacle_rejected", "driver_repeat_rejected", "driver_beat_substituted"],
+)
+def test_driver_boolean_claims_reject_non_boolean_values(key: str) -> None:
+    with pytest.raises(AppenderError, match=f"{key} must be a boolean"):
+        row_payload(turn(claim={key: "yes"}))
 
 
 def test_supervisor_rows_are_copied_from_reader_and_not_agent_text() -> None:

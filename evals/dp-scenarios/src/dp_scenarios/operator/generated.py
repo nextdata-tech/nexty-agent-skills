@@ -86,6 +86,40 @@ class OperatorView:
         }
 
 
+def _invoke_with_timeout(
+    provider: Callable[[OperatorView], object],
+    view: OperatorView,
+    timeout: float,
+) -> tuple[str | None, str | None]:
+    """Invoke one provider call without allowing it to wedge the engine.
+
+    The second item is a deterministic failure reason.  Provider calls run in
+    a daemon thread because a timed-out provider cannot be cancelled safely;
+    importantly, this helper never retries the call.
+    """
+
+    result: dict[str, object] = {}
+
+    def invoke() -> None:
+        try:
+            result["value"] = provider(view)
+        except Exception as exc:  # provider failures must not wedge the scenario
+            result["error"] = exc
+
+    worker = threading.Thread(target=invoke, name="dp-scenario-operator", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        return None, "provider_timeout"
+    error = result.get("error")
+    if isinstance(error, Exception):
+        return None, f"provider_error:{type(error).__name__}"
+    rendered = result.get("value")
+    if not isinstance(rendered, str) or not rendered.strip():
+        return None, "provider_empty"
+    return rendered, None
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorRender:
     """One provider result, including whether the deterministic fallback won."""
@@ -120,25 +154,10 @@ class GeneratedOperator:
     ) -> OperatorRender:
         """Render one selected reply, falling back on every provider failure."""
 
-        result: dict[str, object] = {}
-
-        def invoke() -> None:
-            try:
-                result["value"] = self.provider(view)
-            except Exception as exc:  # provider failures must not wedge the scenario
-                result["error"] = exc
-
-        worker = threading.Thread(target=invoke, name="dp-scenario-operator", daemon=True)
-        worker.start()
-        worker.join(self.provider_timeout_seconds)
-        if worker.is_alive():
-            return OperatorRender(fallback, True, "provider_timeout")
-        error = result.get("error")
-        if isinstance(error, Exception):
-            return OperatorRender(fallback, True, f"provider_error:{type(error).__name__}")
-        rendered = result.get("value")
-        if not isinstance(rendered, str) or not rendered.strip():
-            return OperatorRender(fallback, True, "provider_empty")
+        rendered, failure = _invoke_with_timeout(self.provider, view, self.provider_timeout_seconds)
+        if failure is not None:
+            return OperatorRender(fallback, True, failure)
+        assert rendered is not None
         if len(rendered) > self.max_chars:
             return OperatorRender(fallback, True, "provider_output_too_long")
         try:

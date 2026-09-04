@@ -307,6 +307,10 @@ class _Turn:
         return self.observation.get("operator_answered_from_ground_truth")
 
     @property
+    def repeat_suppressed(self) -> Any:
+        return self.observation.get("operator_repeat_suppressed")
+
+    @property
     def has_classification(self) -> bool:
         return bool(self.observation)
 
@@ -334,10 +338,17 @@ def _classification_note(turn: _Turn | None) -> str:
         return f"{MARKER} classification unavailable"
     rule = turn.rule_id
     rule_text = rule if isinstance(rule, str) and rule else f"{MARKER} no rule id recorded"
-    return (
+    note = (
         f"rule {rule_text} | matched={_flag(turn.matched)} | "
         f"from-ground-truth={_flag(turn.ground_truth)}"
     )
+    # Only rendered when the fact was actually withheld. Without it a reader
+    # sees a ``ground_truth.*`` rule reported as ``from-ground-truth=no`` and
+    # has no way to tell that the engine chose not to re-serve an answer it
+    # had already sent. Runs with no re-serve render exactly as before.
+    if turn.repeat_suppressed:
+        note += " | repeat-suppressed=yes"
+    return note
 
 
 # --------------------------------------------------------------------------
@@ -379,10 +390,19 @@ def _header(
     )
 
     lines.append(
-        "operator: off-script turns={off} | ground-truth answers={gt} | tool calls={tools}".format(
+        "operator: off-script turns={off} | ground-truth answers={gt} | tool calls={tools}"
+        " | mode={mode} | leading-rejected={leading} | obstacle-rejected={obstacle}"
+        " | repeat-rejected={repeat} | beat-substituted={beat}".format(
             off=_text(observations.get("operator_unmatched_turn_count")) or "?",
             gt=_text(observations.get("operator_ground_truth_turn_count")) or "?",
             tools=_text(observations.get("tool_call_count")) or "?",
+            # Older bundles predate the driver: every driver field is read
+            # with ``.get`` so a pre-driver observations file still renders.
+            mode=observations.get("operator_mode", "scripted"),
+            leading=observations.get("driver_leading_rejected_count", 0),
+            obstacle=observations.get("driver_obstacle_rejected_count", 0),
+            repeat=observations.get("driver_repeat_rejected_count", 0),
+            beat=observations.get("driver_beat_substituted_count", 0),
         )
     )
     for note in notes:

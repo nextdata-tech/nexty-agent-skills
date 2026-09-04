@@ -55,6 +55,7 @@ def _observation_turn(
     *,
     matched: bool = True,
     ground_truth: bool = False,
+    repeat_suppressed: bool = False,
     tool_calls: list[dict] | None = None,
 ) -> dict:
     return {
@@ -66,6 +67,7 @@ def _observation_turn(
         "operator_matched": matched,
         "operator_matched_rule_id": rule_id,
         "operator_answered_from_ground_truth": ground_truth,
+        "operator_repeat_suppressed": repeat_suppressed,
     }
 
 
@@ -186,6 +188,29 @@ def test_turn_one_operator_line_is_the_fixed_opening_not_its_own_rule(bundle: Pa
     )
 
 
+def test_header_surfaces_driver_mode_and_all_rejection_counts(bundle: Path) -> None:
+    path = bundle / "artifacts" / "operator-observations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "operator_mode": "driver",
+            "driver_leading_rejected_count": 2,
+            "driver_obstacle_rejected_count": 1,
+            "driver_repeat_rejected_count": 3,
+            "driver_beat_substituted_count": 4,
+        }
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rendered = render_epoch_conversation(bundle)
+
+    assert "mode=driver" in rendered
+    assert "leading-rejected=2" in rendered
+    assert "obstacle-rejected=1" in rendered
+    assert "repeat-rejected=3" in rendered
+    assert "beat-substituted=4" in rendered
+
+
 def test_operator_line_is_attributed_to_the_previous_turns_classification(bundle: Path) -> None:
     """Turn N's operator line was selected by turn N-1's classification."""
 
@@ -210,6 +235,28 @@ def test_agent_reply_is_labelled_with_its_own_classification(bundle: Path) -> No
     agent_half = block.split("AGENT>", 1)[1]
     assert f"this reply classified as: rule {RULE_TURN_2}" in agent_half
     assert "matched=no" in agent_half
+
+
+def test_a_withheld_repeat_is_legible_in_the_rendered_conversation(bundle: Path) -> None:
+    """A ``ground_truth.*`` rule that reports ``from-ground-truth=no`` is
+
+    otherwise unreadable: nothing in the transcript says the engine chose not
+    to re-serve a fact it had already sent. Runs with no re-serve keep their
+    existing annotation exactly.
+    """
+
+    path = bundle / "artifacts" / "operator-observations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "repeat-suppressed" not in render_epoch_conversation(bundle)
+    payload["turns"][2]["operator_repeat_suppressed"] = True
+    payload["turns"][2]["operator_answered_from_ground_truth"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rendered = render_epoch_conversation(bundle)
+    agent_half = _turn_block(rendered, 3).split("AGENT>", 1)[1]
+    assert "repeat-suppressed=yes" in agent_half
+    assert "from-ground-truth=no" in agent_half
+    assert "repeat-suppressed" not in _turn_block(rendered, 2)
 
 
 def test_ground_truth_answers_are_visible(bundle: Path) -> None:
@@ -365,6 +412,17 @@ def test_empty_bundle_does_not_crash(tmp_path: Path) -> None:
     rendered = render_epoch_conversation(empty)
     assert "# nothing — epoch 2" in rendered
     assert "no turns recorded in this bundle" in rendered
+
+
+def test_turn_timeout_is_rendered_as_the_stop_reason(bundle: Path) -> None:
+    path = bundle / "artifacts" / "operator-observations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["terminal_state"] = "turn_timeout"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rendered = render_epoch_conversation(bundle)
+
+    assert "stop: turn_timeout" in rendered
 
 
 # ---------------------------------------------------------------------------
