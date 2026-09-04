@@ -32,8 +32,19 @@ from .appender import (
     row_payload,
 )
 from .events import EventInjection, EventSchedule, event_from_mapping, inject_event
+from .driver import (
+    DriverBeat,
+    DriverOperator,
+    DriverRender,
+    DriverViolation,
+    DriverView,
+    beat_violation,
+    leading_violation,
+    repeat_violation,
+)
 from .generated import GeneratedOperator, OperatorView
-from .matcher import Category, MatchResult, MatcherBank
+from .matcher import Category, MatchResult, MatcherBank, MatcherError
+from .text_match import term_present
 from .persona import PersonaCard
 from .transport import Attachment, OperatorMessage, Transport, TurnResult, TouchedFile, ToolCall
 
@@ -329,6 +340,16 @@ class TurnRecord:
     reported: bool
     intake_failure: bool
     operator_repeat_suppressed: bool = False
+    operator_mode: str = "scripted"
+    operator_beat_id: str | None = None
+    driver_leading_rejected: bool = False
+    driver_obstacle_rejected: bool = False
+    driver_repeat_rejected: bool = False
+    driver_beat_substituted: bool = False
+    driver_fallback_reason: str | None = None
+    driver_skip_reason: str | None = None
+    driver_forbidden_terms_in_force: int = 0
+    driver_forbidden_terms_exempted: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +366,8 @@ class RunResult:
     ungraded_criteria: frozenset[str]
     intake_failure: bool
     stop_reason: str
+    operator_mode: str = "scripted"
+    driver_identity: Mapping[str, object] | None = None
 
     @property
     def approval_records(self) -> tuple[Mapping[str, object], ...]:
@@ -582,8 +605,13 @@ class OperatorEngine:
         supervisor_reader: SupervisorRecordReader | None = None,
         counter_readers: Sequence[object] = (),
         generated_operator: GeneratedOperator | None = None,
+        driver: DriverOperator | None = None,
         extra_sentinels: Sequence[bytes | str] = (),
     ) -> None:
+        if generated_operator is not None and driver is not None:
+            raise ValueError("generated_operator and driver are mutually exclusive")
+        if driver is not None and not script.answer_sheet.driver_forbidden_terms:
+            raise ValueError("driver requires the answer-sheet key driver_forbidden_terms")
         self.script = script
         self.transport = transport
         self.ledger_writer = ledger_writer
@@ -605,6 +633,7 @@ class OperatorEngine:
             self._ledger_supervisor_reader = StaticSupervisorRecordReader(facts)
         self.counter_readers = tuple(counter_readers)
         self.generated_operator = generated_operator
+        self.driver = driver
         # Planted markers live in the generated fixture, not in the scenario's
         # operator block: a scenario may declare no ``operator.sentinel`` and
         # still plant PII the agent can echo back.  These widen redaction
@@ -634,6 +663,99 @@ class OperatorEngine:
         self.turn_pointer = 0
         self.failure_modes: list[str] = []
         self.ledger_rows: list[Mapping[str, object]] = []
+
+    def _provider_view(
+        self,
+        *,
+        turn: int,
+        active_sentinels: Sequence[bytes],
+        pending_sentinels: Sequence[bytes],
+        previous_agent_message: str,
+        prior_agent_messages: Sequence[str],
+        prior_operator_messages: Sequence[str],
+        selected_reply: str,
+        known_facts: Sequence[tuple[str, str]] = (),
+        facts_already_stated: Sequence[str] = (),
+        beat: DriverBeat | None = None,
+        forbidden_terms: Sequence[str] = (),
+        rejection_notice: str | None = None,
+    ) -> OperatorView | DriverView:
+        """Build the one redacted view shared by generated and driver paths."""
+
+        markers = self._redaction_markers((*active_sentinels, *pending_sentinels))
+        context = lambda value: _operator_context(value, markers)
+        common = {
+            "turn": turn,
+            "phase": self.phase,
+            "persona": self.script.persona,
+            "agent_message": context(previous_agent_message),
+            "selected_reply": context(selected_reply),
+            "prior_operator_messages": tuple(context(message) for message in prior_operator_messages),
+            "remaining_turns": len(self.script.turns) - turn + 1,
+        }
+        if self.driver is None:
+            return OperatorView.from_persona(**common)  # type: ignore[arg-type]
+        return DriverView(
+            turn=common["turn"],
+            phase=common["phase"],
+            persona_id=self.script.persona.id,
+            persona_label=self.script.persona.label,
+            persona_vocabulary=tuple(self.script.persona.vocabulary),
+            persona_behaviors=tuple(
+                sorted(str(key) for key, value in self.script.persona.behaviors.items() if value)
+            ),
+            agent_message=common["agent_message"],
+            selected_reply=common["selected_reply"],
+            prior_operator_messages=common["prior_operator_messages"],
+            remaining_turns=common["remaining_turns"],
+            prior_agent_messages=tuple(context(message) for message in prior_agent_messages[-2:]),
+            known_facts=tuple((key, context(fact)) for key, fact in known_facts),
+            facts_already_stated=tuple(facts_already_stated),
+            beat=beat,
+            forbidden_terms=tuple(forbidden_terms),
+            rejection_notice=rejection_notice,
+        )
+
+    def _driver_facts(
+        self,
+        agent_message: str,
+        *,
+        markers: Sequence[bytes],
+    ) -> tuple[tuple[str, str], ...]:
+        """Offer only relevant ground-truth facts to the driver."""
+
+        redacted = _operator_context(agent_message, markers).casefold()
+        return tuple(
+            (key, fact.fact)
+            for key, fact in sorted(self.script.answer_sheet.ground_truth.items())
+            if any(term_present(term, redacted) for term in fact.terms)
+        )
+
+    def _driver_check(
+        self,
+        text: str,
+        *,
+        forbidden: Sequence[str],
+        exempt_texts: Sequence[str],
+        prior_base_texts: Sequence[str],
+        beat: DriverBeat | None,
+    ) -> DriverViolation | None:
+        """Apply the driver rejection ladder in its contractual order."""
+
+        try:
+            self.matcher.validate_generated_surface(text)
+        except MatcherError as exc:
+            return DriverViolation("obstacle", str(exc))
+        detail = leading_violation(text, forbidden_terms=forbidden, exempt_texts=exempt_texts)
+        if detail is not None:
+            return DriverViolation("leading", detail)
+        detail = repeat_violation(text, prior_base_texts)
+        if detail is not None:
+            return DriverViolation("repeat", detail)
+        detail = beat_violation(text, beat)
+        if detail is not None:
+            return DriverViolation("beat", detail)
+        return None
 
     def _message_for(self, base: str, injections: tuple[EventInjection, ...]) -> OperatorMessage:
         attachments = tuple(
@@ -694,6 +816,12 @@ class OperatorEngine:
         phase_status_reason: str | None = None,
         operator_approval: bool = False,
         operator_approval_text: str | None = None,
+        operator_mode: str = "scripted",
+        operator_beat_id: str | None = None,
+        driver_leading_rejected: bool = False,
+        driver_obstacle_rejected: bool = False,
+        driver_repeat_rejected: bool = False,
+        driver_beat_substituted: bool = False,
     ) -> None:
         detail = "operator response selected" if match is not None else (phase_status_reason or "phase not reached")
         action_kind = self._DEFAULT_ACTION_KIND_BY_PHASE[phase]
@@ -738,6 +866,21 @@ class OperatorEngine:
                 detail = "approval without artifact"
                 claim["approval_without_artifact"] = True
         matched_rule_id = match.rule_id if match is not None else None
+        if operator_mode != "scripted":
+            claim = dict(claim) if isinstance(claim, Mapping) else {}
+            claim["operator_mode"] = operator_mode
+        if operator_beat_id is not None:
+            claim = dict(claim) if isinstance(claim, Mapping) else {}
+            claim["operator_beat_id"] = operator_beat_id
+        for name, value in (
+            ("driver_leading_rejected", driver_leading_rejected),
+            ("driver_obstacle_rejected", driver_obstacle_rejected),
+            ("driver_repeat_rejected", driver_repeat_rejected),
+            ("driver_beat_substituted", driver_beat_substituted),
+        ):
+            if value:
+                claim = dict(claim) if isinstance(claim, Mapping) else {}
+                claim[name] = True
         evidence = TurnEvidence(
             run_id=self._run_id or "",
             scenario_id=self.script.answer_sheet.scenario_id,
@@ -803,6 +946,8 @@ class OperatorEngine:
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
         previous_agent_message = ""
+        prior_agent_messages: list[str] = []
+        prior_base_texts: list[str] = []
         prior_operator_messages: list[str] = []
 
         for index, scripted_turn in enumerate(self.script.turns, start=1):
@@ -821,37 +966,126 @@ class OperatorEngine:
             if any(injection.fresh_session for injection in injections):
                 self.transport.start_fresh_session()
                 served_reply_keys.clear()
+            # The ``spec_approved`` row's ``artifact_ref`` is minted from what
+            # the operator actually sent, so an approval turn transmits its
+            # declared line: substituting a matcher reply there would record
+            # some unrelated sentence -- or a refusal -- as the approval.
             base = (
                 scripted_turn.text
-                if index == 1 or not scripted_turn.substitute_reply
+                if index == 1 or not scripted_turn.substitute_reply or scripted_turn.approval
                 else (next_reply or scripted_turn.text)
             )
-            # A fact counts as served when it is actually transmitted, not
-            # when it is selected. A reply selected on the turn before a
-            # ``substitute_reply: false`` ask is never sent, so marking it at
-            # selection would suppress the answer the agent has still never
-            # been given. Marking here also covers the generated path below,
-            # which rewrites ``base`` from this same selection.
-            if base is next_reply and pending_sheet_key is not None:
-                served_reply_keys.add(pending_sheet_key)
-            if index > 1 and scripted_turn.substitute_reply and next_reply and self.generated_operator is not None:
-                # Redaction covers strictly more than the trip scan: every
-                # declared sentinel *and* every planted fixture marker.  A
-                # marker read out of the fixture is not itself a leak (the
-                # tier's leakable-surface policy decides that), but it must
-                # still never be forwarded to an external model provider.
+            selected_base = base
+            operator_mode = "scripted"
+            operator_beat_id: str | None = None
+            driver_leading_rejected = False
+            driver_obstacle_rejected = False
+            driver_repeat_rejected = False
+            driver_beat_substituted = False
+            driver_fallback_reason: str | None = None
+            driver_skip_reason: str | None = None
+            driver_forbidden_terms_in_force = 0
+            driver_forbidden_terms_exempted = 0
+            driver_render: DriverRender | None = None
+            driver_known_facts: tuple[tuple[str, str], ...] = ()
+            driver_fallback_transmitted = False
+
+            authorable = (
+                self.driver is not None
+                and index > 1
+                and scripted_turn.substitute_reply
+                and not scripted_turn.approval
+            )
+            if self.driver is not None and not authorable:
+                driver_skip_reason = (
+                    "turn_one"
+                    if index == 1
+                    else "approval"
+                    if scripted_turn.approval
+                    else "non_substitutable"
+                )
+            if authorable:
                 redaction_markers = self._redaction_markers((*active_sentinels, *pending_sentinels))
-                view = OperatorView.from_persona(
+                driver_known_facts = self._driver_facts(
+                    previous_agent_message,
+                    markers=redaction_markers,
+                )
+                forbidden = tuple(dict.fromkeys(self.script.answer_sheet.driver_forbidden_terms))
+                exempt_texts = (
+                    _operator_context(previous_agent_message, redaction_markers),
+                    *(_operator_context(fact, redaction_markers) for _, fact in driver_known_facts),
+                    _operator_context(next_reply or "", redaction_markers),
+                )
+                exempted = tuple(
+                    term for term in forbidden
+                    if any(term_present(term, text.casefold()) for text in exempt_texts)
+                )
+                effective_forbidden = tuple(term for term in forbidden if term not in exempted)
+                beat = (
+                    DriverBeat(
+                        beat_id="+".join(injection.card_id for injection in injections),
+                        required_terms=tuple(
+                            dict.fromkeys(
+                                term
+                                for injection in injections
+                                for term in injection.required_terms
+                            )
+                        ),
+                    )
+                    if injections
+                    else None
+                )
+                operator_beat_id = beat.beat_id if beat is not None else None
+                driver_forbidden_terms_in_force = len(effective_forbidden)
+                driver_forbidden_terms_exempted = len(exempted)
+                view = self._provider_view(
                     turn=index,
-                    phase=self.phase,
-                    persona=self.script.persona,
-                    agent_message=_operator_context(previous_agent_message, redaction_markers),
-                    selected_reply=next_reply,
-                    prior_operator_messages=tuple(
-                        _operator_context(message, redaction_markers)
-                        for message in prior_operator_messages
+                    active_sentinels=active_sentinels,
+                    pending_sentinels=pending_sentinels,
+                    previous_agent_message=previous_agent_message,
+                    prior_agent_messages=prior_agent_messages,
+                    prior_operator_messages=prior_operator_messages,
+                    selected_reply=next_reply or "",
+                    known_facts=driver_known_facts,
+                    facts_already_stated=tuple(sorted(served_reply_keys)),
+                    beat=beat,
+                    forbidden_terms=effective_forbidden,
+                )
+                assert self.driver is not None
+                fallback = next_reply or scripted_turn.text
+                driver_render = self.driver.author(
+                    view,  # type: ignore[arg-type]
+                    fallback=fallback,
+                    check=lambda text: self._driver_check(
+                        text,
+                        forbidden=forbidden,
+                        exempt_texts=exempt_texts,
+                        prior_base_texts=prior_base_texts,
+                        beat=beat,
                     ),
-                    remaining_turns=len(self.script.turns) - index + 1,
+                )
+                base = driver_render.text
+                operator_mode = "driver_fallback" if driver_render.used_fallback else "driver"
+                driver_fallback_reason = driver_render.reason
+                driver_leading_rejected = driver_render.reason == "driver_leading_rejected"
+                driver_obstacle_rejected = driver_render.reason == "driver_obstacle_rejected"
+                driver_repeat_rejected = driver_render.reason == "driver_repeat_rejected"
+                # A beat rejection already selected the safe scripted line;
+                # record that substitution just like a post-composition beat
+                # repair below.
+                driver_beat_substituted = driver_render.reason == "driver_beat_rejected"
+                driver_fallback_transmitted = driver_render.used_fallback
+                if driver_render.used_fallback and "operator_fallback" not in self.failure_modes:
+                    self.failure_modes.append("operator_fallback")
+            elif index > 1 and scripted_turn.substitute_reply and next_reply and self.generated_operator is not None:
+                view = self._provider_view(
+                    turn=index,
+                    active_sentinels=active_sentinels,
+                    pending_sentinels=pending_sentinels,
+                    previous_agent_message=previous_agent_message,
+                    prior_agent_messages=prior_agent_messages,
+                    prior_operator_messages=prior_operator_messages,
+                    selected_reply=next_reply,
                 )
                 rendered = self.generated_operator.render(
                     view,
@@ -859,6 +1093,7 @@ class OperatorEngine:
                     validate=self.matcher.validate_generated_surface,
                 )
                 base = rendered.text
+                operator_mode = "generated_surface" if not rendered.used_fallback else "scripted"
                 if rendered.used_fallback and "operator_fallback" not in self.failure_modes:
                     self.failure_modes.append("operator_fallback")
             message = self._message_for(base, injections)
@@ -873,6 +1108,43 @@ class OperatorEngine:
             undelivered_ids = tuple(
                 injection.card_id for injection in injections if injection.card_id not in delivered_ids
             )
+            if authorable and driver_render is not None and not driver_render.used_fallback and undelivered_ids:
+                # A provider may pass the pure beat check for a content-only
+                # card whose resolved material has no declared terms.  Give
+                # the deterministic engine's delivery predicate the final
+                # word and repair from the scripted composition.
+                base = next_reply or scripted_turn.text
+                message = self._message_for(base, injections)
+                driver_beat_substituted = True
+                driver_fallback_transmitted = True
+                operator_mode = "driver_fallback"
+                delivered = tuple(
+                    injection
+                    for injection in injections
+                    if _injection_delivered(injection, message, scripted_turn.text)
+                )
+                delivered_ids = {injection.card_id for injection in delivered}
+                undelivered_ids = tuple(
+                    injection.card_id for injection in injections if injection.card_id not in delivered_ids
+                )
+            if authorable and driver_render is not None and not driver_fallback_transmitted:
+                for key, _fact in driver_known_facts:
+                    fact = self.script.answer_sheet.ground_truth[key]
+                    if all(term_present(term, base.casefold()) for term in fact.terms):
+                        served_reply_keys.add(f"ground_truth.{key}")
+            # A fact counts as served when it is actually transmitted, not
+            # when it is selected. ``selected_base is next_reply`` is the one
+            # test for that on every path: a reply selected on the turn before
+            # a ``substitute_reply: false`` ask, or before an approval turn,
+            # is never sent, and marking it here would suppress an answer the
+            # agent has still never been given. On the driver path the reply
+            # only goes out as the fallback composition.
+            if (
+                pending_sheet_key is not None
+                and selected_base is next_reply
+                and (not authorable or driver_fallback_transmitted)
+            ):
+                served_reply_keys.add(pending_sheet_key)
             for injection in delivered:
                 fired_events.append(injection.card_id)
                 if injection.sentinel_bytes is not None:
@@ -970,6 +1242,16 @@ class OperatorEngine:
                 reported=reported,
                 intake_failure=intake_failure,
                 operator_repeat_suppressed=repeat_suppressed,
+                operator_mode=operator_mode,
+                operator_beat_id=operator_beat_id,
+                driver_leading_rejected=driver_leading_rejected,
+                driver_obstacle_rejected=driver_obstacle_rejected,
+                driver_repeat_rejected=driver_repeat_rejected,
+                driver_beat_substituted=driver_beat_substituted,
+                driver_fallback_reason=driver_fallback_reason,
+                driver_skip_reason=driver_skip_reason,
+                driver_forbidden_terms_in_force=driver_forbidden_terms_in_force,
+                driver_forbidden_terms_exempted=driver_forbidden_terms_exempted,
             )
             records.append(turn_record)
             self._append_row(
@@ -982,6 +1264,12 @@ class OperatorEngine:
                 claim=claim or None,
                 operator_approval=scripted_turn.approval,
                 operator_approval_text=message.text if scripted_turn.approval else None,
+                operator_mode=operator_mode,
+                operator_beat_id=operator_beat_id,
+                driver_leading_rejected=driver_leading_rejected,
+                driver_obstacle_rejected=driver_obstacle_rejected,
+                driver_repeat_rejected=driver_repeat_rejected,
+                driver_beat_substituted=driver_beat_substituted,
             )
             if repeat_suppressed:
                 next_reply = None
@@ -990,6 +1278,12 @@ class OperatorEngine:
                 next_reply = match.reply
                 pending_sheet_key = sheet_key
             previous_agent_message = result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message
+            prior_agent_messages.append(previous_agent_message)
+            # Repeat protection compares against deterministic text that was
+            # selected for earlier turns.  The provider is allowed to render
+            # the same persona sentence on multiple distinct turns; comparing
+            # against prior rendered prose would reject that valid driver use.
+            prior_base_texts.append(selected_base)
             if sentinel_tripped or environment_wedged:
                 break
 
@@ -1015,6 +1309,12 @@ class OperatorEngine:
             ungraded_criteria=ungraded_criteria,
             intake_failure="intake_failure" in self.failure_modes,
             stop_reason=reason,
+            operator_mode=("driver" if self.driver is not None else "generated_surface" if self.generated_operator is not None else "scripted"),
+            driver_identity=(
+                {"model_id": self.driver.model_id, "temperature": self.driver.temperature}
+                if self.driver is not None
+                else None
+            ),
         )
 
 
