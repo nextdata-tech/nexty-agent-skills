@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from typing import Any
+
 from .tier import ScenarioRun, TierResult
+from .transcript import render_epoch_conversation
 
 
 class ReportError(ValueError):
@@ -185,7 +188,51 @@ def write_report(
             summary_target.write_text(human_summary(result), encoding="utf-8")
         except OSError as exc:
             raise ReportError(f"could not write human report {summary_target}: {exc}") from exc
+    conversation_targets = write_conversations(result, machine_target.parent, report=machine_report(result))
+    if summary_target is not None and conversation_targets:
+        # Name them in the summary. A transcript nobody knows to look for is a
+        # transcript nobody reads: rendering it required knowing a separate
+        # script existed and handing it a bundle path.
+        lines = ["", "Conversations:"]
+        lines += [f"  {path}" for path in conversation_targets]
+        try:
+            with summary_target.open("a", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + "\n")
+        except OSError as exc:
+            raise ReportError(f"could not append to {summary_target}: {exc}") from exc
     return machine_target, summary_target
+
+
+def write_conversations(
+    result: TierResult, directory: str | Path, *, report: Any = None
+) -> tuple[Path, ...]:
+    """Render every epoch's conversation next to the report.
+
+    Written beside the report rather than inside the evidence bundle on
+    purpose: the bundle's digest is computed when it is retained, so adding a
+    file afterwards would leave the recorded digest describing something the
+    bundle no longer is.
+
+    A rendering failure must not lose the run. The transcript is a convenience
+    over evidence that is already on disk, so a failure is recorded in the
+    returned path list's absence, not raised over a completed tier.
+    """
+
+    target_dir = Path(directory)
+    written: list[Path] = []
+    for run in result.scenario_runs:
+        bundle = getattr(run, "evidence_bundle_dir", None)
+        if not bundle:
+            continue
+        destination = target_dir / f"conversation-{run.scenario_id}-epoch-{run.epoch}.md"
+        try:
+            destination.write_text(
+                render_epoch_conversation(bundle, report=report), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001 - never lose a finished run to a renderer
+            continue
+        written.append(destination)
+    return tuple(written)
 
 
 emit_report = write_report
@@ -201,4 +248,5 @@ __all__ = [
     "render_human_summary",
     "render_machine_report",
     "write_report",
+    "write_conversations",
 ]

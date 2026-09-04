@@ -206,3 +206,47 @@ def test_an_unratable_batch_says_so_instead_of_printing_an_empty_header(tmp_path
     assert "too few epochs completed to rate this batch" in summary
     assert "- per-gate rates:\n" not in summary, "bare header with no rows beneath it"
     assert result.verdict == "ungraded"
+
+
+def test_write_report_also_writes_a_readable_conversation(tmp_path: Path) -> None:
+    """A transcript nobody knows to look for is a transcript nobody reads.
+
+    The renderer existed but was never called from the runner, so seeing how a
+    run actually went required knowing a separate script existed and handing it
+    an `evidence/<scenario>/epoch-<n>` path. `summary.txt` gave gate codes and
+    no conversation.
+
+    Written beside the report rather than into the evidence bundle: the bundle's
+    digest is computed when it is retained, so a file added afterwards would
+    leave the recorded digest describing something the bundle no longer is.
+    """
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    out = tmp_path / "out"
+    _, summary_target = write_report(
+        result, json_path=out / "report.json", summary_path=out / "summary.txt"
+    )
+
+    transcripts = sorted(out.glob("conversation-*.md"))
+    assert transcripts, "no conversation was rendered next to the report"
+    body = transcripts[0].read_text(encoding="utf-8")
+    assert "OPERATOR>" in body and "AGENT>" in body, "the transcript has no conversation in it"
+
+    # And the summary has to name them, or the reader still has to go looking.
+    assert summary_target is not None
+    summary = summary_target.read_text(encoding="utf-8")
+    assert "Conversations:" in summary
+    assert transcripts[0].name in summary
+
+    # The digest recorded for the bundle must still describe the bundle.
+    for run in result.scenario_runs:
+        if run.evidence_bundle_dir:
+            assert not list(Path(run.evidence_bundle_dir).glob("conversation-*.md"))
