@@ -107,20 +107,27 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
+        EXPECT_SOURCE_SHA: ${{ inputs.expect_source_sha }}
         SELECTOR_LABEL: ${{ inputs.selector_label != '' && inputs.selector_label || inputs.artifact_prefix }}
       run: |
         set -euo pipefail
         artifact_prefix="$ARTIFACT_PREFIX"
         # The token needs contents:read and actions:read on nextdata-tech/nxd
         # for this cross-repository lookup.
-        # The producer appends source and run identity after this prefix, so
-        # resolve the newest unexpired main artifact without relying on a
-        # name that can collide across source commits.
+        # The producer appends source and run identity after this prefix. When
+        # a caller pins a source commit, query that exact run identity so a
+        # valid artifact cannot fall out of a recent-run window. Callers that
+        # do not pin a source retain the bounded newest-main-run lookup.
+        if [ -n "$EXPECT_SOURCE_SHA" ]; then
+          runs_query="branch=main&head_sha=$EXPECT_SOURCE_SHA&status=success&per_page=20"
+        else
+          runs_query="branch=main&status=success&per_page=20"
+        fi
         # Resolve through recent NXD main workflow runs instead of paginating
         # the entire artifact catalog, which contains hundreds of thousands
         # of historical artifacts.
         if ! workflow_runs="$(gh api \
-          "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?branch=main&status=success&per_page=20")"; then
+          "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?$runs_query")"; then
           echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
           exit 1
         fi
@@ -143,6 +150,7 @@ runs:
           fi
         done < <(jq -r '.workflow_runs[]
           | select(.head_branch == "main")
+          | select((env.EXPECT_SOURCE_SHA == "") or .head_sha == env.EXPECT_SOURCE_SHA)
           | select(.status == "completed" and .conclusion == "success")
           | .id' <<< "$workflow_runs")
         if [ -z "$artifact" ]; then
