@@ -288,11 +288,21 @@ def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]])
     """Whether a confirmed decision row covers any of a metric's column terms."""
 
     for row in rows:
-        if str(row.get("status", "")).strip().lower() != "confirmed":
+        # ``proposed`` is the documented landing state for an agent-authored
+        # ruling: `nxd-generate-data-product/reference/llm-judgments.md` says
+        # rows land `proposed` + `agent_authored` and become `confirmed` only
+        # once a user reviews them. Requiring `confirmed` graded the user's
+        # review, not the agent's governance, and failed an agent that followed
+        # the pack's own default. ``blocked`` does not govern anything: it
+        # records a deferral with no model behind it.
+        if str(row.get("status", "")).strip().lower() not in {"confirmed", "proposed"}:
             continue
-        blob = " ".join(
-            str(row.get(field, "")) for field in ("applies_to", "ruling", "detail", "decision_id")
-        ).lower()
+        # Bind on the fields that *bind* -- not on free prose. Matching `ruling`
+        # and `detail` meant any confirmed row merely mentioning a term governed
+        # the metric, so "pipeline velocity is out of scope" would mark
+        # stage_velocity_30d governed and turn a real ungoverned shortfall into
+        # a pass.
+        blob = " ".join(str(row.get(field, "")) for field in ("applies_to", "decision_id")).lower()
         if any(term.lower() in blob for term in terms if isinstance(term, str) and term):
             return True
     return False
@@ -377,7 +387,38 @@ def gate_capability_from_decisions(
             required=required,
         )
     rows = _decision_rows(decisions)
-    if not rows:
+    implementation = implementation or ""
+    graded = {
+        name: terms_by_metric[name]
+        for name, label in labels.items()
+        if label in {"impossible", "proxy"} and terms_by_metric.get(name)
+    }
+    implemented = {
+        name: terms
+        for name, terms in graded.items()
+        if _metric_is_implemented(terms, implementation)
+    }
+    if not implementation.strip():
+        # Nothing to read means nothing was established. Falling through here
+        # made every metric "not implemented", produced no findings, and
+        # returned a *passing, examined* gate -- a clean capability pass for a
+        # build the harness never actually looked at, which is the
+        # gate-that-cannot-fail this grading path exists to replace.
+        return _result(
+            "capability",
+            False,
+            [
+                Finding(
+                    "capability_implementation_not_examined",
+                    "no closure model or transform source was available to read columns from",
+                )
+            ],
+            examined=False,
+            required=required,
+        )
+    if not rows and not implemented:
+        # No rulings and no implemented shortfall: nothing was governed and
+        # nothing needed governing.
         return _result(
             "capability",
             False,
@@ -386,14 +427,8 @@ def gate_capability_from_decisions(
             required=required,
         )
     findings: list[Finding] = []
-    for name, label in labels.items():
-        if label not in {"impossible", "proxy"}:
-            continue
-        terms = terms_by_metric.get(name, ())
-        if not terms:
-            continue
-        if not _metric_is_implemented(terms, implementation or ""):
-            continue
+    for name, terms in implemented.items():
+        label = labels[name]
         if not _metric_is_governed(terms, rows):
             findings.append(
                 Finding(

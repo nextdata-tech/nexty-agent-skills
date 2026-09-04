@@ -38,8 +38,7 @@
     ],
     "stage_velocity_30d": [
       "stage_velocity",
-      "velocity_30d",
-      "velocity"
+      "velocity_30d"
     ],
     "recently_moved_deals_proxy": [
       "recently_moved",
