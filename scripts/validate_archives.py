@@ -138,10 +138,15 @@ def _validate_archive(
                     candidate = posixpath.normpath(
                         posixpath.join(str(document.parent), target)
                     )
-                    if not candidate.startswith("skills/"):
-                        continue
                     parts = PurePosixPath(candidate).parts
-                    if len(parts) < 2:
+                    if parts[:1] != ("skills",) or len(parts) < 2:
+                        if candidate not in name_set and not any(
+                            name.startswith(candidate.rstrip("/") + "/") for name in name_set
+                        ):
+                            errors.append(
+                                f"{archive}: {name}: relative link {target!r} points to "
+                                "a member omitted from the archive"
+                            )
                         continue
                     referenced_skill = parts[1]
                     if referenced_skill not in expected:

@@ -568,8 +568,16 @@ def validate_bundle_reference_closure(root: Path) -> list[str]:
                     try:
                         relative = candidate.relative_to(src.resolve())
                     except ValueError:
+                        errors.append(
+                            f"{document}: relative link {target!r} points outside the "
+                            "source skill pack and is not a packaged source member"
+                        )
                         continue
                     if not relative.parts:
+                        errors.append(
+                            f"{document}: relative link {target!r} points to the "
+                            "source root, not a packaged source member"
+                        )
                         continue
                     referenced_skill = relative.parts[0]
                     if referenced_skill not in source_names:

@@ -41,7 +41,7 @@ This supervisor preflight and the generator's closure-root `self_check.py` are
 complementary gates, not two names for the same check. The preflight is the
 host-owned admission decision for the exact definition and workflow: it runs
 structure, runtime, contract, and semantic checks in the supervisor's
-environment before `build_data_product`. The generator-owned [Step 7 self-check](../../nxd-generate-data-product/SKILL.md#step-7--self-check-before-handing-off)
+environment before `build_data_product`. The generator-owned [Step 7 self-check](../../nxd-generate-data-product/SKILL.md#step-7--self-check-before-handing-off-mandatory)
 is copied into the generated closure and records its local structural,
 scratch-transform, reach, policy, and read-back evidence in `build-record.json`.
 A green self-check does not admit or publish a product, and a passing preflight
