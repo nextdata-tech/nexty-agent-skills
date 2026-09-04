@@ -147,6 +147,10 @@ def test_reference_doc_exists_with_contents_heading():
         "reference/incremental-transforms.md must exist — it is the only "
         "sanctioned incremental route"
     )
+    head = "\n".join(INCREMENTAL.read_text().splitlines()[:20]).lower()
+    assert "## contents" in head, (
+        "reference files over 100 lines need a '## Contents' section near the top"
+    )
 
 
 def test_scenario_uses_the_current_skill_and_three_run_runner_oracle():
@@ -166,7 +170,7 @@ def test_scenario_uses_the_current_skill_and_three_run_runner_oracle():
     assert (SCENARIO / "fixtures" / "delta" / "part-0003.csv").is_file()
 
 
-def test_incremental_oracle_material_is_excluded_only_for_this_scenario():
+def test_incremental_oracle_material_is_excluded_only_for_this_scenario(tmp_path):
     spec = importlib.util.spec_from_file_location("evals_run", REPO_ROOT / "evals" / "run.py")
     run = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -182,6 +186,16 @@ def test_incremental_oracle_material_is_excluded_only_for_this_scenario():
         "check_incremental_state.py",
         "delta",
     })
+    workspace = tmp_path / "workspace"
+    target = workspace / "data_product" / "data" / "events" / "part-0003.csv"
+    run._stage_incremental_delta_before_followup(SCENARIO, workspace, 1)
+    assert not target.exists()
+    run._stage_incremental_delta_before_followup(SCENARIO, workspace, 2)
+    assert target.read_text() == (
+        SCENARIO / "fixtures" / "delta" / "part-0003.csv"
+    ).read_text()
+    run._remove_incremental_delta_after_agent(SCENARIO, workspace)
+    assert not target.exists()
 
 
 def test_incremental_oracle_requires_one_cursor_key_to_follow_the_trajectory():
@@ -203,10 +217,12 @@ def test_incremental_oracle_requires_one_cursor_key_to_follow_the_trajectory():
     assert not checker._has_cursor_trajectory(
         states[0], states[1], {"events": {"max_event_id": 100}}
     )
-    head = "\n".join(INCREMENTAL.read_text().splitlines()[:20]).lower()
-    assert "## contents" in head, (
-        "reference files over 100 lines need a '## Contents' section near the top"
-    )
+    string_states = [
+        {"events": {"max_event_id": "100"}},
+        {"events": {"max_event_id": "100"}},
+        {"events": {"max_event_id": "140"}},
+    ]
+    assert checker._has_cursor_trajectory(*string_states)
 
 
 def test_teaches_the_transform_state_kwarg():

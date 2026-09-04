@@ -113,7 +113,7 @@ you were trying to re-measure.
 ### What runs without any further setup
 
 19 of 37 public scenarios. The remaining 18 declare `ci_skip` in their
-`checks.json`. Fourteen need a Tier 2 or Tier 3 install; one is gated on the agent
+`checks.json`. Fifteen need a Tier 2 or Tier 3 install; two are gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
@@ -132,6 +132,7 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
 | `terminal-self-check-provenance` | authenticated Claude CLI + live desktop supervisor and NXD runtime (Tier 3) |
 | `terminal-field-mapper-adapter-contract` | live desktop supervisor over stdio MCP (Tier 3) |
+| `optional-empty-output-aggregate-desktop` | compatible live desktop supervisor (Tier 3) |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `incremental-transform-state` | `--agent-backend claude`: it scripts a follow-up turn and a runner-side three-run state checker, which `codex` cannot drive |
 | `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |

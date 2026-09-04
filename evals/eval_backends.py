@@ -47,7 +47,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 try:
     from desktop_stdio import DesktopStdioError, DesktopStdioSession, redact_text
@@ -377,6 +377,7 @@ class AgentBackend(Protocol):
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
         followup_turns: list[FollowupTurn] | None = None,
+        before_followup_turn: Callable[[Path, int], None] | None = None,
         source_audit_markers: list[tuple[str, str]] | None = None,
         executable: str | None = None,
     ) -> tuple[bool, str, dict]:
@@ -397,6 +398,10 @@ class AgentBackend(Protocol):
         turn ends. ``None``/empty is single-turn and MUST take exactly the
         pre-existing code path. ``timeout_s`` remains a whole-RUN budget across
         every turn, not a per-turn one.
+
+        ``before_followup_turn`` may stage runner-owned workspace inputs after
+        the preceding turn and before a scripted follow-up is delivered. It is
+        called only for a follow-up that will actually be sent.
         """
         ...
 
@@ -567,6 +572,7 @@ class ClaudeBackend:
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
         followup_turns: list[FollowupTurn] | None = None,
+        before_followup_turn: Callable[[Path, int], None] | None = None,
         source_audit_markers: list[tuple[str, str]] | None = None,
         executable: str | None = None,
         mcp_config: Path | None = None,
@@ -599,6 +605,7 @@ class ClaudeBackend:
                 env_overrides=env_overrides, path_prepend=path_prepend,
                 skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
                 followup_turns=followup_turns,
+                before_followup_turn=before_followup_turn,
                 source_audit_markers=source_audit_markers,
                 mcp_config=mcp_config,
                 strict_mcp_config=strict_mcp_config,
@@ -807,6 +814,7 @@ class ClaudeBackend:
         skill_pack_dir: Path | None,
         allowed_tools: str | None,
         followup_turns: list[FollowupTurn],
+        before_followup_turn: Callable[[Path, int], None] | None,
         source_audit_markers: list[tuple[str, str]] | None,
         mcp_config: Path | None,
         strict_mcp_config: bool,
@@ -967,6 +975,14 @@ class ClaudeBackend:
                     # error — the scenario grades the stop separately.
                     skipped_turns.append(turn_index)
                     continue
+                if before_followup_turn is not None:
+                    try:
+                        before_followup_turn(ws, turn_index)
+                    except Exception as exc:  # noqa: BLE001 - setup is scenario-owned
+                        return _abort(
+                            f"follow-up workspace setup failed before turn "
+                            f"{turn_index}: {type(exc).__name__}: {exc}"
+                        )
                 segments.append(
                     (turn_separator(turn_index, text, after_await=after_await), {})
                 )
@@ -1320,6 +1336,7 @@ class CodexBackend:
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
         followup_turns: list[FollowupTurn] | None = None,
+        before_followup_turn: Callable[[Path, int], None] | None = None,
         source_audit_markers: list[tuple[str, str]] | None = None,
         executable: str | None = None,
     ) -> tuple[bool, str, dict]:

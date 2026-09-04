@@ -1796,12 +1796,25 @@ class FakeTransformState(dict):
     def models(self):
         return list(self._declared)
 
-    def __setitem__(self, key, value):
+    def _note_flat_write(self):
         if self._bound is None:
-            # Match the runtime's dict-like flat handle: the value is visible
-            # during this call, but no declared model captures it for folding.
             self.dropped_flat_write = True
+
+    def __setitem__(self, key, value):
+        # Match the runtime's dict-like flat handle: the value is visible during
+        # this call, but no declared model captures it for folding.
+        self._note_flat_write()
         dict.__setitem__(self, key, value)
+
+    def update(self, *args, **kwargs):
+        values = dict(*args, **kwargs)
+        if values:
+            self._note_flat_write()
+        dict.update(self, values)
+
+    def setdefault(self, key, default=None):
+        self._note_flat_write()
+        return dict.setdefault(self, key, default)
 
     def persist(self):
         snapshot = {m: dict(self._bags[m]) for m in self._declared}

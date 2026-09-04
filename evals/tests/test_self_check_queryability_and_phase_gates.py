@@ -174,6 +174,14 @@ def test_fake_transform_state_matches_current_kernel_boundary():
     with pytest.raises(KeyError):
         multi.for_model("missing")
 
+    for method in ("update", "setdefault"):
+        flat = FakeState(["orders", "users"])
+        if method == "update":
+            flat.update({"cursor": 8})
+        else:
+            flat.setdefault("cursor", 8)
+        assert flat.dropped_flat_write, f"flat {method} must be diagnosed"
+
     unserializable = FakeState(["orders"])
     unserializable["bad"] = float("nan")
     with pytest.raises(ValueError):

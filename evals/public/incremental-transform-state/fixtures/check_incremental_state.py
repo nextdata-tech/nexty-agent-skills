@@ -70,10 +70,23 @@ class FakeTransformState(dict):
     def models(self):
         return list(self._declared)
 
-    def __setitem__(self, key, value):
+    def _note_flat_write(self):
         if self._bound is None:
             self.dropped_flat_write = True
+
+    def __setitem__(self, key, value):
+        self._note_flat_write()
         dict.__setitem__(self, key, value)
+
+    def update(self, *args, **kwargs):
+        values = dict(*args, **kwargs)
+        if values:
+            self._note_flat_write()
+        dict.update(self, values)
+
+    def setdefault(self, key, default=None):
+        self._note_flat_write()
+        return dict.setdefault(self, key, default)
 
     def persist(self):
         snapshot = {m: dict(self._bags[m]) for m in self._declared}
@@ -161,12 +174,25 @@ def _scalar_entries(state):
     return entries
 
 
+def _cursor_matches(value, expected):
+    """Compare numeric cursors across JSON-safe int/float/string encodings."""
+    if isinstance(value, str):
+        try:
+            return float(value) == expected
+        except ValueError:
+            return value == str(expected)
+    return value == expected
+
+
 def _has_cursor_trajectory(*states):
     paths = set(_scalar_entries(states[0]))
     for state in states[1:]:
         paths &= set(_scalar_entries(state))
     return any(
-        [_scalar_entries(state)[path] for state in states] == [BASE_ROWS, BASE_ROWS, BASE_ROWS + DELTA_ROWS]
+        all(_cursor_matches(_scalar_entries(state)[path], expected)
+            for state, expected in zip(
+                states, [BASE_ROWS, BASE_ROWS, BASE_ROWS + DELTA_ROWS]
+            ))
         for path in paths
     )
 
