@@ -223,7 +223,14 @@ def test_runner_cli_driver_requires_the_key_and_pins_the_prompt_hash(
     pins, factory = cli._driver_configuration(args, _cli_pins())
 
     assert pins.driver_model_id == "gpt-x"
-    assert dict(pins.driver_sampling_params) == {"temperature": 0.3, "prompt_hash": driver_prompt_hash()}
+    # The completion cap is pinned alongside the prompt hash: it decides
+    # whether a turn produces text at all, so two runs differing by it are
+    # two different operators and must not pair.
+    assert dict(pins.driver_sampling_params) == {
+        "temperature": 0.3,
+        "max_tokens": 900,  # the flag value, not the default -- proves it flows through
+        "prompt_hash": driver_prompt_hash(),
+    }
     operator = factory(object(), object(), 1)
     assert operator.model_id == "gpt-x"
     assert operator.temperature == 0.3

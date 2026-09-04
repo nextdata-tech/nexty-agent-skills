@@ -320,8 +320,13 @@ def test_driver_configuration_pins_the_model_temperature_and_prompt_hash(
     driver_pins, factory = module.driver_configuration(args, PinnedVersions("s", "v", "w", "mock-1", "c"))
 
     assert driver_pins.driver_model_id == "m"
+    # max_tokens is pinned for the same reason as the prompt hash: on
+    # GPT-5-class models the cap spans reasoning tokens, so it decides whether a
+    # turn produces text at all, and two runs differing by it are two different
+    # operators.
     assert dict(driver_pins.driver_sampling_params) == {
         "temperature": 0.2,
+        "max_tokens": 400,
         "prompt_hash": driver_prompt_hash(),
     }
     assert factory is not None
