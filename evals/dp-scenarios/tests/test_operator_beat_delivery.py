@@ -290,7 +290,9 @@ def test_the_capability_shortfall_fanout_beat_survives_reply_substitution() -> N
 
     result = OperatorEngine(scenario.operator_script, transport).run()
 
-    fanout_turn = transport.message_texts[5]
+    # The scope-creep plant rides the 'The build is ready.' turn, which moved
+    # from index 5 to 8 when build room was added before the query ask.
+    fanout_turn = transport.message_texts[8]
     assert "broken out by owner and by stage" in fanout_turn
     assert "one line per combination" in fanout_turn
     assert "grain_trap_fanout" in result.fired_plant_ids

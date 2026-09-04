@@ -191,6 +191,18 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --output-dir /tmp/dp-scenarios-local-run
 ```
 
+Each run writes, next to `report.json` and `summary.txt`:
+
+```
+conversation-<scenario>-epoch-<n>.md
+```
+
+That is the readable transcript — every operator and agent turn, which rule
+answered each one, whether the driver authored it or fell back, the tools the
+agent called, and the gate results. Start there when you want to know how a run
+actually went; `summary.txt` gives you the verdict and gate codes, and names the
+transcripts at the end.
+
 With no `--scenario` it runs the smoke tier rather than every package on disk.
 Naming a scenario id explicitly crosses the tier, which is how you run one core
 or live scenario live.

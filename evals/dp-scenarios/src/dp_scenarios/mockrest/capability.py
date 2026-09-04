@@ -10,7 +10,7 @@ answering its own capability probe from hidden metadata.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -39,11 +39,18 @@ class CapabilityManifest:
     metrics: dict[str, str]
     endpoints: dict[str, dict[str, tuple[int, ...]]]
     known_absent_dimensions: tuple[str, ...] = ()
+    #: Column-name fragments that would mean a build implements a metric.
+    #: Declared per scenario because only the scenario knows that a
+    #: ``stage_age_days`` column is what ``time_in_stage_days`` means. The
+    #: capability gate reads this off the snapshot written into the artifact
+    #: root, so a manifest that parsed it but dropped it here left the gate
+    #: with labels and no way to bind them to columns.
+    metric_terms: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, value: Any) -> "CapabilityManifest":
         raw = _mapping(value, "capability")
-        unknown = sorted(set(raw) - {"metrics", "endpoints", "known_absent_dimensions"})
+        unknown = sorted(set(raw) - {"metrics", "endpoints", "known_absent_dimensions", "metric_terms"})
         if unknown:
             raise CapabilityError(f"capability contains unknown key(s): {', '.join(unknown)}")
         raw_metrics = _mapping(raw.get("metrics", {}), "capability.metrics")
@@ -93,7 +100,26 @@ class CapabilityManifest:
                     f"capability.known_absent_dimensions contains duplicate: {dimension}"
                 )
             known_absent.append(dimension)
-        return cls(metrics, endpoints, tuple(known_absent))
+        raw_terms = raw.get("metric_terms", {})
+        if not isinstance(raw_terms, Mapping):
+            raise CapabilityError("capability.metric_terms must be a mapping")
+        metric_terms: dict[str, tuple[str, ...]] = {}
+        for name, terms in raw_terms.items():
+            if name not in metrics:
+                raise CapabilityError(
+                    f"capability.metric_terms names an undeclared metric: {name}"
+                )
+            if isinstance(terms, str) or not isinstance(terms, (list, tuple)):
+                raise CapabilityError(
+                    f"capability.metric_terms[{name}] must be a list of column fragments"
+                )
+            cleaned = tuple(term for term in terms if isinstance(term, str) and term.strip())
+            if not cleaned:
+                raise CapabilityError(
+                    f"capability.metric_terms[{name}] must contain non-empty strings"
+                )
+            metric_terms[name] = cleaned
+        return cls(metrics, endpoints, tuple(known_absent), metric_terms)
 
     @classmethod
     def load(cls, path: str | Path) -> "CapabilityManifest":
@@ -122,6 +148,7 @@ class CapabilityManifest:
             "metrics": dict(self.metrics),
             "endpoints": endpoints,
             "known_absent_dimensions": list(self.known_absent_dimensions),
+            "metric_terms": {name: list(terms) for name, terms in self.metric_terms.items()},
         }
 
     to_dict = as_dict
