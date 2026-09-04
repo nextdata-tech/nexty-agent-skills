@@ -770,8 +770,13 @@ def test_openai_key_is_stripped_from_the_spawned_agent_environment(
     monkeypatch.setenv("DP_ADAPTER_ENV_CANARY", "present")
 
     environment = _spawned_claude_environment(tmp_path, monkeypatch)
+    # Bind the names first and assert against those. Asserting against the
+    # mapping renders every host environment *value* into pytest's failure
+    # output -- in the one test whose whole subject is keeping a credential
+    # out of a log.
+    variable_names = set(environment)
 
-    assert "OPENAI_API_KEY" not in environment
+    assert "OPENAI_API_KEY" not in variable_names
     assert all("sk-live-operator-key" not in value for value in environment.values())
     # The strip is targeted, not a blanket environment reset.
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
@@ -784,6 +789,7 @@ def test_the_adapter_environment_is_unchanged_when_no_key_is_present(
     monkeypatch.setenv("DP_ADAPTER_ENV_CANARY", "present")
 
     environment = _spawned_claude_environment(tmp_path, monkeypatch)
+    variable_names = set(environment)
 
-    assert "OPENAI_API_KEY" not in environment
+    assert "OPENAI_API_KEY" not in variable_names
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
