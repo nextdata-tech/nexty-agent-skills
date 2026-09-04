@@ -151,3 +151,58 @@ def test_a_scripted_run_is_unchanged_by_the_driver_parameter() -> None:
     assert record.disposition is QualificationDisposition.QUALIFIED
     assert record.operator_mode == "scripted"
     assert record.reasons == ()
+
+
+def test_a_truncated_passing_run_is_observed_even_when_repeatability_is_certified() -> None:
+    record = qualify_run(
+        _passing_score(),
+        replay_status="verified",
+        generated_operator=False,
+        repeatability_certified=True,
+        truncated=True,
+    )
+
+    assert record.disposition is QualificationDisposition.OBSERVED
+    assert record.reasons == ("turn_timeout_truncated",)
+
+
+def test_a_truncated_ungraded_run_puts_timeout_first_and_keeps_gate_reason() -> None:
+    score = _score(
+        GateResult(
+            "follow-up",
+            False,
+            0,
+            (Finding("required_plant_not_fired", "declared planted difficulty did not fire"),),
+            examined=True,
+            ungraded=True,
+        )
+    )
+
+    record = qualify_run(score, replay_status="verified", generated_operator=False, truncated=True)
+
+    assert record.disposition is QualificationDisposition.OBSERVED
+    assert record.reasons == ("turn_timeout_truncated", "required_plant_not_fired")
+
+
+def test_a_truncated_replay_run_keeps_both_caps_with_the_timeout_first() -> None:
+    record = qualify_run(
+        _passing_score(),
+        replay_status="verified",
+        generated_operator=False,
+        repeatability_certified=True,
+        validation_mode="replay",
+        truncated=True,
+    )
+
+    assert record.disposition is QualificationDisposition.OBSERVED
+    assert record.reasons == ("turn_timeout_truncated", "replay_only_not_live")
+
+
+def test_a_truncated_rejected_run_keeps_the_score_state_reason_after_the_timeout() -> None:
+    score = _score(GateResult("follow-up", False, 0, (Finding("gate_failed", "gate did not pass"),), examined=True))
+
+    record = qualify_run(score, replay_status="verified", generated_operator=False, truncated=True)
+
+    assert record.disposition is QualificationDisposition.REJECTED
+    assert record.reasons[0] == "turn_timeout_truncated"
+    assert record.reasons[1].startswith("score_state:")

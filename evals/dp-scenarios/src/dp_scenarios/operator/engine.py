@@ -55,12 +55,14 @@ class TerminalState(str, Enum):
     SCRIPT_EXHAUSTED = "script_exhausted"
     SENTINEL_TRIP = "sentinel_trip"
     ENVIRONMENT_WEDGE = "environment_wedge"
+    TURN_TIMEOUT = "turn_timeout"
 
 
 FAILURE_MODES = frozenset(
     {
         "sentinel_trip",
         "environment_wedge",
+        "turn_timeout",
         "one_obstacle_per_turn",
         "intake_failure",
         "turn_budget_exceeded",
@@ -640,7 +642,6 @@ class OperatorEngine:
             self._ledger_supervisor_reader = StaticSupervisorRecordReader(facts)
         self.counter_readers = tuple(counter_readers)
         self.generated_operator = generated_operator
-        self.driver = driver
         # Planted markers live in the generated fixture, not in the scenario's
         # operator block: a scenario may declare no ``operator.sentinel`` and
         # still plant PII the agent can echo back.  These widen redaction
@@ -949,6 +950,7 @@ class OperatorEngine:
         pending_failure = False
         sentinel_tripped = False
         environment_wedged = False
+        turn_timed_out = False
         next_reply: str | None = None
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
@@ -1167,6 +1169,9 @@ class OperatorEngine:
             if result.environment_wedged:
                 self.failure_modes.append("environment_wedge")
                 environment_wedged = True
+            if result.turn_timed_out:
+                self.failure_modes.append("turn_timeout")
+                turn_timed_out = True
 
             match = self.matcher.reply_for(result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message)
             failure_count = max(result.build_failure_count, 1 if result.build_failed else 0)
@@ -1291,7 +1296,7 @@ class OperatorEngine:
             # the same persona sentence on multiple distinct turns; comparing
             # against prior rendered prose would reject that valid driver use.
             prior_base_texts.append(selected_base)
-            if sentinel_tripped or environment_wedged:
+            if sentinel_tripped or environment_wedged or turn_timed_out:
                 break
 
         if environment_wedged:
@@ -1300,6 +1305,9 @@ class OperatorEngine:
         elif sentinel_tripped:
             terminal_state = TerminalState.SENTINEL_TRIP
             reason = "sentinel_trip"
+        elif turn_timed_out:
+            terminal_state = TerminalState.TURN_TIMEOUT
+            reason = "turn_timeout"
         else:
             terminal_state = TerminalState.SCRIPT_EXHAUSTED
             reason = "script_exhausted"

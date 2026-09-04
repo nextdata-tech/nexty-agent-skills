@@ -37,7 +37,8 @@ from dp_scenarios.runner import (
     TierError,
     TierRunner,
 )
-from dp_scenarios.runner.qualification import QualificationDisposition
+from dp_scenarios.operator.engine import TerminalState as EngineTerminalState
+from dp_scenarios.runner.qualification import QualificationDisposition, qualify_run
 from dp_scenarios.runner.session import LiveSession, SessionError
 from dp_scenarios.runner.report import machine_report
 from dp_scenarios.runner.tier import run_drift_canary
@@ -930,6 +931,47 @@ def test_distinct_stop_conditions_remain_distinct(
     assert run.score.state is expected_state
 
 
+@pytest.mark.parametrize("branch", ["session_factory", "replay_recordings"])
+def test_timeout_and_wedge_are_paired_distinct_qualification_outcomes(
+    tmp_path: Path, branch: str
+) -> None:
+    scenario = make_scenario(f"paired-timeout-{branch}", turns=2)
+    timeout_responses = responses_for(scenario)
+    timeout_responses[1] = TurnResult(
+        agent_message="",
+        turn_timed_out=True,
+        environment_detail="turn exceeded its budget",
+    )
+    wedge_responses = responses_for(scenario)
+    wedge_responses[1] = TurnResult(environment_wedged=True, environment_detail="child exited")
+
+    def run_with(responses: list[TurnResult], root: Path):
+        kwargs: dict[str, object] = {
+            "environment_root": root,
+            "evidence_root": root / "evidence",
+        }
+        if branch == "session_factory":
+            kwargs["session_factory"] = lambda *_args: InMemoryTransport(responses)
+        else:
+            recording = recording_for(scenario, responses)
+            kwargs["replay_recordings"] = {scenario.id: recording.write(root / "recording.json")}
+        return TierRunner([scenario], pins=pins(), canary=clean_canary(), **kwargs).run().scenario_runs[0]
+
+    timeout_run = run_with(timeout_responses, tmp_path / "timeout")
+    wedge_run = run_with(wedge_responses, tmp_path / "wedge")
+
+    assert timeout_run.terminal_state.value == "turn_timeout"
+    assert timeout_run.qualification.disposition is QualificationDisposition.OBSERVED
+    assert timeout_run.qualification.reasons[0] == "turn_timeout_truncated"
+    observations = json.loads(
+        (Path(timeout_run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert observations["terminal_state"] == "turn_timeout"
+    assert wedge_run.terminal_state.value == "environment_wedge"
+    assert wedge_run.qualification.disposition is QualificationDisposition.INVALID
+    assert wedge_run.qualification.reasons == ("run_invalid",)
+
+
 def test_turn_budget_exceeded_is_graded_not_stopped() -> None:
     scenario = make_scenario("budget", turns=2)
     scenario = replace(scenario, turn_budget=1, script=replace(scenario.script, turn_budget=1))
@@ -1194,6 +1236,63 @@ def test_repeatability_certification_promotes_live_run_and_refreshes_bundle(tmp_
     assert promoted.bundle_digest != run.bundle_digest
     assert json.loads((bundle / "qualification.json").read_text(encoding="utf-8"))["disposition"] == "CERTIFIED"
     assert (bundle / "bundle.sha256").read_text(encoding="ascii").strip() == promoted.bundle_digest
+
+
+def test_repeatability_certification_refuses_to_launder_a_truncated_run(tmp_path: Path) -> None:
+    """Certification is scenario-wide; truncation is per-run.
+
+    ``_promote_certified_run`` re-qualifies every run of a certified scenario
+    with ``repeatability_certified=True``.  A run whose turn timed out normally
+    left later plants unfired, so its placement was never actually reached --
+    promoting it would stamp CERTIFIED on evidence the run does not support.
+    The control below is the same run with the same score, promoted.
+    """
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+    run = result.scenario_runs[0]
+    live_manifest = replace(
+        run.manifest,
+        validation_mode="live",
+        supervisor_binary_path="/opt/nxd-desktop-supervisor",
+        session_root="/tmp/desktop-session",
+        session_config_path="/tmp/desktop-session/mcp-config.json",
+        session_config_sha256="sha256:config",
+        session_trace_path="/tmp/desktop-session/trace.jsonl",
+        session_server_result_path="/tmp/desktop-session/server-result.json",
+    )
+    live_run = replace(run, manifest=live_manifest)
+    assert live_run.score.state is ScoreTerminalState.PASSED
+
+    truncated = replace(live_run, terminal_state=EngineTerminalState.TURN_TIMEOUT)
+    promoted_truncated = tier_module._promote_certified_run(truncated)
+    bundle = Path(run.evidence_bundle_dir)
+
+    assert promoted_truncated.qualification.disposition is not QualificationDisposition.CERTIFIED
+    assert json.loads((bundle / "qualification.json").read_text(encoding="utf-8"))["disposition"] != "CERTIFIED"
+    assert (
+        qualify_run(
+            truncated.score,
+            replay_status=truncated.replay_verification_status,
+            generated_operator=False,
+            repeatability_certified=True,
+            validation_mode="live",
+            truncated=True,
+        ).reasons
+        == ("turn_timeout_truncated",)
+    )
+
+    # Control: the identical run, untruncated, does reach CERTIFIED.
+    assert (
+        tier_module._promote_certified_run(live_run).qualification.disposition
+        is QualificationDisposition.CERTIFIED
+    )
 
 
 def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:

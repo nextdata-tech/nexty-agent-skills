@@ -1,6 +1,8 @@
 """Contract tests for the local Claude Code transport bridge."""
 
+import io
 import json
+import dataclasses
 import os
 from pathlib import Path
 import signal
@@ -11,7 +13,10 @@ import uuid
 
 import pytest
 
+import dp_scenarios.runner.claude_adapter as adapter_module
 from dp_scenarios.runner.claude_adapter import ClaudeCodeAdapter, _update_machine_artifacts, parse_claude_events
+from dp_scenarios.operator.transport import TouchedFile, ToolCall, TurnResult
+from dp_scenarios.runner.session import turn_result_to_dict
 from dp_scenarios.runner.local import FileSupervisorRecordReader, LocalRunnerError
 
 
@@ -84,6 +89,7 @@ def test_unpaired_mcp_tool_use_is_an_environment_wedge_not_a_build_failure() -> 
         session_id="claude-session",
     )
 
+    assert result.turn_timed_out is False
     assert result.environment_wedged is True
     assert result.build_failed is False
     assert result.build_failure_count == 0
@@ -339,11 +345,167 @@ for line in sys.stdin:
     finally:
         adapter.close()
 
-    assert result.environment_wedged is True
+    assert result.turn_timed_out is True
+    assert result.environment_wedged is False
     assert "did not complete" in (result.environment_detail or "")
     assert result.tool_calls[0].name == "mcp__nxd-desktop__build_data_product"
     assert result.build_failure_count == 0
     assert result.files_touched == ()
+
+
+def test_an_early_exit_stays_an_environment_wedge_and_is_not_reported_as_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The negative half of the timeout split.
+
+    ``send`` classifies its retained partial turn off the *exception type*, so
+    a branch that always reported a timeout -- or always reported a wedge --
+    would still satisfy the timeout test alone.  A child that exits before its
+    result event raises a plain ``ClaudeAdapterError`` and must stay a wedge.
+    """
+
+    fake_claude = tmp_path / "quitting-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    json.loads(line)
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "build-1", "name": "mcp__nxd-desktop__build_data_product", "input": {}}
+    ]}}), flush=True)
+    sys.exit(3)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o700)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir()
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = ClaudeCodeAdapter(
+        claude=fake_claude,
+        model="test",
+        effort="low",
+        plugin_dir=plugin_dir,
+        repo_root=Path(__file__).resolve().parents[3],
+        fixture_dir=fixture_dir,
+        artifact_dir=tmp_path / "artifacts",
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path(sys.executable),
+        claude_config_dir=None,
+        timeout_s=30.0,
+        max_budget_usd=None,
+        append_system_prompt="test",
+    )
+
+    try:
+        result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    finally:
+        adapter.close()
+
+    assert result.turn_timed_out is False
+    assert result.environment_wedged is True
+    assert "exited before a result event" in (result.environment_detail or "")
+    assert result.tool_calls[0].name == "mcp__nxd-desktop__build_data_product"
+
+
+@pytest.mark.parametrize(
+    ("raised", "expect_timeout"),
+    [(adapter_module.ClaudeTurnTimeout, True), (adapter_module.ClaudeAdapterError, False)],
+)
+def test_the_jsonl_loop_reports_a_timeout_and_a_wedge_as_different_results(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    raised: type[Exception],
+    expect_timeout: bool,
+) -> None:
+    """The subprocess entry point owns its own copy of the split.
+
+    ``LiveSession`` never sees the adapter object -- it only sees this loop's
+    JSONL line -- so a loop that hardcoded ``environment_wedged=True`` would
+    erase the distinction for every live run while every in-process test
+    stayed green.
+    """
+
+    class _StubAdapter:
+        def __init__(self, **_kwargs: object) -> None:
+            self._session_id = "stub-session"
+
+        def send(self, _request: object) -> TurnResult:
+            raise raised("boom")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(adapter_module, "ClaudeCodeAdapter", _StubAdapter)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"type": "turn"}) + "\n"))
+
+    code = adapter_module.main(
+        [
+            "--claude", sys.executable,
+            "--model", "test",
+            "--effort", "low",
+            "--plugin-dir", ".",
+            "--repo-root", ".",
+            "--fixture-dir", ".",
+            "--artifact-dir", ".",
+            "--desktop-supervisor", sys.executable,
+            "--desktop-python", sys.executable,
+        ]
+    )
+
+    assert code == 1
+    payload = json.loads(capsys.readouterr().out.strip())["result"]
+    assert payload["turn_timed_out"] is expect_timeout
+    assert payload["environment_wedged"] is not expect_timeout
+    assert payload["environment_detail"] == "boom"
+    assert payload["session_id"] == "stub-session"
+
+
+def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = TurnResult(
+        transcript_delta=b"delta",
+        agent_message=b"answer",
+        tool_calls=(ToolCall("Read", {"path": "spec"}, {"ok": True}),),
+        tool_results=({"rows": 2},),
+        files_touched=(TouchedFile("closure/spec.json", b"{}"),),
+        approval_artifact=b"approval",
+        build_failed=True,
+        build_failure_count=2,
+        reported=True,
+        environment_wedged=False,
+        turn_timed_out=True,
+        environment_detail="timeout detail",
+        session_id="session-1",
+    )
+    assert {field.name for field in dataclasses.fields(TurnResult)} <= set(turn_result_to_dict(TurnResult()))
+
+    adapter = object.__new__(ClaudeCodeAdapter)
+    adapter.artifact_dir = tmp_path / "artifacts"
+    adapter.artifact_dir.mkdir()
+    adapter._before = {}
+    adapter._facts = {}
+    adapter._build_context = {}
+    adapter._session_id = "session-1"
+    adapter._stdio = None
+    adapter._redact_json_rpc = lambda value: value
+    adapter._redact_text = lambda value: value
+    monkeypatch.setattr(adapter_module, "parse_claude_events", lambda *args, **kwargs: (source, []))
+    monkeypatch.setattr(adapter_module, "_snapshot_workspace", lambda *args, **kwargs: {})
+    monkeypatch.setattr(adapter_module, "_changed_files", lambda *args, **kwargs: source.files_touched)
+    monkeypatch.setattr(adapter_module, "_update_machine_artifacts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adapter, "_approval_artifact", lambda _snapshot: source.approval_artifact)
+
+    assert adapter._finish_turn([{"type": "result"}]) == source
 
 
 def test_adapter_signal_cleanup_reaps_its_claude_child(tmp_path: Path) -> None:

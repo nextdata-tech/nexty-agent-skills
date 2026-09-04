@@ -483,6 +483,10 @@ def _bundle_digest(root: Path) -> str:
 def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
     """Apply scenario-level repeatability certification to one live run."""
 
+    # The truncation flag has to be re-derived here, not inherited.  Promotion
+    # re-qualifies the run from scratch with repeatability_certified=True, so a
+    # run whose last turn timed out would otherwise be laundered into CERTIFIED
+    # by the very step that is supposed to be the strictest.
     qualification = qualify_run(
         run.score,
         replay_status=run.replay_verification_status,
@@ -491,6 +495,7 @@ def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
         repeatability_certified=True,
         validation_mode=run.manifest.validation_mode,
         operator_mode=run.qualification.operator_mode,
+        truncated=run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
     )
     if qualification.disposition is not QualificationDisposition.CERTIFIED:
         return run
@@ -1427,6 +1432,7 @@ class TierRunner:
                     driver=driver_operator is not None,
                     validation_mode=environment.manifest.validation_mode,
                     operator_mode=getattr(run_result, "operator_mode", "scripted"),
+                    truncated=run_result.terminal_state is EngineTerminalState.TURN_TIMEOUT,
                 )
                 bundle_dir: Path | None = None
                 bundle_digest: str | None = None

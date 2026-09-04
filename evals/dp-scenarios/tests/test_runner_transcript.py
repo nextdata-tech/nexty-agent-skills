@@ -414,6 +414,17 @@ def test_empty_bundle_does_not_crash(tmp_path: Path) -> None:
     assert "no turns recorded in this bundle" in rendered
 
 
+def test_turn_timeout_is_rendered_as_the_stop_reason(bundle: Path) -> None:
+    path = bundle / "artifacts" / "operator-observations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["terminal_state"] = "turn_timeout"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rendered = render_epoch_conversation(bundle)
+
+    assert "stop: turn_timeout" in rendered
+
+
 # ---------------------------------------------------------------------------
 # containment
 # ---------------------------------------------------------------------------

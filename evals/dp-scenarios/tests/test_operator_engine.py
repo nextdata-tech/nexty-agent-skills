@@ -8,7 +8,7 @@ import pytest
 from dp_scenarios.ledger import LedgerStore, Manifest, SupervisorFacts, lint, read_ledger
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.appender import AppenderError, StaticSupervisorRecordReader, append_supervisor_facts
-from dp_scenarios.operator.engine import OperatorEngine, OperatorScript, TerminalState, operator_script_hash
+from dp_scenarios.operator.engine import FAILURE_MODES, OperatorEngine, OperatorScript, TerminalState, operator_script_hash
 from dp_scenarios.operator.engine import _operator_context
 from dp_scenarios.operator.events import EventSchedule, event_from_mapping
 from dp_scenarios.operator.generated import GeneratedOperator
@@ -288,6 +288,46 @@ def test_terminal_state_failure_modes_and_ungraded_criteria_are_separate() -> No
     assert not invalid.gradeable
     assert sentinel.terminal_state is TerminalState.SENTINEL_TRIP
     assert sentinel.gradeable
+
+
+def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() -> None:
+    script = make_script(
+        turns=("Improve weekly visibility.", "Please continue.", "Approve this."),
+        turn_budget=10,
+        required_plants=("ceiling",),
+    )
+    timed_out = OperatorEngine(
+        script,
+        InMemoryTransport(
+            [
+                TurnResult(agent_message="What is the source?"),
+                TurnResult(turn_timed_out=True, environment_detail="turn took too long"),
+            ]
+        ),
+    ).run()
+
+    assert timed_out.terminal_state is TerminalState.TURN_TIMEOUT
+    assert timed_out.stop_reason == "turn_timeout"
+    assert "turn_timeout" in timed_out.failure_modes
+    assert "environment_wedge" not in timed_out.failure_modes
+    # FAILURE_MODES is the declared vocabulary; a mode the engine emits but
+    # never declares is invisible to any consumer reading that set.
+    assert set(timed_out.failure_modes) <= FAILURE_MODES
+    assert len(timed_out.turns) == 2
+    assert timed_out.ledger_rows
+    assert all(
+        "terminal state: turn_timeout" in row["phase_status_reason"]
+        for row in timed_out.ledger_rows
+        if row["phase_status"] == "not-applicable"
+    )
+
+    wedged = OperatorEngine(
+        script,
+        InMemoryTransport(
+            [TurnResult(agent_message="What is the source?"), TurnResult(environment_wedged=True)]
+        ),
+    ).run()
+    assert wedged.terminal_state is TerminalState.ENVIRONMENT_WEDGE
 
 
 def test_rubber_stamper_approval_records_open_decision_marker() -> None:

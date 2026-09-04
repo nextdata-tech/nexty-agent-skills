@@ -69,6 +69,7 @@ def qualify_run(
     repeatability_certified: bool = False,
     validation_mode: str = "live",
     operator_mode: str | None = None,
+    truncated: bool = False,
 ) -> QualificationRecord:
     """Map score and replay evidence to a deliberately conservative status.
 
@@ -84,17 +85,36 @@ def qualify_run(
     if score.state is TerminalState.INVALID:
         return QualificationRecord(QualificationDisposition.INVALID, replay_status, operator_mode, ("run_invalid",))
     if score.state is TerminalState.UNGRADED:
+        reasons = _ungraded_reasons(score)
+        if truncated:
+            reasons = ("turn_timeout_truncated",) + reasons
         return QualificationRecord(
-            QualificationDisposition.OBSERVED, replay_status, operator_mode, _ungraded_reasons(score)
+            QualificationDisposition.OBSERVED, replay_status, operator_mode, reasons
         )
     if score.state is not TerminalState.PASSED:
-        return QualificationRecord(QualificationDisposition.REJECTED, replay_status, operator_mode, (f"score_state:{score.state.value}",))
+        reasons = (f"score_state:{score.state.value}",)
+        if truncated:
+            reasons = ("turn_timeout_truncated",) + reasons
+        return QualificationRecord(QualificationDisposition.REJECTED, replay_status, operator_mode, reasons)
     if validation_mode == "replay":
+        reasons = ("replay_only_not_live",)
+        if truncated:
+            reasons = ("turn_timeout_truncated",) + reasons
         return QualificationRecord(
             QualificationDisposition.OBSERVED,
             replay_status,
             operator_mode,
-            ("replay_only_not_live",),
+            reasons,
+        )
+    if truncated:
+        # A turn that ran out of time normally leaves later plants unfired, so
+        # the run's placement in the tier was never actually reached.  Cap it
+        # at OBSERVED however clean the rest of the evidence looks.
+        return QualificationRecord(
+            QualificationDisposition.OBSERVED,
+            replay_status,
+            operator_mode,
+            ("turn_timeout_truncated",),
         )
     if driver:
         # A model authored the operator's words.  Nothing downstream of that
