@@ -36,6 +36,13 @@
 .venv/
 .env.example
 
+# Local provider credentials for driver-operator runs (see
+# evals/dp-scenarios/README.md). Only .env.example was listed here, so a real
+# .env would have been committed. Never commit any of these.
+.env
+.env.local
+.env.*.local
+
 # Skill runtime
 skills/
 skills-lock.json

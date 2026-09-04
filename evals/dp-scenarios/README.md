@@ -216,7 +216,7 @@ injection, ledger rows, the sentinel scan, terminal state and the turn budget
 are still the engine's.
 
 ```bash
-export OPENAI_API_KEY=...   # the only place the key is read from
+export OPENAI_API_KEY=...   # the only place the runner reads the key from
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
   --scenario capability-shortfall \
   --driver-model gpt-4.1 \
@@ -235,8 +235,36 @@ The same three flags exist on `dp_scenarios.runner.cli`, where they require
 `--mode live` — replaying a recording re-authors nothing, so a driver there
 would only spend provider tokens.
 
+### Keeping the key around between runs
+
+Re-exporting the key by hand every session is the main reason driven runs get
+skipped, so `evals/dp-scenarios/.env` is gitignored for exactly this. Create it
+once, `chmod 600`, and source it into the run:
+
+```bash
+umask 077
+printf 'OPENAI_API_KEY=%s\n' 'sk-...' > evals/dp-scenarios/.env
+
+set -a; . evals/dp-scenarios/.env; set +a    # value never reaches stdout
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario capability-shortfall --driver-model gpt-4.1 ...
+```
+
+`set -a` exports every assignment the file makes, so the value goes straight
+into the runner's environment without being echoed, logged, or captured in a
+transcript. Confirm the ignore is working before you paste a real key —
+`git check-ignore -v evals/dp-scenarios/.env` must print a matching rule, and
+`git status` must not list the file. Until this was set up only `.env.example`
+was ignored at the repo root, so a real `.env` would have been committed.
+
+This is a convenience for local runs, not a change to where the runner looks:
+it still reads `OPENAI_API_KEY` from its environment and nothing else. CI never
+uses this path.
+
 **The key comes from the environment and nowhere else.** There is no file
-fallback and no flag that takes a key. It is missing from the agent session's
+fallback and no flag that takes a key — sourcing a `.env` as above puts the
+value in the environment before the process starts; the runner has no notion of
+that file. It is missing from the agent session's
 environment allowlist and is popped from the Claude adapter's child
 environment, so the agent under test cannot read it; the provider's `repr` and
 every provider error are scrubbed of both the key and the `Authorization`

@@ -14,3 +14,9 @@ __pycache__/
 .nexty-test-data/
 scenarios/.nexty-test-data/
 scenarios/.drift-canary-*/
+
+# Provider credentials for --driver-model runs. Sourced by hand, never
+# committed; the repo-root .gitignore covers these too, this is belt and braces
+# because the key lives next to the runner that reads it.
+.env
+.env.local
