@@ -12,9 +12,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Provider SDKs are the responsibility of nxd_eval's own extras. The
-# deterministic harness does not call a model directly; the local live runner
-# invokes the host's Claude Code executable separately. The NXD mapper is
+# Provider SDKs are the responsibility of nxd_eval's own extras. The grading
+# path is still model-free, but the harness is no longer model-free as a whole:
+# with --driver-model the operator side calls OpenAI over aiohttp from
+# openai_driver.py. The local live runner invokes the host's Claude Code
+# executable separately. The NXD mapper is
 # resolved at run time from an explicitly declared artifact manifest or source
 # checkout rather than declared here: pinning it as a path dependency would
 # hardwire one machine's checkout layout into the lock file and break

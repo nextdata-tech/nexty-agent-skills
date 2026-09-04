@@ -310,8 +310,17 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
     return responses
 
 
-def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build populated replay artifacts from the real parent-child-grain-trap package."""
+def populated_parent_child_recordings(
+    tmp_path: Path, *, truncate_final_turn: bool = False
+) -> tuple[object, list[ReplayRecording]]:
+    """Build populated replay artifacts from the real parent-child-grain-trap package.
+
+    ``truncate_final_turn`` replaces the last turn with a per-turn timeout,
+    leaving every gate examined on the earlier turns passing.  That is the one
+    shape that distinguishes the truncation cap from the ordinary ungraded
+    path: the synthetic ``make_scenario`` fixtures never reach PASSED, so a
+    timeout test built on them stays green either way.
+    """
 
     scenario = load_scenario(ROOT / "scenarios/parent-child-grain-trap")
     generated = scenario.generate_fixture(tmp_path / "parent-child-fixture")
@@ -364,6 +373,12 @@ def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[Repl
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
+        if truncate_final_turn:
+            responses[-1] = TurnResult(
+                agent_message="",
+                turn_timed_out=True,
+                environment_detail="turn exceeded its budget",
+            )
         recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
     return scenario, recordings
 
@@ -973,6 +988,38 @@ def test_timeout_and_wedge_are_paired_distinct_qualification_outcomes(
     assert wedge_run.terminal_state.value == "environment_wedge"
     assert wedge_run.qualification.disposition is QualificationDisposition.INVALID
     assert wedge_run.qualification.reasons == ("run_invalid",)
+
+
+def test_a_truncated_run_cannot_reach_a_clean_verdict(tmp_path: Path) -> None:
+    """The truncation cap has to reach ``TierResult.verdict``, not just the bundle.
+
+    ``run_local_claude.py`` and ``runner/cli.py`` both exit ``0 if verdict ==
+    "clean" else 1``, so a cap living only in ``qualification.json`` is a cap
+    nobody enforces.  Built on the *populated* parent-child fixture on purpose:
+    that is the only tier fixture whose runs reach PASSED, so a timeout here
+    genuinely changes the verdict.  On the synthetic ``make_scenario`` fixtures
+    the baseline is already ``ungraded`` and the same assertion passes against
+    the bug.
+    """
+
+    scenario, recordings = populated_parent_child_recordings(tmp_path, truncate_final_turn=True)
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    assert all(run.terminal_state.value == "turn_timeout" for run in result.scenario_runs)
+    # The gates examined before the timeout still pass -- this is the run that
+    # would otherwise aggregate to "clean" and exit 0.
+    assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
+    assert result.verdict != "clean", "a truncated run was reported clean; the runner would exit 0"
+    assert result.verdict == "ungraded"
+    assert all(
+        run.qualification.reasons[0] == "turn_timeout_truncated" for run in result.scenario_runs
+    )
 
 
 def test_turn_budget_exceeded_is_graded_not_stopped() -> None:

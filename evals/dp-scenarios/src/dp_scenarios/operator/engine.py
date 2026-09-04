@@ -1098,7 +1098,21 @@ class OperatorEngine:
                 driver_fallback_transmitted = driver_render.used_fallback
                 if driver_render.used_fallback and "operator_fallback" not in self.failure_modes:
                     self.failure_modes.append("operator_fallback")
-            elif index > 1 and scripted_turn.substitute_reply and next_reply and self.generated_operator is not None:
+            elif (
+                index > 1
+                and scripted_turn.substitute_reply
+                # An approval turn transmits its declared line on this
+                # path too.  ``authorable`` and ``base`` both honour
+                # that; this branch did not, so a scenario declaring an
+                # approval turn without overriding ``substitute_reply``
+                # (which defaults to True) would record a paraphrase of
+                # some unrelated matcher reply -- or a refusal -- as the
+                # approval, and that text becomes the ``spec_approved``
+                # ledger row's ``artifact_ref``.
+                and not scripted_turn.approval
+                and next_reply
+                and self.generated_operator is not None
+            ):
                 view = self._provider_view(
                     turn=index,
                     active_sentinels=active_sentinels,
@@ -1166,6 +1180,23 @@ class OperatorEngine:
             # is never sent, and marking it here would suppress an answer the
             # agent has still never been given. On the driver path the reply
             # only goes out as the fallback composition.
+            #
+            # KNOWN LIMITATION (driver path): a driver that authors the turn
+            # successfully is handed ``selected_reply`` and told to convey it,
+            # but nothing here verifies that it did.  Consuming the key on
+            # driver success alone is wrong -- a driver is free to deflect
+            # ("I am not sure about the grain, ask me later"), and since only a
+            # ``fresh_session`` card clears ``served_reply_keys``, marking the
+            # fact there would stonewall the agent on that question for the
+            # rest of the run.  The cost of the safe choice is that the memory
+            # stays empty under a driver: ``facts_already_stated`` is always
+            # ``()`` and the suppression below never fires on the driver path,
+            # so the driver may restate a fact the agent already has.  Closing
+            # that needs a deterministic test for whether the authored text
+            # actually carried the selection's substance, which the answer
+            # sheet does not currently support -- a fact's ``terms`` trigger
+            # the *question*, not the answer.  Recorded in the design doc's
+            # named follow-ups; do not "fix" this by dropping the guard.
             if (
                 pending_sheet_key is not None
                 and selected_base is next_reply

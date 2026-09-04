@@ -261,8 +261,19 @@ transcript header carry four counters:
 |---|---|
 | `driver_leading_rejected_count` | authored turns that used forbidden vocabulary twice and fell back |
 | `driver_obstacle_rejected_count` | authored turns the matcher's obstacle validation refused twice |
-| `driver_repeat_rejected_count` | authored turns that repeated an earlier operator message twice |
+| `driver_repeat_rejected_count` | authored turns that reproduced a line the engine had already *selected*, twice |
 | `driver_beat_substituted_count` | authored turns whose composed message failed to deliver a mandatory event, so the scripted line was composed instead |
+
+The repeat counter is deliberately keyed to the engine's own selections
+(`prior_base_texts`), not to what was transmitted. On a driven run those
+diverge: every turn after the first sends driver-authored text while the
+selection list accumulates matcher replies that were never sent. So the counter
+fires when the driver happens to reproduce a scripted line verbatim, and *not*
+when the driver repeats itself --- even though `openai_driver.py`'s system
+prompt tells the model not to repeat anything in `prior_operator_messages`.
+Nothing enforces that instruction: a driver that sends the same sentence on
+three consecutive turns passes with all four counters at zero. Recorded under
+**Named follow-ups** in `docs/architecture/driver-operator.md`.
 
 **A driven run is capped at QUALIFIED.** A model authored the operator's words,
 so nothing about the operator side is reproducible turn-for-turn:

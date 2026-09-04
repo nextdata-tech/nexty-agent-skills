@@ -94,6 +94,51 @@ def test_two_fixed_runs_have_byte_identical_messages_and_rows() -> None:
     assert not hasattr(first, "outcome")
 
 
+def test_generated_surface_leaves_an_approval_turn_verbatim() -> None:
+    """An approval turn transmits its declared line on the generated path too.
+
+    ``substitute_reply`` defaults to ``True``, so a scenario that declares an
+    approval turn without overriding it used to hand the approval to the
+    generated operator: the transmitted text -- and therefore
+    ``operator_approval_text``, and therefore the ``spec_approved`` ledger
+    row's ``artifact_ref`` -- became a paraphrase of whatever the matcher had
+    selected, which can be a refusal.  ``authorable`` and ``base`` both carried
+    the guard; this branch did not.
+    """
+
+    approval_line = "That looks good -- approved."
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            "Please continue.",
+            {"text": approval_line, "approval": True},
+        )
+    )
+    seen: list[object] = []
+
+    def provider(view: object) -> str:
+        seen.append(view)
+        return "I am not deciding that."
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Which source is authoritative?"),
+            TurnResult(agent_message="Please approve the definition.", approval_artifact="artifact://a-3"),
+            TurnResult(agent_message="Safe completion.", reported=True),
+        ]
+    )
+    result = OperatorEngine(script, transport, generated_operator=GeneratedOperator(provider)).run()
+
+    assert transport.message_texts[2] == approval_line
+    assert result.turns[2].operator_mode == "scripted"
+    # Turn 2 is an ordinary substitutable turn, so the provider text belongs
+    # there -- the carve-out is specific to the approval.
+    assert transport.message_texts[1] == "I am not deciding that."
+    # The provider was still consulted on the ordinary substitutable turn, so
+    # this is a carve-out for approvals rather than the surface being off.
+    assert len(seen) == 1
+
+
 def test_generated_operator_only_renders_the_engine_selected_reply() -> None:
     script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
     seen: list[object] = []

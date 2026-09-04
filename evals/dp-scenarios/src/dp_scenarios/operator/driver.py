@@ -188,12 +188,17 @@ class DriverOperator:
         if failure is not None:
             return DriverRender(fallback, True, failure, (), 1)
         assert rendered is not None
+        # Strip once, here, so the length check, the validation and the
+        # returned text all judge the same string.  Measuring the unstripped
+        # response but returning the stripped one meant a reply could be
+        # rejected as too long for whitespace that was never going to be sent.
+        rendered = rendered.strip()
         if len(rendered) > self.max_chars:
             return DriverRender(fallback, True, "provider_output_too_long", (), 1)
 
         first = check(rendered)
         if first is None:
-            return DriverRender(rendered.strip(), False, None, (), 1)
+            return DriverRender(rendered, False, None, (), 1)
 
         retry_view = replace(view, rejection_notice=f"{first.kind}: {first.detail}")
         retried, retry_failure = _invoke_with_timeout(self.provider, retry_view, self.provider_timeout_seconds)

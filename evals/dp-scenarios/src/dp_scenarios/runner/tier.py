@@ -1233,11 +1233,27 @@ class TierRunner:
                 runs = tuple(_promote_certified_run(run) for run in runs)
             summaries.append(ScenarioSummary(scenario.id, repeatability, tuple(runs)))
         states = [run.score.state for summary in summaries for run in summary.runs]
+        # A truncated run never reached the end of its script, so the gates it
+        # did examine are not evidence that the run was clean.  Before the
+        # TURN_TIMEOUT split a per-turn timeout was an ENVIRONMENT_WEDGE and
+        # therefore INVALID, so the runner exited 1; the split was meant to
+        # change the *label* only, but it moved timeouts out of the one state
+        # ``_grade`` treats as invalid.  Without this a run whose final turn
+        # timed out could score PASSED on the gates already examined, aggregate
+        # to "clean", and exit 0 -- the qualification cap to OBSERVED lives in
+        # ``qualification.json`` and reaches no caller.  Degrading to "ungraded"
+        # restores the pre-split exit code while keeping the timeout and the
+        # wedge distinguishable in the evidence.
+        truncated = any(
+            run.terminal_state is EngineTerminalState.TURN_TIMEOUT
+            for summary in summaries
+            for run in summary.runs
+        )
         if not states:
             # A tier that examined no scenario is not evidence of a clean run.
             verdict = "failed"
         elif all(state is ScoreTerminalState.PASSED for state in states):
-            verdict = "clean"
+            verdict = "ungraded" if truncated else "clean"
         elif states and all(state in {ScoreTerminalState.PASSED, ScoreTerminalState.UNGRADED} for state in states) and any(
             state is ScoreTerminalState.UNGRADED for state in states
         ):

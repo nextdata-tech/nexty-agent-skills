@@ -334,6 +334,21 @@ result.
 - Paraphrase-level repeat detection. `repeat_violation` is exact-match after
   normalisation; a driver that says the same thing in different words on two
   turns is not caught.
+- Transmitted-text repeat detection. `repeat_violation` compares against the
+  engine's *selected* lines, not the messages that actually went out, so a
+  driver repeating its own authored sentence across turns is not caught by any
+  counter. Stricter than the paraphrase gap above, and separate from it.
+- Served-fact memory is inert on the driven path. `served_reply_keys` only
+  fills when the scripted reply was transmitted, which on a driven run means
+  only on a fallback. Consuming the key on driver success alone would be wrong
+  --- a driver may deflect ("I am not sure about the grain, ask me later")
+  while succeeding, and since only a `fresh_session` card clears the set, that
+  would stonewall the agent on the question for the rest of the run. The cost
+  is that `facts_already_stated` stays `()` under a driver and the repeat
+  suppression never fires there. Closing it needs a deterministic test for
+  whether the authored text carried the selection's substance; the answer sheet
+  cannot support one today, because a fact's `terms` trigger the *question*,
+  not the answer.
 - No second-LLM semantic backstop. Grading stays model-free on purpose: a judge
   model in the grading path would make the harness's verdict depend on a second
   provider's availability and version.
