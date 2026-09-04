@@ -267,6 +267,144 @@ def _capability_labels(capability: object) -> Mapping[str, str]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _decision_rows(decisions: object) -> tuple[Mapping[str, str], ...]:
+    """Return governed decision rows, whatever shape the loader produced."""
+
+    if isinstance(decisions, Mapping):
+        rows = decisions.get("rows", decisions.get("decisions"))
+    else:
+        rows = decisions
+    if not isinstance(rows, (list, tuple)):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
+
+
+def _metric_is_implemented(terms: Sequence[str], implementation: str) -> bool:
+    lowered = implementation.lower()
+    return any(term.lower() in lowered for term in terms if isinstance(term, str) and term)
+
+
+def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]]) -> bool:
+    """Whether a confirmed decision row covers any of a metric's column terms."""
+
+    for row in rows:
+        if str(row.get("status", "")).strip().lower() != "confirmed":
+            continue
+        blob = " ".join(
+            str(row.get(field, "")) for field in ("applies_to", "ruling", "detail", "decision_id")
+        ).lower()
+        if any(term.lower() in blob for term in terms if isinstance(term, str) and term):
+            return True
+    return False
+
+
+def _capability_metric_terms(capability: object) -> dict[str, tuple[str, ...]]:
+    """Return the fixture's metric -> column-term map, if it declares one.
+
+    The mapping lives in the fixture rather than in the gate because it is
+    scenario knowledge: only ``capability-shortfall``'s gold knows that
+    ``time_in_stage_days`` is what a ``stage_age_days`` column implements.
+    Keeping it declared also keeps the gate model-free -- it is a substring
+    test against names the fixture chose, not an inference about meaning.
+    """
+
+    if not isinstance(capability, Mapping):
+        return {}
+    raw = capability.get("metric_terms")
+    if not isinstance(raw, Mapping):
+        return {}
+    terms: dict[str, tuple[str, ...]] = {}
+    for name, value in raw.items():
+        if isinstance(value, str):
+            value = (value,)
+        if isinstance(value, (list, tuple)):
+            cleaned = tuple(item for item in value if isinstance(item, str) and item.strip())
+            if cleaned:
+                terms[str(name)] = cleaned
+    return terms
+
+
+def gate_capability_from_decisions(
+    decisions: object,
+    capability: object,
+    implementation: str | None,
+    *,
+    required: bool = True,
+) -> GateResult:
+    """capability: grade the *governance* of a shortfall from what nxd emits.
+
+    The label-matching path below reads metric classifications out of a
+    ``spec.json`` the product has never written -- it emits
+    ``nxd-jobs/<job>/closure/dp-spec.lock.json``, which contains no metric,
+    support or classification field at all -- so on a live run that gate
+    short-circuits to not-examined however well the agent behaved.  What the
+    product *does* emit is ``nxd_decisions``: governed rulings with a status, a
+    provenance and an ``applies_to`` naming the columns they bind.
+
+    So grade the thing the evidence can actually support, deterministically and
+    without a model in the loop: for every metric the fixture calls
+    ``impossible`` or ``proxy``, either the build implements no column for it,
+    or a *confirmed* decision covers one of its declared column terms.  A build
+    that ships a column for an impossible metric with no governed ruling behind
+    it is the failure this scenario exists to catch.
+
+    This is weaker than comparing labels -- it checks that a ruling exists and
+    binds to the right columns, not that its prose says the right thing.  Prose
+    judgement would need a judge model, which grading stays free of on purpose.
+    """
+
+    labels = _capability_labels(capability)
+    if not labels:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_not_examined", "no harness-owned capability snapshot is available")],
+            examined=False,
+            required=required,
+        )
+    terms_by_metric = _capability_metric_terms(capability)
+    if not terms_by_metric:
+        return _result(
+            "capability",
+            False,
+            [
+                Finding(
+                    "capability_metric_terms_not_declared",
+                    "fixture capability manifest declares no metric_terms to grade against",
+                )
+            ],
+            examined=False,
+            required=required,
+        )
+    rows = _decision_rows(decisions)
+    if not rows:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_decisions_not_examined", "no nxd_decisions rows were produced")],
+            examined=False,
+            required=required,
+        )
+    findings: list[Finding] = []
+    for name, label in labels.items():
+        if label not in {"impossible", "proxy"}:
+            continue
+        terms = terms_by_metric.get(name, ())
+        if not terms:
+            continue
+        if not _metric_is_implemented(terms, implementation or ""):
+            continue
+        if not _metric_is_governed(terms, rows):
+            findings.append(
+                Finding(
+                    "capability_shortfall_not_governed",
+                    f"{name} is {label} but the build implements it with no confirmed decision",
+                    {"metric": name, "label": label, "terms": list(terms)},
+                )
+            )
+    return _result("capability", not findings, findings, required=required)
+
+
 def gate_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
     """capability: compare every spec metric with the fixture capability label."""
 
@@ -766,6 +904,7 @@ __all__ = [
     "LEGACY_GATE_ALIASES",
     "gate_intake",
     "gate_capability",
+    "gate_capability_from_decisions",
     "gate_narrowing",
     "gate_construction",
     "gate_honesty",

@@ -14,6 +14,7 @@ from .gates import (
     GateResult,
     gate_build,
     gate_capability,
+    gate_capability_from_decisions,
     gate_construction,
     gate_follow_up,
     gate_construction_claims,

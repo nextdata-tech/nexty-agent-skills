@@ -9,6 +9,7 @@ condition and to persist observations.
 
 from __future__ import annotations
 
+import csv
 import inspect
 import hashlib
 import json
@@ -31,6 +32,7 @@ from dp_scenarios.grading import (
     ScoreVector,
     gate_build,
     gate_capability,
+    gate_capability_from_decisions,
     gate_construction,
     gate_honesty,
     gate_intake,
@@ -790,6 +792,78 @@ def _supervisor_facts(reader: SupervisorRecordReader | None) -> SupervisorFacts 
     if isinstance(value, SupervisorFacts):
         return value
     return None
+
+
+def _capability_gate_result(
+    artifact_root: Path, spec: object, capability: object, environment: object
+) -> GateResult:
+    """Grade capability from the spec when one exists, else from nxd_decisions.
+
+    The spec path is kept for the replay fixtures that supply a harness-shaped
+    ``spec.json``; no live run has ever produced one, which is why the gate read
+    not-examined on every live run regardless of agent behaviour.
+    """
+
+    required = getattr(environment, "mock_source", None) is not None
+    from_spec = gate_capability(spec, capability, required=required)
+    if "capability_metrics_not_examined" not in from_spec.codes:
+        # A spec with metric labels exists, so grade it the strict way.
+        return from_spec
+    return gate_capability_from_decisions(
+        _decisions_artifact(artifact_root),
+        capability,
+        _implementation_text(artifact_root),
+        required=required,
+    )
+
+
+def _closure_dirs(artifact_root: Path) -> tuple[Path, ...]:
+    """Return every nxd closure directory beneath the artifact root.
+
+    The product writes ``nxd-jobs/<job>/closure/``, and the job name is chosen
+    by the agent at run time -- three live runs produced ``deal-stage-age``,
+    ``deals-stage-aging`` and ``deals-pipeline`` -- so nothing here can be a
+    fixed path.
+    """
+
+    if not artifact_root.is_dir():
+        return ()
+    return tuple(sorted(path for path in artifact_root.glob("nxd-jobs/*/closure") if path.is_dir()))
+
+
+def _decisions_artifact(artifact_root: Path) -> tuple[Mapping[str, str], ...] | None:
+    """Return the governed decision rows the build materialised, if any."""
+
+    rows: list[Mapping[str, str]] = []
+    found = False
+    for closure in _closure_dirs(artifact_root):
+        table = closure / "data" / "nxd_decisions" / "nxd_decisions.csv"
+        if not table.is_file():
+            continue
+        found = True
+        with table.open(newline="", encoding="utf-8") as handle:
+            rows.extend(dict(row) for row in csv.DictReader(handle))
+    return tuple(rows) if found else None
+
+
+def _implementation_text(artifact_root: Path) -> str:
+    """Concatenate the build's model definitions, where column names live.
+
+    ``models.py`` is the deterministic record of which columns the build
+    actually ships; the materialised data directory is not, because only
+    ``nxd_decisions`` is copied into the evidence bundle.
+    """
+
+    chunks: list[str] = []
+    for closure in _closure_dirs(artifact_root):
+        for name in ("models.py", "spec.py", "dp-spec.approved.md"):
+            candidate = closure / name
+            if candidate.is_file():
+                try:
+                    chunks.append(candidate.read_text(encoding="utf-8", errors="replace"))
+                except OSError:
+                    continue
+    return "\n".join(chunks)
 
 
 def _query_artifact(artifact_root: Path) -> object | None:
@@ -1582,7 +1656,7 @@ class TierRunner:
             )
         gates: dict[str, GateResult] = {
             "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
-            "capability": gate_capability(spec, capability, required=environment.mock_source is not None),
+            "capability": _capability_gate_result(artifact_root, spec, capability, environment),
             "narrowing": gate_narrowing(spec_diff, ledger_artifact, closure),
             "construction": construction,
             "build": gate_build(facts, row_counts),
