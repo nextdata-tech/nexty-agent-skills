@@ -131,6 +131,8 @@ class PinnedVersions:
     )
     supervisor_binary_path: str = "not-applicable"
     session_config_sha256: str = "not-applicable"
+    driver_model_id: str = "not-applicable"
+    driver_sampling_params: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         for name in (
@@ -142,11 +144,28 @@ class PinnedVersions:
             "agent_model_id",
             "supervisor_binary_path",
             "session_config_sha256",
+            "driver_model_id",
         ):
             _required_text(getattr(self, name), name)
         if not isinstance(self.agent_sampling_params, Mapping) or not self.agent_sampling_params:
             raise EnvironmentError("pinned value agent_sampling_params must be a non-empty mapping")
         object.__setattr__(self, "agent_sampling_params", MappingProxyType(dict(self.agent_sampling_params)))
+        # The driver pins are cross-field, not independent.  An empty mapping
+        # is the only truthful sampling record for a scripted operator, and a
+        # declared driver with no sampling record cannot be compared across a
+        # pair.  Deliberately NOT the agent_sampling_params rule, which demands
+        # a non-empty mapping unconditionally.
+        if not isinstance(self.driver_sampling_params, Mapping):
+            raise EnvironmentError("pinned value driver_sampling_params must be a mapping")
+        if self.driver_model_id != "not-applicable" and not self.driver_sampling_params:
+            raise EnvironmentError(
+                "pinned value driver_sampling_params must be a non-empty mapping when a driver is pinned"
+            )
+        if self.driver_model_id == "not-applicable" and self.driver_sampling_params:
+            raise EnvironmentError(
+                "pinned value driver_sampling_params must be empty when driver_model_id is not-applicable"
+            )
+        object.__setattr__(self, "driver_sampling_params", MappingProxyType(dict(self.driver_sampling_params)))
 
     @property
     def nxd_data_product_wheel_version(self) -> str:
@@ -185,6 +204,10 @@ class PinnedVersions:
             agent_sampling_params=sampling,  # type: ignore[arg-type]
             supervisor_binary_path=str(value.get("supervisor_binary_path", "not-applicable")),
             session_config_sha256=str(value.get("session_config_sha256", "not-applicable")),
+            # Absence is unambiguous: the driver fields did not exist before
+            # the driver operator, so a mapping without them is a scripted run.
+            driver_model_id=str(value.get("driver_model_id", "not-applicable")),
+            driver_sampling_params=value.get("driver_sampling_params", {}),  # type: ignore[arg-type]
         )
 
 

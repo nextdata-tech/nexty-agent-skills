@@ -586,6 +586,14 @@ class ClaudeCodeAdapter:
             mcp_allowed_tools=mcp_allowed_tools,
         )
         environment = dict(os.environ)
+        # The operator driver's provider key belongs to the harness process
+        # alone.  RunEnvironment.agent_environment already withholds it by
+        # allowlist, but this adapter is also runnable directly (python -m
+        # dp_scenarios.runner.claude_adapter), and on that path the child would
+        # inherit the whole parent environment.  Contamination is one-way and
+        # unrecoverable: an agent under test that can read the key can call the
+        # same provider the operator does.
+        environment.pop("OPENAI_API_KEY", None)
         if self.claude_config_dir is not None:
             environment["CLAUDE_CONFIG_DIR"] = str(self.claude_config_dir)
         self._process = subprocess.Popen(

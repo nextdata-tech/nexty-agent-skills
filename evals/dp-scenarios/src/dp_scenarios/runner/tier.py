@@ -46,6 +46,7 @@ from dp_scenarios.grading.statistics import RepeatabilityReport
 from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
+    DriverOperator,
     GeneratedOperator,
     OperatorEngine,
     StaticSupervisorRecordReader,
@@ -296,7 +297,7 @@ CanaryFactory: TypeAlias = Callable[[], CanaryResult | Verdict]
 SupervisorReaderFactory: TypeAlias = Callable[..., SupervisorRecordReader | None]
 KnobPlan: TypeAlias = Mapping[tuple[str, int], SupervisorKnobs] | Callable[[Scenario, int], SupervisorKnobs]
 WorkflowRestartFactory: TypeAlias = Callable[[Scenario, RunEnvironment, int, str], Transport]
-GeneratedOperatorFactory: TypeAlias = Callable[..., GeneratedOperator | None]
+GeneratedOperatorFactory: TypeAlias = Callable[..., "GeneratedOperator | DriverOperator | None"]
 
 
 def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: ClaimsDocument) -> Verdict:
@@ -443,9 +444,12 @@ def _replay_verification(
     expected: Any,
     *,
     generated_operator: bool,
+    driver: bool = False,
 ) -> tuple[str, str]:
     """Replay scripted turns and compare the two canonical evidence surfaces."""
 
+    if driver:
+        return "not-attempted", "driver operator output is not assumed deterministic"
     if generated_operator:
         return "not-attempted", "generated operator output is not assumed deterministic"
     try:
@@ -483,6 +487,7 @@ def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
         run.score,
         replay_status=run.replay_verification_status,
         generated_operator=run.qualification.operator_mode == "generated_surface",
+        driver=run.qualification.operator_mode == "driver",
         repeatability_certified=True,
         validation_mode=run.manifest.validation_mode,
     )
@@ -999,7 +1004,7 @@ class TierRunner:
         knob_plan: KnobPlan | None = None,
         workflow_restart_factory: WorkflowRestartFactory | None = None,
         workflow_observer: WorkflowObserver | None = None,
-        operator_factory: GeneratedOperator | GeneratedOperatorFactory | None = None,
+        operator_factory: GeneratedOperator | DriverOperator | GeneratedOperatorFactory | None = None,
         allow_host_home: bool = False,
     ) -> None:
         self.scenarios = tuple(scenarios)
@@ -1046,13 +1051,48 @@ class TierRunner:
         scenario: Scenario,
         environment: RunEnvironment,
         epoch: int,
-    ) -> GeneratedOperator | None:
-        """Resolve the optional generated surface without changing engine state."""
+    ) -> GeneratedOperator | DriverOperator | None:
+        """Resolve the optional operator surface without changing engine state."""
 
+        surface = self._resolve_operator_surface(scenario, environment, epoch)
+        self._check_driver_pins(surface)
+        return surface
+
+    def _check_driver_pins(self, surface: object) -> None:
+        """Refuse a run whose manifest pins and operator surface disagree.
+
+        The manifest is the only record a later reader has of who spoke the
+        operator's words.  A driver-authored run stored under scripted pins
+        would be indistinguishable from a scripted one, and scripted pins on a
+        driver run would let a paired comparison treat two different operators
+        as the same arm.  Neither is recoverable after the fact, so both are
+        refused here rather than recorded.
+        """
+
+        declared = self.pins.driver_model_id != "not-applicable"
+        if declared != isinstance(surface, DriverOperator):
+            raise TierError("manifest driver pins and operator factory disagree")
+        if not declared:
+            return
+        assert isinstance(surface, DriverOperator)
+        if surface.model_id != self.pins.driver_model_id:
+            raise TierError("manifest driver pins and operator factory disagree")
+        temperature = self.pins.driver_sampling_params.get("temperature")
+        if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+            raise TierError("manifest driver pins and operator factory disagree")
+        if float(temperature) != float(surface.temperature):
+            raise TierError("manifest driver pins and operator factory disagree")
+
+    def _resolve_operator_surface(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> GeneratedOperator | DriverOperator | None:
         factory = self.operator_factory
         if factory is None:
             return None
-        if isinstance(factory, GeneratedOperator):
+        if isinstance(factory, (GeneratedOperator, DriverOperator)):
             return factory
         try:
             parameters = inspect.signature(factory).parameters.values()
@@ -1069,8 +1109,8 @@ class TierRunner:
             value = factory(scenario)
         else:
             value = factory()
-        if value is not None and not isinstance(value, GeneratedOperator):
-            raise TierError("operator factory returned no GeneratedOperator")
+        if value is not None and not isinstance(value, (GeneratedOperator, DriverOperator)):
+            raise TierError("operator factory returned no GeneratedOperator or DriverOperator")
         return value
 
     def _canary(self) -> CanaryResult:
@@ -1132,6 +1172,12 @@ class TierRunner:
         if canary.claims_hash != self.pins.canary_claims_hash:
             raise TierError("canary claims hash does not match the pinned assertion")
         self._validate_evidence_destinations()
+        if self.pins.driver_model_id != "not-applicable" and self.operator_factory is None:
+            # Fail before entering any environment.  Without this the run
+            # would spawn a session, author scripted turns, and only then
+            # trip the per-epoch consistency gate -- having already spent the
+            # agent tokens the pins promised a driver would shape.
+            raise TierError("manifest driver pins and operator factory disagree")
         run_pins = replace(self.pins, canary_claims_hash=canary.claims_hash)
         summaries: list[ScenarioSummary] = []
         for scenario in self.scenarios:
@@ -1222,6 +1268,17 @@ class TierRunner:
                     )
                 artifact_root = environment.base_dir / "artifacts"
                 artifact_root.mkdir()
+                # Resolve the operator surface before any transport exists.
+                # The consistency gate inside can refuse the run, and a live
+                # session started first would be a spawned agent process that
+                # the refusal then has to unwind.
+                operator_surface = self._generated_operator(scenario, environment, epoch)
+                generated_operator = (
+                    operator_surface if isinstance(operator_surface, GeneratedOperator) else None
+                )
+                driver_operator = (
+                    operator_surface if isinstance(operator_surface, DriverOperator) else None
+                )
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
                 if recording is not None and recording.supervisor_facts is not None:
                     _write_json(artifact_root / "supervisor-facts.json", recording.supervisor_facts)
@@ -1241,7 +1298,6 @@ class TierRunner:
                             turn=turn,
                         ),
                     )
-                generated_operator = self._generated_operator(scenario, environment, epoch)
                 started = time.monotonic()
                 transport_closed = False
                 primary_error: BaseException | None = None
@@ -1258,6 +1314,7 @@ class TierRunner:
                         scenario.script,
                         transport,
                         generated_operator=generated_operator,
+                        driver=driver_operator,
                         extra_sentinels=sorted(marker_values(environment.generated_fixture_manifest)),
                     )
                     run_result = engine.run()
@@ -1331,11 +1388,13 @@ class TierRunner:
                     replay,
                     run_result,
                     generated_operator=generated_operator is not None,
+                    driver=driver_operator is not None,
                 )
                 qualification = qualify_run(
                     score,
                     replay_status=replay_status,
                     generated_operator=generated_operator is not None,
+                    driver=driver_operator is not None,
                     validation_mode=environment.manifest.validation_mode,
                 )
                 bundle_dir: Path | None = None

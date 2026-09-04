@@ -67,10 +67,11 @@ def qualify_run(
     generated_operator: bool,
     repeatability_certified: bool = False,
     validation_mode: str = "live",
+    driver: bool = False,
 ) -> QualificationRecord:
     """Map score and replay evidence to a deliberately conservative status."""
 
-    operator_mode = "generated_surface" if generated_operator else "scripted"
+    operator_mode = "driver" if driver else ("generated_surface" if generated_operator else "scripted")
     if score.state is TerminalState.INVALID:
         return QualificationRecord(QualificationDisposition.INVALID, replay_status, operator_mode, ("run_invalid",))
     if score.state is TerminalState.UNGRADED:
@@ -85,6 +86,16 @@ def qualify_run(
             replay_status,
             operator_mode,
             ("replay_only_not_live",),
+        )
+    if driver:
+        # A model authored the operator's words.  Nothing downstream of that
+        # is reproducible turn-for-turn, so the run can never be CERTIFIED
+        # however many epochs agree.
+        return QualificationRecord(
+            QualificationDisposition.QUALIFIED,
+            replay_status,
+            operator_mode,
+            ("driver_operator_is_capped_below_certified",),
         )
     if generated_operator:
         return QualificationRecord(QualificationDisposition.QUALIFIED, replay_status, operator_mode, ("generated_operator_is_capped_below_certified",))

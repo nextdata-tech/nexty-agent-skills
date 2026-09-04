@@ -205,6 +205,71 @@ grant (for example `WebFetch`, `WebSearch`, `NotebookEdit`) are omitted from
 not as "unreachable". Deny rules also apply to the tools a `Task` subagent can
 use, so a denied shell stays denied one level down.
 
+#### Driving the operator with a model
+
+By default the operator is scripted: a keyword matcher picks a canned reply
+from the scenario's answer sheet. `--driver-model` replaces the *words* of each
+authorable turn with a model-authored message, so a scenario can express a
+persona that rubber-stamps, pushes a wrong theory, or re-decides six turns
+later. Everything else stays deterministic — phase transitions, event
+injection, ledger rows, the sentinel scan, terminal state and the turn budget
+are still the engine's.
+
+```bash
+export OPENAI_API_KEY=...   # the only place the key is read from
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario capability-shortfall \
+  --driver-model gpt-4.1 \
+  --driver-temperature 0.7 \
+  --driver-timeout 60 \
+  --output-dir /tmp/dp-scenarios-driven-run
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--driver-model` | none | OpenAI model id; omitting it keeps the scripted operator |
+| `--driver-temperature` | `0.7` | sampling temperature, pinned into the manifest |
+| `--driver-timeout` | `60` | seconds allowed for one provider call before the turn falls back |
+
+The same three flags exist on `dp_scenarios.runner.cli`, where they require
+`--mode live` — replaying a recording re-authors nothing, so a driver there
+would only spend provider tokens.
+
+**The key comes from the environment and nowhere else.** There is no file
+fallback and no flag that takes a key. It is missing from the agent session's
+environment allowlist and is popped from the Claude adapter's child
+environment, so the agent under test cannot read it; the provider's `repr` and
+every provider error are scrubbed of both the key and the `Authorization`
+header value. A missing `OPENAI_API_KEY` is refused before the drift canary
+runs and before any fixture is generated, so it costs nothing.
+
+**`driver_forbidden_terms` is required.** A driven scenario's answer sheet must
+declare the vocabulary the agent is being graded on discovering for itself; the
+engine refuses to construct a driver without it. If an authored message uses
+one of those terms, the driver is re-asked once with the reason; a second trip
+transmits the scripted line instead and records `driver_leading_rejected`. The
+run is still valid evidence — the agent never saw the term.
+
+**What is recorded.** The manifest pins `driver_model_id` and
+`driver_sampling_params` (`temperature` plus `prompt_hash`, the sha256 of the
+system prompt, so a silent prompt edit cannot be paired against an older run).
+Per turn, `operator-observations.json` carries `operator_mode`,
+`operator_beat_id` and the driver flags; the run level and the rendered
+transcript header carry four counters:
+
+| counter | what it means |
+|---|---|
+| `driver_leading_rejected_count` | authored turns that used forbidden vocabulary twice and fell back |
+| `driver_obstacle_rejected_count` | authored turns the matcher's obstacle validation refused twice |
+| `driver_repeat_rejected_count` | authored turns that repeated an earlier operator message twice |
+| `driver_beat_substituted_count` | authored turns whose composed message failed to deliver a mandatory event, so the scripted line was composed instead |
+
+**A driven run is capped at QUALIFIED.** A model authored the operator's words,
+so nothing about the operator side is reproducible turn-for-turn:
+`replay_status` is `not-attempted` and the disposition can never reach
+CERTIFIED, however many epochs agree. Use the driver to observe persona
+behaviour a scripted operator cannot produce, not to certify a result.
+
 A scenario whose source is the run-local mock REST server hands that source to
 the agent the way an operator would: the runner writes an `infra-profile.yaml`
 into the agent's workspace with the source's `base_url` and the endpoints it is

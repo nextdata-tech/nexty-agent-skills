@@ -9,6 +9,8 @@ comparable to programmatic runs.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
+from dataclasses import replace
 import json
 from pathlib import Path
 import shlex
@@ -22,6 +24,9 @@ from dp_scenarios.scenario import (
     requires_live_session,
     select_tier,
 )
+
+from dp_scenarios.operator.driver import DriverOperator
+from dp_scenarios.operator.openai_driver import OpenAIDriverProvider, driver_prompt_hash
 
 from .environment import PinnedVersions
 from .report import write_report
@@ -119,6 +124,52 @@ def _load_cli_knob_plan(path: Path) -> Mapping[tuple[str, int], SupervisorKnobs]
     return knob_plan
 
 
+def _driver_configuration(
+    args: argparse.Namespace,
+    pins: PinnedVersions,
+) -> tuple[PinnedVersions, Callable[..., DriverOperator] | None]:
+    """Return the pins and operator factory implied by the driver flags.
+
+    Kept identical in shape to the local entrypoint's ``driver_configuration``
+    so the same flags mean the same thing on both surfaces; the key is read
+    only from ``OPENAI_API_KEY`` and the provider is built before the canary.
+    """
+
+    model = getattr(args, "driver_model", None)
+    if model is None:
+        return pins, None
+    if args.mode != "live":
+        # Replaying a recording re-authors nothing; a driver here would spend
+        # provider tokens producing words the recording then overrides.
+        raise TierError("--driver-model requires --mode live")
+    temperature = float(getattr(args, "driver_temperature", 0.7))
+    timeout = float(getattr(args, "driver_timeout", 60.0))
+    if not 0 <= temperature <= 2:
+        raise TierError("--driver-temperature must be between 0 and 2")
+    if timeout <= 0:
+        raise TierError("--driver-timeout must be positive")
+    provider = OpenAIDriverProvider.from_environment(
+        model=model,
+        temperature=temperature,
+        timeout_seconds=timeout,
+    )
+    driver_pins = replace(
+        pins,
+        driver_model_id=model,
+        driver_sampling_params={"temperature": temperature, "prompt_hash": driver_prompt_hash()},
+    )
+
+    def factory(scenario: object, environment: object, epoch: int) -> DriverOperator:
+        return DriverOperator(
+            provider,
+            model_id=model,
+            temperature=temperature,
+            provider_timeout_seconds=timeout,
+        )
+
+    return driver_pins, factory
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the runner CLI parser."""
 
@@ -148,6 +199,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON runtime-knob plan keyed by scenario id and one-based epoch",
     )
     parser.add_argument("--agent-model-id", default="replay")
+    parser.add_argument(
+        "--driver-model",
+        default=None,
+        help=(
+            "OpenAI model id that authors each substitutable operator turn "
+            "(default: none, the operator stays scripted). Requires OPENAI_API_KEY "
+            "in the environment and driver_forbidden_terms in the answer sheet"
+        ),
+    )
+    parser.add_argument("--driver-temperature", type=float, default=0.7, help="sampling temperature for --driver-model")
+    parser.add_argument("--driver-timeout", type=float, default=60.0, help="seconds allowed for one driver provider call")
     parser.add_argument("--model-call-budget", type=float)
     parser.add_argument("--wall-clock-budget", type=float)
     parser.add_argument("--report-json", type=Path, required=True)
@@ -177,6 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         canary_claims_hash=args.canary_claims_hash,
         agent_model_id=args.agent_model_id,
     )
+    pins, operator_factory = _driver_configuration(args, pins)
     if args.canary_replay is not None:
         expected_claims_hash = load_claims(args.canary_dir / "claims.json").baseline.approves_claims_hash
         canary = _canary_from_mapping(
@@ -224,6 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         supervisor_command=args.supervisor if args.mode == "live" else None,
         knob_plan=knob_plan,
         budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
+        operator_factory=operator_factory,
     ).run()
     write_report(result, json_path=args.report_json, summary_path=args.report_summary)
     return 0 if result.verdict == "clean" else 1
