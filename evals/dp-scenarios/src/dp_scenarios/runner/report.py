@@ -114,6 +114,20 @@ def human_summary(result: TierResult) -> str:
             lines.append(
                 f"  route fidelity: {run.route_fidelity_status} ({run.route_fidelity_reason})"
             )
+            if run.qualification.operator_mode == "driver":
+                # Without this a driven run whose every authored turn fell back
+                # to the scripted line is indistinguishable from a scripted run
+                # in stdout and summary.txt -- the run completes, spends the
+                # full agent budget, and the only trace is
+                # operator-observations.json. A provider error is a fail-safe
+                # fallback, not an abort, so the summary has to say it happened.
+                if "operator_fallback" in run.failure_modes:
+                    lines.append(
+                        "  driver: fell back to scripted lines on at least one authored turn; "
+                        "see driver_fallback_reason in operator-observations.json"
+                    )
+                else:
+                    lines.append("  driver: authored every substitutable turn")
             lines.append(
                 f"  efficiency: turns={run.efficiency.turns!s}, "
                 f"model-calls={run.efficiency.model_calls!s}, wall-clock={run.efficiency.wall_clock!s}"

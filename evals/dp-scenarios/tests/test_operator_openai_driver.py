@@ -269,6 +269,23 @@ def test_a_malformed_payload_is_refused(monkeypatch: pytest.MonkeyPatch, payload
         provider(make_view())
 
 
+def test_a_length_limited_response_reports_its_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    provider = OpenAIDriverProvider.from_environment(
+        model="gpt-x",
+        temperature=1.0,
+        post=lambda url, headers, body, timeout: {
+            "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+        },
+    )
+
+    with pytest.raises(
+        DriverProviderError,
+        match=r"provider returned no text \(finish_reason=length\)",
+    ):
+        provider(make_view())
+
+
 def test_configuration_is_validated_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 

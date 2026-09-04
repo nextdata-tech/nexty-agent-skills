@@ -193,8 +193,9 @@ def test_runner_cli_mirrors_the_driver_flags_and_defaults_to_scripted() -> None:
     )
 
     assert args.driver_model is None
-    assert args.driver_temperature == 0.7
+    assert args.driver_temperature == 1.0
     assert args.driver_timeout == 60.0
+    assert args.driver_max_tokens == 400
 
     pins, factory = cli._driver_configuration(args, _cli_pins())
     assert factory is None
@@ -206,7 +207,13 @@ def test_runner_cli_driver_requires_the_key_and_pins_the_prompt_hash(
 ) -> None:
     from dp_scenarios.operator.openai_driver import DriverConfigError, driver_prompt_hash
 
-    args = SimpleNamespace(mode="live", driver_model="gpt-x", driver_temperature=0.3, driver_timeout=30.0)
+    args = SimpleNamespace(
+        mode="live",
+        driver_model="gpt-x",
+        driver_temperature=0.3,
+        driver_timeout=30.0,
+        driver_max_tokens=900,
+    )
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(DriverConfigError, match="OPENAI_API_KEY"):
@@ -220,6 +227,7 @@ def test_runner_cli_driver_requires_the_key_and_pins_the_prompt_hash(
     operator = factory(object(), object(), 1)
     assert operator.model_id == "gpt-x"
     assert operator.temperature == 0.3
+    assert operator.provider.max_tokens == 900
     assert "sk-test" not in repr(operator)
 
 
@@ -227,7 +235,13 @@ def test_runner_cli_refuses_a_driver_in_replay_mode(monkeypatch: pytest.MonkeyPa
     """Replaying a recording re-authors nothing; a driver would only spend tokens."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    args = SimpleNamespace(mode="replay", driver_model="gpt-x", driver_temperature=0.3, driver_timeout=30.0)
+    args = SimpleNamespace(
+        mode="replay",
+        driver_model="gpt-x",
+        driver_temperature=0.3,
+        driver_timeout=30.0,
+        driver_max_tokens=400,
+    )
 
     with pytest.raises(cli.TierError, match="--driver-model requires --mode live"):
         cli._driver_configuration(args, _cli_pins())

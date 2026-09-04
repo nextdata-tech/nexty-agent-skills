@@ -263,7 +263,7 @@ class OpenAIDriverProvider:
             ) from None
         text = _extract_text(payload)
         if text is None:
-            raise DriverProviderError("provider returned no text")
+            raise DriverProviderError(self._scrub(_empty_response_reason(payload)))
         return text
 
 
@@ -285,6 +285,21 @@ def _extract_text(payload: object) -> str | None:
     if not isinstance(content, str) or not content.strip():
         return None
     return content.strip()
+
+
+def _empty_response_reason(payload: object) -> str:
+    """Describe why a successful provider response had no usable text."""
+
+    if isinstance(payload, Mapping):
+        choices = payload.get("choices")
+        if isinstance(choices, (list, tuple)) and choices:
+            first = choices[0]
+            if isinstance(first, Mapping):
+                finish_reason = first.get("finish_reason")
+                if isinstance(finish_reason, str) and finish_reason.strip():
+                    bounded_reason = " ".join(finish_reason.split())[:80]
+                    return f"provider returned no text (finish_reason={bounded_reason})"
+    return "provider returned no text"
 
 
 def _scrub(text: str, api_key: str) -> str:

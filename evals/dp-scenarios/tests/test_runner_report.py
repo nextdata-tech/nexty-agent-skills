@@ -162,7 +162,7 @@ def test_stable_document_removes_all_non_reproducible_keys_and_keeps_format_vers
     assert result["report_format_version"] == 1
 
 
-def test_the_operator_surfaces_name_truncation_rather_than_calling_it_invalid(tmp_path: Path) -> None:
+def test_the_operator_surfaces_report_truncation_rather_than_calling_it_invalid(tmp_path: Path) -> None:
     """The rendered summary and report.json are the point of the truncation split.
 
     Everything below them was pinned at the RateReport level, but neither

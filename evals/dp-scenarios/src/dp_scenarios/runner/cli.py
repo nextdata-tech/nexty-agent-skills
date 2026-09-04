@@ -142,16 +142,20 @@ def _driver_configuration(
         # Replaying a recording re-authors nothing; a driver here would spend
         # provider tokens producing words the recording then overrides.
         raise TierError("--driver-model requires --mode live")
-    temperature = float(getattr(args, "driver_temperature", 0.7))
+    temperature = float(getattr(args, "driver_temperature", 1.0))
     timeout = float(getattr(args, "driver_timeout", 60.0))
+    max_tokens = getattr(args, "driver_max_tokens", 400)
     if not 0 <= temperature <= 2:
         raise TierError("--driver-temperature must be between 0 and 2")
     if timeout <= 0:
         raise TierError("--driver-timeout must be positive")
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
+        raise TierError("--driver-max-tokens must be a positive integer")
     provider = OpenAIDriverProvider.from_environment(
         model=model,
         temperature=temperature,
         timeout_seconds=timeout,
+        max_tokens=max_tokens,
     )
     driver_pins = replace(
         pins,
@@ -208,8 +212,14 @@ def build_parser() -> argparse.ArgumentParser:
             "in the environment and driver_forbidden_terms in the answer sheet"
         ),
     )
-    parser.add_argument("--driver-temperature", type=float, default=0.7, help="sampling temperature for --driver-model")
+    parser.add_argument("--driver-temperature", type=float, default=1.0, help="sampling temperature for --driver-model")
     parser.add_argument("--driver-timeout", type=float, default=60.0, help="seconds allowed for one driver provider call")
+    parser.add_argument(
+        "--driver-max-tokens",
+        type=int,
+        default=400,
+        help="maximum completion tokens per provider call, including reasoning tokens",
+    )
     parser.add_argument("--model-call-budget", type=float)
     parser.add_argument("--wall-clock-budget", type=float)
     parser.add_argument("--report-json", type=Path, required=True)

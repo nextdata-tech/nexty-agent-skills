@@ -228,18 +228,33 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 | flag | default | meaning |
 |---|---|---|
 | `--driver-model` | none | OpenAI model id; omitting it keeps the scripted operator |
-| `--driver-temperature` | `0.7` | sampling temperature, pinned into the manifest |
+| `--driver-temperature` | `1.0` | sampling temperature, pinned into the manifest |
 | `--driver-timeout` | `60` | seconds allowed for one provider call before the turn falls back |
+| `--driver-max-tokens` | `400` | maximum completion tokens per provider call; GPT-5-class models count reasoning and visible output together |
 
-**GPT-5-class models need `--driver-temperature 1.0`.** They accept only the
-default temperature and reject the field otherwise, so the request omits it
-when it is the default and sends it when it is not — a non-default value fails
-loudly rather than being quietly dropped. The request always uses
+**GPT-5-class models use `--driver-temperature 1.0` by default.** They accept
+only the default temperature and reject the field otherwise, so the request
+omits it when it is the default and sends it when it is not — a non-default
+value is still sent, so an incompatible one is rejected by the API rather than
+silently dropped from the request.
+
+**A rejected driver call is a fallback, not an abort.** The turn goes out as the
+scripted line, the run finishes, and the full agent budget is spent either way,
+so a misconfigured driver costs a whole run. The summary now says which
+happened per epoch (`driver: authored every substitutable turn`, or `driver:
+fell back to scripted lines ...`); before that a driven run that never once
+authored was indistinguishable from a scripted one outside
+`operator-observations.json`.
+
+The request always uses
 `max_completion_tokens`; those models reject `max_tokens` outright, and the
 older ones accept the newer name, so there is one shape for both. A driven run
 where every authorable turn shows `operator_mode: driver_fallback` with
 `driver_fallback_reason: provider_error:...` is this class of problem: the
-reason now carries the provider's own scrubbed message, so read it first.
+reason now carries the provider's own scrubbed message, so read it first. The
+completion-token cap includes reasoning tokens on GPT-5-class models; raise
+`--driver-max-tokens` for longer multi-turn prompts when a response ends with
+`finish_reason=length`.
 
 The same three flags exist on `dp_scenarios.runner.cli`, where they require
 `--mode live` — replaying a recording re-authors nothing, so a driver there
