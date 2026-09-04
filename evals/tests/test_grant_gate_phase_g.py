@@ -281,13 +281,13 @@ def test_phase_g_decides_before_phase_b_imports():
     """
     body = _script_body()
     gate_exit = body.index("PHASE G FAILED")
-    # Anchored at line starts: both this phase's own comments and Phase E's
-    # mention `sys.path.insert(0, ".")` in prose ABOVE the statement, and a
-    # substring search would happily match the commentary and pass while the
-    # gate sat below the real import.
+    # The path and import checks are anchored at line starts because both this
+    # phase's own comments and Phase E's prose mention them above the statement.
+    # The transform call is wrapped by the stateful self-check, so it is located
+    # by its executable call shape instead of assuming top-level indentation.
     for later in ('\nsys.path.insert(0, ".")',
                   "\n    from transform.main import",
-                  "\n    ingest(duckdb=out"):
+                  "ingest(duckdb=out"):
         assert gate_exit < body.index(later), (
             f"Phase G's failure exit must come before {later!r}. Below it, the "
             f"transform has already run under an unauthorized grant."

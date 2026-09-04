@@ -2078,11 +2078,11 @@ dry_run_secrets = (
 def run_transform(state=None):
     """Execute one transform invocation with the same argument boundary."""
     global dry_run_runnable
-    kwargs = {"duckdb": out, "secrets": dry_run_secrets}
+    state_kwargs = {}
     if state is not None:
-        kwargs["transform_state"] = state
+        state_kwargs["transform_state"] = state
     try:
-        ingest(**kwargs)
+        ingest(duckdb=out, secrets=dry_run_secrets, **state_kwargs)
     except KeyError as exc:
         if not dry_run_waived(exc, network_declared):
             berr("runtime.transform_raised",
