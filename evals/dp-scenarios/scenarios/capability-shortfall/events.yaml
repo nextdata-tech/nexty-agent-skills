@@ -7,7 +7,8 @@
   plant: false
 - version: 1
   id: grain_trap_fanout
-  trigger_turn: 6
+  # Fires on 'The build is ready.' -- moved from 6 when build room was added.
+  trigger_turn: 9
   type: scope_creep
   content: >-
     One more thing while you are in there: can I also get this broken out by
