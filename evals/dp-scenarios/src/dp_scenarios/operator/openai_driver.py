@@ -87,6 +87,10 @@ def _persona_block(view: "DriverView") -> str:
     return "\n".join(lines)
 
 
+#: The only temperature GPT-5-class models accept; also the API-wide default.
+_DEFAULT_TEMPERATURE = 1.0
+
+
 def build_messages(view: "DriverView") -> list[dict[str, str]]:
     """Return the chat messages for one authored turn.
 
@@ -226,10 +230,24 @@ class OpenAIDriverProvider:
 
         body: dict[str, object] = {
             "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            # ``max_tokens`` is rejected outright by every GPT-5-class model
+            # ("Unsupported parameter: 'max_tokens' is not supported with this
+            # model. Use 'max_completion_tokens' instead"), while the newer name
+            # is accepted by the older ones too. Sending the old name meant the
+            # driver could only ever have worked with the gpt-4.1 in the README:
+            # a live run against gpt-5.6-luna fell back on all six authorable
+            # turns, every one of them a 400 the operator never saw.
+            "max_completion_tokens": self.max_tokens,
             "messages": build_messages(view),
         }
+        if self.temperature != _DEFAULT_TEMPERATURE:
+            # GPT-5-class models accept only the default temperature and reject
+            # the field otherwise. Omitting it when it *is* the default is not a
+            # silent downgrade -- the request means the same thing either way --
+            # and it keeps a non-default value an explicit, visible failure
+            # rather than something quietly dropped. The manifest still pins the
+            # requested temperature, which stays accurate.
+            body["temperature"] = self.temperature
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -245,7 +263,7 @@ class OpenAIDriverProvider:
             ) from None
         text = _extract_text(payload)
         if text is None:
-            raise DriverProviderError("provider returned no text")
+            raise DriverProviderError(self._scrub(_empty_response_reason(payload)))
         return text
 
 
@@ -267,6 +285,21 @@ def _extract_text(payload: object) -> str | None:
     if not isinstance(content, str) or not content.strip():
         return None
     return content.strip()
+
+
+def _empty_response_reason(payload: object) -> str:
+    """Describe why a successful provider response had no usable text."""
+
+    if isinstance(payload, Mapping):
+        choices = payload.get("choices")
+        if isinstance(choices, (list, tuple)) and choices:
+            first = choices[0]
+            if isinstance(first, Mapping):
+                finish_reason = first.get("finish_reason")
+                if isinstance(finish_reason, str) and finish_reason.strip():
+                    bounded_reason = " ".join(finish_reason.split())[:80]
+                    return f"provider returned no text (finish_reason={bounded_reason})"
+    return "provider returned no text"
 
 
 def _scrub(text: str, api_key: str) -> str:

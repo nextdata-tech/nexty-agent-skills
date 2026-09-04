@@ -311,20 +311,22 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
 
 
 def populated_parent_child_recordings(
-    tmp_path: Path, *, truncate_final_turn: bool = False
+    tmp_path: Path, *, truncate_final_turn: bool = False, truncate_every_epoch: bool = False
 ) -> tuple[object, list[ReplayRecording]]:
     """Build populated replay artifacts from the real parent-child-grain-trap package.
 
     ``truncate_final_turn`` replaces the last turn of the *last epoch* with a
     per-turn timeout, leaving every gate examined on the earlier turns passing.
-    Only one epoch, so the batch still has valid observations to rate.  Note
-    this is *not* the only reachable shape: a systemic cause --- a slow agent, a
-    wedged provider, a --turn-timeout too tight for a driven turn --- truncates
-    every epoch, since ``_run_scenario_epochs`` has no early break.  That case
-    is covered by ``test_a_batch_of_truncated_epochs_still_reports``.  That is the one
-    shape that distinguishes the truncation cap from the ordinary ungraded
-    path: the synthetic ``make_scenario`` fixtures never reach PASSED, so a
-    timeout test built on them stays green either way.
+    Only one epoch, so the batch still has valid observations to rate.
+    Truncating a single epoch is the one shape that distinguishes the truncation
+    cap from the ordinary ungraded path: the synthetic ``make_scenario``
+    fixtures never reach PASSED, so a timeout test built on them stays green
+    either way.
+
+    It is not, however, the only *reachable* shape.  A systemic cause --- a slow
+    agent, a wedged provider, a --turn-timeout too tight for a driven turn ---
+    truncates every epoch, since ``_run_scenario_epochs`` has no early break.
+    That case is covered by ``test_a_batch_of_truncated_epochs_still_reports``.
     """
 
     scenario = load_scenario(ROOT / "scenarios/parent-child-grain-trap")
@@ -378,7 +380,7 @@ def populated_parent_child_recordings(
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
-        if truncate_final_turn and epoch == scenario.epochs - 1:
+        if truncate_every_epoch or (truncate_final_turn and epoch == scenario.epochs - 1):
             responses[-1] = TurnResult(
                 agent_message="",
                 turn_timed_out=True,

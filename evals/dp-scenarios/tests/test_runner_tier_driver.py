@@ -591,3 +591,36 @@ def test_driver_rejection_evidence_is_marshalled_into_observations_on_both_branc
         assert "obstacle-rejected=1" in operator_line, branch
         assert "repeat-rejected=1" in operator_line, branch
         assert "beat-substituted=1" in operator_line, branch
+
+
+def test_the_summary_distinguishes_an_authored_run_from_an_all_fallback_one(tmp_path: Path) -> None:
+    """A misconfigured driven run must not read as a successful one.
+
+    A provider error is a fail-safe fallback, not an abort: the run completes
+    and spends the full agent budget either way. The summary never mentioned the
+    driver at all, so a wrong temperature or a stale parameter name -- both of
+    which 400 on every authorable turn -- produced output indistinguishable from
+    a scripted run, with the only trace in operator-observations.json.
+    """
+
+    from dp_scenarios.runner.report import human_summary
+
+    def run_with(provider: object) -> object:
+        return TierRunner(
+            [_scenario()],
+            pins=_driver_pins(),
+            canary=clean_canary(),
+            session_factory=lambda *_a: InMemoryTransport(_responses()),
+            operator_factory=lambda: _driver(provider) if provider is not None else _driver(),
+            evidence_root=tmp_path / ("fb" if provider is not None else "ok"),
+        ).run()
+
+    def always_fails(_view: object) -> str:
+        raise RuntimeError("provider is down")
+
+    authored = human_summary(run_with(None))
+    assert "driver: authored every substitutable turn" in authored
+
+    fell_back = human_summary(run_with(always_fails))
+    assert "driver: fell back to scripted lines" in fell_back
+    assert "authored every substitutable turn" not in fell_back

@@ -213,7 +213,10 @@ def test_the_request_carries_the_documented_url_headers_and_body(monkeypatch: py
     assert seen["timeout"] == 9.0
     assert seen["body"]["model"] == "gpt-x"
     assert seen["body"]["temperature"] == 0.3
-    assert seen["body"]["max_tokens"] == 400
+    assert seen["body"]["max_completion_tokens"] == 400
+    # The old name must be gone, not merely accompanied: GPT-5-class models
+    # reject the request outright when it is present.
+    assert "max_tokens" not in seen["body"]
     assert seen["body"]["messages"] == build_messages(make_view())
 
 
@@ -263,6 +266,23 @@ def test_a_malformed_payload_is_refused(monkeypatch: pytest.MonkeyPatch, payload
     )
 
     with pytest.raises(DriverProviderError, match="provider returned no text"):
+        provider(make_view())
+
+
+def test_a_length_limited_response_reports_its_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    provider = OpenAIDriverProvider.from_environment(
+        model="gpt-x",
+        temperature=1.0,
+        post=lambda url, headers, body, timeout: {
+            "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+        },
+    )
+
+    with pytest.raises(
+        DriverProviderError,
+        match=r"provider returned no text \(finish_reason=length\)",
+    ):
         provider(make_view())
 
 
@@ -471,3 +491,34 @@ def test_a_replaced_view_is_still_serialisable() -> None:
     payload = json.loads(build_messages(view)[1]["content"])
 
     assert payload["rejection_notice"] == "beat: missing required beat terms: x"
+
+
+def test_the_default_temperature_is_omitted_rather_than_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GPT-5-class models reject `temperature` unless it is left at the default.
+
+    Omitting it there means the same request, so a driver run against those
+    models works; a non-default value is still sent, so it fails loudly instead
+    of being quietly dropped.
+    """
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    seen: dict[str, Any] = {}
+
+    def fake_post(url: str, headers: Any, body: Any, timeout: float) -> Any:
+        seen["body"] = body
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    def provider_at(temperature: float) -> Any:
+        return OpenAIDriverProvider(
+            model="gpt-x",
+            temperature=temperature,
+            api_key="sk-test",
+            timeout_seconds=9.0,
+            post=fake_post,
+        )
+
+    provider_at(1.0)(make_view())
+    assert "temperature" not in seen["body"]
+
+    provider_at(0.3)(make_view())
+    assert seen["body"]["temperature"] == 0.3

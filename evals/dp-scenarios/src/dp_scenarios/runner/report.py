@@ -114,6 +114,20 @@ def human_summary(result: TierResult) -> str:
             lines.append(
                 f"  route fidelity: {run.route_fidelity_status} ({run.route_fidelity_reason})"
             )
+            if run.qualification.operator_mode == "driver":
+                # Without this a driven run whose every authored turn fell back
+                # to the scripted line is indistinguishable from a scripted run
+                # in stdout and summary.txt -- the run completes, spends the
+                # full agent budget, and the only trace is
+                # operator-observations.json. A provider error is a fail-safe
+                # fallback, not an abort, so the summary has to say it happened.
+                if "operator_fallback" in run.failure_modes:
+                    lines.append(
+                        "  driver: fell back to scripted lines on at least one authored turn; "
+                        "see driver_fallback_reason in operator-observations.json"
+                    )
+                else:
+                    lines.append("  driver: authored every substitutable turn")
             lines.append(
                 f"  efficiency: turns={run.efficiency.turns!s}, "
                 f"model-calls={run.efficiency.model_calls!s}, wall-clock={run.efficiency.wall_clock!s}"
@@ -122,7 +136,13 @@ def human_summary(result: TierResult) -> str:
         if summary.repeatability.demonstrated_once is not None:
             lines.append("- repeatability: demonstrated-once; no rate is rendered")
         elif summary.repeatability.rates is not None:
-            lines.append("- per-gate rates:")
+            if not summary.repeatability.rates.rates:
+                # Without this the summary prints a bare "- per-gate rates:"
+                # header with nothing beneath it and never says, in words, the
+                # one fact the reader needs: too few epochs finished to rate.
+                lines.append("- per-gate rates: none; too few epochs completed to rate this batch")
+            else:
+                lines.append("- per-gate rates:")
             for gate, rate in summary.repeatability.rates.rates.items():
                 lines.append(
                     f"  {gate}: {rate.passed}/{rate.examined} = {rate.rate:.3f}; "

@@ -268,8 +268,14 @@ def test_driver_flags_default_to_a_scripted_operator() -> None:
     args = _driver_args(module, [])
 
     assert args.driver_model is None
-    assert args.driver_temperature == 0.7
+    # 1.0 is the API default and the only value GPT-5-class models accept; at
+    # that value the field is omitted from the request entirely, so one default
+    # works for both model generations. Defaulting to 0.7 meant the documented
+    # flow against a current model was a guaranteed 400 on every authorable
+    # turn -- which degrades to a silent fallback, not an error.
+    assert args.driver_temperature == 1.0
     assert args.driver_timeout == 60.0
+    assert args.driver_max_tokens == 400
 
 
 def test_driver_configuration_is_the_identity_without_the_flag() -> None:

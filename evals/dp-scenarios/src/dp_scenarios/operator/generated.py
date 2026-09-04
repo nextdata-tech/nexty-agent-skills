@@ -113,7 +113,21 @@ def _invoke_with_timeout(
         return None, "provider_timeout"
     error = result.get("error")
     if isinstance(error, Exception):
-        return None, f"provider_error:{type(error).__name__}"
+        # ``DriverProviderError`` is the contract type a provider raises *after*
+        # scrubbing its own message, so its text is safe to record and is the
+        # only thing that explains the failure. Reducing every provider failure
+        # to a bare type name cost a 22-minute live run its diagnosis: all six
+        # authorable turns recorded ``provider_error:DriverProviderError`` while
+        # the API had actually replied "Unsupported parameter: 'max_tokens' ...
+        # Use 'max_completion_tokens' instead" every time. Any other exception
+        # type keeps the type name only, because nothing promises its message
+        # has been scrubbed.
+        detail = ""
+        if type(error).__name__ == "DriverProviderError":
+            message = " ".join(str(error).split())[:200]
+            if message:
+                detail = f":{message}"
+        return None, f"provider_error:{type(error).__name__}{detail}"
     rendered = result.get("value")
     if not isinstance(rendered, str) or not rendered.strip():
         return None, "provider_empty"
