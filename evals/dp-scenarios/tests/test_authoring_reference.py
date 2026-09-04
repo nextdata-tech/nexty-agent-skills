@@ -31,9 +31,27 @@ _REFERENCE = _REPO_ROOT / ".claude/skills/dp-scenario-from-scratch/reference/sce
 
 
 def _reference_text() -> str:
-    if not _REFERENCE.is_file():
-        pytest.skip(f"authoring reference not present at {_REFERENCE}")
+    # Deliberately not a skip. Deleting the reference would then be green, and
+    # the skills route every contributor to it -- its absence is the loudest
+    # possible version of the drift these tests exist to catch.
+    assert _REFERENCE.is_file(), (
+        f"the contributor-facing authoring reference is missing at {_REFERENCE}; "
+        "both scenario-authoring skills route contributors to it"
+    )
     return _REFERENCE.read_text(encoding="utf-8")
+
+
+def _section(text: str, start: str, end: str) -> str:
+    """Return the text between two anchors, failing legibly if one moved.
+
+    Splitting on a phrase raises IndexError when it is reworded, which reads as
+    a broken test rather than the finding: the reference stopped saying the
+    thing.
+    """
+
+    assert start in text, f"the reference no longer contains the anchor {start!r}"
+    assert end in text, f"the reference no longer contains the anchor {end!r}"
+    return text.split(start)[1].split(end)[0]
 
 
 def _backticked(section: str) -> set[str]:
@@ -42,7 +60,7 @@ def _backticked(section: str) -> set[str]:
 
 def test_the_reference_names_every_required_scenario_key() -> None:
     text = _reference_text()
-    listed = _backticked(text.split("Sixteen keys are required")[1].split("What each must contain")[0])
+    listed = _backticked(_section(text, "Sixteen keys are required", "What each must contain"))
 
     assert not (_SCENARIO_KEYS - listed), (
         f"scenario.yaml keys missing from the contributor reference: "
@@ -52,7 +70,7 @@ def test_the_reference_names_every_required_scenario_key() -> None:
 
 def test_the_reference_names_every_required_answer_sheet_key() -> None:
     text = _reference_text()
-    listed = _backticked(text.split("Ten keys are required")[1].split("Several may be empty")[0])
+    listed = _backticked(_section(text, "Ten keys are required", "Two rules that fail at load"))
 
     assert not (ANSWER_SHEET_KEYS - listed), (
         f"answer-sheet keys missing from the contributor reference: "

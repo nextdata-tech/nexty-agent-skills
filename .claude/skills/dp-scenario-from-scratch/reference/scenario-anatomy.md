@@ -19,8 +19,12 @@ top level of `scenarios/`, so a package one level down is invisible to it —
 and an incomplete package placed directly at the top level makes the *entire*
 scenario root unloadable, failing every test that reads it.
 
-A package is additive: it needs no edit to any shared file, so two people can
-author scenarios at the same time without conflicting.
+While parked in `_proposed/` a package is fully additive — it touches no shared
+file, so two people can author at once without conflicting. **That stops being
+true at promotion**: `test_scenario_loader.py` keeps a hand-maintained tier map
+whose key set must equal the packages on disk, so an engineer adds a line there
+when they move the directory up. Deliberate, so a new scenario cannot appear
+unnoticed.
 
 ```
 scenarios/_proposed/<id>/      # promoted to scenarios/<id>/ when ready
@@ -51,12 +55,12 @@ What each must contain:
 | `fixture.dataset` | `grain_trap` or `zero_row_optional`. |
 | `fixture.seed` | **Must be `29`.** Asserted for every package, so generated data is comparable. |
 | `fixture.variant` | Required. A name for this scenario's shape of the dataset. |
-| `fixture.plant` | Optional, and unset in every shipped package. The plant usually comes from `events.yaml` instead. |
+| `fixture.plant` | Set in five of the six shipped packages, and **mandatory when `dataset` is `zero_row_optional`** — omitting it there raises `fixture requires dataset, seed, variant, and plant`. For `grain_trap` it may be omitted, and one package does. |
 | `coverage.variant` | Must equal `fixture.variant` exactly. |
 | `coverage.untested` | Non-empty prose saying what this scenario does *not* establish. |
 | `turn_budget` | The loader only requires it to be **at least** the turn count. Set it **equal** anyway: the efficiency ratio and the budget-exceeded check both read it as the exact script length, so a larger value quietly misreports both. Only `capability-shortfall` has a test pinning the equality. |
 | `phase_map` | Every turn number to a phase, 1-7. |
-| `persona` | A path to a file under `_personas/`. |
+| `persona` | Resolved **relative to the package directory**, so the depth matters. While parked in `_proposed/` write `../../_personas/<name>.yaml`; when an engineer promotes the directory it becomes `../_personas/<name>.yaml`. Copying the shipped form (`../_personas/…`) into `_proposed/` fails immediately with `persona does not resolve to a file`; forgetting to shorten it at promotion fails then. |
 | `answer_sheet` / `events` | Paths to those two files. |
 | `repeatability` | The tier and epoch count. Copy a shipped scenario's block. |
 | `required_plants` | Non-empty. A scenario with no required plant cannot fail for the reason it was written. |
@@ -74,8 +78,21 @@ This is the operator's script and everything it knows.
 `decision_answers` `status_answers` `opening_forbidden_terms`
 `open_decision_markers` `obstacle_terms`
 
-Several may be empty lists or maps, but every key must be present.
-`ground_truth` and `driver_forbidden_terms` are the **only** optional ones —
+Every key must be present, and emptiness is not uniform:
+
+- `opening_forbidden_terms` and `open_decision_markers` must be **non-empty**.
+  `open_decision_markers` is the one nobody guesses — it is the marker text an
+  agent uses to flag an unresolved decision, e.g. `[DECISION NEEDED]`.
+- `obstacle_terms` is the only list that may be empty.
+- `source_answers`, `decision_answers` and `status_answers` may be empty maps.
+
+Two rules that fail at load and surprise people:
+
+- `opening_message` must be **at most one business sentence**.
+- `turns[0]` must **equal `opening_message` exactly** — same string, not a
+  paraphrase.
+
+`ground_truth` and `driver_forbidden_terms` are the **only** optional keys —
 and they are the two that carry most of the scenario's substance.
 
 - `opening_message` — the contributor's own vague first words, verbatim.

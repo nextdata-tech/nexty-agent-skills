@@ -98,6 +98,36 @@ if there isn't one, say so and stop.
 
 ## Before you hand it back
 
+**Check the package itself.** Nothing under `_proposed/` is read by the test
+suite — that is the point of parking it there, but it means a green suite says
+nothing about your package. Load it directly:
+
+```bash
+uv run --project evals/dp-scenarios python -c "
+from dp_scenarios.scenario import load_scenario
+from dp_scenarios.grading.gates import GATE_PHASES
+s = load_scenario('evals/dp-scenarios/scenarios/_proposed/<id>')
+assert s.seed == 29, f'seed must be 29, got {s.seed}'
+assert s.coverage['variant'] == s.fixture_variant, 'coverage.variant must equal fixture.variant'
+assert s.coverage['untested'], 'coverage.untested must not be empty'
+assert set(s.gates) == set(GATE_PHASES), f'gates must be all seven, missing {set(GATE_PHASES) - set(s.gates)}'
+assert s.turn_budget == len(s.answer_sheet.turns), f'turn_budget {s.turn_budget} != {len(s.answer_sheet.turns)} turns'
+assert s.required_plants, 'required_plants must not be empty'
+print('package is sound:', s.id, '| tier:', s.tier, '| turns:', len(s.answer_sheet.turns))"
+```
+
+Each failure names the exact key. Fix until it prints `package is sound`.
+**Do not skip this** — without it a missing key or a wrong persona path stays
+invisible until an engineer promotes the directory, and surfaces to them
+rather than to you.
+
+The asserts are not decoration: `load_scenario` alone accepts `seed: 7`, a
+`coverage.variant` that does not match, and a `turn_budget` larger than the
+script. Those three are checked only by a test that skips `_proposed/`, so
+without the asserts they would wait until promotion to fail.
+
+Then run the suite, which checks you have not broken anything else:
+
 ```bash
 uv run --project evals/dp-scenarios python -m pytest evals/dp-scenarios/tests -q
 ```
