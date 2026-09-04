@@ -32,6 +32,7 @@ every row and looking like it worked. Its sibling, a `join(...)` with no
 from __future__ import annotations
 
 import importlib.util
+import ast
 import json
 import re
 import subprocess
@@ -136,6 +137,49 @@ def _codes(report: dict) -> list[str]:
     return [d["code"] for d in report["diagnostics"]]
 
 
+def _fake_state_class():
+    """Load only the self-check's offline state model for semantic unit tests."""
+    tree = ast.parse(SELF_CHECK.read_text())
+    cls = next(node for node in tree.body
+               if isinstance(node, ast.ClassDef) and node.name == "FakeTransformState")
+    ns = {"json": json, "GENERIC_STATE_KEY": "__nxd_generic__"}
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), str(SELF_CHECK), "exec"), ns)
+    return ns["FakeTransformState"]
+
+
+def test_fake_transform_state_matches_current_kernel_boundary():
+    FakeState = _fake_state_class()
+
+    single = FakeState(["orders"], {"orders": {"cursor": 3}})
+    assert single.models() == ["orders"]
+    assert single.for_model("orders") is single
+    single["cursor"] = 4
+    assert single.persist() == {"orders": {"cursor": 4}}
+
+    multi = FakeState(["orders", "users"])
+    orders = multi.for_model("orders")
+    assert orders is multi.for_model("orders")
+    orders["cursor"] = 7
+    multi["flat_cursor"] = 8
+    generic = multi.generic()
+    generic["batch"] = 1
+    persisted = multi.persist()
+    assert persisted == {
+        "orders": {"cursor": 7},
+        "users": {},
+        "__nxd_generic__": {"batch": 1},
+    }
+    assert multi.dropped_flat_write
+    assert multi["flat_cursor"] == 8
+    with pytest.raises(KeyError):
+        multi.for_model("missing")
+
+    unserializable = FakeState(["orders"])
+    unserializable["bad"] = float("nan")
+    with pytest.raises(ValueError):
+        unserializable.persist()
+
+
 CSV_SERVICE = '_src = "/infra-profile/desktop-local#/services/csv-source"\n'
 API_SERVICE = '_src = "/infra-profile/desktop-local#/services/api-source"\n'
 
@@ -166,6 +210,18 @@ CSV_TRANSFORM = (
     "        raise RuntimeError(f'{sorted(actual)} != {sorted(expected)}')\n"
     "    (run_dir / '.transform-complete').touch()\n\n"
     'if __name__ == "__main__":\n    data_product.main()\n'
+)
+
+STATEFUL_TRANSFORM = CSV_TRANSFORM.replace(
+    "def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:\n",
+    "def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any], transform_state) -> None:\n"
+    "    state = transform_state.for_model(\"orders\")\n"
+    "    state[\"cursor\"] = state.get(\"cursor\", 0) + 1\n",
+)
+
+STATEFUL_NO_WRITE_TRANSFORM = CSV_TRANSFORM.replace(
+    "def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:\n",
+    "def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any], transform_state) -> None:\n",
 )
 
 API_TRANSFORM = CSV_TRANSFORM.replace(
@@ -522,6 +578,28 @@ def test_a_csv_closure_still_fails_on_a_real_key_error(tmp_path):
     codes = _codes(report)
     assert "runtime.transform_raised" in codes, codes
     assert "runtime.dry_run_not_runnable" not in codes
+
+
+@_needs_dlt
+def test_stateful_transform_is_injected_and_verified_again(tmp_path):
+    models = MODELS_HEAD + _model("orders", view=True)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  STATEFUL_TRANSFORM, ("orders",))
+    codes = _codes(report)
+    assert not {
+        "runtime.state_unserializable",
+        "runtime.state_not_persisted",
+        "runtime.state_flat_write",
+        "runtime.rerun_row_count_changed",
+    } & set(codes), codes
+
+
+@_needs_dlt
+def test_stateful_transform_that_lands_rows_without_state_fails(tmp_path):
+    models = MODELS_HEAD + _model("orders", view=True)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  STATEFUL_NO_WRITE_TRANSFORM, ("orders",))
+    assert "runtime.state_not_persisted" in _codes(report)
 
 
 # --- closure.contract_phase_unsupported -------------------------------------

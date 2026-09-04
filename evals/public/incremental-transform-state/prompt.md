@@ -12,7 +12,9 @@ The workspace contains a working desktop data-product closure under
 - `infra-profile.yaml`, `csv-source-path`, `requirements.txt`.
 
 `nxd-run-history.txt` holds the row counts from the two runs so far (stable at
-100, since replace is idempotent) and the author's note about the source.
+100, since replace is idempotent) and the author's note about the source. The
+evaluator will later add a third file containing event_id 101..140 and ask for
+one follow-up run through the same workflow.
 
 The source is an append-only event export. Files only ever gain rows, nothing
 already written is revised or deleted, and every row carries a monotonically
@@ -23,6 +25,10 @@ Task for the agent:
 
 The author asks: "this re-reads the entire export every time — can you make it
 load only the new events?" Make the change in `data_product/`.
+
+After the initial edit, a follow-up turn will provide a new source file. The
+same transform must preserve the 100 existing rows, land exactly the 40 new
+events, and advance its durable cursor to 140.
 
 This is an NXD desktop data product. You have the installed Nexty skills
 available; consult them for the platform's incremental-loading contract before

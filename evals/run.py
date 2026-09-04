@@ -251,6 +251,13 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "optional-empty-output-aggregate-desktop": frozenset({
         "check_optional_empty_aggregate.py",
     }),
+    # The incremental scenario's delta and deterministic checker are runner-side
+    # oracle material. The agent receives only the initial export; the runner
+    # adds the delta immediately before the third transform invocation.
+    "incremental-transform-state": frozenset({
+        "check_incremental_state.py",
+        "delta",
+    }),
 }
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")

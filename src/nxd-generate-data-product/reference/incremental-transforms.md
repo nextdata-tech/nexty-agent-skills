@@ -438,8 +438,10 @@ delta's keys are *already present* (`SELECT count(*) … WHERE <cursor> IN (…)
 `>= :delta_min`), not what the table's maximum is. The full-table read the
 [eligibility
 gate](#before-you-start-the-eligibility-gate) requires when you rebuild a
-non-append-safe derived model with `"replace"`. The cursor lives in
-`transform_state`, and nowhere else.
+non-append-safe derived model with `"replace"` is also sanctioned. A third read
+is sanctioned for a follow-up batch: read the full table to verify that the
+previous rows remain and the new rows were added. None of these reads is a
+watermark; the cursor lives in `transform_state`, and nowhere else.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be

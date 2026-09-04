@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.42.0
+  version: 0.43.0
 ---
 
 # nxd-generate-data-product skill
@@ -456,8 +456,7 @@ Then the self-check. Confirm the `duckdb` port/parameter pair and no `.semantic_
 `dp-blueprint.md` governed the build, confirm shipped-matches-approved**: every
 promised model, gate, weight, band and `nxd_decisions` row traces to a spec
 section, and none carries a value the spec does not. Confirm the
-supplied export is unchanged, then run BOTH the self-check and the lock verify. **The self-check is shipped as a helper file**: `cp "$JOB_HELPER_DIR/scripts/self_check.py" <closure>/self_check.py`, then run it **from the closure root** (it resolves `models.py`, `spec.py`, `transform/`, ordinary `data/`, and labeled `data-<label>/` roots against its own working directory, so running it elsewhere reports `CANNOT READ`). Skipping this copy leaves nothing to execute, and the reach gate silently never runs. So: `cd <closure> && python3 self_check.py --json --record build-record.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
-against a scratch DuckDB, **structurally validates `models.py`/`spec.py` against
+supplied export is unchanged, then run BOTH the self-check and the lock verify. **The self-check is shipped as a helper file**: `cp "$JOB_HELPER_DIR/scripts/self_check.py" <closure>/self_check.py`, then run it **from the closure root** (it resolves `models.py`, `spec.py`, `transform/`, ordinary `data/`, and labeled `data-<label>/` roots against its own working directory, so running it elsewhere reports `CANNOT READ`). Skipping this copy leaves nothing to execute, and the reach gate silently never runs. So: `cd <closure> && python3 self_check.py --json --record build-record.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform against a scratch DuckDB; stateful transforms are invoked a second time after a strict JSON state fold, so unchanged reruns must preserve materialization and row counts. **Structurally validates `models.py`/`spec.py` against
 the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
 installable here), runs **Phase E — the reach gate**, which decides BEFORE the transform is imported so the verdict precedes the act (`transform/main.py` may import no model-provider SDK, and no raw network transport unless `spec.py` declares an `api-source`/`db-source`; an import contradicting the declared connector type fails too, and `contracts/**/*.py` is scanned for model-SDK imports as well — a green Phase E is an import-level name check, not proof the transform is offline), runs **Phase C** (`dp-blueprint.approved.md` and `dp-blueprint.lock.json` present with the snapshot's bytes matching the lock, `build-record.json` present with a matching `compiled_from`, `README.md` present, no `../`-rooted contract pointer) and **Phase D — the policy boundary**: a promised
 `nxd_decisions` must be a BASE model with in-vocabulary `status` **and `provenance`** columns (settled-or-not and authored-by are separate required axes),

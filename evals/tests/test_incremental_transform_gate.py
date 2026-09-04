@@ -61,7 +61,10 @@ to satisfy an ordering check.
 from __future__ import annotations
 
 import ast
+import importlib.util
+import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -73,6 +76,7 @@ GENERATE_DP = SRC / "nxd-generate-data-product"
 SKILL = GENERATE_DP / "SKILL.md"
 INCREMENTAL = GENERATE_DP / "reference" / "incremental-transforms.md"
 TRANSFORM_TEMPLATE = GENERATE_DP / "reference" / "transform-template.md"
+SCENARIO = REPO_ROOT / "evals" / "public" / "incremental-transform-state"
 
 REFERENCE_LINK = "reference/incremental-transforms.md"
 
@@ -142,6 +146,62 @@ def test_reference_doc_exists_with_contents_heading():
     assert INCREMENTAL.is_file(), (
         "reference/incremental-transforms.md must exist — it is the only "
         "sanctioned incremental route"
+    )
+
+
+def test_scenario_uses_the_current_skill_and_three_run_runner_oracle():
+    config = json.loads((SCENARIO / "checks.json").read_text())
+    assert config["skills"] == ["nxd-generate-data-product"]
+    assert config["ci_skip"]
+    assert len(config["turns"]) == 1
+    assert config["turns"][0]["text"].startswith("The source export has just gained")
+    assert config["workspace_files"] == ["data_product/transform/main.py"]
+    assert config["deterministic_check"]["script"] == "check_incremental_state.py"
+    assert config["deterministic_check"]["deps"] == [
+        "dlt[duckdb]==1.28.2",
+        "duckdb==1.5.4",
+    ]
+    checker = SCENARIO / "fixtures" / "check_incremental_state.py"
+    assert "three times" in checker.read_text()
+    assert (SCENARIO / "fixtures" / "delta" / "part-0003.csv").is_file()
+
+
+def test_incremental_oracle_material_is_excluded_only_for_this_scenario():
+    spec = importlib.util.spec_from_file_location("evals_run", REPO_ROOT / "evals" / "run.py")
+    run = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.path.insert(0, str(REPO_ROOT / "evals"))
+    sys.modules["evals_run"] = run
+    try:
+        spec.loader.exec_module(run)
+    finally:
+        sys.path.pop(0)
+        sys.modules.pop("evals_run", None)
+
+    assert run.SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS[SCENARIO.name] == frozenset({
+        "check_incremental_state.py",
+        "delta",
+    })
+
+
+def test_incremental_oracle_requires_one_cursor_key_to_follow_the_trajectory():
+    checker_path = SCENARIO / "fixtures" / "check_incremental_state.py"
+    spec = importlib.util.spec_from_file_location("incremental_checker", checker_path)
+    checker = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules["incremental_checker"] = checker
+    try:
+        spec.loader.exec_module(checker)
+    finally:
+        sys.modules.pop("incremental_checker", None)
+    states = [
+        {"events": {"max_event_id": 100}},
+        {"events": {"max_event_id": 100}},
+        {"events": {"max_event_id": 140}},
+    ]
+    assert checker._has_cursor_trajectory(*states)
+    assert not checker._has_cursor_trajectory(
+        states[0], states[1], {"events": {"max_event_id": 100}}
     )
     head = "\n".join(INCREMENTAL.read_text().splitlines()[:20]).lower()
     assert "## contents" in head, (
