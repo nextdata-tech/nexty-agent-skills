@@ -2,7 +2,7 @@
 
 **For analysts working in Claude Cowork.**
 
-You already know how to use an agent get at your data. What you don't have is a way to get the *same* result next month, sliced differently, without redoing the work and without wondering whether last month's version used the same logic.
+You already know how to use an agent to get at your data. What you don't have is a way to get the *same* result next month, sliced differently, without redoing the work and without wondering whether last month's version used the same logic.
 
 Nexty turns a job you do by hand into something that does it for you. It finds your data, applies your definitions, runs on your own machine, and costs less than redoing the thinking every time.
 
@@ -27,7 +27,7 @@ Nexty turns a job you do by hand into something that does it for you. It finds y
 
 ### Install
 
-**macOS 13 or later, Apple silicon or Intel.**
+**macOS 13 or later, Apple silicon (arm64) or Intel (x86_64).**
 
 Download `nxd-desktop-0.0.0-*-macos-arm64.run` from **TODO**, make it executable and run it:
 
@@ -121,7 +121,7 @@ Note what's in it: the outcome, the rules, the cadence, and a number you can che
 
 Nexty finds and retrieves data for you rather than waiting to be handed a file. It can pull from:
 
-- **Databases** you already use: Snowflake, Postgres, BigQuery, and others. Give it the connection once.
+- **Databases** you already use: Snowflake, Postgres, and others. Give it the connection once.
 - **APIs**, including internal services and third-party ones.
 - **Files and exports**, wherever they sit on your machine or in a shared folder.
 
