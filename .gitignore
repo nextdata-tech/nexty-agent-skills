@@ -79,9 +79,12 @@ evals/benchmarks/.benchmark-staging/
 evals/benchmarks/entries/.*.md.*
 evals/benchmarks/records/.*.json.*
 evals/benchmarks/.README.md.*
-# MCP server venv + lock (resolved locally with matched nxd wheels)
+# MCP server venv. The LOCK is tracked: the semantic-contract job and the
+# nightly canary both run `uv sync --locked` here before installing the NXD
+# wheels on top, so an untracked lock would let CI resolve a different dependency
+# set than a developer and turn a drift check into a moving target. The nxd
+# wheels stay out of the lock — they are installed from the published artifact.
 evals/mcp/.venv/
-evals/mcp/uv.lock
 
 # Query-loop run transcripts (generated)
 evals/query-loop/runs/

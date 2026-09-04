@@ -39,6 +39,41 @@ The stub reads the exact same fixture shape as the real server
 (`catalog.json` + `semantic.json` + `seed.sql`), so swapping in the genuine
 server later is a launch-command change, not a fixture change.
 
+> **The stub is substrate and Inspect smoke coverage. It is NOT a drift oracle
+> for the production MCP surface.** Its tool list, argument names, and
+> descriptions are written here, so it agrees with itself no matter what NXD
+> ships. Never cite a green stub run as evidence that the eval surface still
+> matches production — that question is answered by the semantic-contract job
+> described below, against the contract NXD publishes.
+
+## Where drift is actually caught
+
+Three tiers, in increasing distance from a merge gate. Only the second one gates
+anything.
+
+| Tier | Where | What it pairs | Signal |
+|---|---|---|---|
+| Producer | NXD CI (`test_mcp_contract.py`) | NXD source vs the contract shipped in its own wheel | a tool, description, or request schema changed without regenerating the published contract |
+| Consumer (gating) | this repo, `semantic MCP contract` job in `ci.yml` | the NXD revision this repo PINS vs the artifact NXD PUBLISHED for it | the eval MCP surface diverged from the contract in a way nobody declared |
+| Canary (look-ahead) | this repo, `.github/workflows/nightly-mcp-canary.yml` | NXD **main** vs Nexty **main** — a pairing nobody ships | the next NXD bump is going to break the evals |
+
+The nightly canary is explicitly a look-ahead. A red canary is notice, not a
+broken release; the released pairing is whatever the gating job validated.
+
+## One-way artifact ownership
+
+NXD is the producer and owns the production contract: it tests, builds, and
+publishes an immutable wheel bundle with a manifest carrying the source, field
+mapper, semantic-layer, and RPC-transport tree identities plus the contract
+digest. It never runs these evals and never waits on this repository.
+
+This repository is the consumer and owns the eval canary. Its jobs read
+artifacts NXD has already finished publishing. There is no reciprocal workflow
+dispatch in either direction, and none should be added: the existing
+Nexty-release-to-NXD-submodule-bump flow is maintenance synchronisation, not a
+CI prerequisite. Making it one would put a cycle between two repositories whose
+pipelines are currently able to fail independently.
+
 ## Run it
 
 ### 1. Install / sync

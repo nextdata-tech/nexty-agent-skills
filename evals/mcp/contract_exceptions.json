@@ -1,0 +1,41 @@
+{
+  "schema": "nxd-semantic-mcp-exceptions-v1",
+  "_comment": [
+    "Declared, reasoned differences between NXD's production semantic MCP surface",
+    "and the eval harness's server. Every entry is a place a scenario cannot see a",
+    "production regression, so each one needs a reason a reader can act on.",
+    "An UNDECLARED difference fails the semantic-contract job. So does an entry that",
+    "no longer describes a real difference, which keeps this file from rotting into",
+    "a blanket waiver.",
+    "Descriptions are not compared here: the eval server paraphrases them for its",
+    "own scenarios. NXD's producer-side contract tests pin the descriptions against",
+    "the factory and extracted entrypoints that actually serve them."
+  ],
+  "missing_tools": [
+    {
+      "name": "semantic_model",
+      "reason": "The eval server serves the agent-facing catalog through list_models and describe_model, which is what the graded scenarios drive. semantic_model returns the FULL registry as one JSON payload and exists for cross-DP planning; no eval scenario plans across meshes through the tool surface, so adding it would be untested substrate. Revisit when a scenario grades cross-DP discovery through the tools rather than through fixtures."
+    }
+  ],
+  "extra_tools": [],
+  "missing_parameters": [
+    {
+      "tool": "run_semantic_query",
+      "parameter": "order_by",
+      "reason": "The eval server compiles selections directly through compile_selection with no ordering. Top-N behaviour is exercised by NXD's own compiler tests; wiring order_by here would add an eval-side code path with no scenario grading it."
+    },
+    {
+      "tool": "run_semantic_query",
+      "parameter": "limit",
+      "reason": "Same as order_by: the governed executor already applies its own row cap, so a caller-supplied limit would change what the executor's cap means without any scenario measuring the difference."
+    }
+  ],
+  "extra_parameters": [],
+  "parameter_mismatches": [
+    {
+      "tool": "describe_model",
+      "parameter": "name",
+      "reason": "Production's RPC-to-pydantic conversion leaves an undescribed nullable field out of the JSON Schema's required set, so name reads as optional over the wire even though describe_model cannot answer without it. The eval server types it as a plain str, hence required. The eval side is the stricter of the two and is the behaviour scenarios should grade; this entry records that the laxer production schema is known and deliberate."
+    }
+  ]
+}

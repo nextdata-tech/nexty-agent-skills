@@ -1,0 +1,328 @@
+name: 'Consume a published NXD Python artifact'
+description: >-
+  Resolve, download, verify and optionally install a wheel bundle that NXD has
+  already published. Consumer-side only: this never triggers, dispatches, or
+  waits on an NXD build. If no eligible artifact matches, it fails.
+
+inputs:
+  token:
+    description: >-
+      PAT with contents:read and actions:read on nextdata-tech/nxd. Required —
+      an empty token fails immediately with token_missing_message rather than
+      skipping, so a missing secret can never look like a pass.
+    required: true
+  token_missing_message:
+    description: 'What to print when token is empty. Job-specific; keep it actionable.'
+    required: false
+    default: 'NXD_DISPATCH_PAT is unavailable; this job cannot resolve the NXD artifact.'
+  artifact_prefix:
+    description: >-
+      Artifact-name prefix to select on. The published name is
+      nxd-py-linux-x86_64-<field-mapper-tree>-<semantic-tree>-<source-sha>-<run-id>,
+      so a prefix can pin as much or as little of that as the caller needs. If
+      expect_source_sha is absent, the newest unexpired main-branch match wins;
+      otherwise the source revision input restricts the search to that commit's
+      main runs after its artifact-bundle publication job succeeds. Pass the
+      bare "nxd-py-linux-x86_64-" to take whatever main published most recently.
+    required: true
+  selector_label:
+    description: 'How to name the selector in the not-found message. Defaults to artifact_prefix.'
+    required: false
+    default: ''
+  expect_field_mapper_tree_sha:
+    description: 'When set, the manifest must carry this field_mapper_tree_sha.'
+    required: false
+    default: ''
+  expect_semantic_tree_sha:
+    description: 'When set, the manifest must carry this semantic_tree_sha.'
+    required: false
+    default: ''
+  expect_rpc_tree_sha:
+    description: 'When set, the manifest must carry this rpc_tree_sha.'
+    required: false
+    default: ''
+  expect_source_sha:
+    description: >-
+      When set, resolution is restricted to NXD main runs for this exact
+      revision, outside the recent-run window, and the manifest source_sha must
+      equal it. If this revision has no unexpired matching artifact, the action
+      fails not-found rather than resolving a different source and reporting a
+      mismatch.
+    required: false
+    default: ''
+  require_mcp_provenance:
+    description: >-
+      When 'true', refuse a manifest with no semantic_tree_sha / rpc_tree_sha /
+      mcp_contract_sha256. Artifacts published before NXD emitted those fields
+      are valid for other consumers, so an MCP consumer must ask explicitly —
+      and gets a refusal, never a silent pass against an older artifact.
+    required: false
+    default: 'false'
+  artifact_dir:
+    description: 'Directory to download the artifact into, relative to the workspace.'
+    required: false
+    default: 'nxd-artifact'
+  install_project_dir:
+    description: >-
+      uv project to `uv sync --locked` and then install the wheels into. Leave
+      empty to download and verify without installing.
+    required: false
+    default: ''
+
+outputs:
+  artifact_name:
+    description: 'The resolved artifact name.'
+    value: ${{ steps.resolve.outputs.artifact_name }}
+  run_id:
+    description: 'The NXD workflow run that published it.'
+    value: ${{ steps.resolve.outputs.run_id }}
+  manifest_path:
+    description: 'Absolute path to the verified manifest.json.'
+    value: ${{ steps.verify.outputs.manifest_path }}
+  wheels_dir:
+    description: 'Absolute path to the verified wheelhouse.'
+    value: ${{ steps.verify.outputs.wheels_dir }}
+  package_version:
+    description: 'The single version shared by every packaged distribution.'
+    value: ${{ steps.verify.outputs.package_version }}
+  source_sha:
+    description: 'NXD commit the wheels were built from.'
+    value: ${{ steps.verify.outputs.source_sha }}
+  semantic_tree_sha:
+    description: 'Semantic-layer tree identity, or empty on a pre-provenance artifact.'
+    value: ${{ steps.verify.outputs.semantic_tree_sha }}
+  rpc_tree_sha:
+    description: 'RPC/MCP-transport tree identity, or empty on a pre-provenance artifact.'
+    value: ${{ steps.verify.outputs.rpc_tree_sha }}
+  mcp_contract_sha256:
+    description: 'Digest of the shipped MCP contract, or empty on a pre-provenance artifact.'
+    value: ${{ steps.verify.outputs.mcp_contract_sha256 }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Require an NXD artifact token
+      if: inputs.token == ''
+      shell: bash
+      run: |
+        echo "${{ inputs.token_missing_message }}" >&2
+        exit 1
+
+    - name: Resolve NXD Python artifact
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
+        EXPECT_SOURCE_SHA: ${{ inputs.expect_source_sha }}
+        SELECTOR_LABEL: ${{ inputs.selector_label != '' && inputs.selector_label || inputs.artifact_prefix }}
+      run: |
+        set -euo pipefail
+        artifact_prefix="$ARTIFACT_PREFIX"
+        # The token needs contents:read and actions:read on nextdata-tech/nxd
+        # for this cross-repository lookup.
+        # The producer appends source and run identity after this prefix. When
+        # a caller pins a source commit, query that exact run identity so a
+        # valid artifact cannot fall out of a recent-run window. Callers that
+        # do not pin a source retain the bounded newest-main-run lookup.
+        if [ -n "$EXPECT_SOURCE_SHA" ]; then
+          runs_query="branch=main&head_sha=$EXPECT_SOURCE_SHA&per_page=20"
+        else
+          runs_query="branch=main&status=success&per_page=20"
+        fi
+        # Resolve through recent NXD main workflow runs instead of paginating
+        # the entire artifact catalog, which contains hundreds of thousands
+        # of historical artifacts.
+        if ! workflow_runs="$(gh api \
+          "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?$runs_query")"; then
+          echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
+          exit 1
+        fi
+        artifact=''
+        while IFS= read -r run_id; do
+          if [ -n "$EXPECT_SOURCE_SHA" ]; then
+            # The artifact-bundle job is the publication gate for this
+            # consumer. It completes before unrelated release jobs, so a
+            # pinned consumer must not wait for the entire NXD workflow run.
+            if ! run_jobs="$(gh api \
+              "repos/nextdata-tech/nxd/actions/runs/$run_id/jobs?per_page=100")"; then
+              echo "NXD_DISPATCH_PAT cannot read NXD workflow jobs; grant actions:read" >&2
+              exit 1
+            fi
+            publication_jobs="$(jq -r '[.jobs[]
+              | select(.name == "python-build / artifact-bundle")
+              | select(.status == "completed" and .conclusion == "success")]
+              | length' <<< "$run_jobs")"
+            if [ "$publication_jobs" -eq 0 ]; then
+              continue
+            fi
+          fi
+          if ! run_artifacts="$(gh api \
+            "repos/nextdata-tech/nxd/actions/runs/$run_id/artifacts?per_page=100")"; then
+            echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
+            exit 1
+          fi
+          artifact="$(jq -c --arg artifact_prefix "$artifact_prefix" '
+            [.artifacts[]
+              | select(.expired == false)
+              | select(.name | startswith($artifact_prefix))]
+            | sort_by(.created_at)
+            | .[-1] // empty
+          ' <<< "$run_artifacts")"
+          if [ -n "$artifact" ]; then
+            break
+          fi
+        done < <(jq -r '.workflow_runs[]
+          | select(.head_branch == "main")
+          | select((env.EXPECT_SOURCE_SHA == "") or .head_sha == env.EXPECT_SOURCE_SHA)
+          | select((env.EXPECT_SOURCE_SHA != "") or
+              (.status == "completed" and .conclusion == "success"))
+          | .id' <<< "$workflow_runs")
+        if [ -z "$artifact" ]; then
+          echo "No unexpired main-branch NXD artifact found for $SELECTOR_LABEL" >&2
+          exit 1
+        fi
+        run_id="$(jq -r '.workflow_run.id // empty' <<< "$artifact")"
+        resolved_name="$(jq -r '.name // empty' <<< "$artifact")"
+        if [ -z "$run_id" ] || [[ "$resolved_name" != "$artifact_prefix"* ]]; then
+          echo "The resolved NXD artifact has no valid workflow run or name" >&2
+          exit 1
+        fi
+        echo "artifact_name=$resolved_name" >> "$GITHUB_OUTPUT"
+        echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+        echo "Resolved $resolved_name from NXD workflow run $run_id"
+
+    - name: Download NXD Python artifact
+      uses: actions/download-artifact@v7
+      with:
+        github-token: ${{ inputs.token }}
+        repository: nextdata-tech/nxd
+        run-id: ${{ steps.resolve.outputs.run_id }}
+        name: ${{ steps.resolve.outputs.artifact_name }}
+        path: ${{ inputs.artifact_dir }}
+
+    - name: Verify NXD Python artifact
+      id: verify
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ inputs.artifact_dir }}
+        ARTIFACT_RUN_ID: ${{ steps.resolve.outputs.run_id }}
+        EXPECT_FIELD_MAPPER_TREE_SHA: ${{ inputs.expect_field_mapper_tree_sha }}
+        EXPECT_SEMANTIC_TREE_SHA: ${{ inputs.expect_semantic_tree_sha }}
+        EXPECT_RPC_TREE_SHA: ${{ inputs.expect_rpc_tree_sha }}
+        EXPECT_SOURCE_SHA: ${{ inputs.expect_source_sha }}
+        REQUIRE_MCP_PROVENANCE: ${{ inputs.require_mcp_provenance }}
+      run: |
+        set -euo pipefail
+        manifest="$ARTIFACT_DIR/manifest.json"
+        test -f "$manifest"
+        jq -e \
+          --arg artifact_run_id "$ARTIFACT_RUN_ID" \
+          '(.schema == "nxd-py-artifact-v1")
+           and (.repository == "nextdata-tech/nxd")
+           and (.source_sha // "" | test("^[0-9a-f]{40}$"))
+           and (.workflow_run_id == $artifact_run_id)
+           and (.platform == "linux-x86_64")
+           and (.python == "3.11")
+           and (.package_version != null)
+           and (.packages["nxd-core"] != null)
+           and (.packages["nxd-data_product"] != null)
+           and (.packages["nxd-drivers"] != null)
+           and (.wheels | length > 0)' "$manifest" >/dev/null
+
+        if [ -n "$EXPECT_FIELD_MAPPER_TREE_SHA" ]; then
+          actual="$(jq -r '.field_mapper_tree_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_FIELD_MAPPER_TREE_SHA" ]; then
+            echo "Resolved artifact has field_mapper_tree_sha=$actual, expected $EXPECT_FIELD_MAPPER_TREE_SHA" >&2
+            exit 1
+          fi
+        fi
+        if [ -n "$EXPECT_SEMANTIC_TREE_SHA" ]; then
+          actual="$(jq -r '.semantic_tree_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_SEMANTIC_TREE_SHA" ]; then
+            echo "Resolved artifact has semantic_tree_sha=$actual, expected $EXPECT_SEMANTIC_TREE_SHA" >&2
+            exit 1
+          fi
+        fi
+        if [ -n "$EXPECT_RPC_TREE_SHA" ]; then
+          actual="$(jq -r '.rpc_tree_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_RPC_TREE_SHA" ]; then
+            echo "Resolved artifact has rpc_tree_sha=$actual, expected $EXPECT_RPC_TREE_SHA" >&2
+            exit 1
+          fi
+        fi
+        if [ -n "$EXPECT_SOURCE_SHA" ]; then
+          actual="$(jq -r '.source_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_SOURCE_SHA" ]; then
+            echo "Resolved artifact was built from NXD $actual, but this job pins $EXPECT_SOURCE_SHA" >&2
+            exit 1
+          fi
+        fi
+        if [ "$REQUIRE_MCP_PROVENANCE" = "true" ]; then
+          # Fail closed. An artifact that predates the MCP provenance fields is
+          # a perfectly good field-mapper artifact and is NOT an acceptable
+          # stand-in here: accepting it would check the eval surface against a
+          # semantic layer whose identity this run cannot state.
+          if ! jq -e '(.semantic_tree_sha // "" | test("^[0-9a-f]{40}$"))
+                      and (.rpc_tree_sha // "" | test("^[0-9a-f]{40}$"))
+                      and (.mcp_contract_sha256 // "" | test("^[0-9a-f]{64}$"))' "$manifest" >/dev/null; then
+            echo "The resolved NXD artifact carries no MCP provenance (semantic_tree_sha / rpc_tree_sha / mcp_contract_sha256)." >&2
+            echo "It was published by an NXD revision that predates the semantic MCP contract." >&2
+            echo "Bump the pinned NXD source to a revision that publishes it; do not fall back to an older artifact." >&2
+            exit 1
+          fi
+        fi
+
+        while IFS=$'\t' read -r name expected_sha256; do
+          wheel="$ARTIFACT_DIR/wheels/$name"
+          test -f "$wheel"
+          actual_sha256="$(sha256sum "$wheel" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$expected_sha256" ]; then
+            echo "SHA-256 mismatch for $name" >&2
+            exit 1
+          fi
+        done < <(jq -r '.wheels[] | [.name, .sha256] | @tsv' "$manifest")
+
+        if [ "$REQUIRE_MCP_PROVENANCE" = "true" ]; then
+          contract_wheel_name="$(jq -r '[.wheels[] | select(.name | startswith("nxd_data_product-")) | .name] | if length == 1 then .[0] else empty end' "$manifest")"
+          if [ -z "$contract_wheel_name" ]; then
+            echo "The NXD artifact does not contain exactly one nxd_data_product wheel for MCP contract verification" >&2
+            exit 1
+          fi
+          contract_wheel="$ARTIFACT_DIR/wheels/$contract_wheel_name"
+          packaged_contract_sha256="$(unzip -p "$contract_wheel" nxd/experimental/semantic/mcp_contract.json | sha256sum | awk '{print $1}')"
+          manifest_contract_sha256="$(jq -r '.mcp_contract_sha256' "$manifest")"
+          if [ "$packaged_contract_sha256" != "$manifest_contract_sha256" ]; then
+            echo "The packaged MCP contract digest does not match the artifact manifest" >&2
+            exit 1
+          fi
+        fi
+
+        package_version="$(jq -r '.package_version' "$manifest")"
+        jq -e --arg package_version "$package_version" \
+          '(.packages | to_entries | all(.value == $package_version))' "$manifest" >/dev/null
+        echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+        echo "manifest_path=${{ github.workspace }}/$manifest" >> "$GITHUB_OUTPUT"
+        echo "wheels_dir=${{ github.workspace }}/$ARTIFACT_DIR/wheels" >> "$GITHUB_OUTPUT"
+        for field in source_sha semantic_tree_sha rpc_tree_sha mcp_contract_sha256; do
+          echo "$field=$(jq -r --arg field "$field" '.[$field] // ""' "$manifest")" >> "$GITHUB_OUTPUT"
+        done
+        cat "$manifest"
+
+    - name: Install NXD Python artifact
+      if: inputs.install_project_dir != ''
+      shell: bash
+      working-directory: ${{ inputs.install_project_dir }}
+      env:
+        PACKAGE_VERSION: ${{ steps.verify.outputs.package_version }}
+        WHEELS_DIR: ${{ steps.verify.outputs.wheels_dir }}
+      run: |
+        set -euo pipefail
+        uv sync --locked
+        uv pip install \
+          --python .venv/bin/python \
+          --no-index \
+          --find-links "$WHEELS_DIR" \
+          "nxd-core==$PACKAGE_VERSION" \
+          "nxd-data_product==$PACKAGE_VERSION" \
+          "nxd-drivers==$PACKAGE_VERSION"

@@ -10,21 +10,19 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-import json
 import os
 import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from dp_scenarios.nxdartifact import ARTIFACT_DISTRIBUTIONS as _ARTIFACT_DISTRIBUTIONS
+from dp_scenarios.nxdartifact import ArtifactManifestError
+from dp_scenarios.nxdartifact import read_artifact_manifest
+
 
 class FieldMapperUnavailable(RuntimeError):
     """The declared NXD field-mapper build is unavailable or incompatible."""
-
-
-_ARTIFACT_SCHEMA = "nxd-py-artifact-v1"
-_ARTIFACT_REPOSITORY = "nextdata-tech/nxd"
-_ARTIFACT_DISTRIBUTIONS = ("nxd-core", "nxd-data_product", "nxd-drivers")
 
 
 def _source_directories(repo_root: Path) -> tuple[Path, ...]:
@@ -82,35 +80,18 @@ def _validate_module_api(module: ModuleType) -> ModuleType:
 
 
 def _read_artifact_manifest(path: Path) -> dict[str, Any]:
-    try:
-        manifest_path = path.expanduser().resolve(strict=True)
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, RuntimeError, UnicodeError, json.JSONDecodeError) as exc:
-        raise FieldMapperUnavailable(f"EVAL_NXD_ARTIFACT_MANIFEST is unreadable: {path!s}") from exc
-    if not isinstance(data, dict):
-        raise FieldMapperUnavailable("EVAL_NXD_ARTIFACT_MANIFEST must contain a JSON object")
-    if data.get("schema") != _ARTIFACT_SCHEMA or data.get("repository") != _ARTIFACT_REPOSITORY:
-        raise FieldMapperUnavailable("EVAL_NXD_ARTIFACT_MANIFEST has an incompatible schema or repository")
-    if not isinstance(data.get("field_mapper_tree_sha"), str) or not data["field_mapper_tree_sha"]:
-        raise FieldMapperUnavailable("EVAL_NXD_ARTIFACT_MANIFEST has no field-mapper source identity")
+    """Validate the manifest through the shared reader, keeping this call site's
+    exception type. The messages are unchanged: the shared reader takes the
+    environment-variable name as its ``label`` and interpolates it verbatim.
 
-    package_version = data.get("package_version")
-    packages = data.get("packages")
-    if not isinstance(package_version, str) or not package_version:
-        raise FieldMapperUnavailable("EVAL_NXD_ARTIFACT_MANIFEST has no package version")
-    if not isinstance(packages, dict) or any(
-        packages.get(name) != package_version for name in _ARTIFACT_DISTRIBUTIONS
-    ):
-        raise FieldMapperUnavailable("EVAL_NXD_ARTIFACT_MANIFEST has inconsistent package versions")
-    wheels = data.get("wheels")
-    if not isinstance(wheels, list) or not wheels or any(
-        not isinstance(wheel, dict)
-        or not isinstance(wheel.get("name"), str)
-        or not isinstance(wheel.get("sha256"), str)
-        for wheel in wheels
-    ):
-        raise FieldMapperUnavailable("EVAL_NXD_ARTIFACT_MANIFEST has no valid wheel records")
-    return data
+    The field mapper does not need the MCP provenance fields, so they are not
+    required here — demanding them would fail this path against every artifact
+    NXD published before the semantic contract existed.
+    """
+    try:
+        return read_artifact_manifest(path, label="EVAL_NXD_ARTIFACT_MANIFEST")
+    except ArtifactManifestError as exc:
+        raise FieldMapperUnavailable(str(exc)) from exc
 
 
 def _load_artifact_field_mapper(manifest_path: Path) -> ModuleType:
