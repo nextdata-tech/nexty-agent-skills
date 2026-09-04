@@ -52,6 +52,17 @@ def test_appender_serializes_absent_rule_and_event_ids_as_null() -> None:
     assert payload["event_ids"] is None
 
 
+def test_appender_accepts_a_boolean_repeat_suppression_claim() -> None:
+    payload = row_payload(turn(claim={"operator_repeat_suppressed": True}))
+
+    assert payload["claim"] == {"operator_repeat_suppressed": True}
+
+
+def test_appender_rejects_a_non_boolean_repeat_suppression_claim() -> None:
+    with pytest.raises(AppenderError, match="operator_repeat_suppressed must be a boolean"):
+        row_payload(turn(claim={"operator_repeat_suppressed": "yes"}))
+
+
 def test_write_path_keeps_rule_and_event_ids_out_of_free_prose() -> None:
     rows: list[object] = []
     payload = append_turn_row(

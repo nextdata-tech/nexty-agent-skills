@@ -95,3 +95,21 @@ opening_forbidden_terms:
   - query
 open_decision_markers: ["[DECISION NEEDED]"]
 obstacle_terms: []
+driver_forbidden_terms:
+  - proxy
+  - approximation
+  - approximate
+  - label
+  - labeled
+  - labelled
+  - refuse
+  - refused
+  - history
+  - historical
+  - stage-entry
+  - stage entry
+  - movement
+  - owner
+  - contact
+  - contact details
+  - email

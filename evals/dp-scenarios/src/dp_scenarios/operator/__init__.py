@@ -35,6 +35,17 @@ from .engine import (
 )
 from .events import EventCard, EventInjection, EventSchedule, EventType, event_from_mapping, load_event_cards
 from .generated import GeneratedOperator, OperatorProvider, OperatorRender, OperatorView
+from .driver import (
+    DriverBeat,
+    DriverOperator,
+    DriverProvider,
+    DriverRender,
+    DriverViolation,
+    DriverView,
+    beat_violation,
+    leading_violation,
+    repeat_violation,
+)
 from .matcher import Category, MatchResult, MatcherBank, MatcherError
 from .persona import PersonaCard, PersonaError, load_persona, persona_from_mapping
 from .transport import (
@@ -62,6 +73,13 @@ __all__ = [
     "EventSchedule",
     "EventType",
     "GeneratedOperator",
+    "DriverBeat",
+    "DriverOperator",
+    "DriverProvider",
+    "DriverRender",
+    "DriverViolation",
+    "DriverView",
+    "beat_violation",
     "event_from_mapping",
     "Engine",
     "Outcome",
@@ -76,6 +94,7 @@ __all__ = [
     "OperatorRender",
     "OperatorScript",
     "OperatorView",
+    "leading_violation",
     "ScriptTurn",
     "PersonaCard",
     "PersonaError",
@@ -97,4 +116,5 @@ __all__ = [
     "load_event_cards",
     "load_persona",
     "operator_script_hash",
+    "repeat_violation",
 ]

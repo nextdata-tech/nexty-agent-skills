@@ -1572,6 +1572,8 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
 
     assert payload["operator_ground_truth_turn_count"] == 1
     assert payload["operator_unmatched_turn_count"] == 1
+    assert payload["operator_repeat_suppressed_count"] == 0
+    assert all(turn["operator_repeat_suppressed"] is False for turn in payload["turns"])
     assert payload["turns"][0]["operator_answered_from_ground_truth"] is True
     assert payload["turns"][0]["operator_matched"] is True
     assert payload["turns"][0]["operator_matched_rule_id"] == "ground_truth.value_col"
@@ -1579,6 +1581,124 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
     assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
     assert payload["turns"][1]["operator_matched_rule_id"] == "unmatched.source_question"
     assert payload["turns"][2]["operator_matched"] is True
+
+
+def test_operator_observations_do_not_count_a_withheld_fact_as_answered(tmp_path: Path) -> None:
+    """A suppressed re-serve sent nothing from the brief, so it must not be
+
+    counted as a turn the operator answered from the brief. Counting it would
+    make a run that stated one fact and then went quiet read identically to a
+    run that answered twice -- exactly the "5 of 7 turns answered from the
+    brief" reading the count exists to support.
+    """
+
+    opening = "Improve visibility."
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "obs-repeat",
+            "opening_message": opening,
+            "turns": [opening, "Please continue.", "Please continue again."],
+            "source_answers": {"source": "Use the source."},
+            "decision_answers": {},
+            "status_answers": {},
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+            "ground_truth": {
+                "value_col": {"terms": ["value", "column"], "fact": "It is the recognized dollar amount."},
+            },
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turns=sheet.turns,
+        turn_budget=3,
+        phase_by_turn={1: 1, 2: 2, 3: 3},
+    )
+    responses = [
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="Understood.", reported=True),
+    ]
+    transport = InMemoryTransport(responses)
+    result = OperatorEngine(script, transport).run()
+
+    tier_module._write_operator_observations(tmp_path, result)
+    payload = json.loads((tmp_path / "operator-observations.json").read_text())
+
+    assert transport.message_texts[1] == "It is the recognized dollar amount."
+    assert transport.message_texts[2] == "Please continue again."
+    assert payload["operator_repeat_suppressed_count"] == 1
+    assert payload["operator_ground_truth_turn_count"] == 1
+    assert payload["turns"][0]["operator_repeat_suppressed"] is False
+    assert payload["turns"][0]["operator_answered_from_ground_truth"] is True
+    assert payload["turns"][1]["operator_repeat_suppressed"] is True
+    assert payload["turns"][1]["operator_matched_rule_id"] == "ground_truth.value_col"
+    assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
+
+
+def test_a_repeated_answer_is_suppressed_end_to_end_through_the_replay_path(tmp_path: Path) -> None:
+    """The whole path, not the writer in isolation.
+
+    ``TierRunner.run()`` owns the artifact root the observations are written
+    under, so the flag is asserted where a grader would read it, alongside the
+    operator text a transcript reader would see.
+    """
+
+    scenario = make_scenario("repeat-replay", turns=3)
+    recording = recording_for(scenario, responses_for(scenario))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    run = result.scenario_runs[0]
+    payload = json.loads(
+        (Path(run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["operator_repeat_suppressed_count"] == 2
+    assert [turn["operator_repeat_suppressed"] for turn in payload["turns"]] == [False, True, True]
+    sent = [turn.operator_message.text for turn in run.replay_recording.turns]
+    assert sent == ["Improve visibility.", "Use the source.", "Please continue 2."]
+
+
+def test_a_repeated_answer_is_suppressed_end_to_end_on_the_live_path(tmp_path: Path) -> None:
+    """The same property on the ``session_factory=`` branch.
+
+    A fix verified only under ``replay_recordings=`` has already been bypassed
+    entirely on the live branch in this package, so both are driven.
+    """
+
+    scenario = make_scenario("repeat-live", turns=3)
+    responses = responses_for(scenario)
+    (tmp_path / "env").mkdir()
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(responses),
+        environment_root=tmp_path / "env",
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    run = result.scenario_runs[0]
+    payload = json.loads(
+        (Path(run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["operator_repeat_suppressed_count"] == 2
+    assert [turn["operator_repeat_suppressed"] for turn in payload["turns"]] == [False, True, True]
+    sent = [turn.operator_message.text for turn in run.replay_recording.turns]
+    assert sent == ["Improve visibility.", "Use the source.", "Please continue 2."]
 
 
 def test_a_shipped_brief_actually_fires_in_a_scenario_level_run(tmp_path: Path) -> None:

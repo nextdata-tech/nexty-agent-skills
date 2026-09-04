@@ -537,6 +537,160 @@ def test_ledger_rows_record_unmatched_and_ground_truth_answered_turns() -> None:
     assert "operator_answered_from_ground_truth" not in (matched_row["claim"] or {})
 
 
+def test_a_selected_reply_that_was_never_transmitted_is_not_remembered_as_served() -> None:
+    """Served-fact memory is keyed to transmission, not to selection.
+
+    Turn 2 here is ``substitute_reply: false``, so the answer chosen on turn 1
+    is discarded rather than sent -- the agent has still never been told it.
+    Remembering it at selection time would make the operator withhold, on turn
+    3, a fact it has never once stated, which is the opposite of the defect
+    this memory exists to fix.
+    """
+
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            {"text": "Show me the weekly numbers.", "substitute_reply": False},
+            "Please continue again.",
+        )
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts == (
+        "Improve weekly visibility.",
+        "Show me the weekly numbers.",
+        "The approved source is the business record.",
+    )
+    assert [turn.operator_repeat_suppressed for turn in result.turns] == [False, False, False]
+
+
+def test_repeated_source_answer_selection_is_suppressed() -> None:
+    script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts == (
+        "Improve weekly visibility.",
+        "The approved source is the business record.",
+        "Please continue again.",
+    )
+    assert result.turns[1].operator_repeat_suppressed is True
+    assert result.ledger_rows[1]["claim"] == {"operator_repeat_suppressed": True}
+    assert "operator_answered_from_ground_truth" not in result.ledger_rows[1]["claim"]
+
+
+def test_fresh_session_clears_served_source_answers_before_a_later_transmission() -> None:
+    event = event_from_mapping(
+        {
+            "version": 1,
+            "id": "amnesia",
+            "trigger_turn": 3,
+            "type": "back_after_lunch",
+            "content": "Where were we?",
+            "outcome": "fresh_session_requested",
+            "gap_seconds": 1,
+        }
+    )
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            "Please continue.",
+            "Please continue again.",
+            "Where are we?",
+        ),
+        events=EventSchedule((event,)),
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the status?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    # The agent lost its session on turn 3, so the fact is legitimately needed
+    # again and no turn is suppressed.
+    assert transport.message_texts.count("The approved source is the business record.") == 2
+    assert transport.message_texts[3] == "The approved source is the business record."
+    assert len(transport.started_fresh) == 2
+    assert [turn.operator_repeat_suppressed for turn in result.turns] == [False, False, False, False]
+
+
+def test_served_fact_memory_survives_an_operator_that_paraphrases_the_reply() -> None:
+    """The memory is keyed to the selected sheet key, not to the text sent.
+
+    A generated operator rewrites the selected reply, so no fact text survives
+    as a substring of what goes out. Filling the memory by scanning the
+    transmitted message would therefore leave it permanently empty and the
+    suppression inert on exactly the path Part 2 introduces.
+    """
+
+    script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(
+        script,
+        transport,
+        generated_operator=GeneratedOperator(lambda _view: "Noted, that is where it lives."),
+    ).run()
+
+    assert "The approved source is the business record." not in transport.message_texts[1]
+    assert transport.message_texts == (
+        "Improve weekly visibility.",
+        "Noted, that is where it lives.",
+        "Please continue again.",
+    )
+    assert result.turns[1].operator_repeat_suppressed is True
+
+
+def test_a_repeated_persona_reply_is_never_suppressed() -> None:
+    """Only answer-sheet facts are suppressible.
+
+    Repeating "go ahead" is in character for an operator; withholding it would
+    silence the persona rather than stop a fact being re-served.
+    """
+
+    script = make_script(turns=("Improve weekly visibility.", "Please continue.", "Please continue again."))
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Please approve the blueprint."),
+            TurnResult(agent_message="Please approve the blueprint."),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert result.turns[0].match.rule_id == "persona.approval_request"
+    assert result.turns[1].match.rule_id == "persona.approval_request"
+    assert transport.message_texts[1] == transport.message_texts[2]
+    assert [turn.operator_repeat_suppressed for turn in result.turns] == [False, False, False]
+
+
 def test_intake_failure_is_recorded_when_opening_turn_is_not_source_question() -> None:
     script = make_script(turns=("Improve weekly visibility.",))
     result = OperatorEngine(

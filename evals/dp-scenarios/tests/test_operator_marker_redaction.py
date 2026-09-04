@@ -72,10 +72,15 @@ def test_a_marker_quoted_in_an_earlier_operator_message_is_redacted_too() -> Non
         # standing in for any operator turn that quotes what the agent said.
         return f"Understood, about {MARKER.decode()}."
 
+    # The two questions are deliberately different. Asking the same one twice
+    # now selects an already-served answer, which the engine suppresses -- the
+    # operator falls back to its scripted turn and the provider is never
+    # consulted a second time, which is a served-fact-memory property, not the
+    # redaction property under test here.
     transport = InMemoryTransport(
         [
             TurnResult(agent_message="Which source is authoritative?"),
-            TurnResult(agent_message="Which source is authoritative?"),
+            TurnResult(agent_message="What is the status?"),
             TurnResult(agent_message="Done."),
         ]
     )

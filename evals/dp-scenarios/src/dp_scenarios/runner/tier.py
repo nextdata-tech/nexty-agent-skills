@@ -620,12 +620,15 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
     tool_call_count = 0
     unmatched_turn_count = 0
     ground_truth_turn_count = 0
+    repeat_suppressed_turn_count = 0
     for turn in run_result.turns:
         tool_call_count += len(turn.tool_calls)
         if not turn.match.matched:
             unmatched_turn_count += 1
-        if turn.match.ground_truth:
+        if turn.match.ground_truth and not turn.operator_repeat_suppressed:
             ground_truth_turn_count += 1
+        if turn.operator_repeat_suppressed:
+            repeat_suppressed_turn_count += 1
         turns.append(
             {
                 "turn": turn.turn,
@@ -649,7 +652,8 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 # ground-truth brief, not just read byte-identical replies.
                 "operator_matched_rule_id": turn.match.rule_id,
                 "operator_matched": turn.match.matched,
-                "operator_answered_from_ground_truth": turn.match.ground_truth,
+                "operator_answered_from_ground_truth": turn.match.ground_truth and not turn.operator_repeat_suppressed,
+                "operator_repeat_suppressed": turn.operator_repeat_suppressed,
             }
         )
     _write_json(
@@ -663,6 +667,7 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
             "tool_call_count": tool_call_count,
             "operator_unmatched_turn_count": unmatched_turn_count,
             "operator_ground_truth_turn_count": ground_truth_turn_count,
+            "operator_repeat_suppressed_count": repeat_suppressed_turn_count,
             "turns": turns,
         },
     )

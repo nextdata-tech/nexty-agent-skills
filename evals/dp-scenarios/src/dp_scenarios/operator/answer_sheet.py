@@ -41,7 +41,7 @@ ANSWER_SHEET_KEYS = frozenset(
 # brief and must keep validating and matching exactly as before.  Only a
 # package that declares one opts into brief-backed answers for otherwise
 # unmatched questions (see MatcherBank._unmatched).
-OPTIONAL_ANSWER_SHEET_KEYS = frozenset({"ground_truth"})
+OPTIONAL_ANSWER_SHEET_KEYS = frozenset({"driver_forbidden_terms", "ground_truth"})
 
 
 def _mapping(value: object, location: str) -> dict[str, Any]:
@@ -190,6 +190,8 @@ class AnswerSheet:
     opening_forbidden_terms: tuple[str, ...]
     open_decision_markers: tuple[str, ...]
     obstacle_terms: tuple[str, ...]
+    driver_forbidden_terms: tuple[str, ...] = ()
+    """Separate graded-property vocabulary a driver must never volunteer; absent means undrivable."""
     ground_truth: Mapping[str, GroundTruthFact] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
@@ -271,7 +273,7 @@ class AnswerSheet:
     def to_mapping(self) -> dict[str, object]:
         """Return a canonical, JSON-ready representation for script hashing."""
 
-        return {
+        mapping: dict[str, object] = {
             "version": self.version,
             "scenario_id": self.scenario_id,
             "opening_message": self.opening_message,
@@ -286,6 +288,12 @@ class AnswerSheet:
             "obstacle_terms": list(self.obstacle_terms),
             "ground_truth": {key: value.to_mapping() for key, value in self.ground_truth.items()},
         }
+        # Keep legacy sheets round-trippable: an absent optional field is
+        # represented by its absence, while every driven sheet carries the
+        # non-empty vocabulary into the script hash.
+        if self.driver_forbidden_terms:
+            mapping["driver_forbidden_terms"] = list(self.driver_forbidden_terms)
+        return mapping
 
 
 def _answer_mapping(value: object, location: str) -> dict[str, str]:
@@ -363,6 +371,11 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
     # even an empty mapping is validated the same strict way as every other
     # section, so a malformed brief is always a load error, never a silent skip.
     ground_truth = _ground_truth_mapping(raw["ground_truth"]) if "ground_truth" in raw else {}
+    driver_forbidden_terms = (
+        _strings(raw["driver_forbidden_terms"], "answer_sheet.driver_forbidden_terms")
+        if "driver_forbidden_terms" in raw
+        else ()
+    )
     return AnswerSheet(
         version=version,
         scenario_id=_string(raw["scenario_id"], "answer_sheet.scenario_id"),
@@ -374,6 +387,7 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         opening_forbidden_terms=forbidden,
         open_decision_markers=_strings(raw["open_decision_markers"], "answer_sheet.open_decision_markers"),
         obstacle_terms=_strings(raw["obstacle_terms"], "answer_sheet.obstacle_terms", allow_empty=True),
+        driver_forbidden_terms=driver_forbidden_terms,
         ground_truth=MappingProxyType(ground_truth),
     )
 

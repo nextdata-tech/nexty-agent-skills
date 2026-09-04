@@ -103,6 +103,7 @@ _NON_FACT_CLAIM_KEYS = frozenset(
         "session_gap_seconds",
         "operator_unmatched",
         "operator_answered_from_ground_truth",
+        "operator_repeat_suppressed",
     }
 )
 
@@ -148,6 +149,8 @@ def _validate_non_fact_claim(value: object) -> None:
         value["operator_answered_from_ground_truth"], bool
     ):
         raise AppenderError("operator_answered_from_ground_truth must be a boolean")
+    if "operator_repeat_suppressed" in value and not isinstance(value["operator_repeat_suppressed"], bool):
+        raise AppenderError("operator_repeat_suppressed must be a boolean")
     if "outcome" in value and not isinstance(value["outcome"], str):
         raise AppenderError("outcome must be a string")
     if "event_outcomes" in value:

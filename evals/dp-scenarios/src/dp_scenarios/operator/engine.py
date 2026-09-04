@@ -328,6 +328,7 @@ class TurnRecord:
     build_failure_count: int
     reported: bool
     intake_failure: bool
+    operator_repeat_suppressed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,6 +478,30 @@ def _injection_delivered(
         names = {item.name for item in message.attachments}
         return all(item.name in names for item in injection.attachments)
     return scripted_text in text
+
+
+_SUPPRESSIBLE_RULE_PREFIXES = (
+    "ground_truth.",
+    "source.answer.",
+    "decision.answer.",
+    "status.answer.",
+)
+
+
+def _served_reply_key(rule_id: str) -> str | None:
+    """Return the answer-sheet key of a match that states a declared fact.
+
+    Only answer-sheet lookups are suppressible. A persona reply
+    (``persona.approval_request``) or a fallback (``fallback.no-leading``) is
+    not a fact: repeating "go ahead" or the no-leading deflection is in
+    character, while repeating the same declared fact verbatim is the defect
+    this key exists to catch. Memory is keyed to the *selected* sheet key, not
+    to the text that went out, because a generated operator paraphrases the
+    reply -- no fact text survives as a substring, so a text scan would leave
+    the memory permanently empty and the suppression inert.
+    """
+
+    return rule_id if rule_id.startswith(_SUPPRESSIBLE_RULE_PREFIXES) else None
 
 
 def _operator_context(value: str | bytes, sentinels: Sequence[bytes]) -> str:
@@ -775,6 +800,8 @@ class OperatorEngine:
         sentinel_tripped = False
         environment_wedged = False
         next_reply: str | None = None
+        pending_sheet_key: str | None = None
+        served_reply_keys: set[str] = set()
         previous_agent_message = ""
         prior_operator_messages: list[str] = []
 
@@ -793,11 +820,20 @@ class OperatorEngine:
             )
             if any(injection.fresh_session for injection in injections):
                 self.transport.start_fresh_session()
+                served_reply_keys.clear()
             base = (
                 scripted_turn.text
                 if index == 1 or not scripted_turn.substitute_reply
                 else (next_reply or scripted_turn.text)
             )
+            # A fact counts as served when it is actually transmitted, not
+            # when it is selected. A reply selected on the turn before a
+            # ``substitute_reply: false`` ask is never sent, so marking it at
+            # selection would suppress the answer the agent has still never
+            # been given. Marking here also covers the generated path below,
+            # which rewrites ``base`` from this same selection.
+            if base is next_reply and pending_sheet_key is not None:
+                served_reply_keys.add(pending_sheet_key)
             if index > 1 and scripted_turn.substitute_reply and next_reply and self.generated_operator is not None:
                 # Redaction covers strictly more than the trip scan: every
                 # declared sentinel *and* every planted fixture marker.  A
@@ -902,7 +938,19 @@ class OperatorEngine:
             # the brief" from "0 of 7", not just read a byte-identical reply.
             if not match.matched:
                 claim["operator_unmatched"] = True
-            if match.ground_truth:
+            # Serving the same declared fact twice is what a live run actually
+            # did: three identical ground-truth lines in a row, which the agent
+            # called out. Suppress the re-serve and let the scripted turn carry
+            # the conversation instead. The claim records that the fact was
+            # withheld; ``operator_answered_from_ground_truth`` is deliberately
+            # NOT recorded, because nothing from the brief went out this turn
+            # (see qualification._ungraded_reasons for the precedent: a claim
+            # the code never checked must not stand).
+            sheet_key = _served_reply_key(match.rule_id)
+            repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
+            if repeat_suppressed:
+                claim["operator_repeat_suppressed"] = True
+            if match.ground_truth and not repeat_suppressed:
                 claim["operator_answered_from_ground_truth"] = True
             turn_record = TurnRecord(
                 turn=index,
@@ -921,6 +969,7 @@ class OperatorEngine:
                 build_failure_count=failure_count,
                 reported=reported,
                 intake_failure=intake_failure,
+                operator_repeat_suppressed=repeat_suppressed,
             )
             records.append(turn_record)
             self._append_row(
@@ -934,7 +983,12 @@ class OperatorEngine:
                 operator_approval=scripted_turn.approval,
                 operator_approval_text=message.text if scripted_turn.approval else None,
             )
-            next_reply = match.reply
+            if repeat_suppressed:
+                next_reply = None
+                pending_sheet_key = None
+            else:
+                next_reply = match.reply
+                pending_sheet_key = sheet_key
             previous_agent_message = result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message
             if sentinel_tripped or environment_wedged:
                 break
