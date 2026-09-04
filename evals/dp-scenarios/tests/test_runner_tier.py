@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 from typing import Mapping
@@ -42,7 +42,7 @@ from dp_scenarios.runner.qualification import QualificationDisposition, qualify_
 from dp_scenarios.runner.session import LiveSession, SessionError
 from dp_scenarios.runner.report import machine_report
 from dp_scenarios.runner.tier import run_drift_canary
-from dp_scenarios.scenario import FixtureSpec, load_scenario
+from dp_scenarios.scenario import FixtureSpec, GateSpec, load_scenario
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.ledger.lint import LintReport
 
@@ -60,6 +60,9 @@ class FakeScenario:
     epochs: int
     repeatability_tier: RepeatabilityTier
     package_dir: Path = ROOT
+    # Real scenarios declare a gate per phase; a double declares only the
+    # gates a test needs, which is what ``declared_sentinels`` reads.
+    gates: Mapping[str, GateSpec] = field(default_factory=dict)
 
     @property
     def seed(self) -> int:

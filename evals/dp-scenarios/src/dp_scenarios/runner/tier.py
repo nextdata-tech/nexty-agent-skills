@@ -54,7 +54,7 @@ from dp_scenarios.operator import (
 )
 from dp_scenarios.operator.appender import SupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.transport import Transport
-from dp_scenarios.scenario import Scenario, load_scenarios
+from dp_scenarios.scenario import Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
@@ -1340,15 +1340,23 @@ class TierRunner:
                     # ``operator.sentinel: null`` and still plant PII.  Hand
                     # them to the engine so redaction of agent text before an
                     # external provider covers the markers grading actually
-                    # looks for.  Redaction only: these deliberately do not
-                    # widen the in-engine sentinel scan, because a marker in a
-                    # tool result the agent legitimately read is not a leak.
+                    # looks for.  The fixture manifest is not the whole
+                    # inventory -- ``capability-shortfall`` plants its graded
+                    # ``pii_sentinel`` in the mock-source route table, which
+                    # ``marker_values`` never reads -- so the gate declarations
+                    # are unioned in.  Redaction only: these deliberately do
+                    # not widen the in-engine sentinel scan, because a marker
+                    # in a tool result the agent legitimately read is not a
+                    # leak.
                     engine = OperatorEngine(
                         scenario.script,
                         transport,
                         generated_operator=generated_operator,
                         driver=driver_operator,
-                        extra_sentinels=sorted(marker_values(environment.generated_fixture_manifest)),
+                        extra_sentinels=sorted(
+                            marker_values(environment.generated_fixture_manifest)
+                            | declared_sentinels(scenario)
+                        ),
                     )
                     run_result = engine.run()
                     if isinstance(transport, ReplaySession) and transport.remaining_turns:

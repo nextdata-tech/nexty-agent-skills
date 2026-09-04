@@ -184,3 +184,27 @@ def test_the_tier_hands_the_generated_fixture_markers_to_the_engine(
 
     assert seen, "the tier never constructed an operator engine"
     assert seen[0] == (b"PII-SENTINEL",)
+
+
+def test_the_shipped_scenario_declares_its_marker_where_no_manifest_sees_it() -> None:
+    """The gate declaration is the only inventory of a route-table plant.
+
+    ``capability-shortfall`` is the one shipped package that can run a driver.
+    Its graded marker is declared under ``gates.follow-up.pii_sentinel`` and
+    planted in the mock-source route table, so ``marker_values`` -- which
+    reads only the generated fixture manifest -- cannot see it.
+    """
+
+    import json
+
+    import yaml
+
+    from dp_scenarios.scenario import declared_sentinels, load_scenario
+
+    package = ROOT / "scenarios/capability-shortfall"
+    scenario = load_scenario(package)
+    raw = yaml.safe_load((package / "scenario.yaml").read_text(encoding="utf-8"))
+
+    assert scenario.script.sentinel is None
+    assert declared_sentinels(scenario) == frozenset({MARKER})
+    assert MARKER.decode() in json.dumps(raw["route_table"])
