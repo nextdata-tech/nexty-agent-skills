@@ -1,0 +1,33 @@
+name: 'Slack Notification'
+description: 'Notify the build-notifications channel when a scheduled job fails'
+inputs:
+  slack_webhook:
+    description: "Slack webhook to pass to rtCamp/action-slack-notify"
+    required: true
+  label:
+    description: >-
+      Short label naming what failed, e.g. 'nightly MCP canary'. Falls back to
+      the job id, then to nothing.
+    required: false
+    default: ''
+  detail:
+    description: >-
+      Extra context appended on its own line — the pairing under test and the
+      first failing check. A notification a reader has to open the run to act on
+      is one they will not act on, so include what identifies BOTH sides
+      (this repository's SHA and the NXD trees) and what actually failed.
+    required: false
+    default: ''
+runs:
+  using: "composite"
+  steps:
+    - uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ inputs.slack_webhook }}
+        # The " in *<label>*" clause is built inside the expression rather than
+        # around it, so an empty label drops the clause instead of rendering an
+        # empty `**`. github.job is documented as populated only within a job's
+        # execution steps, so treat it as possibly absent.
+        SLACK_MESSAGE: ":exclamation: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}> failed${{ (inputs.label != '' && format(' in *{0}*', inputs.label)) || (github.job != '' && format(' in *{0}*', github.job)) || '' }} on `${{ github.ref_name }}`.${{ inputs.detail != '' && format('%0A{0}', inputs.detail) || '' }}"
+        SLACK_COLOR: '#880808'
+        MSG_MINIMAL: true

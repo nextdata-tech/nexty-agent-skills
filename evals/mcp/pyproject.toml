@@ -10,13 +10,14 @@ requires-python = ">=3.11"
 # so the harness itself never imports any of this.
 dependencies = [
     "mcp>=1.2.0",
+    "typing-extensions>=4.7",
     "snowflake-connector-python>=3.12",
     "cryptography>=42",
 ]
 
 # NOTE on the nxd dependency:
 # run_semantic_query imports the GENUINE compiler from nxd.experimental.semantic
-# (the nxd_data_product wheel, NEX-620/621) — NOT a re-implementation. That wheel
+# (the nxd_data_product wheel) — NOT a re-implementation. That wheel
 # is built from the nxd monorepo and is NOT on a public index (a PyPI package
 # named "nxd-data-product" is an unrelated stub — do not depend on it). So it is
 # intentionally absent from `dependencies` above. Before running MCP scenarios,
@@ -30,6 +31,20 @@ dependencies = [
 # Or point run.py at an existing interpreter that already has the matched set via
 # EVAL_MCP_PYTHON (see evals/mcp/README.md). A stale nxd_core against a newer
 # nxd_data_product fails at runtime — the set must share one version.
+
+[dependency-groups]
+# The contract checker is stdlib-only on purpose, so its tests need nothing but
+# pytest. They must stay runnable in the static-checks job, which installs no
+# NXD wheels — a checker whose own tests needed the artifact could only be
+# exercised in the job it is supposed to guard.
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# contract_check.py / contract_surface.py / nightly_canary.py sit at the project
+# root next to semantic_server.py rather than in a package: run.py launches the
+# server by path, and moving it now would break that contract.
+pythonpath = ["."]
 
 [tool.uv]
 package = false

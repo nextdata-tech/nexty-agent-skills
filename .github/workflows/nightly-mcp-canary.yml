@@ -1,0 +1,110 @@
+name: nightly-mcp-canary
+
+# LOOK-AHEAD CANARY. This is not shipped-pair proof.
+#
+# It pairs NXD's newest published main artifact with THIS repository's current
+# revision — a combination nobody has released. A red run means "the next NXD
+# bump will break the evals", which is exactly the notice worth having a day
+# early. The pairing that actually ships is validated by the `semantic MCP
+# contract` job in ci.yml, which pins an NXD revision and checks the artifact
+# NXD published for it.
+#
+# Direction of the dependency, stated once: this workflow CONSUMES a finished
+# NXD artifact. It does not dispatch, trigger, or wait on an NXD build, and NXD
+# never waits on this. The existing Nexty-release-to-NXD-submodule-bump flow is
+# maintenance synchronisation and is deliberately not a prerequisite here.
+#
+# Deterministic lane only: no model calls, no Snowflake. Everything it checks is
+# reproducible from the artifact and the fixtures.
+
+on:
+  schedule:
+    # 05:20 UTC — after NXD's own main pipeline has had the night to publish.
+    - cron: '20 5 * * *'
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Keep the server log verbose'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-mcp-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: semantic MCP canary (NXD main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      NXD_REPO_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v5
+
+      # No NXD source checkout and no tree-sha expectations: the point of this
+      # lane is to take whatever main most recently published. The provenance
+      # is then READ from the manifest and reported, rather than asserted.
+      # `require_mcp_provenance` is what keeps that honest — an artifact with no
+      # semantic identity fails the job instead of being canaried blind.
+      - name: Consume the newest published NXD main artifact
+        id: nxd-artifact
+        uses: ./.github/actions/nxd-artifact
+        with:
+          token: ${{ env.NXD_REPO_TOKEN }}
+          token_missing_message: 'NXD_DISPATCH_PAT is unavailable; the nightly MCP canary cannot resolve an NXD artifact.'
+          artifact_prefix: nxd-py-linux-x86_64-
+          selector_label: 'the newest NXD main build'
+          require_mcp_provenance: 'true'
+          install_project_dir: evals/mcp
+
+      - name: Run the MCP transport and behaviour canary
+        id: canary
+        working-directory: evals/mcp
+        env:
+          MANIFEST: ${{ steps.nxd-artifact.outputs.manifest_path }}
+        run: uv run --locked --no-sync python nightly_canary.py --manifest "$MANIFEST"
+
+      - name: Summarise the canaried pairing
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### nightly MCP canary (look-ahead, not shipped-pair proof)"
+            echo "- **outcome**: ${{ steps.canary.outcome || 'not reached' }}"
+            echo "- **nexty sha**: \`$GITHUB_SHA\`"
+            echo "- **nxd source**: \`${{ steps.nxd-artifact.outputs.source_sha }}\`"
+            echo "- **nxd semantic tree**: \`${{ steps.nxd-artifact.outputs.semantic_tree_sha }}\`"
+            echo "- **nxd rpc tree**: \`${{ steps.nxd-artifact.outputs.rpc_tree_sha }}\`"
+            echo "- **mcp contract sha256**: \`${{ steps.nxd-artifact.outputs.mcp_contract_sha256 }}\`"
+            echo "- **artifact**: \`${{ steps.nxd-artifact.outputs.artifact_name }}\` (run ${{ steps.nxd-artifact.outputs.run_id }})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Fails closed on every path above — a missing token, an unresolvable or
+      # provenance-less artifact, a wheel-digest mismatch, a server that will
+      # not start, a contract difference, or a behaviour check — because each of
+      # those exits non-zero rather than degrading.
+      - name: Slack Notification
+        if: failure()
+        uses: ./.github/actions/slack
+        with:
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          label: 'nightly MCP canary'
+          detail: >-
+            nexty `${{ github.sha }}` vs nxd `${{ steps.nxd-artifact.outputs.source_sha || 'unresolved' }}`
+            (semantic tree `${{ steps.nxd-artifact.outputs.semantic_tree_sha || 'unresolved' }}`,
+            rpc tree `${{ steps.nxd-artifact.outputs.rpc_tree_sha || 'unresolved' }}`,
+            artifact `${{ steps.nxd-artifact.outputs.artifact_name || 'unresolved' }}`).
+            Canary step outcome: `${{ steps.canary.outcome || 'not reached' }}`.
+            Look-ahead only — the shipped pairing is gated by the `semantic MCP contract` CI job.

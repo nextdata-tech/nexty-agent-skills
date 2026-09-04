@@ -8,6 +8,21 @@ on:
 permissions:
   contents: read
 
+env:
+  # The single NXD revision this repository pins. Two jobs consume artifacts
+  # published for it — the field-mapper integration and the semantic MCP
+  # contract check — and they must name the SAME revision or "the pair we ship"
+  # stops being one pair. Kept here rather than repeated per job so a bump is
+  # one edit that cannot half-land.
+  #
+  # BUMPING: the semantic MCP contract check requires the artifact to carry MCP
+  # provenance (semantic_tree_sha / rpc_tree_sha / mcp_contract_sha256). Point
+  # this at an NXD commit on main whose python-build run has published such an
+  # artifact; a revision that predates the provenance fails the job closed
+  # rather than being accepted, which is deliberate — see
+  # .github/actions/nxd-artifact and evals/mcp/README.md.
+  NXD_PINNED_SHA: bb5fa1e3ab4ca381edc8e309449e77639e9ff8af
+
 jobs:
   static-checks:
     runs-on: ubuntu-latest
@@ -62,6 +77,15 @@ jobs:
         working-directory: evals/dp-scenarios
         run: uv run --locked pytest -q -m "not integration and not field_mapper"
 
+      # The semantic MCP contract checker. Stdlib-only by design, so its tests
+      # run here with no NXD wheels installed — a checker whose own tests needed
+      # the artifact could only be exercised inside the job it exists to guard,
+      # and a break in it would surface as that job's failure rather than its
+      # own. The wheel-backed half runs in the semantic-contract job below.
+      - name: semantic MCP contract checker tests
+        working-directory: evals/mcp
+        run: uv run --locked pytest -q
+
       # Benchmark evidence is source-controlled like the skills: validate the
       # stdlib recorder directly and fail if an entry or generated index drifts.
       - name: Benchmark evidence index
@@ -112,7 +136,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: nextdata-tech/nxd
-          ref: bb5fa1e3ab4ca381edc8e309449e77639e9ff8af
+          ref: ${{ env.NXD_PINNED_SHA }}
           path: nxd
           token: ${{ env.NXD_REPO_TOKEN }}
           fetch-depth: 1
@@ -126,137 +150,110 @@ jobs:
         working-directory: nxd
         run: |
           source_sha="$(git rev-parse HEAD)"
-          test "$source_sha" = "bb5fa1e3ab4ca381edc8e309449e77639e9ff8af"
+          test "$source_sha" = "$NXD_PINNED_SHA"
           echo "$source_sha"
           field_mapper_tree_sha="$(git rev-parse HEAD:components/nxd_py/data_product/nxd/experimental/field_mapper)"
           echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
-      - name: Resolve NXD Python artifact
-        if: env.NXD_REPO_TOKEN != ''
+      # Resolve / download / verify / install now live in a shared composite
+      # action so the semantic-contract job and the nightly canary consume NXD
+      # artifacts through exactly the same code. The behaviour and the failure
+      # messages are unchanged: the token check that used to be the trailing
+      # step is the action's first step, so an absent secret still fails the job
+      # with the same sentence instead of skipping.
+      - name: Consume the published NXD artifact
         id: nxd-artifact
-        env:
-          GH_TOKEN: ${{ env.NXD_REPO_TOKEN }}
-          FIELD_MAPPER_TREE_SHA: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
-        run: |
-          set -euo pipefail
-          artifact_prefix="nxd-py-linux-x86_64-$FIELD_MAPPER_TREE_SHA-"
-          # NXD_DISPATCH_PAT needs contents:read and actions:read on
-          # nextdata-tech/nxd for this cross-repository lookup.
-          # The producer appends source and run identity after this prefix, so
-          # resolve the newest unexpired main artifact without relying on a
-          # name that can collide across source commits.
-          # Resolve through recent NXD main workflow runs instead of paginating
-          # the entire artifact catalog, which contains hundreds of thousands
-          # of historical artifacts.
-          if ! workflow_runs="$(gh api \
-            "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?branch=main&per_page=20")"; then
-            echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
-            exit 1
-          fi
-          artifact=''
-          while IFS= read -r run_id; do
-            if ! run_artifacts="$(gh api \
-              "repos/nextdata-tech/nxd/actions/runs/$run_id/artifacts?per_page=100")"; then
-              echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
-              exit 1
-            fi
-            artifact="$(jq -c --arg artifact_prefix "$artifact_prefix" '
-              [.artifacts[]
-                | select(.expired == false)
-                | select(.name | startswith($artifact_prefix))]
-              | sort_by(.created_at)
-              | .[-1] // empty
-            ' <<< "$run_artifacts")"
-            if [ -n "$artifact" ]; then
-              break
-            fi
-          done < <(jq -r '.workflow_runs[] | select(.head_branch == "main") | .id' <<< "$workflow_runs")
-          if [ -z "$artifact" ]; then
-            echo "No unexpired main-branch NXD artifact found for $FIELD_MAPPER_TREE_SHA" >&2
-            exit 1
-          fi
-          run_id="$(jq -r '.workflow_run.id // empty' <<< "$artifact")"
-          resolved_name="$(jq -r '.name // empty' <<< "$artifact")"
-          if [ -z "$run_id" ] || [[ "$resolved_name" != "$artifact_prefix"* ]]; then
-            echo "The resolved NXD artifact has no valid workflow run or name" >&2
-            exit 1
-          fi
-          echo "artifact_name=$resolved_name" >> "$GITHUB_OUTPUT"
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Resolved $resolved_name from NXD workflow run $run_id"
-      - name: Download NXD Python artifact
-        if: env.NXD_REPO_TOKEN != ''
-        uses: actions/download-artifact@v7
+        uses: ./.github/actions/nxd-artifact
         with:
-          github-token: ${{ env.NXD_REPO_TOKEN }}
-          repository: nextdata-tech/nxd
-          run-id: ${{ steps.nxd-artifact.outputs.run_id }}
-          name: ${{ steps.nxd-artifact.outputs.artifact_name }}
-          path: nxd-artifact
-      - name: Verify NXD Python artifact
-        if: env.NXD_REPO_TOKEN != ''
-        id: artifact-manifest
-        env:
-          FIELD_MAPPER_TREE_SHA: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
-          ARTIFACT_RUN_ID: ${{ steps.nxd-artifact.outputs.run_id }}
-        run: |
-          set -euo pipefail
-          manifest="nxd-artifact/manifest.json"
-          test -f "$manifest"
-          jq -e \
-            --arg field_mapper_tree_sha "$FIELD_MAPPER_TREE_SHA" \
-            --arg artifact_run_id "$ARTIFACT_RUN_ID" \
-            '(.schema == "nxd-py-artifact-v1")
-             and (.repository == "nextdata-tech/nxd")
-             and (.source_sha // "" | test("^[0-9a-f]{40}$"))
-             and (.workflow_run_id == $artifact_run_id)
-             and (.field_mapper_tree_sha == $field_mapper_tree_sha)
-             and (.platform == "linux-x86_64")
-             and (.python == "3.11")
-             and (.package_version != null)
-             and (.packages["nxd-core"] != null)
-             and (.packages["nxd-data_product"] != null)
-             and (.packages["nxd-drivers"] != null)
-             and (.wheels | length > 0)' "$manifest" >/dev/null
-
-          while IFS=$'\t' read -r name expected_sha256; do
-            wheel="nxd-artifact/wheels/$name"
-            test -f "$wheel"
-            actual_sha256="$(sha256sum "$wheel" | awk '{print $1}')"
-            if [ "$actual_sha256" != "$expected_sha256" ]; then
-              echo "SHA-256 mismatch for $name" >&2
-              exit 1
-            fi
-          done < <(jq -r '.wheels[] | [.name, .sha256] | @tsv' "$manifest")
-
-          package_version="$(jq -r '.package_version' "$manifest")"
-          jq -e --arg package_version "$package_version" \
-            '(.packages | to_entries | all(.value == $package_version))' "$manifest" >/dev/null
-          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
-          cat "$manifest"
-      - name: Install NXD Python artifact
-        if: env.NXD_REPO_TOKEN != ''
-        working-directory: evals/dp-scenarios
-        env:
-          PACKAGE_VERSION: ${{ steps.artifact-manifest.outputs.package_version }}
-        run: |
-          set -euo pipefail
-          uv sync --locked
-          uv pip install \
-            --python .venv/bin/python \
-            --no-index \
-            --find-links "${{ github.workspace }}/nxd-artifact/wheels" \
-            "nxd-core==$PACKAGE_VERSION" \
-            "nxd-data_product==$PACKAGE_VERSION" \
-            "nxd-drivers==$PACKAGE_VERSION"
+          token: ${{ env.NXD_REPO_TOKEN }}
+          token_missing_message: 'NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot resolve the NXD artifact.'
+          artifact_prefix: nxd-py-linux-x86_64-${{ steps.nxd-source.outputs.field_mapper_tree_sha }}-
+          selector_label: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          expect_field_mapper_tree_sha: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          install_project_dir: evals/dp-scenarios
       - name: Run field-mapper grant tests
-        if: env.NXD_REPO_TOKEN != ''
         working-directory: evals/dp-scenarios
         env:
-          EVAL_NXD_ARTIFACT_MANIFEST: ${{ github.workspace }}/nxd-artifact/manifest.json
+          EVAL_NXD_ARTIFACT_MANIFEST: ${{ steps.nxd-artifact.outputs.manifest_path }}
           EVAL_NXD_REPO_ROOT: ${{ github.workspace }}/nxd
         run: uv run --locked --no-sync pytest -q -m field_mapper
-      - name: Require NXD artifact token
-        if: env.NXD_REPO_TOKEN == ''
+
+  semantic-contract:
+    # Required lane. Checks the PINNED-and-PUBLISHED pairing: the NXD revision
+    # this repository pins, and the artifact NXD published for it. Purely a
+    # consumer — it reads a finished artifact and never triggers an NXD build.
+    #
+    # The nightly canary answers a different question (NXD main against Nexty
+    # main, i.e. what is coming); this job answers "does the pair we actually
+    # ship agree", which is the one that gates a merge.
+    name: semantic MCP contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NXD_REPO_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v5
+      - name: Check out the pinned NXD source
+        if: env.NXD_REPO_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          repository: nextdata-tech/nxd
+          ref: ${{ env.NXD_PINNED_SHA }}
+          path: nxd
+          token: ${{ env.NXD_REPO_TOKEN }}
+          fetch-depth: 1
+          sparse-checkout: |
+            components/nxd_py/data_product/nxd/experimental/field_mapper
+            components/nxd_py/data_product/nxd/experimental/semantic
+            components/nxd_py/drivers/nxd/drivers/rpc
+          sparse-checkout-cone-mode: true
+      - name: Verify pinned NXD source
+        if: env.NXD_REPO_TOKEN != ''
+        id: nxd-source
+        working-directory: nxd
         run: |
-          echo "NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot resolve the NXD artifact." >&2
-          exit 1
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$NXD_PINNED_SHA"
+          field_mapper_tree_sha="$(git rev-parse HEAD:components/nxd_py/data_product/nxd/experimental/field_mapper)"
+          semantic_tree_sha="$(git rev-parse HEAD:components/nxd_py/data_product/nxd/experimental/semantic)"
+          echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
+          echo "semantic_tree_sha=$semantic_tree_sha" >> "$GITHUB_OUTPUT"
+      - name: Consume the published NXD artifact
+        id: nxd-artifact
+        uses: ./.github/actions/nxd-artifact
+        with:
+          token: ${{ env.NXD_REPO_TOKEN }}
+          token_missing_message: 'NXD_DISPATCH_PAT is unavailable; the semantic MCP contract check cannot resolve the NXD artifact.'
+          artifact_prefix: nxd-py-linux-x86_64-${{ steps.nxd-source.outputs.field_mapper_tree_sha }}-${{ steps.nxd-source.outputs.semantic_tree_sha }}-
+          selector_label: semantic tree ${{ steps.nxd-source.outputs.semantic_tree_sha }}
+          expect_field_mapper_tree_sha: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          expect_semantic_tree_sha: ${{ steps.nxd-source.outputs.semantic_tree_sha }}
+          require_mcp_provenance: 'true'
+          install_project_dir: evals/mcp
+      - name: Extract the eval MCP surface
+        working-directory: evals/mcp
+        run: uv run --locked --no-sync python contract_surface.py --out "$RUNNER_TEMP/eval-surface.json"
+      - name: Check the eval surface against the shipped NXD contract
+        working-directory: evals/mcp
+        run: uv run --locked --no-sync python contract_check.py --surface "$RUNNER_TEMP/eval-surface.json"
+      # Names BOTH sides of the pairing that was checked. Runs on failure too:
+      # a red run whose summary does not say which NXD build it was measured
+      # against sends the reader to the logs to find out what it even compared.
+      - name: Record the checked pairing
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### semantic MCP contract"
+            echo "- **nexty sha**: \`$GITHUB_SHA\`"
+            echo "- **nxd source**: \`${{ steps.nxd-artifact.outputs.source_sha }}\`"
+            echo "- **nxd semantic tree**: \`${{ steps.nxd-artifact.outputs.semantic_tree_sha }}\`"
+            echo "- **nxd rpc tree**: \`${{ steps.nxd-artifact.outputs.rpc_tree_sha }}\`"
+            echo "- **mcp contract sha256**: \`${{ steps.nxd-artifact.outputs.mcp_contract_sha256 }}\`"
+            echo "- **artifact**: \`${{ steps.nxd-artifact.outputs.artifact_name }}\` (run ${{ steps.nxd-artifact.outputs.run_id }})"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -18,6 +18,14 @@ re-declares the three tools but routes ``run_semantic_query`` through the
 governed executor — so what's under test (fan-out-safe compilation + governance)
 is the real code, only the tool-registration shell differs.
 
+Because the tool-registration shell is re-declared here, it can drift from what
+NXD actually serves — and it already does, deliberately: three tools rather than
+four, and no ``order_by`` / ``limit``. That subset is DECLARED, with reasons, in
+``contract_exceptions.json``, and the ``semantic MCP contract`` CI job compares
+this server's real descriptors against the contract NXD ships in its wheel. Add
+or rename a tool or an argument here and that job fails until the difference is
+either removed or written down. See README.md § "Drift control".
+
   * ``list_models`` / ``describe_model`` — return the agent-facing logical
     catalog verbatim from ``fixtures/catalog.json``.
   * ``run_semantic_query`` — compiles a ``{measures, dimensions, filters}``
@@ -39,6 +47,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from typing_extensions import TypedDict
 
 
 @contextlib.contextmanager
@@ -81,6 +90,14 @@ with _stdout_to_stderr():
 # and the agent's "this is governed/masked" note is grounded in real behaviour.
 # Override with EVAL_MCP_CAN_SEE_PII=1.
 _CAN_SEE_PII = os.environ.get("EVAL_MCP_CAN_SEE_PII", "") == "1"
+
+
+class SemanticFilter(TypedDict, total=False):
+    """Wire-shaped filter payload, without reimplementing compiler validation."""
+
+    dimension: str | None
+    op: str | None
+    value: Any | None
 
 
 def _load_catalog(fixture_dir: Path) -> dict[str, Any]:
@@ -200,7 +217,7 @@ def build_server(
     def run_semantic_query(
         measures: list[str],
         dimensions: list[str] | None = None,
-        filters: list[dict] | None = None,
+        filters: list[SemanticFilter] | None = None,
     ) -> dict:
         from nxd.experimental.semantic import CompileError, compile_selection
 
