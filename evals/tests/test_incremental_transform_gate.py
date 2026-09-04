@@ -190,6 +190,9 @@ def test_incremental_oracle_material_is_excluded_only_for_this_scenario(tmp_path
     target = workspace / "data_product" / "data" / "events" / "part-0003.csv"
     run._stage_incremental_delta_before_followup(SCENARIO, workspace, 1)
     assert not target.exists()
+    with pytest.raises(FileNotFoundError):
+        run._stage_incremental_delta_before_followup(SCENARIO, workspace, 2)
+    target.parent.mkdir(parents=True)
     run._stage_incremental_delta_before_followup(SCENARIO, workspace, 2)
     assert target.read_text() == (
         SCENARIO / "fixtures" / "delta" / "part-0003.csv"
@@ -223,6 +226,13 @@ def test_incremental_oracle_requires_one_cursor_key_to_follow_the_trajectory():
         {"events": {"max_event_id": "140"}},
     ]
     assert checker._has_cursor_trajectory(*string_states)
+    timestamp_states = [
+        {"events": {"occurred_at": checker.BASE_TIMESTAMP}},
+        {"events": {"occurred_at": checker.BASE_TIMESTAMP}},
+        {"events": {"occurred_at": checker.DELTA_TIMESTAMP}},
+    ]
+    assert checker._has_cursor_trajectory(*timestamp_states)
+    assert not checker._has_cursor_trajectory(*timestamp_states[:2])
 
 
 def test_teaches_the_transform_state_kwarg():

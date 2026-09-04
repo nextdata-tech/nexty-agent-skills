@@ -285,7 +285,11 @@ def _stage_incremental_delta_before_followup(
         raise FileExistsError(
             f"incremental delta target already exists before follow-up: {target}"
         )
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.parent.is_dir():
+        raise FileNotFoundError(
+            f"incremental delta target directory missing before follow-up: "
+            f"{target.parent}"
+        )
     shutil.copy2(source, target)
 
 

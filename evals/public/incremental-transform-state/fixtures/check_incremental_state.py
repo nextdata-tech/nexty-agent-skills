@@ -29,6 +29,8 @@ from pathlib import Path
 BASE_ROWS = 100
 DELTA_ROWS = 40
 GENERIC_STATE_KEY = "__nxd_generic__"
+BASE_TIMESTAMP = "2026-07-20T04:40:00Z"
+DELTA_TIMESTAMP = "2026-07-30T20:20:00Z"
 
 
 @dataclass
@@ -175,24 +177,37 @@ def _scalar_entries(state):
 
 
 def _cursor_matches(value, expected):
-    """Compare numeric cursors across JSON-safe int/float/string encodings."""
-    if isinstance(value, str):
+    """Compare JSON-safe numeric or timestamp cursor encodings."""
+    if isinstance(expected, (int, float)) and isinstance(value, str):
         try:
             return float(value) == expected
         except ValueError:
-            return value == str(expected)
+            return False
     return value == expected
 
 
 def _has_cursor_trajectory(*states):
+    """Require exactly three runs and accept either supported cursor field."""
+    if len(states) != 3:
+        return False
     paths = set(_scalar_entries(states[0]))
     for state in states[1:]:
         paths &= set(_scalar_entries(state))
+    trajectories = (
+        (BASE_ROWS, BASE_ROWS, BASE_ROWS + DELTA_ROWS),
+        (BASE_TIMESTAMP, BASE_TIMESTAMP, DELTA_TIMESTAMP),
+    )
     return any(
-        all(_cursor_matches(_scalar_entries(state)[path], expected)
-            for state, expected in zip(
-                states, [BASE_ROWS, BASE_ROWS, BASE_ROWS + DELTA_ROWS]
-            ))
+        any(
+            all(
+                _cursor_matches(entries[path], expected)
+                for entries, expected in zip(
+                    (_scalar_entries(state) for state in states), trajectory,
+                    strict=True,
+                )
+            )
+            for trajectory in trajectories
+        )
         for path in paths
     )
 
