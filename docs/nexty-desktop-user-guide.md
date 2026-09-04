@@ -163,13 +163,13 @@ When the answer is right:
 
 > This is right. Turn it into something I can reuse.
 
-### The plan
+### The blueprint
 
-Before building anything, Nexty writes out **the plan**: plain English, your job written down. It covers what the product is for, what questions it answers, what your terms mean, what rules always apply, and anything Nexty couldn't work out without you. We call this the data product blueprint.
+Before building anything, Nexty writes out the plan it intends to follow. We call it the **data product blueprint**: plain English, your job written down. It covers what the product is for, what questions it answers, what your terms mean, what rules always apply, and anything Nexty couldn't work out without you.
 
-You don't need to understand its structure, but if you're curious about the details, you can review the plan at any time. You can check two things:
+You don't need to understand its structure, but if you're curious about the details, you can review the blueprint at any time. You can check two things:
 
-1. **Your corrections are in it.** Everything you argued about while working the problem should be written down here. If you told Claude that refunds don't count and there's nothing about refunds in the plan, say so now.
+1. **Your corrections are in it.** Everything you argued about while working the problem should be written down here. If you told Claude that refunds don't count and there's nothing about refunds in the blueprint, say so now.
 2. **The open questions are answered.** Nexty lists what it couldn't resolve on its own. These are the assumptions that will quietly shape every future answer.
 
 It's yours to change:
@@ -318,7 +318,7 @@ Copy these and change the nouns.
 
 > This is right. Turn it into a reusable product.
 
-> Show me the plan again. I want to check the definitions.
+> Show me the blueprint again. I want to check the definitions.
 
 > "Enterprise account" means ACV over $50k or headcount over 1,000. Use it everywhere.
 
@@ -348,7 +348,7 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 ### Sharing
 
-> Generate the release page and tell me where to find it.
+> Generate the blueprint page and tell me where to find it.
 
 > Export this product so I can send it to a colleague.
 
