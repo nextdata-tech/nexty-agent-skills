@@ -357,6 +357,44 @@ def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
             pass
 
 
+def test_pinned_driver_identity_is_written_to_the_manifest(tmp_path: Path) -> None:
+    driver_pins = PinnedVersions(
+        "skills-1",
+        "supervisor-1",
+        "wheel-1",
+        "mock-1",
+        "claims-1",
+        driver_model_id="gpt-x",
+        driver_sampling_params={"temperature": 0.7},
+    )
+
+    with RunEnvironment(make_scenario(), driver_pins, root=tmp_path) as environment:
+        assert environment.manifest.driver_model_id == "gpt-x"
+        assert environment.manifest.driver_sampling_params == {"temperature": 0.7}
+
+
+def test_replay_stored_driver_pin_cannot_override_na_pins(tmp_path: Path) -> None:
+    driver_pins = PinnedVersions(
+        "skills-1",
+        "supervisor-1",
+        "wheel-1",
+        "mock-1",
+        "claims-1",
+        driver_model_id="gpt-x",
+        driver_sampling_params={"temperature": 0.7},
+    )
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    with RunEnvironment(make_scenario(), driver_pins, root=source_root) as environment:
+        stored = environment.manifest.to_dict()
+
+    replay_root = tmp_path / "replay"
+    replay_root.mkdir()
+    with pytest.raises(RunEnvironmentError, match="replay manifest mismatch in driver_model_id"):
+        with RunEnvironment(make_scenario(), pins(), root=replay_root, manifest_override=stored):
+            pass
+
+
 def _route_table() -> dict[str, object]:
     """A source shaped like a graded one: one served route, two probe-only."""
 

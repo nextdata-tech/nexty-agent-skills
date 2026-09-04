@@ -251,8 +251,8 @@ def paired_mcnemar(
     field = next(iter(comparison.differing_fields))
     if field_under_test is not None and field != field_under_test:
         raise ValueError(f"manifest field differs outside the requested comparison: {field}")
-    if field in {"fixture_dir_hash", "operator_script_hash"}:
-        raise ValueError("paired comparison requires identical fixture and operator script")
+    if field in {"fixture_dir_hash", "operator_script_hash", "driver_model_id", "driver_sampling_params"}:
+        raise ValueError("paired comparison requires identical fixture, operator script and driver")
     if len(before) != len(after):
         raise ValueError("paired comparison requires one outcome per identical trial")
     base = [_gate_passed(value, "query") for value in before]

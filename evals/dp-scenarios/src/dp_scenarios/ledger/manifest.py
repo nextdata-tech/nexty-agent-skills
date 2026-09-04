@@ -45,6 +45,8 @@ MANIFEST_FIELDS = (
     "fixture_dir_hash",
     "mock_api_version",
     "operator_script_hash",
+    "driver_model_id",
+    "driver_sampling_params",
     "turn_budget",
     "grant_fixture_hash",
     "scenario_id",
@@ -121,6 +123,7 @@ COMPARABILITY_EXCLUDED_FIELDS = REPLAY_SESSION_PATH_FIELDS | frozenset({"validat
 # tier; both spellings use the same waiver policy.
 _SMOKE_TIER_WAIVERS = frozenset(
     {
+        "driver_model_id",
         "judge_model_id",
         "judge_prompt_hash",
         "judge_calibration_set_hash",
@@ -230,6 +233,8 @@ class Manifest:
     # Persist this distinction.  A stored live manifest must still require
     # desktop identity when a later validator reads it without the substrate.
     validation_mode: str = "replay"
+    driver_model_id: str = NOT_APPLICABLE
+    driver_sampling_params: Mapping[str, object] = field(default_factory=dict)
 
     fields: ClassVar[tuple[str, ...]] = MANIFEST_FIELDS
 
@@ -258,6 +263,7 @@ class Manifest:
             "session_config_sha256",
             "session_trace_path",
             "session_server_result_path",
+            "driver_model_id",
         )
         for field_name in string_fields:
             value = getattr(self, field_name)
@@ -274,6 +280,37 @@ class Manifest:
                 field="agent_sampling_params",
                 value=self.agent_sampling_params,
             )
+        if not isinstance(self.driver_sampling_params, Mapping):
+            raise ManifestError(
+                "manifest field driver_sampling_params must be a mapping",
+                field="driver_sampling_params",
+                value=self.driver_sampling_params,
+            )
+        if self.driver_model_id == NOT_APPLICABLE:
+            if self.driver_sampling_params:
+                raise ManifestError(
+                    "driver_sampling_params must be empty when driver_model_id is not-applicable",
+                    field="driver_sampling_params",
+                    value=self.driver_sampling_params,
+                )
+        else:
+            if not self.driver_sampling_params:
+                raise ManifestError(
+                    "driver_sampling_params must be non-empty when driver_model_id is declared",
+                    field="driver_sampling_params",
+                    value=self.driver_sampling_params,
+                )
+            temperature = self.driver_sampling_params.get("temperature")
+            if (
+                isinstance(temperature, bool)
+                or not isinstance(temperature, (int, float))
+                or not 0 <= temperature <= 2
+            ):
+                raise ManifestError(
+                    "driver_sampling_params.temperature must be a number between 0 and 2",
+                    field="driver_sampling_params",
+                    value=self.driver_sampling_params,
+                )
         if not isinstance(self.runtime_knobs, Mapping) or not self.runtime_knobs:
             raise ManifestError(
                 "manifest field runtime_knobs must be a non-empty mapping",
@@ -380,6 +417,7 @@ class Manifest:
             for field_name in cls.fields
             if field_name not in value
             and field_name != "validation_mode"
+            and field_name not in {"driver_model_id", "driver_sampling_params"}
             and (validation_mode == "live" or field_name not in DESKTOP_SESSION_FIELDS)
         ]
         if missing:
@@ -392,6 +430,11 @@ class Manifest:
             field_name: value.get(field_name, NOT_APPLICABLE)
             for field_name in cls.fields
         }
+        # Absence unambiguously means scripted: these fields did not exist
+        # before the driver and must not inherit the string sentinel as a
+        # Mapping value.
+        values["driver_model_id"] = value.get("driver_model_id", NOT_APPLICABLE)
+        values["driver_sampling_params"] = value.get("driver_sampling_params", {})
         values["validation_mode"] = validation_mode
         return cls(
             **values,

@@ -1,0 +1,47 @@
+{
+  "agent_model_id": "sonnet",
+  "agent_sampling_params": {
+    "effort": "medium",
+    "temperature": "provider-default"
+  },
+  "canary_claims_hash": "sha256:0c9313d775e6c44d7418c2068f1ba437b0f73f977da762585361d6b588a5a9f3",
+  "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+  "fixture_dir_hash": "1631f73165925721c7e400594c0d0e7179bec5a0c721743ae95b2d96ac0a1371",
+  "fixture_seed": 29,
+  "grant_fixture_hash": "not-applicable",
+  "judge_calibration_set_hash": "not-applicable",
+  "judge_model_id": "not-applicable",
+  "judge_prompt_hash": "not-applicable",
+  "mock_api_version": "mock-1",
+  "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+  "operator_script_hash": "f55f153a26037c22d8551c7fdfa9a30fe7cb8b3f09ed5938fdc1d0550710ae45",
+  "persona_paraphrase_prompt_hash": "not-applicable",
+  "run_id": "capability-shortfall-trial-0",
+  "runtime_knobs": {
+    "broker_fault": {
+      "active_attempt": 1,
+      "active_fault": "none",
+      "enabled": false
+    },
+    "schema_version": 1,
+    "transform_window": {
+      "enabled": false
+    },
+    "workflow_switch": {
+      "enabled": false
+    }
+  },
+  "scenario_id": "capability-shortfall",
+  "session_config_path": "/private/tmp/dp-cs-live-7/dp-scenario-run-8h1_qm_z/desktop-session/mcp-config.json",
+  "session_config_sha256": "sha256:3d5e4d1ce2c93c1a073040d5dc441d715e7195623b3fcc6302b85b33a4d6f6ee",
+  "session_root": "/private/tmp/dp-cs-live-7/dp-scenario-run-8h1_qm_z/desktop-session",
+  "session_server_result_path": "/private/tmp/dp-cs-live-7/dp-scenario-run-8h1_qm_z/desktop-session/server-result.json",
+  "session_trace_path": "/private/tmp/dp-cs-live-7/dp-scenario-run-8h1_qm_z/desktop-session/mcp-trace.jsonl",
+  "skill_pack_version": "0.42.0",
+  "supervisor_binary_path": "/Volumes/PRO-G40/projects/nxd/target/debug/nxd-desktop-supervisor#sha256:1e0f115e4bf1d792e93dcb579c31f58a889720f2395ef437b11630650704ceb3",
+  "supervisor_version": "sha256:1e0f115e4bf1d792e93dcb579c31f58a889720f2395ef437b11630650704ceb3",
+  "tier": "live",
+  "trial_index": 0,
+  "turn_budget": 10,
+  "validation_mode": "live"
+}

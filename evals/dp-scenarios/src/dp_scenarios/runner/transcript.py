@@ -390,10 +390,19 @@ def _header(
     )
 
     lines.append(
-        "operator: off-script turns={off} | ground-truth answers={gt} | tool calls={tools}".format(
+        "operator: off-script turns={off} | ground-truth answers={gt} | tool calls={tools}"
+        " | mode={mode} | leading-rejected={leading} | obstacle-rejected={obstacle}"
+        " | repeat-rejected={repeat} | beat-substituted={beat}".format(
             off=_text(observations.get("operator_unmatched_turn_count")) or "?",
             gt=_text(observations.get("operator_ground_truth_turn_count")) or "?",
             tools=_text(observations.get("tool_call_count")) or "?",
+            # Older bundles predate the driver: every driver field is read
+            # with ``.get`` so a pre-driver observations file still renders.
+            mode=observations.get("operator_mode", "scripted"),
+            leading=observations.get("driver_leading_rejected_count", 0),
+            obstacle=observations.get("driver_obstacle_rejected_count", 0),
+            repeat=observations.get("driver_repeat_rejected_count", 0),
+            beat=observations.get("driver_beat_substituted_count", 0),
         )
     )
     for note in notes:

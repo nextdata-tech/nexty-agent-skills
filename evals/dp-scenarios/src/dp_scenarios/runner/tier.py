@@ -43,9 +43,10 @@ from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityReport
-from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
+from dp_scenarios.ledger import LedgerRow, Manifest, NOT_APPLICABLE, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
+    DriverOperator,
     GeneratedOperator,
     OperatorEngine,
     StaticSupervisorRecordReader,
@@ -296,7 +297,7 @@ CanaryFactory: TypeAlias = Callable[[], CanaryResult | Verdict]
 SupervisorReaderFactory: TypeAlias = Callable[..., SupervisorRecordReader | None]
 KnobPlan: TypeAlias = Mapping[tuple[str, int], SupervisorKnobs] | Callable[[Scenario, int], SupervisorKnobs]
 WorkflowRestartFactory: TypeAlias = Callable[[Scenario, RunEnvironment, int, str], Transport]
-GeneratedOperatorFactory: TypeAlias = Callable[..., GeneratedOperator | None]
+OperatorFactory: TypeAlias = Callable[..., GeneratedOperator | DriverOperator | None]
 
 
 def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: ClaimsDocument) -> Verdict:
@@ -443,9 +444,12 @@ def _replay_verification(
     expected: Any,
     *,
     generated_operator: bool,
+    driver: bool = False,
 ) -> tuple[str, str]:
     """Replay scripted turns and compare the two canonical evidence surfaces."""
 
+    if driver:
+        return "not-attempted", "driver operator output is not assumed deterministic"
     if generated_operator:
         return "not-attempted", "generated operator output is not assumed deterministic"
     try:
@@ -482,9 +486,11 @@ def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
     qualification = qualify_run(
         run.score,
         replay_status=run.replay_verification_status,
-        generated_operator=run.qualification.operator_mode == "generated_surface",
+        generated_operator=run.qualification.operator_mode in {"generated_surface", "driver"},
+        driver=run.qualification.operator_mode == "driver",
         repeatability_certified=True,
         validation_mode=run.manifest.validation_mode,
+        operator_mode=run.qualification.operator_mode,
     )
     if qualification.disposition is not QualificationDisposition.CERTIFIED:
         return run
@@ -621,6 +627,10 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
     unmatched_turn_count = 0
     ground_truth_turn_count = 0
     repeat_suppressed_turn_count = 0
+    driver_leading_rejected_count = 0
+    driver_obstacle_rejected_count = 0
+    driver_repeat_rejected_count = 0
+    driver_beat_substituted_count = 0
     for turn in run_result.turns:
         tool_call_count += len(turn.tool_calls)
         if not turn.match.matched:
@@ -629,6 +639,10 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
             ground_truth_turn_count += 1
         if turn.operator_repeat_suppressed:
             repeat_suppressed_turn_count += 1
+        driver_leading_rejected_count += int(getattr(turn, "driver_leading_rejected", False))
+        driver_obstacle_rejected_count += int(getattr(turn, "driver_obstacle_rejected", False))
+        driver_repeat_rejected_count += int(getattr(turn, "driver_repeat_rejected", False))
+        driver_beat_substituted_count += int(getattr(turn, "driver_beat_substituted", False))
         turns.append(
             {
                 "turn": turn.turn,
@@ -654,8 +668,20 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 "operator_matched": turn.match.matched,
                 "operator_answered_from_ground_truth": turn.match.ground_truth and not turn.operator_repeat_suppressed,
                 "operator_repeat_suppressed": turn.operator_repeat_suppressed,
+                "operator_mode": getattr(turn, "operator_mode", "scripted"),
+                "operator_beat_id": getattr(turn, "operator_beat_id", None),
+                "driver_leading_rejected": getattr(turn, "driver_leading_rejected", False),
+                "driver_obstacle_rejected": getattr(turn, "driver_obstacle_rejected", False),
+                "driver_repeat_rejected": getattr(turn, "driver_repeat_rejected", False),
+                "driver_beat_substituted": getattr(turn, "driver_beat_substituted", False),
+                "driver_fallback_reason": getattr(turn, "driver_fallback_reason", None),
+                "driver_skip_reason": getattr(turn, "driver_skip_reason", None),
+                "driver_forbidden_terms_in_force": getattr(turn, "driver_forbidden_terms_in_force", 0),
+                "driver_forbidden_terms_exempted": getattr(turn, "driver_forbidden_terms_exempted", 0),
             }
         )
+    identity = getattr(run_result, "driver_identity", None)
+    identity = identity if isinstance(identity, Mapping) else {}
     _write_json(
         artifact_root / "operator-observations.json",
         {
@@ -668,6 +694,13 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
             "operator_unmatched_turn_count": unmatched_turn_count,
             "operator_ground_truth_turn_count": ground_truth_turn_count,
             "operator_repeat_suppressed_count": repeat_suppressed_turn_count,
+            "operator_mode": getattr(run_result, "operator_mode", "scripted"),
+            "driver_model_id": identity.get("model_id"),
+            "driver_temperature": identity.get("temperature"),
+            "driver_leading_rejected_count": driver_leading_rejected_count,
+            "driver_obstacle_rejected_count": driver_obstacle_rejected_count,
+            "driver_repeat_rejected_count": driver_repeat_rejected_count,
+            "driver_beat_substituted_count": driver_beat_substituted_count,
             "turns": turns,
         },
     )
@@ -999,7 +1032,7 @@ class TierRunner:
         knob_plan: KnobPlan | None = None,
         workflow_restart_factory: WorkflowRestartFactory | None = None,
         workflow_observer: WorkflowObserver | None = None,
-        operator_factory: GeneratedOperator | GeneratedOperatorFactory | None = None,
+        operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
         allow_host_home: bool = False,
     ) -> None:
         self.scenarios = tuple(scenarios)
@@ -1046,13 +1079,13 @@ class TierRunner:
         scenario: Scenario,
         environment: RunEnvironment,
         epoch: int,
-    ) -> GeneratedOperator | None:
+    ) -> GeneratedOperator | DriverOperator | None:
         """Resolve the optional generated surface without changing engine state."""
 
         factory = self.operator_factory
         if factory is None:
             return None
-        if isinstance(factory, GeneratedOperator):
+        if isinstance(factory, (GeneratedOperator, DriverOperator)):
             return factory
         try:
             parameters = inspect.signature(factory).parameters.values()
@@ -1069,8 +1102,8 @@ class TierRunner:
             value = factory(scenario)
         else:
             value = factory()
-        if value is not None and not isinstance(value, GeneratedOperator):
-            raise TierError("operator factory returned no GeneratedOperator")
+        if value is not None and not isinstance(value, (GeneratedOperator, DriverOperator)):
+            raise TierError("operator factory returned no GeneratedOperator or DriverOperator")
         return value
 
     def _canary(self) -> CanaryResult:
@@ -1123,6 +1156,8 @@ class TierRunner:
         """Run one complete tier, returning before any scenario on canary block."""
 
         started = time.monotonic()
+        if self.pins.driver_model_id != NOT_APPLICABLE and self.operator_factory is None:
+            raise TierError("manifest driver pins require an operator factory")
         canary = self._canary()
         if canary.blocking:
             reasons = tuple(issue.to_dict() for issue in canary.verdict.issues)
@@ -1225,6 +1260,21 @@ class TierRunner:
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
                 if recording is not None and recording.supervisor_facts is not None:
                     _write_json(artifact_root / "supervisor-facts.json", recording.supervisor_facts)
+                generated_operator = self._generated_operator(scenario, environment, epoch)
+                declared = self.pins.driver_model_id != NOT_APPLICABLE
+                if declared != isinstance(generated_operator, DriverOperator):
+                    raise TierError("manifest driver pins and operator factory disagree")
+                if declared:
+                    assert isinstance(generated_operator, DriverOperator)
+                    try:
+                        pinned_temperature = float(self.pins.driver_sampling_params["temperature"])
+                    except (KeyError, TypeError, ValueError):
+                        raise TierError("manifest driver pins and operator factory disagree") from None
+                    if (
+                        generated_operator.model_id != self.pins.driver_model_id
+                        or pinned_temperature != float(generated_operator.temperature)
+                    ):
+                        raise TierError("manifest driver pins and operator factory disagree")
                 if recording is not None:
                     transport: Transport = ReplaySession(recording, artifact_root=artifact_root)
                 else:
@@ -1241,7 +1291,6 @@ class TierRunner:
                             turn=turn,
                         ),
                     )
-                generated_operator = self._generated_operator(scenario, environment, epoch)
                 started = time.monotonic()
                 transport_closed = False
                 primary_error: BaseException | None = None
@@ -1257,7 +1306,16 @@ class TierRunner:
                     engine = OperatorEngine(
                         scenario.script,
                         transport,
-                        generated_operator=generated_operator,
+                        generated_operator=(
+                            generated_operator
+                            if isinstance(generated_operator, GeneratedOperator)
+                            else None
+                        ),
+                        driver=(
+                            generated_operator
+                            if isinstance(generated_operator, DriverOperator)
+                            else None
+                        ),
                         extra_sentinels=sorted(marker_values(environment.generated_fixture_manifest)),
                     )
                     run_result = engine.run()
@@ -1330,13 +1388,16 @@ class TierRunner:
                     scenario,
                     replay,
                     run_result,
-                    generated_operator=generated_operator is not None,
+                    generated_operator=isinstance(generated_operator, GeneratedOperator),
+                    driver=isinstance(generated_operator, DriverOperator),
                 )
                 qualification = qualify_run(
                     score,
                     replay_status=replay_status,
-                    generated_operator=generated_operator is not None,
+                    generated_operator=isinstance(generated_operator, GeneratedOperator),
+                    driver=isinstance(generated_operator, DriverOperator),
                     validation_mode=environment.manifest.validation_mode,
+                    operator_mode=getattr(run_result, "operator_mode", "scripted"),
                 )
                 bundle_dir: Path | None = None
                 bundle_digest: str | None = None

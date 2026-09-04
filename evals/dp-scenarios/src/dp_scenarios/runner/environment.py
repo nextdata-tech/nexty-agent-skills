@@ -23,7 +23,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from dp_scenarios.ledger import LedgerRow, LedgerStore, Manifest, fixture_dir_hash
-from dp_scenarios.ledger.manifest import REPLAY_SESSION_PATH_FIELDS
+from dp_scenarios.ledger.manifest import NOT_APPLICABLE, REPLAY_SESSION_PATH_FIELDS
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_transform_latency
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios.scenario import Scenario
@@ -129,6 +129,10 @@ class PinnedVersions:
     agent_sampling_params: Mapping[str, object] = field(
         default_factory=lambda: MappingProxyType({"temperature": 0})
     )
+    driver_model_id: str = NOT_APPLICABLE
+    driver_sampling_params: Mapping[str, object] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     supervisor_binary_path: str = "not-applicable"
     session_config_sha256: str = "not-applicable"
 
@@ -140,6 +144,7 @@ class PinnedVersions:
             "mock_api_version",
             "canary_claims_hash",
             "agent_model_id",
+            "driver_model_id",
             "supervisor_binary_path",
             "session_config_sha256",
         ):
@@ -147,6 +152,13 @@ class PinnedVersions:
         if not isinstance(self.agent_sampling_params, Mapping) or not self.agent_sampling_params:
             raise EnvironmentError("pinned value agent_sampling_params must be a non-empty mapping")
         object.__setattr__(self, "agent_sampling_params", MappingProxyType(dict(self.agent_sampling_params)))
+        if not isinstance(self.driver_sampling_params, Mapping):
+            raise EnvironmentError("pinned value driver_sampling_params must be a mapping")
+        if self.driver_model_id == NOT_APPLICABLE and self.driver_sampling_params:
+            raise EnvironmentError("pinned value driver_sampling_params must be empty when driver_model_id is not-applicable")
+        if self.driver_model_id != NOT_APPLICABLE and not self.driver_sampling_params:
+            raise EnvironmentError("pinned value driver_sampling_params must be non-empty when driver_model_id is declared")
+        object.__setattr__(self, "driver_sampling_params", MappingProxyType(dict(self.driver_sampling_params)))
 
     @property
     def nxd_data_product_wheel_version(self) -> str:
@@ -175,6 +187,8 @@ class PinnedVersions:
         if not isinstance(agent_model_id, str) or not agent_model_id.strip():
             raise EnvironmentError("pinned value agent_model_id must be a non-empty string")
         sampling = value.get("agent_sampling_params", {"temperature": 0})
+        driver_model_id = value.get("driver_model_id", NOT_APPLICABLE)
+        driver_sampling_params = value.get("driver_sampling_params", {})
         return cls(
             skill_pack_version=required["skill_pack_version"],  # type: ignore[arg-type]
             supervisor_version=required["supervisor_version"],  # type: ignore[arg-type]
@@ -183,6 +197,8 @@ class PinnedVersions:
             canary_claims_hash=required["canary_claims_hash"],  # type: ignore[arg-type]
             agent_model_id=agent_model_id,
             agent_sampling_params=sampling,  # type: ignore[arg-type]
+            driver_model_id=driver_model_id,  # type: ignore[arg-type]
+            driver_sampling_params=driver_sampling_params,  # type: ignore[arg-type]
             supervisor_binary_path=str(value.get("supervisor_binary_path", "not-applicable")),
             session_config_sha256=str(value.get("session_config_sha256", "not-applicable")),
         )
@@ -514,6 +530,8 @@ class RunEnvironment:
         manifest = Manifest(
             agent_model_id=self.pins.agent_model_id,
             agent_sampling_params=dict(self.pins.agent_sampling_params),
+            driver_model_id=self.pins.driver_model_id,
+            driver_sampling_params=dict(self.pins.driver_sampling_params),
             judge_model_id="not-applicable",
             judge_prompt_hash="not-applicable",
             skill_pack_version=self.pins.skill_pack_version,

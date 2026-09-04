@@ -20,6 +20,7 @@ from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
 from dp_scenarios.ledger import fixture_dir_hash
 from dp_scenarios.operator import (
+    DriverOperator,
     EventSchedule,
     OperatorEngine,
     OperatorScript,
@@ -138,8 +139,144 @@ def pins() -> PinnedVersions:
     return PinnedVersions("skills-1", "supervisor-1", "wheel-1", "mock-1", "claims-1")
 
 
+def driver_pins() -> PinnedVersions:
+    return replace(
+        pins(),
+        driver_model_id="tier-driver",
+        driver_sampling_params={"temperature": 0.0},
+    )
+
+
 def clean_canary() -> CanaryResult:
     return CanaryResult(Verdict("clean", (), ()), claims_hash="claims-1")
+
+
+def test_tier_runner_drives_the_same_operator_factory_on_replay_and_live_paths(tmp_path: Path) -> None:
+    base = make_scenario("driver-tier", turns=3)
+    sheet = answer_sheet_from_mapping(
+        {
+            **base.script.answer_sheet.to_mapping(),
+            "driver_forbidden_terms": ["grain"],
+            "ground_truth": {"grain_fact": {"terms": ["grain"], "fact": "The grain is one row per account."}},
+        }
+    )
+    script = OperatorScript.from_components(
+        base.script.persona,
+        sheet,
+        turns=base.script.turns,
+        turn_budget=3,
+        phase_by_turn=base.script.phase_by_turn,
+    )
+    scenario = replace(base, script=script)
+    responses = [
+        TurnResult(agent_message="What is the source?"),
+        TurnResult(agent_message="Status update."),
+        TurnResult(agent_message="Done.", reported=True),
+    ]
+
+    def make_driver() -> DriverOperator:
+        return DriverOperator(lambda _view: "Understood, carry on.", model_id="tier-driver", temperature=0.0)
+
+    recorder = RecordingSession(InMemoryTransport(responses))
+    OperatorEngine(script, recorder, driver=make_driver()).run()
+    recording = recorder.recording()
+
+    replayed = TierRunner(
+        [scenario],
+        pins=driver_pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+        operator_factory=make_driver,
+        evidence_root=tmp_path / "replay-evidence",
+    ).run()
+    replay_run = replayed.scenario_runs[0]
+    replay_observations = json.loads(
+        (Path(replay_run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert replay_observations["operator_mode"] == "driver"
+    assert replay_observations["driver_model_id"] == "tier-driver"
+    assert replay_observations["driver_temperature"] == 0.0
+    assert replay_observations["driver_leading_rejected_count"] == 0
+    assert replay_observations["driver_obstacle_rejected_count"] == 0
+    assert replay_observations["driver_repeat_rejected_count"] == 0
+    assert replay_observations["driver_beat_substituted_count"] == 0
+    # Turn 1 is never authorable, so no term is in force there; the two
+    # authorable turns each carry the one declared driver-forbidden term.
+    assert [turn["driver_forbidden_terms_in_force"] for turn in replay_observations["turns"]] == [0, 1, 1]
+    assert [turn["driver_skip_reason"] for turn in replay_observations["turns"]] == ["turn_one", None, None]
+    assert replay_run.qualification.operator_mode == "driver"
+
+    (tmp_path / "live-env").mkdir()
+    live = TierRunner(
+        [scenario],
+        pins=driver_pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(responses),
+        operator_factory=make_driver,
+        environment_root=tmp_path / "live-env",
+        evidence_root=tmp_path / "live-evidence",
+    ).run()
+    live_run = live.scenario_runs[0]
+    live_observations = json.loads(
+        (Path(live_run.evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert live_observations["operator_mode"] == "driver"
+    assert [turn["operator_mode"] for turn in live_observations["turns"]] == ["scripted", "driver", "driver"]
+
+    rejected_text = "REJECTED-DRIVER-TEXT-GRAIN"
+    def rejecting_driver() -> DriverOperator:
+        return DriverOperator(
+            lambda _view: rejected_text,
+            model_id="tier-driver",
+            temperature=0.0,
+        )
+    rejected_recorder = RecordingSession(InMemoryTransport(responses))
+    OperatorEngine(script, rejected_recorder, driver=rejecting_driver()).run()
+    rejected_recording = rejected_recorder.recording()
+    rejected = TierRunner(
+        [scenario],
+        pins=driver_pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: rejected_recording},
+        operator_factory=rejecting_driver,
+        evidence_root=tmp_path / "rejected-evidence",
+    ).run()
+    rejected_bundle = Path(rejected.scenario_runs[0].evidence_bundle_dir)
+    rejected_observations = json.loads(
+        (rejected_bundle / "artifacts" / "operator-observations.json").read_text()
+    )
+    # Without this the containment assertion below would hold vacuously: it
+    # must be a run in which the driver text really was rejected.
+    assert rejected_observations["driver_leading_rejected_count"] == 2
+    assert all(
+        rejected_text not in path.read_text(encoding="utf-8", errors="replace")
+        for path in rejected_bundle.rglob("*")
+        if path.is_file()
+    )
+
+    scripted = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses)},
+        evidence_root=tmp_path / "scripted-evidence",
+    ).run()
+    scripted_observations = json.loads(
+        (Path(scripted.scenario_runs[0].evidence_bundle_dir) / "artifacts" / "operator-observations.json").read_text()
+    )
+    assert scripted_observations["operator_mode"] == "scripted"
+    assert scripted_observations["driver_model_id"] is None
+    assert scripted_observations["driver_temperature"] is None
+    assert [
+        scripted_observations[key]
+        for key in (
+            "driver_leading_rejected_count",
+            "driver_obstacle_rejected_count",
+            "driver_repeat_rejected_count",
+            "driver_beat_substituted_count",
+        )
+    ] == [0, 0, 0, 0]
+    assert all(turn["driver_skip_reason"] is None for turn in scripted_observations["turns"])
 
 
 def recording_for(scenario: FakeScenario, responses: list[TurnResult]) -> ReplayRecording:

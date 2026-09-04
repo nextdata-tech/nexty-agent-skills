@@ -214,9 +214,9 @@ def test_mcnemar_refuses_multi_field_manifests_and_accepts_one_field() -> None:
     multi = {**first, "skill_pack_version": "v2", "supervisor_version": "sup-2"}
     with pytest.raises(ValueError, match="exactly one"):
         paired_mcnemar(first, multi, [_run()], [_run()])
-    with pytest.raises(ValueError, match="fixture and operator"):
+    with pytest.raises(ValueError, match="fixture, operator script and driver"):
         paired_mcnemar(first, {**first, "fixture_dir_hash": "fixture-2"}, [_run()], [_run()])
-    with pytest.raises(ValueError, match="fixture and operator"):
+    with pytest.raises(ValueError, match="fixture, operator script and driver"):
         paired_mcnemar(first, {**first, "operator_script_hash": "operator-2"}, [_run()], [_run()])
 
 
@@ -235,6 +235,14 @@ def test_mcnemar_refuses_validation_mode_as_a_pairing_axis() -> None:
 
     with pytest.raises(ValueError, match="exactly one"):
         paired_mcnemar(live, replay, [_run()], [_run()])
+
+
+def test_mcnemar_refuses_driver_model_as_a_pairing_axis() -> None:
+    first = {**_manifest(), "driver_model_id": "gpt-a", "driver_sampling_params": {"temperature": 0}}
+    second = {**first, "driver_model_id": "gpt-b"}
+
+    with pytest.raises(ValueError, match="fixture, operator script and driver"):
+        paired_mcnemar(first, second, [_run()], [_run()])
 
 
 def test_mcnemar_refuses_a_manifest_whose_runtime_knobs_are_unpinned() -> None:

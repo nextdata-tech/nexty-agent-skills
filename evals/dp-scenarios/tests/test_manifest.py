@@ -1,6 +1,7 @@
 """Tests for typed run identity and cross-machine fixture hashing."""
 
 import os
+import json
 import shutil
 import unicodedata
 from pathlib import Path
@@ -74,6 +75,22 @@ def test_not_applicable_is_waived_only_for_smoke_fields() -> None:
     make_manifest(tier="T0", judge_model_id="not-applicable")
     with pytest.raises(ManifestError, match="agent_model_id"):
         make_manifest(agent_model_id="not-applicable")
+
+
+def test_driver_manifest_pins_are_cross_field_validated() -> None:
+    with pytest.raises(ManifestError, match="driver_sampling_params"):
+        make_manifest(driver_model_id="gpt-x", driver_sampling_params={})
+    with pytest.raises(ManifestError, match="driver_sampling_params"):
+        make_manifest(driver_sampling_params={"temperature": 0.7})
+    with pytest.raises(ManifestError, match="temperature"):
+        make_manifest(driver_model_id="gpt-x", driver_sampling_params={"temperature": True})
+
+
+def test_pre_driver_manifest_defaults_driver_fields_when_replayed() -> None:
+    path = Path(__file__).parent / "data" / "pre_driver_manifest.json"
+    parsed = Manifest.from_mapping(json.loads(path.read_text(encoding="utf-8")), replay=None)
+    assert parsed.driver_model_id == "not-applicable"
+    assert parsed.driver_sampling_params == {}
 
 
 def test_live_manifest_requires_desktop_fields_but_replay_can_waive_them() -> None:

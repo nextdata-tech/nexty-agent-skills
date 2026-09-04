@@ -65,12 +65,22 @@ def qualify_run(
     *,
     replay_status: str,
     generated_operator: bool,
+    driver: bool = False,
     repeatability_certified: bool = False,
     validation_mode: str = "live",
+    operator_mode: str | None = None,
 ) -> QualificationRecord:
-    """Map score and replay evidence to a deliberately conservative status."""
+    """Map score and replay evidence to a deliberately conservative status.
 
-    operator_mode = "generated_surface" if generated_operator else "scripted"
+    ``generated_operator`` is the *cap*: any run whose operator words came
+    from a model -- a generated surface or a driver -- cannot be certified.
+    ``operator_mode`` is the *label* recorded in the evidence; it defaults to
+    the cap's two historical values so a driver run is not mislabelled
+    ``generated_surface`` in ``qualification.json`` while
+    ``operator-observations.json`` records ``driver``.
+    """
+
+    operator_mode = "driver" if driver else (operator_mode or ("generated_surface" if generated_operator else "scripted"))
     if score.state is TerminalState.INVALID:
         return QualificationRecord(QualificationDisposition.INVALID, replay_status, operator_mode, ("run_invalid",))
     if score.state is TerminalState.UNGRADED:
@@ -85,6 +95,13 @@ def qualify_run(
             replay_status,
             operator_mode,
             ("replay_only_not_live",),
+        )
+    if driver:
+        return QualificationRecord(
+            QualificationDisposition.QUALIFIED,
+            replay_status,
+            operator_mode,
+            ("driver_operator_is_capped_below_certified",),
         )
     if generated_operator:
         return QualificationRecord(QualificationDisposition.QUALIFIED, replay_status, operator_mode, ("generated_operator_is_capped_below_certified",))

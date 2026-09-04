@@ -188,6 +188,29 @@ def test_turn_one_operator_line_is_the_fixed_opening_not_its_own_rule(bundle: Pa
     )
 
 
+def test_header_surfaces_driver_mode_and_all_rejection_counts(bundle: Path) -> None:
+    path = bundle / "artifacts" / "operator-observations.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "operator_mode": "driver",
+            "driver_leading_rejected_count": 2,
+            "driver_obstacle_rejected_count": 1,
+            "driver_repeat_rejected_count": 3,
+            "driver_beat_substituted_count": 4,
+        }
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rendered = render_epoch_conversation(bundle)
+
+    assert "mode=driver" in rendered
+    assert "leading-rejected=2" in rendered
+    assert "obstacle-rejected=1" in rendered
+    assert "repeat-rejected=3" in rendered
+    assert "beat-substituted=4" in rendered
+
+
 def test_operator_line_is_attributed_to_the_previous_turns_classification(bundle: Path) -> None:
     """Turn N's operator line was selected by turn N-1's classification."""
 
