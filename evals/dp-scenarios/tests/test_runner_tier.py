@@ -317,9 +317,11 @@ def populated_parent_child_recordings(
 
     ``truncate_final_turn`` replaces the last turn of the *last epoch* with a
     per-turn timeout, leaving every gate examined on the earlier turns passing.
-    Only one epoch, so the batch still has valid observations to rate --- which
-    is also the reachable shape: one epoch running out of time, not all of
-    them.  That is the one
+    Only one epoch, so the batch still has valid observations to rate.  Note
+    this is *not* the only reachable shape: a systemic cause --- a slow agent, a
+    wedged provider, a --turn-timeout too tight for a driven turn --- truncates
+    every epoch, since ``_run_scenario_epochs`` has no early break.  That case
+    is covered by ``test_a_batch_of_truncated_epochs_still_reports``.  That is the one
     shape that distinguishes the truncation cap from the ordinary ungraded
     path: the synthetic ``make_scenario`` fixtures never reach PASSED, so a
     timeout test built on them stays green either way.

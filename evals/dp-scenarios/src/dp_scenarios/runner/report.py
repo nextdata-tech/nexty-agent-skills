@@ -129,7 +129,14 @@ def human_summary(result: TierResult) -> str:
                     f"Wilson lower bound={rate.lower_bound:.3f}"
                 )
             if summary.repeatability.rates.excluded_invalid:
-                lines.append(f"  invalid runs excluded from rates: {summary.repeatability.rates.excluded_invalid}")
+                # "invalid" alone is wrong for half of what this counts: a
+                # truncated run scores PASSED with terminal_state=turn_timeout.
+                excluded = summary.repeatability.rates.excluded_invalid
+                truncated = summary.repeatability.rates.excluded_truncated
+                detail = f" ({truncated} truncated)" if truncated else ""
+                lines.append(
+                    f"  runs excluded from rates (invalid or truncated): {excluded}{detail}"
+                )
     return "\n".join(lines) + "\n"
 
 

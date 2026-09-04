@@ -251,6 +251,9 @@ class ScenarioSummary:
                 for gate, rate in self.repeatability.rates.rates.items()
             }
             result["repeatability"]["excluded_invalid"] = self.repeatability.rates.excluded_invalid
+            # Addressable separately so a consumer is never told that a run
+            # scoring PASSED with terminal_state=turn_timeout was invalid.
+            result["repeatability"]["excluded_truncated"] = self.repeatability.rates.excluded_truncated
         if self.repeatability.demonstrated_once is not None:
             result["repeatability"]["demonstrated_once"] = self.repeatability.demonstrated_once.as_dict()
         return result

@@ -53,7 +53,12 @@ class RateReport:
     """Per-gate rates for valid, non-single-shot observations."""
 
     rates: Mapping[str, GateRate]
+    # Counts INVALID *and* truncated runs: both mean "this epoch did not
+    # complete", which is what the certification rules ask about.  The two are
+    # separable via ``excluded_truncated`` so a reader is never told that a run
+    # scoring PASSED with ``terminal_state=turn_timeout`` was invalid.
     excluded_invalid: int = 0
+    excluded_truncated: int = 0
     discounted_twins: int = 0
 
 
@@ -187,8 +192,29 @@ def gate_pass_rates(runs: Sequence[object], *, twins: Mapping[str, str] | None =
         for run in selected
         if _state(run) is not TerminalState.INVALID and not _truncated(run)
     ]
-    if len(valid) < 2:
+    excluded_truncated = sum(1 for run in selected if _truncated(run))
+    if not selected:
+        # No observations at all is a caller error, not a run outcome: there is
+        # no batch to report on.  Kept as a raise so a wiring mistake stays
+        # loud.
         raise ValueError("a rate request requires at least two valid observations")
+    if len(valid) < 2:
+        # Too few completed epochs to rate, which is a *result*, not a usage
+        # error: certification already fails on ``excluded_invalid != 0``, so
+        # an empty report says "not certified, and here is why" while letting
+        # the caller finish and write its evidence.  Raising here cost the
+        # operator report.json and summary.txt for a run that had already spent
+        # the agent and driver tokens -- `tier.py` calls this bare inside its
+        # per-scenario loop, and neither runner's handler catches ValueError.
+        # The shape that gets here is systemic (a slow agent, a wedged
+        # provider, a --turn-timeout too tight for a driven turn), which is
+        # exactly when the report matters most.
+        return RateReport(
+            rates={},
+            excluded_invalid=len(selected) - len(valid),
+            excluded_truncated=excluded_truncated,
+            discounted_twins=discounted,
+        )
     rates: dict[str, GateRate] = {}
     for gate in ("intake", "capability", "narrowing", "construction", "build", "query", "follow-up"):
         passed = 0
@@ -200,7 +226,12 @@ def gate_pass_rates(runs: Sequence[object], *, twins: Mapping[str, str] | None =
                 passed += gate_passed
         if examined:
             rates[gate] = GateRate(gate, passed, examined, wilson_ci(passed, examined, alpha=alpha))
-    return RateReport(rates=rates, excluded_invalid=len(selected) - len(valid), discounted_twins=discounted)
+    return RateReport(
+        rates=rates,
+        excluded_invalid=len(selected) - len(valid),
+        excluded_truncated=excluded_truncated,
+        discounted_twins=discounted,
+    )
 
 
 def repeatability_plan(tier: RepeatabilityTier | str) -> int:
