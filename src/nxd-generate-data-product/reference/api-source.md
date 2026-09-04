@@ -4,6 +4,7 @@
 
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
+  - REST response envelopes: select the row array
   - Paginator `type` values
   - A POST body is scanned for dlt expressions — escape every literal brace
   - Paginating a GraphQL connection
@@ -52,6 +53,41 @@ config: RESTAPIConfig = {
 }
 resources = {r.name: r for r in rest_api_resources(config)}  # returns a LIST
 ```
+
+### REST response envelopes: select the row array
+
+Inspect each response before authoring the models. If the API returns a top-level
+object that wraps rows in a key such as `data` — for example
+`{"page": 1, "per_page": 10, "total": 12, "pages": 2, "data": [...]}` — set
+the resource endpoint's `data_selector` to that row-array path:
+
+```python
+resources_config = [
+    {
+        "name": "monitors",
+        "endpoint": {
+            "path": secrets["endpoint_monitors"],
+            "data_selector": "data",
+        },
+    },
+    {
+        "name": "checks",
+        "endpoint": {
+            "path": secrets["endpoint_checks"],
+            "data_selector": "data",
+        },
+    },
+]
+```
+
+`data_selector` is optional only when the response itself is already the row
+list. It is required semantically for an envelope: without it, pagination
+metadata can be treated as row data, the resource can fail while extracting, or
+the landed table can carry `page`, `per_page`, `total`, and `pages` as columns.
+Repeat the selector for every resource whose response has the same envelope.
+An equivalent mapping that extracts the array before handing rows to dlt is
+acceptable, but do not replace the declared REST connector with a hand-written
+HTTP loop.
 
 ### Paginator `type` values — copy these exactly
 

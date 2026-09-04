@@ -36,20 +36,25 @@ roots += list(plugins.glob("**/src/nxd-run-job-loop"))
 roots += list(plugins.glob("**/skills/nxd-run-job-loop"))
 for mount in (home, home / "mnt"):
     local_plugins = mount / ".local-plugins"
-    cached_pattern = local_plugins / "cache/nexty/nexty-agent-skills/*/skills/nxd-run-job-loop"
-    searched.append(cached_pattern)
-    cached = list(local_plugins.glob("cache/nexty/nexty-agent-skills/*/skills/nxd-run-job-loop"))
     def _version_key(root):
         parts = root.parents[1].name.split(".")
         if len(parts) != 3 or not all(part.isdigit() for part in parts):
             return (-1, -1, -1)
         return tuple(int(part) for part in parts)
-    roots += sorted(cached, key=_version_key, reverse=True)
+    for plugin_name in ("nexty-desktop", "nexty-datamesh", "nexty-agent-skills"):
+        cached_pattern = local_plugins / f"cache/nexty/{plugin_name}/*/skills/nxd-run-job-loop"
+        searched.append(cached_pattern)
+        cached = list(local_plugins.glob(str(cached_pattern.relative_to(local_plugins))))
+        roots += sorted(cached, key=_version_key, reverse=True)
 claude = home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
-cowork_pattern = claude / "*/*/cowork_plugins/cache/nexty/nexty-agent-skills/*/skills/nxd-run-job-loop"
+plugin_patterns = [
+    claude / f"*/*/cowork_plugins/cache/nexty/{plugin_name}/*/skills/nxd-run-job-loop"
+    for plugin_name in ("nexty-desktop", "nexty-datamesh", "nexty-agent-skills")
+]
 skills_plugin_pattern = claude / "skills-plugin/*/*/*/skills/nxd-run-job-loop"
-searched += [cowork_pattern, skills_plugin_pattern]
-roots += list(claude.glob("*/*/cowork_plugins/cache/nexty/nexty-agent-skills/*/skills/nxd-run-job-loop"))
+searched += [*plugin_patterns, skills_plugin_pattern]
+for pattern in plugin_patterns:
+    roots += list(claude.glob(str(pattern.relative_to(claude))))
 roots += list(claude.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop"))
 for root in roots:
     skill = root / "SKILL.md"

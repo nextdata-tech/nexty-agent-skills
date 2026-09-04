@@ -40,7 +40,7 @@
     },
     {
       "id": "data-selector-or-envelope-handled",
-      "check": "Both endpoints return an envelope ({page, per_page, total, pages, data: [...]}), not a bare list. Each resource reaches the 'data' array (via a data_selector or equivalent), so the landed table carries only check/monitor rows -- not the pagination-metadata keys mixed in as columns or as a separate junk row. FAIL if page/per_page/total appear as columns on the landed monitors or checks table."
+      "check": "Both endpoints return an envelope ({page, per_page, total, pages, data: [...]}), not a bare list. Each resource reaches the 'data' array (via a data_selector or equivalent), so the landed table carries only check/monitor rows -- not the pagination-metadata keys mixed in as columns or as a separate junk row. This is enforced by the authoritative deterministic check fact landed:envelope-data-selector; grade from that fact. FAIL if page/per_page/total appear as columns on the landed monitors or checks table."
     },
     {
       "id": "pagination-configured",

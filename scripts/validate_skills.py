@@ -342,6 +342,88 @@ def validate_pack_completeness(root: Path) -> list[str]:
     return errors
 
 
+def validate_marketplace_skill_bundles(root: Path) -> list[str]:
+    """Validate the named marketplace projections against ``src/``.
+
+    The marketplace intentionally keeps the two customer-facing bundles as
+    skill-bundle plugins backed by the canonical ``src/`` tree. This prevents
+    copied plugin trees from drifting while allowing shared foundation skills
+    to appear in both experiences.
+    """
+    errors: list[str] = []
+    market_path = root / ".claude-plugin" / "marketplace.json"
+    if not market_path.exists():
+        return [f"{market_path}: missing marketplace manifest"]
+    try:
+        market = json.loads(market_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{market_path}: invalid JSON ({exc})"]
+
+    plugins = market.get("plugins", [])
+    if not isinstance(plugins, list):
+        return [f"{market_path}: plugins must be a list"]
+    by_name = {
+        plugin.get("name"): plugin
+        for plugin in plugins
+        if isinstance(plugin, dict) and isinstance(plugin.get("name"), str)
+    }
+    src = root / "src"
+    source_names = {path.name for path in _skill_dirs(src)} if src.is_dir() else set()
+    named_sets: dict[str, set[str]] = {}
+
+    for plugin_name in ("nexty-desktop", "nexty-datamesh"):
+        plugin = by_name.get(plugin_name)
+        if plugin is None:
+            errors.append(f"{market_path}: missing {plugin_name!r} plugin entry")
+            continue
+        if plugin.get("source") != "./src":
+            errors.append(
+                f"{market_path}: {plugin_name!r} must use source './src'"
+            )
+        if plugin.get("strict") is not False:
+            errors.append(
+                f"{market_path}: {plugin_name!r} must set strict to false"
+            )
+        skills = plugin.get("skills")
+        if not isinstance(skills, list) or not skills:
+            errors.append(f"{market_path}: {plugin_name!r} must list skills")
+            continue
+        names: set[str] = set()
+        for skill_ref in skills:
+            if not isinstance(skill_ref, str) or not skill_ref.startswith("./"):
+                errors.append(
+                    f"{market_path}: {plugin_name!r} has invalid skill path {skill_ref!r}"
+                )
+                continue
+            skill_name = skill_ref[2:]
+            if not skill_name or "/" in skill_name or skill_name in names:
+                errors.append(
+                    f"{market_path}: {plugin_name!r} has duplicate or invalid skill path "
+                    f"{skill_ref!r}"
+                )
+                continue
+            names.add(skill_name)
+            if skill_name not in source_names:
+                errors.append(
+                    f"{market_path}: {plugin_name!r} references missing skill src/{skill_name}"
+                )
+        named_sets[plugin_name] = names
+
+    if len(named_sets) == 2:
+        union = named_sets["nexty-desktop"] | named_sets["nexty-datamesh"]
+        missing = sorted(source_names - union)
+        extra = sorted(union - source_names)
+        if missing:
+            errors.append(
+                f"{market_path}: named plugin sets omit source skills: {', '.join(missing)}"
+            )
+        if extra:
+            errors.append(
+                f"{market_path}: named plugin sets reference unknown skills: {', '.join(extra)}"
+            )
+    return errors
+
+
 def validate_version_consistency(root: Path) -> list[str]:
     """plugin.json, marketplace.json, and every SKILL.md metadata.version agree."""
     errors: list[str] = []
@@ -415,6 +497,7 @@ def main() -> int:
     errors.extend(validate_reference_tocs(root))
     errors.extend(validate_evals(root))
     errors.extend(validate_pack_completeness(root))
+    errors.extend(validate_marketplace_skill_bundles(root))
     errors.extend(validate_version_consistency(root))
 
     if errors:

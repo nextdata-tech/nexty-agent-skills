@@ -24,6 +24,33 @@ skill_sets:
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"
 
+  nexty_desktop:
+    description: "Nexty Desktop local workflow plugin set."
+    skills:
+      - "src/nxd-analyze-mesh"
+      - "src/nxd-build-semantic-data-product"
+      - "src/nxd-generate-data-product"
+      - "src/nxd-render-static-artifact"
+      - "src/nxd-review-closure"
+      - "src/nxd-run-job-loop"
+
+  nexty_datamesh:
+    description: "Nexty DataMesh deployed-workflow plugin set."
+    skills:
+      - "src/nxd-add-expectations-and-promises"
+      - "src/nxd-add-inputs"
+      - "src/nxd-add-outputs"
+      - "src/nxd-add-policies"
+      - "src/nxd-analyze-mesh"
+      - "src/nxd-build-data-product"
+      - "src/nxd-build-semantic-data-product"
+      - "src/nxd-debug-data-product"
+      - "src/nxd-fix-policy-failures"
+      - "src/nxd-query-data-product"
+      - "src/nxd-run-evals"
+      - "src/nxd-setup-cli"
+      - "src/nxd-toggle-policies"
+
   # Control arm for the adversarial-review experiment: the shipped pack with
   # nxd-review-closure REMOVED. Its Step 6b dispatch is conditional on that
   # skill being installed, so this arm runs the pre-review workflow while every

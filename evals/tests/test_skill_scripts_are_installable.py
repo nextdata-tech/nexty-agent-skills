@@ -209,7 +209,7 @@ def _bootstrap_resolves(home: Path, cwd: Path) -> Path:
 def test_bootstrap_resolver_has_no_hardcoded_plugin_version():
     text = (SRC / "nxd-run-job-loop" / "reference" / "scripts-bootstrap.md").read_text()
     assert not re.search(r"version\s*=\s*['\"]\d+\.\d+\.\d+['\"]", text)
-    assert "nexty-agent-skills/*/skills/nxd-run-job-loop" in text
+    assert 'for plugin_name in ("nexty-desktop", "nexty-datamesh", "nexty-agent-skills")' in text
 
 
 def _install(target: str, home: Path, *args: str) -> None:
@@ -510,7 +510,10 @@ def test_whole_pack_report_count_matches_archive_members():
     )
     version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
     archive = REPO / "build" / f"nexty-agent-skills-v{version}.zip"
-    match = re.search(r"Plugin pack: .* \((\d+) files,", result.stdout)
+    match = re.search(
+        rf"Plugin pack: .*nexty-agent-skills-v{re.escape(version)}\.zip \((\d+) files,",
+        result.stdout,
+    )
     assert match, result.stdout
     with zipfile.ZipFile(archive) as zf:
         members = zf.infolist()

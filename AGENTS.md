@@ -17,12 +17,16 @@ pack-level invariants CI cannot check on its own.
   marketplace manifests for the Claude Code distribution path.
 - `evals/skill-sets.yaml` — named skill packs used by the eval harness.
 - `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip and
-  assembles the uploadable whole-pack plugin zip,
-  `build/nexty-agent-skills-v<version>.zip`, in the Desktop/Cowork layout:
-  `./skills/<name>/` trees plus a `.claude-plugin/plugin.json` with the `skills`
-  override stripped, because Desktop auto-discovers `./skills`.
-- `build-plugin.sh` — packages `.claude-plugin/plugin.json` + `src/` + `README.md`
-  into one Claude Code plugin zip,
+  assembles the two named uploadable plugin zips,
+  `build/nexty-desktop-v<version>.zip` and `build/nexty-datamesh-v<version>.zip`,
+  plus the compatibility aggregate `build/nexty-agent-skills-v<version>.zip`.
+  Each uses the Desktop/Cowork layout: `./skills/<name>/` trees plus a
+  `.claude-plugin/plugin.json` with the `skills` override stripped, because
+  Desktop auto-discovers `./skills`. Membership comes from the explicit skill
+  lists in `.claude-plugin/marketplace.json`; `src/` remains canonical and
+  shared skills may intentionally occur in both named sets.
+- `build-plugin.sh` — packages the legacy aggregate `.claude-plugin/plugin.json` +
+  `src/` + `README.md` into one direct Claude Code plugin zip,
   `build/plugin/nexty-agent-skills-plugin-v<version>.zip`, in the documented
   plugin format: plugin-root contents at the archive root, loadable with
   `claude --plugin-dir <zip>` / `--plugin-url <url>`. This is the sibling of the
@@ -61,16 +65,20 @@ The plugin version in `.claude-plugin/plugin.json` is authoritative.
 
 - A `vX.Y.Z` release tag MUST equal `plugin.json` `version` (release.yml enforces).
 - `.claude-plugin/marketplace.json` plugin `version` MUST equal `plugin.json`.
+- The `nexty-desktop` and `nexty-datamesh` marketplace entries MUST be skill-bundle
+  projections from `./src`, and their union MUST cover every skill under `src/`.
 - Every `src/*/SKILL.md` `metadata.version` MUST equal the plugin version — skill
   versions are kept in lockstep, not bumped individually.
 - Bump the plugin version when shipping new or changed skills (minor for added
   capability, patch for packaging/doc fixes). Sync all three surfaces in the same
   PR.
 
-## Pack completeness (shipped pack = every skill)
+## Pack completeness (compatibility pack = every skill)
 
-The shipped pack is `current_pack` in `evals/skill-sets.yaml`. It must list **every**
-skill directory under `src/`. When you add a skill you MUST, in the same PR:
+The compatibility pack is `current_pack` in `evals/skill-sets.yaml`. It must list
+**every** skill directory under `src/`. The `nexty_desktop` and `nexty_datamesh`
+sets describe the two experience-specific projections and may overlap on shared
+foundation skills. When you add a skill you MUST, in the same PR:
 
 1. Add `src/<skill>` to `current_pack` in `evals/skill-sets.yaml`.
 2. Add a row to the **Available Skills** table in `README.md`.

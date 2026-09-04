@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.43.0
+  version: 0.43.1
 ---
 
 # nxd-generate-data-product skill
@@ -358,9 +358,7 @@ Raise `RuntimeError` carrying actual-vs-expected. An itemized exclusion means a
 totality alone can pass while every monetary answer is overstated — both, with
 worked code, in [reference/derived-models.md](reference/derived-models.md).
 
-**Other connector types**: Step 3 is identical except the `readers=[...]` body
-and `secrets[...]` key — take those from `reference/` (`file-source.md`,
-`database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
+**Other connector types**: Step 3 is identical except the `readers=[...]` body and `secrets[...]` key — take those from `reference/` (`file-source.md`, `database-source.md`, `api-source.md`); when an API returns a metadata envelope, select its row array with the resource endpoint's `data_selector` before landing. Steps 3a/3b are connector-independent.
 
 ### Step 4 — `spec.py`: models + transform + the `duckdb` output port
 

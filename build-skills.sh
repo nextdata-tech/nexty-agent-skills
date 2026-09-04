@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Package each skill in src/ into a zip, excluding noise (VCS, CI, caches,
-# pre-commit hooks, lockfiles, OS junk). Also assemble one uploadable plugin zip
-# containing the whole pack. Report file count + size per skill.
-# Output zips land in the build/ directory: build/<skill>.zip and
-# build/nexty-agent-skills-v<version>.zip.
+# pre-commit hooks, lockfiles, OS junk). Also assemble the uploadable plugin zips
+# declared in .claude-plugin/marketplace.json. Report file count + size per
+# skill. Output zips land in build/ directory: build/<skill>.zip,
+# build/nexty-desktop-v<version>.zip, build/nexty-datamesh-v<version>.zip, and
+# the legacy aggregate build/nexty-agent-skills-v<version>.zip.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$ROOT_DIR/src"
 OUT_DIR="$ROOT_DIR/build"
+MARKETPLACE_JSON="$ROOT_DIR/.claude-plugin/marketplace.json"
 mkdir -p "$OUT_DIR"
 # The directory is generated output. Clear old archives so a release or local
 # rebuild cannot publish a removed skill or a pack from a previous version.
@@ -149,6 +151,104 @@ done
 
 echo
 echo "Skill zips written to ${OUT_DIR}/"
+
+# The marketplace is the source of truth for plugin membership. These entries
+# use Claude Code's skill-bundle form, so both plugins can project selected
+# skills from the same src/ tree without maintaining duplicate source files.
+skill_names_for_plugin() {
+  local plugin_name="$1"
+  python3 - "$MARKETPLACE_JSON" "$plugin_name" <<'PY'
+import json
+import sys
+
+marketplace_path, plugin_name = sys.argv[1:]
+with open(marketplace_path, encoding="utf-8") as fh:
+    marketplace = json.load(fh)
+
+for plugin in marketplace.get("plugins", []):
+    if plugin.get("name") != plugin_name:
+        continue
+    if plugin.get("source") != "./src":
+        raise SystemExit(
+            f"{plugin_name}: expected marketplace source './src' for a skill-bundle plugin"
+        )
+    skills = plugin.get("skills")
+    if not isinstance(skills, list) or not skills:
+        raise SystemExit(f"{plugin_name}: marketplace entry has no skills list")
+    for skill in skills:
+        if not isinstance(skill, str) or not skill.startswith("./"):
+            raise SystemExit(f"{plugin_name}: invalid skill path {skill!r}")
+        print(skill[2:])
+    break
+else:
+    raise SystemExit(f"marketplace entry not found: {plugin_name}")
+PY
+}
+
+write_plugin_manifest() {
+  local plugin_name="$1" destination="$2"
+  python3 - "$ROOT_DIR/.claude-plugin/plugin.json" "$MARKETPLACE_JSON" "$plugin_name" "$destination" <<'PY'
+import json
+import sys
+
+plugin_path, marketplace_path, plugin_name, destination = sys.argv[1:]
+with open(plugin_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+with open(marketplace_path, encoding="utf-8") as fh:
+    marketplace = json.load(fh)
+
+entry = next(
+    (item for item in marketplace.get("plugins", []) if item.get("name") == plugin_name),
+    None,
+)
+if entry is None:
+    raise SystemExit(f"marketplace entry not found: {plugin_name}")
+
+manifest["name"] = plugin_name
+manifest["displayName"] = entry.get("displayName", plugin_name)
+manifest["description"] = entry.get("description", manifest.get("description", ""))
+manifest.pop("skills", None)
+manifest.pop("$schema", None)
+with open(destination, "w", encoding="utf-8") as fh:
+    json.dump(manifest, fh, indent=2)
+    fh.write("\n")
+PY
+}
+
+build_plugin_pack() {
+  local plugin_name="$1" archive_name="$2"
+  local pack_staging
+  pack_staging="$(mktemp -d "${TMPDIR:-/tmp}/nexty-agent-skills-pack.XXXXXX")"
+  mkdir -p "$pack_staging/.claude-plugin" "$pack_staging/skills"
+  write_plugin_manifest "$plugin_name" "$pack_staging/.claude-plugin/plugin.json"
+
+  while IFS= read -r skill; do
+    [[ -f "$OUT_DIR/$skill.zip" ]] || {
+      echo "error: missing per-skill archive for $plugin_name: $skill" >&2
+      rm -rf "$pack_staging"
+      exit 1
+    }
+    mkdir -p "$pack_staging/skills/$skill"
+    unzip -q "$OUT_DIR/$skill.zip" -d "$pack_staging/skills/$skill"
+  done < <(skill_names_for_plugin "$plugin_name")
+
+  local pack_path="$OUT_DIR/${archive_name}-v${PLUGIN_VERSION}.zip"
+  rm -f "$pack_path"
+  (
+    cd "$pack_staging"
+    zip -qrD "$pack_path" .
+  )
+  local pack_files pack_size
+  pack_files="$(unzip -Z1 "$pack_path" | wc -l | tr -d ' ')"
+  pack_size="$(du -h "$pack_path" | awk '{print $1}')"
+  echo "Plugin pack: ${pack_path} (${pack_files} files, ${pack_size})"
+  rm -rf "$pack_staging"
+}
+
+# Build the two new plugin projections from the same sanitized per-skill
+# archives used by the compatibility aggregate below.
+build_plugin_pack "nexty-desktop" "nexty-desktop"
+build_plugin_pack "nexty-datamesh" "nexty-datamesh"
 
 # Assemble the same layout that Claude Desktop/Cowork accepts as one plugin
 # upload and that nxd's Desktop cache uses: ./skills/<name>/ plus

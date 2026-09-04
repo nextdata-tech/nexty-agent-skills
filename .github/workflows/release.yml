@@ -286,8 +286,8 @@ jobs:
       - name: Validate skills
         run: python3 scripts/validate_skills.py --root .
 
-      # build-skills.sh writes one zip per skill plus the uploadable whole-pack
-      # plugin zip into build/. It only prints an "OVER CAP" status; it never
+      # build-skills.sh writes one zip per skill plus the uploadable named plugin
+      # zips into build/. It only prints an "OVER CAP" status; it never
       # exits non-zero, so we grep.
       - name: Build skill zips and enforce the 200-entry Claude Desktop cap
         run: |
@@ -309,8 +309,8 @@ jobs:
           name: release-evals
           path: eval-report
 
-      # Publish both the individual skill zips and the single whole-pack plugin
-      # zip. The latter is the supported Claude Desktop/Cowork upload path.
+      # Publish both the individual skill zips and the named plugin zips. The
+      # latter are the supported Claude Desktop/Cowork upload paths.
       - name: Assemble release assets
         id: assets
         env:
@@ -319,8 +319,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Per-skill zips and nexty-agent-skills-v<version>.zip (both built by
-          # build-skills.sh). The pack is a real plugin ZIP, not a zip of zips.
+          # Per-skill zips plus the named and compatibility plugin zips (all built
+          # by build-skills.sh). Each pack is a real plugin ZIP, not a zip of zips.
           for z in build/*.zip; do
             cp "$z" "dist/$(basename "$z")"
           done
@@ -358,8 +358,12 @@ jobs:
           below, then upload it under Settings → Capabilities → Skills (or drag it
           into a chat).
 
-          **Install the whole pack:** download `nexty-agent-skills-<tag>.zip`, then
+          **Install local Desktop workflows:** download `nexty-desktop-<tag>.zip`, then
           use Customize → Plugins → Add plugin → Upload plugin.
+
+          **Install deployed DataMesh workflows:** download `nexty-datamesh-<tag>.zip`
+          and use the same Plugins upload flow. `nexty-agent-skills-<tag>.zip` remains
+          available as a compatibility aggregate.
 
           **Claude Code users:** prefer the plugin/marketplace flow in the README;
           these zips target Claude Desktop.

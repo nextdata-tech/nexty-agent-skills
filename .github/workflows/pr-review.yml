@@ -167,9 +167,9 @@ jobs:
                - every directory under src/ is listed in current_pack in
                  evals/skill-sets.yaml AND has a row in the README Available Skills
                  table — a new skill missing from either is REQUEST_CHANGES
-               - all three version surfaces agree: .claude-plugin/plugin.json,
-                 .claude-plugin/marketplace.json, and every src/*/SKILL.md
-                 metadata.version. Any drift is REQUEST_CHANGES.
+               - the version in .claude-plugin/plugin.json agrees with every
+                 .claude-plugin/marketplace.json plugin entry and every
+                 src/*/SKILL.md metadata.version. Any drift is REQUEST_CHANGES.
             3. Post ONE structured review via
                gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews
                Use REQUEST_CHANGES for any high-severity finding, COMMENT

@@ -11,7 +11,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.43.0
+  version: 0.43.1
 ---
 
 # nxd-run-job-loop skill
@@ -72,7 +72,7 @@ Choose this order before invoking any runtime command:
    **once** with the failed `run_id` rather than classifying from the build error
    text — [reference/failure-handling.md](reference/failure-handling.md) § After a
    failed build has the contract and the rules.
-   This is the supported route for Claude Desktop and Claude Cowork. Read-only `nxd://`
+   This is the supported route for Claude Desktop and Claude Cowork; the closure-root `self_check.py` remains the generator Step 7 record gate, not a substitute. Read-only `nxd://`
    **resources** — with tool bridges where a client exposes none — expose what a
    release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
