@@ -103,9 +103,10 @@ This repository also includes Claude Code plugin metadata:
   plugins backed by that tree, plus a compatibility aggregate for existing installs.
 
 `nexty-desktop` contains the local supervisor workflow. `nexty-datamesh` contains the
-deployed-platform workflow. `nxd-analyze-mesh` and `nxd-build-semantic-data-product` are
-shared foundation skills and intentionally appear in both sets. `nexty-agent-skills` remains
-available as the compatibility aggregate for existing installs.
+deployed-platform workflow. `nxd-build-semantic-data-product` is shared because it
+supports local inference and the deployed semantic-model flow. `nxd-analyze-mesh` is
+DataMesh-only because its live inspection flow requires a connected mesh. The
+`nexty-agent-skills` compatibility aggregate remains available for existing installs.
 
 #### Own marketplace
 
@@ -174,6 +175,11 @@ Use `--plugin desktop|datamesh|all` to select a named set; `all` is the compatib
 | `--desktop` / `--cowork` | Builds `nexty-desktop-v<version>.zip`, `nexty-datamesh-v<version>.zip`, or the compatibility `nexty-agent-skills-v<version>.zip`, depending on `--plugin`. Upload the selected ZIP in Claude Desktop's Plugins UI. |
 
 **Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
+Each Code install records its selected projection in `.nexty-plugin-install.json` at
+that skills root. Installing another named projection replaces only the previously
+managed skills; user-authored skill directories are left in place. Uninstall reads
+that marker, so it removes the installed projection even when a different
+`--plugin` value is supplied.
 
 **Examples**
 
@@ -269,9 +275,9 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nexty-datamesh` | Deployed DataMesh workflows | `build/nexty-datamesh-v<version>.zip` |
 | `nexty-agent-skills` | Compatibility aggregate for existing installs | `build/nexty-agent-skills-v<version>.zip` |
 
-The two named plugins share the mesh analyzer and semantic-product foundation skills by
-design. Their membership is declared once in `.claude-plugin/marketplace.json` and the
-build script projects those lists from `src/`.
+The two named plugins share the semantic-product foundation skill by design. Their
+membership is declared once in `.claude-plugin/marketplace.json` and the build script
+projects those lists from `src/`.
 
 | Skill | Description |
 |-------|-------------|

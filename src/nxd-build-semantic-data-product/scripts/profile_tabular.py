@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile local tabular samples for offline mesh discovery.
+"""Profile local tabular samples for semantic model inference.
 
 Two modes, one output shape:
 

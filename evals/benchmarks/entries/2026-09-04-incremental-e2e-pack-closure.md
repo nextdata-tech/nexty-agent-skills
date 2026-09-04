@@ -2,7 +2,7 @@
 id: 2026-09-04-incremental-e2e-pack-closure
 date: 2026-09-04
 label: "incremental E2E: named-pack closure and installability boundaries"
-plugin_version: 0.44.0
+plugin_version: 0.45.0
 status: NO_EVAL
 scenarios: []
 record: null

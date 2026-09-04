@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.44.0
+  version: 0.45.0
 ---
 
 # Nexty Mesh Assets
@@ -69,8 +69,11 @@ fails with a *shell* "No such file or directory". Resolve a `WORKDIR` **once per
 session** (skill dir if Bash sees its scripts, else a scratch copy that preserves
 the package layout), then run all entrypoints + the venv from `$WORKDIR`. Recipe
 (probe → Glob/Read/Write copy → confirm) + rationale:
-**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** — read it
-first. Quick probe:
+**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** - read it
+first for the live inspection scripts. Local tabular profiling is owned by
+`nxd-build-semantic-data-product`; do not copy or recreate that profiler in
+this skill. If a workflow needs a local `schema.json`, enable that skill and
+follow its profiler bootstrap instructions.
 
 ```bash
 [ -f "$SKILL_DIR/scripts/classify_profile.py" ] && WORKDIR="$SKILL_DIR"   # else bootstrap a copy
@@ -91,7 +94,6 @@ python3 -m venv .nxd-analyze-mesh-venv
 | `classify_profile.py <profile>` | Parse the profile, classify every service, list the inspectable (Storage/API) ones. |
 | `inspect_service.py <profile> <service>... --out FILE` | Connect read-only, inventory each service with schema-fingerprint grouping, de-duplicate shared stores, write inventory JSON. |
 | `match_assets.py <inventory.json>... [--flow SRC:DST]` | Match candidate input/output pairs, classify, and write the report + models markdown. `--flow` (repeatable) scopes matching to declared architecture flows. |
-| `profile_tabular.py <path>` / `profile_tabular.py <db.duckdb> <table>...` | Read-only local profiler. File mode: CSV/JSON/JSONL/Parquet sources that aren't live services. DuckDB mode: materialized `main.<table>` tables (e.g. a dlt sample load), enriched with exact full-table nullability/cardinality; two or more tables emit ONE combined document (redirect to `schema.json` as the profiling→inference handoff artifact). Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass and by nxd-build-semantic-data-product's Step 1-alt. |
 
 **Layout** — service-type code is isolated from generic code:
 
@@ -125,7 +127,20 @@ Run the steps in order. Inspect read-only at every step — never create, write,
 
 **Consult the user.** The person running this skill has domain knowledge of their environment. When a decision is genuinely ambiguous — which catalog owns a table, which copy of a replicated dataset is the source of truth, which of two services is the input — ask them rather than guessing.
 
-**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [reference/offline-discovery.md](reference/offline-discovery.md).
+**Offline mode.** When live inspection is not possible (no network to the
+services, credentials withheld, or the user prefers to share evidence by
+hand), run an optional read-only collection pass instead of (or alongside)
+live inspection - Snowflake `SHOW`/`DESCRIBE` output and Git repo inspection.
+For local CSV, JSON, Parquet, or DuckDB profiling, use the profiler owned by
+`nxd-build-semantic-data-product` and keep its `schema.json` handoff artifact.
+An analyzer-only installation must stop with an actionable request to enable
+that skill; for example, in the CLI run `nxd activate skills --plugin desktop
+--target code`, or from this checkout run
+`bash scripts/install.sh --code --skills "nxd-analyze-mesh
+nxd-build-semantic-data-product"`. It must not fall back to a live service,
+copy a second profiler, or silently skip the local evidence. The evidence feeds the same
+candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md`
+report. See [reference/offline-discovery.md](reference/offline-discovery.md).
 
 ### Step 0: Resolve the active mesh (do this first)
 
