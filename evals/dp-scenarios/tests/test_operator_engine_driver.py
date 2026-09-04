@@ -422,7 +422,7 @@ def test_driver_construction_rejects_missing_terms_and_conflicting_operator() ->
     )
     with pytest.raises(ValueError, match="driver_forbidden_terms"):
         OperatorEngine(no_terms_script, InMemoryTransport([TurnResult(agent_message="What is the source?")]), driver=driver(lambda _view: "ok"))
-    with pytest.raises(ValueError, match="mutually exclusive"):
+    with pytest.raises(ValueError, match="never both"):
         OperatorEngine(
             script,
             InMemoryTransport([TurnResult(agent_message="What is the source?")]),

@@ -279,9 +279,23 @@ def test_tier_runner_drives_the_same_operator_factory_on_replay_and_live_paths(t
     assert all(turn["driver_skip_reason"] is None for turn in scripted_observations["turns"])
 
 
-def recording_for(scenario: FakeScenario, responses: list[TurnResult]) -> ReplayRecording:
+def recording_for(
+    scenario: FakeScenario,
+    responses: list[TurnResult],
+    *,
+    driver: object | None = None,
+) -> ReplayRecording:
+    """Record a run of ``scenario``, optionally with the driver that authored it.
+
+    A driver-authored replay has to be recorded through the same driver: the
+    engine now substitutes the operator's words on substitutable turns, so a
+    recording made by the scripted engine would not match a driven rerun and
+    the mismatch would look like a replay fault rather than a fixture that was
+    built against the wrong operator.
+    """
+
     recorder = RecordingSession(InMemoryTransport(responses))
-    OperatorEngine(scenario.script, recorder).run()
+    OperatorEngine(scenario.script, recorder, driver=driver).run()
     return recorder.recording()
 
 

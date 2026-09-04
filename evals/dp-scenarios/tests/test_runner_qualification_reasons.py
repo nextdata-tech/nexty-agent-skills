@@ -10,7 +10,7 @@ Read beside ``operator-observations.json`` -- which may say the plant did fire
 
 from __future__ import annotations
 
-from dp_scenarios.grading.gates import Finding, GateResult
+from dp_scenarios.grading.gates import GATE_PHASES, GATE_POINTS, Finding, GateResult
 from dp_scenarios.grading.score import ScoreVector, TerminalState, score_run
 from dp_scenarios.ledger.lint import LintReport
 from dp_scenarios.runner.qualification import QualificationDisposition, qualify_run
@@ -91,12 +91,25 @@ def test_an_ungraded_gate_with_no_findings_still_names_a_reason() -> None:
     assert "required_difficulty_not_fired" not in record.reasons
 
 
-def test_driver_pass_is_qualified_with_a_driver_specific_cap_reason() -> None:
-    score = ScoreVector({}, 100, {}, TerminalState.PASSED)
+def _passing_score():
+    return score_run(
+        {name: GateResult(name, True, GATE_POINTS[name]) for name in GATE_PHASES},
+        honesty_report=_clean_lint(),
+        route_fidelity=True,
+    )
+
+
+def test_a_driver_authored_run_is_capped_below_certified_with_its_own_reason() -> None:
+    """A model authored the operator's words, so nothing here is repeatable.
+
+    The cap has to be its own reason code, not the generated-surface one: a
+    reader deciding whether the evidence supports a claim needs to know which
+    surface was non-deterministic.
+    """
 
     record = qualify_run(
-        score,
-        replay_status="verified",
+        _passing_score(),
+        replay_status="not-attempted",
         generated_operator=False,
         driver=True,
     )
@@ -105,8 +118,10 @@ def test_driver_pass_is_qualified_with_a_driver_specific_cap_reason() -> None:
     assert record.operator_mode == "driver"
     assert record.reasons == ("driver_operator_is_capped_below_certified",)
 
+
+def test_a_driver_run_stays_capped_even_when_repeatability_is_certified() -> None:
     certified = qualify_run(
-        score,
+        _passing_score(),
         replay_status="verified",
         generated_operator=False,
         driver=True,
@@ -120,7 +135,7 @@ def test_driver_pass_is_qualified_with_a_driver_specific_cap_reason() -> None:
     # Control: the identical call without the driver flag reaches CERTIFIED,
     # so the two assertions above are carried by the cap and not by the score.
     scripted = qualify_run(
-        score,
+        _passing_score(),
         replay_status="verified",
         generated_operator=False,
         driver=False,
@@ -128,3 +143,11 @@ def test_driver_pass_is_qualified_with_a_driver_specific_cap_reason() -> None:
     )
 
     assert scripted.disposition is QualificationDisposition.CERTIFIED
+
+
+def test_a_scripted_run_is_unchanged_by_the_driver_parameter() -> None:
+    record = qualify_run(_passing_score(), replay_status="verified", generated_operator=False)
+
+    assert record.disposition is QualificationDisposition.QUALIFIED
+    assert record.operator_mode == "scripted"
+    assert record.reasons == ()

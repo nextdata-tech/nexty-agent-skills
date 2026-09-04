@@ -152,12 +152,19 @@ class PinnedVersions:
         if not isinstance(self.agent_sampling_params, Mapping) or not self.agent_sampling_params:
             raise EnvironmentError("pinned value agent_sampling_params must be a non-empty mapping")
         object.__setattr__(self, "agent_sampling_params", MappingProxyType(dict(self.agent_sampling_params)))
+        # The driver pins are cross-field, not independent.  An empty mapping
+        # is the only truthful sampling record for a scripted operator, and a
+        # declared driver with no sampling record cannot be compared across a
+        # pair.  Deliberately NOT the agent_sampling_params rule, which demands
+        # a non-empty mapping unconditionally.
         if not isinstance(self.driver_sampling_params, Mapping):
             raise EnvironmentError("pinned value driver_sampling_params must be a mapping")
         if self.driver_model_id == NOT_APPLICABLE and self.driver_sampling_params:
             raise EnvironmentError("pinned value driver_sampling_params must be empty when driver_model_id is not-applicable")
         if self.driver_model_id != NOT_APPLICABLE and not self.driver_sampling_params:
-            raise EnvironmentError("pinned value driver_sampling_params must be non-empty when driver_model_id is declared")
+            raise EnvironmentError(
+                "pinned value driver_sampling_params must be a non-empty mapping when a driver is pinned"
+            )
         object.__setattr__(self, "driver_sampling_params", MappingProxyType(dict(self.driver_sampling_params)))
 
     @property
@@ -197,6 +204,8 @@ class PinnedVersions:
             canary_claims_hash=required["canary_claims_hash"],  # type: ignore[arg-type]
             agent_model_id=agent_model_id,
             agent_sampling_params=sampling,  # type: ignore[arg-type]
+            # Absence is unambiguous: the driver fields did not exist before
+            # the driver operator, so a mapping without them is a scripted run.
             driver_model_id=driver_model_id,  # type: ignore[arg-type]
             driver_sampling_params=driver_sampling_params,  # type: ignore[arg-type]
             supervisor_binary_path=str(value.get("supervisor_binary_path", "not-applicable")),

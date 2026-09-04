@@ -528,3 +528,94 @@ def test_granting_bash_denies_nothing(tmp_path: Path, monkeypatch: pytest.Monkey
         tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
     }
     assert "Bash" in allowed_tools
+
+
+def _spawned_claude_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    """Return the ``env=`` mapping the adapter really hands to ``Popen``."""
+
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    claude.chmod(0o700)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir(exist_ok=True)
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir(exist_ok=True)
+    mcp_config = tmp_path / "mcp.json"
+    mcp_config.write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "agent"
+    workspace.mkdir(exist_ok=True)
+    monkeypatch.chdir(workspace)
+
+    captured: dict[str, dict[str, str]] = {}
+
+    class FakeProcess:
+        stdout = None
+        stderr = None
+        stdin = None
+        pid = 0
+
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["env"] = dict(kwargs["env"])
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    adapter = ClaudeCodeAdapter(
+        claude=claude,
+        model="test",
+        effort="low",
+        plugin_dir=plugin_dir,
+        repo_root=Path(__file__).resolve().parents[3],
+        fixture_dir=fixture_dir,
+        artifact_dir=tmp_path / "artifacts",
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path(sys.executable),
+        claude_config_dir=None,
+        timeout_s=5,
+        max_budget_usd=None,
+        append_system_prompt="test",
+        allow_bash=False,
+        mcp_config=mcp_config,
+        allowed_tools="mcp__nxd-desktop__build_data_product",
+    )
+    adapter.start()
+    return captured["env"]
+
+
+def test_openai_key_is_stripped_from_the_spawned_agent_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent process must never inherit the operator driver's key.
+
+    ``RunEnvironment.agent_environment`` withholds it by allowlist on the
+    harness path, but this adapter is also runnable directly as
+    ``python -m dp_scenarios.runner.claude_adapter``, and on that path the
+    child would otherwise inherit the whole parent environment.
+    """
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-operator-key")
+    monkeypatch.setenv("DP_ADAPTER_ENV_CANARY", "present")
+
+    environment = _spawned_claude_environment(tmp_path, monkeypatch)
+
+    assert "OPENAI_API_KEY" not in environment
+    assert all("sk-live-operator-key" not in value for value in environment.values())
+    # The strip is targeted, not a blanket environment reset.
+    assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
+
+
+def test_the_adapter_environment_is_unchanged_when_no_key_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("DP_ADAPTER_ENV_CANARY", "present")
+
+    environment = _spawned_claude_environment(tmp_path, monkeypatch)
+
+    assert "OPENAI_API_KEY" not in environment
+    assert environment["DP_ADAPTER_ENV_CANARY"] == "present"

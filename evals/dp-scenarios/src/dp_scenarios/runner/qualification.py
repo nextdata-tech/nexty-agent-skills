@@ -97,6 +97,9 @@ def qualify_run(
             ("replay_only_not_live",),
         )
     if driver:
+        # A model authored the operator's words.  Nothing downstream of that
+        # is reproducible turn-for-turn, so the run can never be CERTIFIED
+        # however many epochs agree.
         return QualificationRecord(
             QualificationDisposition.QUALIFIED,
             replay_status,

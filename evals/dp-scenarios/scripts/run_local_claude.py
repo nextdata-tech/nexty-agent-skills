@@ -16,13 +16,19 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
 from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.probe import resolve_supervisor
 from dp_scenarios.grading.statistics import RepeatabilityTier
+from dp_scenarios.operator.driver import DriverOperator
+from dp_scenarios.operator.openai_driver import (
+    DriverConfigError,
+    OpenAIDriverProvider,
+    driver_prompt_hash,
+)
 from dp_scenarios.runner.environment import PinnedVersions
 from dp_scenarios.runner.local import FileSupervisorRecordReader, temporary_plugin
 from dp_scenarios.runner.report import write_report
@@ -162,6 +168,62 @@ def _configure_scenarios(
     )
 
 
+DriverFactory = Callable[[Any, Any, int], DriverOperator]
+
+
+def driver_configuration(
+    args: argparse.Namespace,
+    pins: PinnedVersions,
+) -> tuple[PinnedVersions, DriverFactory | None]:
+    """Return the pins and operator factory implied by the driver flags.
+
+    Without ``--driver-model`` this is the identity: the operator stays
+    scripted and the pins keep ``driver_model_id`` not-applicable, which is
+    what makes a scripted ledger byte-stable.
+
+    With it, the provider is constructed **first**, before the drift canary
+    runs and before any scenario fixture is generated. A missing
+    ``OPENAI_API_KEY`` is then a refusal that costs nothing, rather than one
+    discovered after a canary build and a live agent session have already been
+    paid for.
+    """
+
+    model = getattr(args, "driver_model", None)
+    if model is None:
+        return pins, None
+    if not isinstance(model, str) or not model.strip():
+        raise TierError("--driver-model must be a non-empty model id")
+    temperature = float(getattr(args, "driver_temperature", 0.7))
+    timeout = float(getattr(args, "driver_timeout", 60.0))
+    if not 0 <= temperature <= 2:
+        raise TierError("--driver-temperature must be between 0 and 2")
+    if timeout <= 0:
+        raise TierError("--driver-timeout must be positive")
+    provider = OpenAIDriverProvider.from_environment(
+        model=model,
+        temperature=temperature,
+        timeout_seconds=timeout,
+    )
+    driver_pins = replace(
+        pins,
+        driver_model_id=model,
+        # The prompt is part of the operator's identity: two runs with the
+        # same model and temperature but different system prompts are two
+        # different operators and must not pair.
+        driver_sampling_params={"temperature": temperature, "prompt_hash": driver_prompt_hash()},
+    )
+
+    def factory(scenario: Any, environment: Any, epoch: int) -> DriverOperator:
+        return DriverOperator(
+            provider,
+            model_id=model,
+            temperature=temperature,
+            provider_timeout_seconds=timeout,
+        )
+
+    return driver_pins, factory
+
+
 def _tool_grant_arguments(args: argparse.Namespace) -> list[str]:
     """Return the adapter flags that decide the agent's tool grants."""
 
@@ -209,6 +271,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--supervisor", type=Path, help="nxd-desktop-supervisor executable")
     parser.add_argument("--desktop-python", type=Path, default=None, help="desktop supervisor Python interpreter")
     parser.add_argument("--runtime-wheel-version", help="override the runtime pin stored in the manifest")
+    parser.add_argument(
+        "--driver-model",
+        default=None,
+        help=(
+            "OpenAI model id that authors each substitutable operator turn "
+            "(default: none, the operator stays scripted). Requires OPENAI_API_KEY "
+            "in the environment and driver_forbidden_terms in the answer sheet"
+        ),
+    )
+    parser.add_argument("--driver-temperature", type=float, default=0.7, help="sampling temperature for --driver-model")
+    parser.add_argument("--driver-timeout", type=float, default=60.0, help="seconds allowed for one driver provider call")
     parser.add_argument("--model-call-budget", type=float)
     parser.add_argument("--wall-clock-budget", type=float)
     return parser
@@ -257,6 +330,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_model_id=args.model,
         agent_sampling_params={"temperature": "provider-default", "effort": args.effort},
     )
+    pins, operator_factory = driver_configuration(args, pins)
 
     if args.output_dir is None:
         report_dir = Path(tempfile.mkdtemp(prefix="dp-scenarios-local-report-"))
@@ -310,6 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             supervisor_command=supervisor,
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
             allow_host_home=args.allow_host_home,
+            operator_factory=operator_factory,
         ).run()
         write_report(result, json_path=report_dir / "report.json", summary_path=report_dir / "summary.txt")
     finally:
@@ -323,6 +398,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 if __name__ == "__main__":  # pragma: no cover - exercised as a local entrypoint
     try:
         raise SystemExit(main())
-    except TierError as exc:
+    except (TierError, DriverConfigError) as exc:
+        # DriverConfigError carries only the name of the missing variable, never
+        # its value; there is nothing to redact on this path.
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

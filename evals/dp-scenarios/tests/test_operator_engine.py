@@ -1108,3 +1108,60 @@ def test_every_claim_bearing_row_carries_a_qualification() -> None:
         qualification = _qualification_for(None, claim)
         assert qualification in QUALIFICATIONS, claim
         assert qualification is not None, claim
+
+
+def test_engine_refuses_a_driver_without_declared_forbidden_terms() -> None:
+    """Fail at construction, not on the first authored turn.
+
+    Without ``driver_forbidden_terms`` the leading check has nothing to test,
+    so a driver would be free to hand the agent the answer and the run would
+    still be retained as evidence.
+    """
+
+    from dp_scenarios.operator.driver import DriverOperator
+
+    driver = DriverOperator(lambda view: "anything", model_id="m", temperature=0.0)
+    script = make_script()
+    assert script.answer_sheet.driver_forbidden_terms == ()
+
+    with pytest.raises(ValueError, match="driver_forbidden_terms"):
+        OperatorEngine(script, InMemoryTransport([]), driver=driver)
+
+
+def test_engine_accepts_a_driver_when_the_sheet_declares_the_vocabulary() -> None:
+    from dp_scenarios.operator.driver import DriverOperator
+
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "engine-driver",
+            "opening_message": "Improve weekly visibility.",
+            "turns": ["Improve weekly visibility.", "Please continue."],
+            "source_answers": {"source": "The approved source is the business record."},
+            "decision_answers": {"choice": {"terms": ["option"], "answer": "Yes."}},
+            "status_answers": {"status": "The work is still in progress."},
+            "driver_forbidden_terms": ["late delivery rate"],
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona, sheet, turns=sheet.turns, turn_budget=25, phase_by_turn={1: 1, 2: 2}
+    )
+    driver = DriverOperator(lambda view: "anything", model_id="m", temperature=0.0)
+
+    engine = OperatorEngine(script, InMemoryTransport([]), driver=driver)
+
+    assert engine.driver is driver
+
+
+def test_engine_refuses_a_generated_surface_and_a_driver_together() -> None:
+    from dp_scenarios.operator.driver import DriverOperator
+
+    driver = DriverOperator(lambda view: "anything", model_id="m", temperature=0.0)
+    surface = GeneratedOperator(lambda view: "anything")
+
+    with pytest.raises(ValueError, match="never both"):
+        OperatorEngine(make_script(), InMemoryTransport([]), generated_operator=surface, driver=driver)

@@ -609,11 +609,18 @@ class OperatorEngine:
         extra_sentinels: Sequence[bytes | str] = (),
     ) -> None:
         if generated_operator is not None and driver is not None:
-            raise ValueError("generated_operator and driver are mutually exclusive")
+            raise ValueError("an engine takes a generated operator or a driver, never both")
         if driver is not None and not script.answer_sheet.driver_forbidden_terms:
-            raise ValueError("driver requires the answer-sheet key driver_forbidden_terms")
+            # Fail closed at construction, not on the first authored turn.
+            # Without a declared vocabulary the leading check has nothing to
+            # test, so a driver would be free to hand the agent the answer and
+            # the run would still be recorded as evidence.
+            raise ValueError(
+                "a driver requires the answer sheet key driver_forbidden_terms; it is missing or empty"
+            )
         self.script = script
         self.transport = transport
+        self.driver = driver
         self.ledger_writer = ledger_writer
         self.supervisor_reader = supervisor_reader
         self._run_id: str | None = None

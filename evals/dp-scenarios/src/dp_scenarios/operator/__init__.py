@@ -46,6 +46,14 @@ from .driver import (
     leading_violation,
     repeat_violation,
 )
+from .openai_driver import (
+    DriverConfigError,
+    DriverProviderError,
+    OpenAIDriverProvider,
+    SYSTEM_PROMPT,
+    build_messages,
+    driver_prompt_hash,
+)
 from .matcher import Category, MatchResult, MatcherBank, MatcherError
 from .persona import PersonaCard, PersonaError, load_persona, persona_from_mapping
 from .transport import (
@@ -74,7 +82,9 @@ __all__ = [
     "EventType",
     "GeneratedOperator",
     "DriverBeat",
+    "DriverConfigError",
     "DriverOperator",
+    "DriverProviderError",
     "DriverProvider",
     "DriverRender",
     "DriverViolation",
@@ -94,6 +104,10 @@ __all__ = [
     "OperatorRender",
     "OperatorScript",
     "OperatorView",
+    "OpenAIDriverProvider",
+    "SYSTEM_PROMPT",
+    "build_messages",
+    "driver_prompt_hash",
     "leading_violation",
     "ScriptTurn",
     "PersonaCard",
