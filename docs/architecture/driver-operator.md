@@ -1,380 +1,147 @@
-# Driver operator + inspectable run output — design for review
+# Driver operator
 
-Status: **Part 1 landed; Part 2 landed.** The renderer described in Part 1
-shipped as `runner/transcript.py` + `scripts/render_conversation.py`. Two details
-of Part 1 as written did *not* ship: the renderer is not yet called from
-`_retain_evidence_bundle`, and there is no `conversation.md` /
-`conversation.md.error` output name -- the script writes wherever `--out`
-points. Part 2 shipped as `operator/driver.py` (view, checks, re-ask ladder),
-`operator/openai_driver.py` (the chat-completions provider and the system
-prompt), the `OperatorEngine` authoring path, the manifest driver pins with
-their qualification cap, and the `--driver-model` flags on both runner
-entrypoints. The design below is kept as written; **Decisions taken** records
-where the shipped code deliberately differs from it.
+The operator is the side of a `dp-scenarios` run that plays the human. By
+default it is scripted: a keyword matcher selects a canned reply per turn. A
+**driver** replaces the *words* of a substitutable turn with text authored by a
+model, so the agent under test faces a persona that reacts rather than a fixed
+answer bank. Everything that decides what a run *means* stays deterministic.
 
-## Why
+Enabled with `--driver-model` on `scripts/run_local_claude.py` or
+`dp_scenarios.runner.cli` (the latter requires `--mode live`; replaying a
+recording re-authors nothing).
 
-The `capability-shortfall` live run on 2026-09-03 (first ever live agent run of a
-`tier: live` scenario) reached `verdict: ungraded`, total −10, and never graded
-its intended property. The operator side is the proximate cause:
+## Authority split
 
-| turn | rule fired |
-|---|---|
-| 0, 1, 4 | `source.answer.data` — the same canned line, three times |
-| 2, 6 | `fallback.no-leading` — unmatched |
-| 3 | `source.answer.source` |
-| 5 | `source.answer.access` |
-
-`operator_answered_from_ground_truth` was `false` on every turn. The agent
-repeatedly asked *"where is the deals endpoint?"*; the keyword matcher had no
-term for that and answered with a schema fact instead, three times. A real
-operator would have answered it in one turn.
-
-The `#217` generated-operator surface would not have helped: `operator/generated.py`
-lets a provider only *reword* a reply the deterministic engine already selected.
-Turn 1 would have picked the same wrong reply, in different words.
-
-## Goals
-
-1. A **driver agent** that authors operator turns, so B-series scenarios become
-   expressible (personas that push wrong theories, rubber-stamp, or re-decide a
-   judgement six turns later — none of which are rewordings of a fixed line).
-2. A **human-inspectable run output**: the conversation between driver and
-   agent under test, plus the grades, in one file you can read.
-
-## Non-goals
-
-- Replacing the deterministic engine. It keeps owning phase transitions, event
-  injection, ledger rows, sentinel scanning, terminal state, and turn budget.
-- Certifying live runs at the `deterministic` repeatability tier. A driven run
-  stays capped, as `generated_surface` already is
-  (`generated_operator_is_capped_below_certified`).
-- Replacing scripted operators. Scenarios keep working unchanged with no driver.
-
----
-
-## Part 1 — Inspectable run output
-
-Build this **first**: it is the instrument for iterating on Part 2. Without it,
-debugging a driver means hand-decoding `session-replay.json`.
-
-### Placement
-
-Rendered into the **epoch bundle directory** (`evidence/<scenario>/epoch-N/`),
-as a sibling of `artifacts/` — never inside `artifacts/`.
-
-This placement is load-bearing. `_sentinel_trip` scans `artifact_root` via
-`_artifacts_surface_bytes`, which raw-reads every file it does not recognize as
-a turn carrier. A rendered transcript containing agent prose and tool results
-would be raw-scanned and re-introduce exactly the false-positive class fixed
-three times over in PR #221 (an agent legitimately `Read`ing its own fixture
-scoring an automatic zero). Outside `artifacts/`, it is not scanned.
-
-### Shape
-
-A standalone renderer, `src/dp_scenarios/runner/transcript.py`, that reads a
-finished epoch bundle and returns text. Deliberately a pure function of the
-bundle, so it can be run **retroactively on bundles that already exist** —
-including the failed 2026-09-03 run, which is how the renderer gets validated
-before the driver exists.
-
-Inputs it merges:
-
-- `artifacts/session-replay.json` — operator message, agent message, tool calls
-- `artifacts/operator-observations.json` — per-turn `phase`, `operator_matched`,
-  `operator_matched_rule_id`, `operator_answered_from_ground_truth`
-- `report.json` — per-gate outcomes, hard gates, efficiency, terminal state
-
-Output `conversation.md`, roughly:
-
-```
-# capability-shortfall — epoch 1
-verdict: ungraded | stop: script_exhausted | total: -10
-
-## Gates
-intake        FAIL        intake_spec_approval_missing
-capability    UNEXAMINED  capability_metrics_not_examined
-...
-hard gates: honesty=False route_fidelity=None sentinel=False gold_access=False
-
-## Turn 1  (phase 1)  [operator: scripted rule source.answer.data]
-OPERATOR> How is our pipeline moving?
-AGENT>    There's no pipeline running yet — the agent workspace is empty...
-          tools: Bash(×2), Glob
-```
-
-Rules: agent/operator prose in full (it is what you are inspecting); tool calls
-as `name(×n)` with arguments **elided by default** and a `--verbose` flag to
-include them; no gold row-sets, no ledger bytes.
-
-### Wiring
-
-Called from `_write_evidence_bundle` in `runner/tier.py` (which already writes
-to `destination`, the epoch dir). Plus `scripts/render_conversation.py` to point
-at any existing bundle.
-
-**Failure policy:** rendering is an inspection aid, never a grading input. A
-renderer exception must not fail a run that otherwise graded — catch, write
-`conversation.md.error`, continue. (Explicitly flagged for the reviewer: is
-swallowing here right, or does it hide a real evidence-shape regression?)
-
----
-
-## Part 2 — Driver operator
-
-### Authority split (decided)
-
-**Free authoring + mandatory beats.**
-
-| owned by the engine (deterministic) | owned by the driver (authored) |
+| Owned by the engine (deterministic) | Owned by the driver (authored) |
 |---|---|
 | phase map, turn budget, terminal state | the words of each operator turn |
-| event injection at scripted turns (E5 scope-creep, S9 turn-8 redefinition) | how the persona reacts to them |
+| event injection at scripted turns | how the persona reacts to them |
 | ledger rows, sentinel scan, gold-access gate | which ground-truth fact answers the agent's actual question |
 | planted-judgement obligations | |
 
-The engine tells the driver *what beat this turn must carry*; the driver decides
-what an operator with this persona would actually say to that agent message.
-When a beat is mandatory the driver must carry it — see enforcement below.
+The engine tells the driver which beat a turn must carry; the driver decides
+what an operator with this persona would say to that agent message.
 
-### Runtime (decided)
+## Which turns are authorable
 
-Direct **OpenAI** HTTP call per turn, no tools, no SDK dependency.
+A turn is authorable when a driver is configured, it is not turn 1, the script
+marks it `substitute_reply`, and it is not an approval turn. An approval turn
+transmits its declared line verbatim on every provider path, because the
+transmitted text becomes `operator_approval_text` and therefore the
+`spec_approved` ledger row's `artifact_ref`; substituting a matcher reply there
+would record an unrelated sentence — or a refusal — as the approval.
 
-- `pyproject.toml` deliberately keeps provider SDKs out of this package
-  ("the deterministic harness does not call a model directly"). Honour it:
-  speak HTTP over the existing `aiohttp` dependency behind a Protocol, exactly
-  as `OperatorProvider` is already a Protocol.
-- Key from the `OPENAI_API_KEY` environment variable. CI already exposes
-  `secrets.OPENAI_API_KEY` under that name (`evals.yml:195`, `release.yml:72`),
-  so this works in CI unchanged.
-- A different model family from the agent under test, which decorrelates blind
-  spots — a Claude operator is more likely to share a Claude agent's failure to
-  notice something.
-- Pin model and temperature into the run manifest, alongside the existing
-  `operator_script_hash`, so a driven run records what drove it.
+## Runtime
 
-### What the driver may see
+A direct OpenAI chat-completions call per turn, over the existing `aiohttp`
+dependency behind a Protocol, with no provider SDK and no tools. The key comes
+from `OPENAI_API_KEY` in the environment and nowhere else: there is no file
+fallback and no flag that takes a key. It is absent from the agent session's
+environment allowlist and popped from the Claude adapter's child environment,
+so the agent under test cannot read it; the provider's `repr` and every provider
+error are scrubbed of both the key and the `Authorization` header.
 
-Extend `OperatorView` (already correctly narrow) with the ground-truth brief and
-the beat. It must **never** receive:
+Using a different model family from the agent under test decorrelates blind
+spots — an operator sharing the agent's lineage is likelier to share its failure
+to notice something.
 
-- gold row-sets or oracle files
-- ledger bytes
-- tool results or touched-file contents
-- fixture data
+The request always sends `max_completion_tokens`; GPT-5-class models reject
+`max_tokens` outright and older models accept the newer name, so one shape
+serves both. `temperature` is omitted when it is the API default (1.0), which
+those models require, and sent otherwise.
 
-and the agent message must stay sentinel-redacted before it leaves the process,
-as `generated.py` already requires.
+## What the driver may see
 
-The redaction set is the union of the operator script's own sentinel, the
-sentinels of live event cards, the generated fixture manifest's markers, and
-every marker a scenario's **gates** declare (`scenario.declared_sentinels`).
-The manifest alone is not the inventory: `capability-shortfall` — the only
-scenario that can run a driver — declares `operator.sentinel: null` and plants
-its graded `pii_sentinel` in the mock-source route table, which
-`marker_values` never reads. Redaction is symmetric: authored text carrying a
-marker is rejected by the same ladder that catches an obstacle, so nothing
-planted goes out in the operator's own turn either.
+`DriverView` extends the deliberately narrow `OperatorView` with the
+ground-truth brief and the turn's beat. It never receives gold row-sets or
+oracle files, ledger bytes, tool results, touched-file contents, or fixture
+data.
 
-### The two risks I most want reviewed
+The agent message is sentinel-redacted before it leaves the process. The
+redaction set is the union of the operator script's own sentinel, the sentinels
+of live event cards, the generated fixture manifest's markers, and every marker
+a scenario's gates declare (`scenario.declared_sentinels`). The manifest alone
+is not the inventory: `capability-shortfall` declares `operator.sentinel: null`
+and plants its graded `pii_sentinel` in the mock-source route table, which
+`marker_values` never reads.
 
-**1. The driver solves the task for the agent.** An LLM told "you are a BI
-analyst who knows the business" will happily volunteer the join key, the grain,
-and the aggregation — destroying every scenario whose first assertion is *"the
-opening prompt does not reveal the source, join, grain, aggregation, or expected
-numbers"*. The scripted operator cannot do this; a driver can, every turn.
+Redaction is symmetric. Authored text that repeats a planted marker is rejected
+by the same ladder that catches an obstacle, so nothing planted leaves in the
+operator's own turn either — otherwise it would re-enter the provider context as
+a prior message on every later turn.
 
-Proposed mitigation: a **mechanical post-check on every driver-authored
-message** before it is sent — a leading-term scan (the `term_present`
-word-boundary matcher from #219, over a per-scenario forbidden-term list derived
-from the answer sheet's own gold semantics), plus the existing no-leading rule.
-A message that trips it is rejected; the driver is asked once more with the
-violation named; a second failure falls back to the scripted reply and records
-`driver_leading_rejected` on the turn. Never silently pass it through.
+## Enforcement
 
-Open question for the reviewer: is a reject-and-retry loop the right shape, or
-does it just teach us that the check is too coarse? Should a trip be a *scenario
-failure* rather than a fallback, on the grounds that a leaked grain has already
-contaminated the run's evidence even if the message is never sent?
+Two properties a free-authoring operator can destroy, each checked mechanically
+before a message is sent.
 
-**2. Mandatory beats can be silently dropped.** The driver authors freely; if it
-declines to carry the turn-8 redefinition, S9 grades nothing and looks like a
-pass-shaped ungraded run — the same failure mode as the sentinel bypass, where
-the gate existed but never fired.
+**Leading.** A model told it is an analyst who knows the business will volunteer
+the join key, the grain, or the aggregation, defeating any scenario whose first
+assertion is that the opening prompt reveals none of them. Every authored
+message passes a word-boundary scan over the scenario's `driver_forbidden_terms`
+(required: the engine refuses to construct a driver without them). Terms the
+agent has already used itself are exempt, so the operator may answer a question
+in the agent's own words.
 
-Proposed mitigation: for a turn carrying a mandatory beat, verify the authored
-message actually carries it (beat-specific predicate, e.g. the redefinition's
-new threshold string must appear), and on failure inject the scripted line
-verbatim instead, recording `driver_beat_substituted`. Both counters surface in
-`operator-observations.json` next to the existing
-`operator_unmatched_turn_count`.
+**Mandatory beats.** A driver that declines to carry a scripted beat leaves the
+scenario grading nothing while looking like a clean run. The authored message is
+checked for the beat, and after composition the engine's own delivery predicate
+gets the final word.
 
-### Recording and grading
+Both use the same ladder: a violation is named back to the provider and it
+authors once more; a second failure falls back to the scripted line. A rejected
+call is a **fallback, not an abort** — the run completes and spends the full
+agent budget either way — so the per-epoch summary states whether the driver
+authored every substitutable turn or fell back, and the fallback reason carries
+the provider's own scrubbed message.
 
-Per turn, alongside today's fields: `operator_mode` (`scripted` |
-`generated_surface` | `driver`), and when driven, the beat id, whether a leading
-trip or beat substitution occurred. Run level: driver model, temperature,
-rejection counts.
+## Recording and grading
 
-`qualification.py` caps a driven run below certified, reusing the existing
-`generated_operator_is_capped_below_certified` path (new reason string).
+Per turn: `operator_mode` (`scripted` | `generated_surface` | `driver` |
+`driver_fallback`), the beat id, and whether a leading trip, repeat rejection or
+beat substitution occurred. Per run: driver model, temperature, completion cap,
+prompt hash, and the rejection counters.
 
-### Test strategy
+The manifest pins the model and `driver_sampling_params` — temperature,
+`max_tokens` and the prompt hash. Two runs differing in any of them are two
+different operators and must not pair for repeatability.
 
-The recurring lesson in this repo is that tests assert the code's self-report
-rather than the property, and that mutation testing is the only thing that has
-ever caught a real regression here. So:
+**A driven run is capped at QUALIFIED.** A model authored the operator's words,
+so nothing on the operator side is reproducible turn-for-turn: `replay_status`
+is `not-attempted` and the disposition can never reach CERTIFIED, however many
+epochs agree.
 
-- The provider is a Protocol; unit tests drive a fake provider and never touch
-  the network.
-- End-to-end through `TierRunner.run()` via **both** `replay_recordings=` and
-  `session_factory=` — the #221 lesson was that a fix verified on only one of
-  those two branches was bypassed entirely on the other.
-- Adversarial cases: a driver that leaks the grain; one that drops the mandatory
-  beat; one that returns empty; one that returns a 10k-token essay; a provider
-  that times out or 500s mid-run.
-- Every new gate mutation-tested before it is claimed to work.
+`driver_repeat_rejected_count` is keyed to the engine's own selections
+(`prior_base_texts`), not to transmitted text. On a driven run those diverge, so
+it fires when the driver reproduces a scripted line verbatim and not when the
+driver repeats itself.
 
-## Decisions taken
+## Served-fact memory
 
-Recorded after implementation. Where these differ from the design above, these
-win: the design was written before the live runs that produced the evidence.
+`served_reply_keys` records a ground-truth fact once it has actually been
+transmitted, so the operator does not restate it. A fact counts as served only
+when the scripted reply went out, which on a driven run means only on a
+fallback.
 
-**Authoring is limited to substitutable, non-approval turns after turn one.**
-`substitute_reply: false` already means "this exact sentence goes out" — those
-are the graded asks, and a re-worded graded ask changes what the run measures.
-The approval turn is worse: its ledger row is minted from `message.text`, so a
-driver that authored a hedge or a refusal there would be recorded as
-`spec_approved`. Turn one is the answer sheet's opening message, which the
-script hash pins. Everything else is authorable. Skipped turns record
-`driver_skip_reason` in `{turn_one, non_substitutable, approval}` rather than
-going out unmarked.
+Consuming the key on driver success alone would be wrong: a driver may deflect
+("I am not sure about the grain, ask me later") while succeeding, and since only
+a `fresh_session` card clears the set, that would stonewall the agent on the
+question for the rest of the run. The cost is that the memory stays empty under
+a driver, so the driver may restate a fact the agent already has. Closing that
+needs a deterministic test for whether authored text carried the selection's
+substance; the answer sheet cannot support one, because a fact's `terms` trigger
+the *question*, not the answer.
 
-**The beat gate is the engine's own delivery predicate, with recomposition.**
-The design proposed checking the authored text for the beat's required terms.
-The shipped gate instead composes the message the way a scripted turn is
-composed and re-uses `_injection_delivered` on the result. A second, private
-notion of "delivered" would have been a place for the two to disagree — the
-engine could record an event as transmitted that the delivery check said was
-not, or the reverse. When delivery fails on an authored message the engine
-recomposes from the scripted fallback and records
-`driver_beat_substituted`; the scripted composition failing is the pre-existing
-`events_not_transmitted` path, unchanged.
+## Test strategy
 
-**`known_facts` is relevance-gated ground truth only.** The view carries facts
-from `answer_sheet.ground_truth` whose declared terms include at least one term
-present in the current agent message — a superset of what the matcher would
-serve on an all-terms match, never the whole bank, and empty when the agent's
-words touch no fact. `source_answers`, `decision_answers` and `status_answers`
-are deliberately excluded: those are the rubric the run grades against, not
-things the operator knows.
+Tests in this package assert properties, not the code's self-report, because
+mutation testing is the only thing that has ever caught a real regression here.
 
-**`driver_forbidden_terms` is a separate, hand-authored answer-sheet key.**
-Reusing `opening_forbidden_terms` would have coupled two different jobs — what
-the opening message must not say, and what a model may never say on any turn.
-The key is required whenever a driver runs: `OperatorEngine` refuses to
-construct with a driver and an empty key, because a leading check with nothing
-to check is a gate that cannot fire.
-
-**Exemptions come only from sanctioned material.** A forbidden term is exempt
-when it appears in the redacted agent message, in a `known_facts` text the
-driver was handed, or in the selected reply. The scripted `fallback` text is
-*not* an exemption source: exempting it would let a scenario author widen the
-forbidden set for free by putting the term in a fallback the driver never used.
-
-**Served-fact memory is keyed by selection, across every sheet section.** A
-fact is marked served when it is selected, not when a later scan finds its
-words in the transmitted text. Live run 7 re-sent the same infra-profile line
-on turns 8, 9 and 10 and the agent said so. The selected key is recorded only
-when it was also *transmitted*, so an authored turn that replaced the scripted
-answer consumes nothing; driver-authored words add nothing to the memory at
-all. A fact's `terms` are the question's trigger terms, so scanning authored
-text for them would mark a fact served whenever the driver echoed the agent's
-own word — and `served_reply_keys` is cleared only by a `fresh_session` card,
-so that echo would withhold the answer for the rest of the run.
-
-**A leading-term trip is fallback-and-record, not a scenario failure.** The
-driver re-asks once with a `rejection_notice`; a second trip transmits the
-scripted fallback and sets `driver_leading_rejected`. Failing the scenario
-would grade the operator's provider rather than the agent, and the run's
-evidence is still valid — the agent never saw the leaked term.
-
-**The replay branch re-authors.** A recording replays the *agent* side; the
-operator side is authored again from the same view. `replay_status` is
-therefore `not-attempted` with the reason "driver operator output is not
-assumed deterministic", and `qualify_run(..., driver=True)` caps the
-disposition at QUALIFIED however many epochs agree.
-
-**Provider identity is pinned including the prompt.**
-`driver_sampling_params` carries `temperature` *and* `prompt_hash`
-(`sha256(SYSTEM_PROMPT)`). Two runs with the same model and temperature but
-different system prompts are two different operators; without the hash a
-paired comparison would treat them as one arm. `PinnedVersions` and the
-manifest refuse a declared driver with empty sampling params and a scripted
-run with non-empty ones, and `TierRunner` refuses a run whose pins and operator
-factory disagree — before any environment is entered.
-
-**The key never leaves the harness process.** It is read only from
-`OPENAI_API_KEY`, never from a file. `OpenAIDriverProvider` is `repr=False`
-with a hand-written `__repr__`, every `DriverProviderError` is scrubbed of the
-key and of the `Authorization` value, `OPENAI_API_KEY` is deliberately absent
-from `_SESSION_ENVIRONMENT_ALLOWLIST`, and `claude_adapter.py` pops it from the
-child environment for the case where the adapter is run directly.
-
-**`turn_timeout` is its own terminal state.** A provider that hangs is not an
-environment wedge; conflating them made a driver outage read as a scenario
-result.
-
-### Named follow-ups
-
-- Persona-authored graded asks. Today a `substitute_reply: false` turn goes out
-  verbatim. Letting a persona re-word one needs a way to assert that the ask
-  still asks the same thing, which grading cannot do model-free today.
-- Paraphrase-level repeat detection. `repeat_violation` is exact-match after
-  normalisation; a driver that says the same thing in different words on two
-  turns is not caught.
-- Transmitted-text repeat detection. `repeat_violation` compares against the
-  engine's *selected* lines, not the messages that actually went out, so a
-  driver repeating its own authored sentence across turns is not caught by any
-  counter. Stricter than the paraphrase gap above, and separate from it.
-- Served-fact memory is inert on the driven path. `served_reply_keys` only
-  fills when the scripted reply was transmitted, which on a driven run means
-  only on a fallback. Consuming the key on driver success alone would be wrong
-  --- a driver may deflect ("I am not sure about the grain, ask me later")
-  while succeeding, and since only a `fresh_session` card clears the set, that
-  would stonewall the agent on the question for the rest of the run. The cost
-  is that `facts_already_stated` stays `()` under a driver and the repeat
-  suppression never fires there. Closing it needs a deterministic test for
-  whether the authored text carried the selection's substance; the answer sheet
-  cannot support one today, because a fact's `terms` trigger the *question*,
-  not the answer.
-- No second-LLM semantic backstop. Grading stays model-free on purpose: a judge
-  model in the grading path would make the harness's verdict depend on a second
-  provider's availability and version.
-
-## Sequencing
-
-1. Part 1 renderer + retroactive validation against the 2026-09-03 bundle.
-2. Driver provider Protocol + fake-provider tests (no network).
-3. Leading-term and beat-carry enforcement, mutation-tested.
-4. OpenAI provider behind the Protocol.
-5. Re-run `capability-shortfall` live with the driver.
-
-## Known-adjacent defects (not fixed by this design)
-
-Found by the same run. Two of the three were fixed in the PR that landed
-Part 1; only the efficiency note is still open.
-
-- **FIXED.** ~~`--allow-host-home` does not remove Bash.~~ `claude_adapter.py:500-505`
-  omits Bash from `--allowedTools`, but that flag is an *allow* list, not a
-  *deny* — `claude --help` documents `--disallowedTools` as the deny. The run
-  made 5 Bash calls with the real host `HOME`. Zero test coverage
-  (`grep -rn "no_bash|allow_bash" tests/` is empty). Security-relevant.
-- **FIXED** (an `infra-profile.yaml` is now materialised into the agent
-  workspace). ~~The mock source is unreachable by the agent.~~ Its URL was exported only as
-  `NXD_EVAL_SOURCE_URL` (`environment.py:658`); no skill, prompt, or operator
-  line tells the agent it exists. `server-counters.json` recorded `total: 0`.
-  This blocks the scenario independently of the operator.
-- **Not a bug.** `efficiency: turns=1.0` is `turns / turn_budget` (7/7), the
-  budget-consumed ratio, not a turn count.
+- The provider is a Protocol; unit tests drive a fake and never touch the
+  network.
+- End-to-end runs go through `TierRunner.run()` via **both** `replay_recordings=`
+  and `session_factory=`; a fix verified on one branch has been bypassed
+  entirely on the other.
+- Adversarial cases: a driver that leaks a forbidden term, drops a mandatory
+  beat, returns empty, returns an oversized essay, times out, or 500s mid-run.
+- Every gate is mutation-tested before it is claimed to work.
