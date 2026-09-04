@@ -1196,6 +1196,10 @@ class TierRunner:
         """Run one complete tier, returning before any scenario on canary block."""
 
         started = time.monotonic()
+        # Fail before entering any environment.  Without this the run would
+        # spawn a session, author scripted turns, and only then trip the
+        # per-epoch consistency gate -- having already spent the agent tokens
+        # the pins promised a driver would shape.
         if self.pins.driver_model_id != NOT_APPLICABLE and self.operator_factory is None:
             raise TierError("manifest driver pins require an operator factory")
         canary = self._canary()
@@ -1207,12 +1211,6 @@ class TierRunner:
         if canary.claims_hash != self.pins.canary_claims_hash:
             raise TierError("canary claims hash does not match the pinned assertion")
         self._validate_evidence_destinations()
-        if self.pins.driver_model_id != "not-applicable" and self.operator_factory is None:
-            # Fail before entering any environment.  Without this the run
-            # would spawn a session, author scripted turns, and only then
-            # trip the per-epoch consistency gate -- having already spent the
-            # agent tokens the pins promised a driver would shape.
-            raise TierError("manifest driver pins and operator factory disagree")
         run_pins = replace(self.pins, canary_claims_hash=canary.claims_hash)
         summaries: list[ScenarioSummary] = []
         for scenario in self.scenarios:

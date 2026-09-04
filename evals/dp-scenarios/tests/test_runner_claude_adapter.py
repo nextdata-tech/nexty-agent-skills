@@ -309,7 +309,7 @@ for line in sys.stdin:
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "id": "build-1", "name": "mcp__nxd-desktop__build_data_product", "input": {}}
     ]}}), flush=True)
-    time.sleep(1)
+    time.sleep(60)
         """.strip()
         + "\n",
         encoding="utf-8",
@@ -335,7 +335,13 @@ for line in sys.stdin:
         desktop_supervisor=Path("/usr/bin/true"),
         desktop_python=Path(sys.executable),
         claude_config_dir=None,
-        timeout_s=0.5,
+        # The budget is total wall time from the first read, so it has to
+        # cover the child interpreter's start-up as well as the turn. At 0.5s
+        # a loaded machine can expire the deadline before the child prints its
+        # first event, and the partial-retention assertion below then fails
+        # for a reason that has nothing to do with retention. The child sleeps
+        # far past this, so a wider budget still times the turn out.
+        timeout_s=2.0,
         max_budget_usd=None,
         append_system_prompt="test",
     )

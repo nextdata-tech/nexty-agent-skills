@@ -197,8 +197,11 @@ def test_driver_view_is_relevance_gated_and_redacted() -> None:
     assert all(len(view.prior_agent_messages) <= 2 for view in views)
     assert all("FIXTURE-SECRET" not in json.dumps(view.to_mapping()) for view in views)
     assert "FIXTURE-SECRET" not in json.dumps(views[0].to_mapping())
-    assert "FACT-ONLY-MARKER" not in json.dumps(views[0].to_mapping())
-    assert "ACTIVE-SENTINEL" not in json.dumps(views[0].to_mapping())
+    # No agent message in this run says "grain", so the grain fact's token is
+    # owed to no view at all -- not just to the first one.
+    assert all("FACT-ONLY-MARKER" not in json.dumps(view.to_mapping()) for view in views)
+    assert all(view.known_facts == () for view in views)
+    assert all("ACTIVE-SENTINEL" not in json.dumps(view.to_mapping()) for view in views)
 
     views.clear()
     OperatorEngine(
@@ -405,6 +408,15 @@ def test_leading_rejection_flag_uses_the_final_render_reason() -> None:
     assert result.turns[1].operator_message.text == "Understood, carry on."
     assert result.turns[1].driver_leading_rejected is False
     assert result.turns[1].driver_fallback_reason is None
+    # The row is the durable evidence: a retried-then-accepted turn is a plain
+    # driver turn, not a recorded rejection. Flags read from ``attempts``
+    # instead of the final reason would stamp this row as a leak.
+    claim = result.ledger_rows[1]["claim"] or {}
+    assert claim["operator_mode"] == "driver"
+    assert "driver_leading_rejected" not in claim
+    assert "driver_obstacle_rejected" not in claim
+    assert "driver_repeat_rejected" not in claim
+    assert "driver_beat_substituted" not in claim
 
 
 def test_driver_construction_rejects_missing_terms_and_conflicting_operator() -> None:

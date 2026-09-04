@@ -241,12 +241,13 @@ def test_driver_leading_term_falls_back_on_both_runner_branches(tmp_path: Path) 
         operator_factory=lambda: _driver(leaking_provider),
         evidence_root=tmp_path / "replay",
     ).run()
+    replay_bundle = Path(replay.scenario_runs[0].evidence_bundle_dir)
+    replay_recording = json.loads(
+        (replay_bundle / "session-replay.json").read_text(encoding="utf-8")
+    )
+    assert replay_recording["turns"][1]["operator_message"]["text"] == scenario.script.answer_sheet.source_answers["source"]
     replay_observations = json.loads(
-        (
-            Path(replay.scenario_runs[0].evidence_bundle_dir)
-            / "artifacts"
-            / "operator-observations.json"
-        ).read_text(encoding="utf-8")
+        (replay_bundle / "artifacts" / "operator-observations.json").read_text(encoding="utf-8")
     )
     assert replay_observations["driver_leading_rejected_count"] == 1
 
@@ -260,14 +261,29 @@ def test_driver_pins_and_factory_are_consistent_before_running_a_session(tmp_pat
         called = True
         raise AssertionError("session factory must not be called")
 
+    # The canary is the *first* thing the tier spends: it extracts claims and,
+    # in a live run, preflights and builds. "Fail before entering any
+    # environment" therefore has to mean before the canary, not merely before
+    # a session -- and only a canary factory can witness that, because a
+    # ``CanaryResult`` value passed in has already been computed by the
+    # caller. Asserting on ``session_factory`` alone leaves the guard free to
+    # sit anywhere in ``run()`` after ``_canary()`` and still look correct.
+    canary_calls = 0
+
+    def counting_canary() -> object:
+        nonlocal canary_calls
+        canary_calls += 1
+        return clean_canary()
+
     with pytest.raises(TierError, match="require an operator factory"):
         TierRunner(
             [scenario],
             pins=_driver_pins(),
-            canary=clean_canary(),
+            canary=counting_canary,
             session_factory=forbidden_session,
         ).run()
     assert not called
+    assert canary_calls == 0
 
     with pytest.raises(TierError, match="pins and operator factory disagree"):
         TierRunner(
@@ -278,14 +294,19 @@ def test_driver_pins_and_factory_are_consistent_before_running_a_session(tmp_pat
             operator_factory=lambda: _driver(),
         ).run()
 
+    # The per-epoch consistency gate is the one that *does* sit downstream of
+    # the canary, so the same factory is consulted here. That pins the
+    # assertion above to ordering rather than to a canary this runner would
+    # never have called anyway.
     with pytest.raises(TierError, match="pins and operator factory disagree"):
         TierRunner(
             [scenario],
             pins=_driver_pins(model_id="expected-driver"),
-            canary=clean_canary(),
+            canary=counting_canary,
             replay_recordings={scenario.id: recording_for(scenario, _responses())},
             operator_factory=lambda: _driver(),
         ).run()
+    assert canary_calls == 1
 
 
 def test_stored_driver_manifest_is_rejected_by_na_pins(tmp_path: Path) -> None:
