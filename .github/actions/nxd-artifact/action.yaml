@@ -120,7 +120,7 @@ runs:
         # the entire artifact catalog, which contains hundreds of thousands
         # of historical artifacts.
         if ! workflow_runs="$(gh api \
-          "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?branch=main&per_page=20")"; then
+          "repos/nextdata-tech/nxd/actions/workflows/nxd.ci.yml/runs?branch=main&status=success&per_page=20")"; then
           echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
           exit 1
         fi
@@ -198,20 +198,32 @@ runs:
            and (.wheels | length > 0)' "$manifest" >/dev/null
 
         if [ -n "$EXPECT_FIELD_MAPPER_TREE_SHA" ]; then
-          jq -e --arg expected "$EXPECT_FIELD_MAPPER_TREE_SHA" \
-            '.field_mapper_tree_sha == $expected' "$manifest" >/dev/null
+          actual="$(jq -r '.field_mapper_tree_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_FIELD_MAPPER_TREE_SHA" ]; then
+            echo "Resolved artifact has field_mapper_tree_sha=$actual, expected $EXPECT_FIELD_MAPPER_TREE_SHA" >&2
+            exit 1
+          fi
         fi
         if [ -n "$EXPECT_SEMANTIC_TREE_SHA" ]; then
-          jq -e --arg expected "$EXPECT_SEMANTIC_TREE_SHA" \
-            '.semantic_tree_sha == $expected' "$manifest" >/dev/null
+          actual="$(jq -r '.semantic_tree_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_SEMANTIC_TREE_SHA" ]; then
+            echo "Resolved artifact has semantic_tree_sha=$actual, expected $EXPECT_SEMANTIC_TREE_SHA" >&2
+            exit 1
+          fi
         fi
         if [ -n "$EXPECT_RPC_TREE_SHA" ]; then
-          jq -e --arg expected "$EXPECT_RPC_TREE_SHA" \
-            '.rpc_tree_sha == $expected' "$manifest" >/dev/null
+          actual="$(jq -r '.rpc_tree_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_RPC_TREE_SHA" ]; then
+            echo "Resolved artifact has rpc_tree_sha=$actual, expected $EXPECT_RPC_TREE_SHA" >&2
+            exit 1
+          fi
         fi
         if [ -n "$EXPECT_SOURCE_SHA" ]; then
-          jq -e --arg expected "$EXPECT_SOURCE_SHA" \
-            '.source_sha == $expected' "$manifest" >/dev/null
+          actual="$(jq -r '.source_sha // ""' "$manifest")"
+          if [ "$actual" != "$EXPECT_SOURCE_SHA" ]; then
+            echo "Resolved artifact was built from NXD $actual, but this job pins $EXPECT_SOURCE_SHA" >&2
+            exit 1
+          fi
         fi
         if [ "$REQUIRE_MCP_PROVENANCE" = "true" ]; then
           # Fail closed. An artifact that predates the MCP provenance fields is
