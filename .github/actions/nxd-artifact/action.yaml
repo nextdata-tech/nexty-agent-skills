@@ -2,7 +2,7 @@ name: 'Consume a published NXD Python artifact'
 description: >-
   Resolve, download, verify and optionally install a wheel bundle that NXD has
   already published. Consumer-side only: this never triggers, dispatches, or
-  waits on an NXD build. If no completed artifact matches, it fails.
+  waits on an NXD build. If no eligible artifact matches, it fails.
 
 inputs:
   token:
@@ -22,8 +22,8 @@ inputs:
       so a prefix can pin as much or as little of that as the caller needs. If
       expect_source_sha is absent, the newest unexpired main-branch match wins;
       otherwise the source revision input restricts the search to that commit's
-      main runs. Pass the bare "nxd-py-linux-x86_64-" to take whatever main
-      published most recently.
+      main runs after its artifact-bundle publication job succeeds. Pass the
+      bare "nxd-py-linux-x86_64-" to take whatever main published most recently.
     required: true
   selector_label:
     description: 'How to name the selector in the not-found message. Defaults to artifact_prefix.'
@@ -126,7 +126,7 @@ runs:
         # valid artifact cannot fall out of a recent-run window. Callers that
         # do not pin a source retain the bounded newest-main-run lookup.
         if [ -n "$EXPECT_SOURCE_SHA" ]; then
-          runs_query="branch=main&head_sha=$EXPECT_SOURCE_SHA&status=success&per_page=20"
+          runs_query="branch=main&head_sha=$EXPECT_SOURCE_SHA&per_page=20"
         else
           runs_query="branch=main&status=success&per_page=20"
         fi
@@ -140,6 +140,23 @@ runs:
         fi
         artifact=''
         while IFS= read -r run_id; do
+          if [ -n "$EXPECT_SOURCE_SHA" ]; then
+            # The artifact-bundle job is the publication gate for this
+            # consumer. It completes before unrelated release jobs, so a
+            # pinned consumer must not wait for the entire NXD workflow run.
+            if ! run_jobs="$(gh api \
+              "repos/nextdata-tech/nxd/actions/runs/$run_id/jobs?per_page=100")"; then
+              echo "NXD_DISPATCH_PAT cannot read NXD workflow jobs; grant actions:read" >&2
+              exit 1
+            fi
+            publication_jobs="$(jq -r '[.jobs[]
+              | select(.name == "python-build / artifact-bundle")
+              | select(.status == "completed" and .conclusion == "success")]
+              | length' <<< "$run_jobs")"
+            if [ "$publication_jobs" -eq 0 ]; then
+              continue
+            fi
+          fi
           if ! run_artifacts="$(gh api \
             "repos/nextdata-tech/nxd/actions/runs/$run_id/artifacts?per_page=100")"; then
             echo "NXD_DISPATCH_PAT cannot read Actions artifacts from nextdata-tech/nxd; grant contents:read and actions:read" >&2
@@ -158,7 +175,8 @@ runs:
         done < <(jq -r '.workflow_runs[]
           | select(.head_branch == "main")
           | select((env.EXPECT_SOURCE_SHA == "") or .head_sha == env.EXPECT_SOURCE_SHA)
-          | select(.status == "completed" and .conclusion == "success")
+          | select((env.EXPECT_SOURCE_SHA != "") or
+              (.status == "completed" and .conclusion == "success"))
           | .id' <<< "$workflow_runs")
         if [ -z "$artifact" ]; then
           echo "No unexpired main-branch NXD artifact found for $SELECTOR_LABEL" >&2
