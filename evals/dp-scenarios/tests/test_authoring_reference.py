@@ -97,3 +97,56 @@ def test_the_reference_names_every_gate_and_no_invented_tier() -> None:
     assert "There is no `draft` tier" in text, (
         "the reference must say `draft` is invalid; contributors reach for it"
     )
+
+
+_SKILLS = (
+    _REPO_ROOT / ".claude/skills/dp-scenario-from-scratch/SKILL.md",
+    _REPO_ROOT / ".claude/skills/dp-scenario-from-session/SKILL.md",
+)
+
+
+def _skill_texts() -> list[str]:
+    texts = []
+    for path in _SKILLS:
+        assert path.is_file(), f"scenario-authoring skill missing at {path}"
+        texts.append(path.read_text(encoding="utf-8"))
+    return texts
+
+
+def test_both_skills_ship_the_same_contributor_check() -> None:
+    """The check block is duplicated verbatim; drift between the two is silent.
+
+    Nothing under `_proposed/` is read by this suite, so the block a
+    contributor runs is their only real feedback. Two copies of it that
+    disagree means one set of contributors gets a weaker check than the other,
+    and no test would notice.
+    """
+
+    scratch, session = _skill_texts()
+
+    marker = "print('package is sound:'"
+    blocks = []
+    for text in (scratch, session):
+        assert marker in text, "a skill no longer ships the package check"
+        start = text.index("uv run --project evals/dp-scenarios python -c \"\nfrom dp_scenarios.scenario import load_scenario")
+        blocks.append(text[start : text.index(marker, start)])
+
+    assert blocks[0] == blocks[1], "the two skills' package checks have drifted apart"
+
+
+def test_the_contributor_check_still_pins_what_nothing_else_does() -> None:
+    """These three are the reason the block exists, so assert it keeps them.
+
+    `turn_budget` equality is enforced by nothing anywhere else -- the loader
+    checks only a floor and the equality test is hardcoded to
+    capability-shortfall -- so dropping it from the block loses the constraint
+    entirely rather than deferring it.
+    """
+
+    for text in _skill_texts():
+        assert "s.seed == 29" in text, "the check no longer pins the seed"
+        assert "s.turn_budget == len(s.answer_sheet.turns)" in text, (
+            "the check no longer pins turn_budget equality, which nothing else enforces"
+        )
+        assert "set(s.gates) == set(GATE_PHASES)" in text, "the check no longer pins the gate set"
+        assert "s.required_plants" in text, "the check no longer pins required_plants"

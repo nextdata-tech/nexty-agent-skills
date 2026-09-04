@@ -121,10 +121,17 @@ Each failure names the exact key. Fix until it prints `package is sound`.
 invisible until an engineer promotes the directory, and surfaces to them
 rather than to you.
 
-The asserts are not decoration: `load_scenario` alone accepts `seed: 7`, a
-`coverage.variant` that does not match, and a `turn_budget` larger than the
-script. Those three are checked only by a test that skips `_proposed/`, so
-without the asserts they would wait until promotion to fail.
+The asserts are not decoration, and the three they add are each unenforced in
+a different way:
+
+- **`seed: 7`** loads fine. It is checked only by a test that skips
+  `_proposed/`, so without the assert it waits until promotion to fail.
+- **`turn_budget` larger than the script** is enforced by **nothing, ever** —
+  the loader checks only a floor, and the equality test is hardcoded to
+  `capability-shortfall`. Without the assert it never fails at all; it quietly
+  misreports the efficiency ratio for the life of the scenario.
+- **`coverage.variant` not matching `fixture.variant`** is caught by the loader
+  itself, so that assert is belt-and-braces rather than the only guard.
 
 Then run the suite, which checks you have not broken anything else:
 
