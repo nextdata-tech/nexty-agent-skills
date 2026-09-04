@@ -29,8 +29,6 @@ from pathlib import Path
 BASE_ROWS = 100
 DELTA_ROWS = 40
 GENERIC_STATE_KEY = "__nxd_generic__"
-BASE_TIMESTAMP = "2026-07-27T08:20:00Z"
-DELTA_TIMESTAMP = "2026-07-30T20:20:00Z"
 
 
 @dataclass
@@ -177,7 +175,7 @@ def _scalar_entries(state):
 
 
 def _cursor_matches(value, expected):
-    """Compare JSON-safe numeric or timestamp cursor encodings."""
+    """Compare JSON-safe numeric cursor encodings."""
     if isinstance(expected, (int, float)) and isinstance(value, str):
         try:
             return float(value) == expected
@@ -187,26 +185,20 @@ def _cursor_matches(value, expected):
 
 
 def _has_cursor_trajectory(*states):
-    """Require exactly three runs and accept either supported cursor field."""
+    """Require exactly three runs and a stable numeric cursor trajectory."""
     if len(states) != 3:
         return False
     paths = set(_scalar_entries(states[0]))
     for state in states[1:]:
         paths &= set(_scalar_entries(state))
-    trajectories = (
-        (BASE_ROWS, BASE_ROWS, BASE_ROWS + DELTA_ROWS),
-        (BASE_TIMESTAMP, BASE_TIMESTAMP, DELTA_TIMESTAMP),
-    )
+    trajectory = (BASE_ROWS, BASE_ROWS, BASE_ROWS + DELTA_ROWS)
     return any(
-        any(
-            all(
-                _cursor_matches(entries[path], expected)
-                for entries, expected in zip(
-                    (_scalar_entries(state) for state in states), trajectory,
-                    strict=True,
-                )
+        all(
+            _cursor_matches(entries[path], expected)
+            for entries, expected in zip(
+                (_scalar_entries(state) for state in states), trajectory,
+                strict=True,
             )
-            for trajectory in trajectories
         )
         for path in paths
     )
@@ -300,10 +292,7 @@ def main() -> int:
     if r3["distinct"].get("events") != expected_total:
         failures.append("run3-distinct-events: the delta was not landed exactly once")
     if not _has_cursor_trajectory(r1["state"], r2["state"], r3["state"]):
-        failures.append(
-            "cursor-trajectory: no persisted bag/key follows a valid "
-            "100 -> 100 -> 140 or timestamp trajectory"
-        )
+        failures.append("cursor-trajectory: no persisted bag/key follows 100 -> 100 -> 140")
     if not r3["marker"]:
         failures.append("run3-marker: .transform-complete was not touched")
 

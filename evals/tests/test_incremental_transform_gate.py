@@ -61,7 +61,6 @@ to satisfy an ordering check.
 from __future__ import annotations
 
 import ast
-import csv
 import importlib.util
 import json
 import re
@@ -227,29 +226,6 @@ def test_incremental_oracle_requires_one_cursor_key_to_follow_the_trajectory():
         {"events": {"max_event_id": "140"}},
     ]
     assert checker._has_cursor_trajectory(*string_states)
-    timestamp_states = [
-        {"events": {"occurred_at": "2026-07-27T08:20:00Z"}},
-        {"events": {"occurred_at": "2026-07-27T08:20:00Z"}},
-        {"events": {"occurred_at": "2026-07-30T20:20:00Z"}},
-    ]
-    assert checker._has_cursor_trajectory(*timestamp_states)
-    assert not checker._has_cursor_trajectory(*timestamp_states[:2])
-
-    def max_occurred_at(paths):
-        values = []
-        for path in paths:
-            with path.open(newline="") as handle:
-                values.extend(row["occurred_at"] for row in csv.DictReader(handle))
-        return max(values)
-
-    base_paths = sorted(
-        (SCENARIO / "fixtures" / "data_product" / "data" / "events").glob(
-            "part-*.csv"
-        )
-    )
-    delta_path = SCENARIO / "fixtures" / "delta" / "part-0003.csv"
-    assert checker.BASE_TIMESTAMP == max_occurred_at(base_paths)
-    assert checker.DELTA_TIMESTAMP == max_occurred_at([*base_paths, delta_path])
 
 
 def test_teaches_the_transform_state_kwarg():
