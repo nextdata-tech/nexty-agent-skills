@@ -127,9 +127,7 @@ an answer the agent has still never been given.
 Under a driver the scripted sentence never goes out, so transmission is decided
 by whether the authored turn carried the reply's substance. That is measured
 deterministically from the reply's distinctive words — its own content, minus
-everything already in the agent's message:
-
-at least three of them must appear, and at least a third. Fewer than three
+everything already in the agent's message. At least three of them must appear, and at least a third. Fewer than three
 distinctive words is never counted as conveyed: the reply adds too little
 beyond the question to judge either way.
 

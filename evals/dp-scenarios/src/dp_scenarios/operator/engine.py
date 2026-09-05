@@ -555,7 +555,6 @@ def _snapshot(reader: object) -> Mapping[str, object]:
     return dict(value)
 
 
-
 def _artifact_text(artifact: str | bytes | None) -> str:
     """Return an approval artifact as text, empty when the agent supplied none."""
 
@@ -618,7 +617,6 @@ _CONVEYANCE_RATIO = 0.34
 _CONVEYANCE_MINIMUM = 3
 
 
-
 def _content_words(text: str) -> set[str]:
     return {
         word
@@ -638,13 +636,13 @@ def _authored_text_conveys(reply: str, agent_message: str, authored: str) -> boo
     the fact.
     """
 
+    # A reply with fewer than three distinctive words needs no guard of its own:
+    # ``carried`` is a subset of ``distinctive``, so the minimum below already
+    # refuses it, and the ``and`` short-circuits before the ratio divides. The
+    # guard that used to sit here became unreachable when the short-reply branch
+    # was removed, and an unreachable guard reads as protection that is not
+    # there.
     distinctive = _content_words(reply) - _content_words(agent_message)
-    if len(distinctive) < _CONVEYANCE_MINIMUM:
-        # The reply adds almost nothing the question did not already contain,
-        # so there is no evidence either way and conveyance cannot be
-        # established. Returning True here would let a pure echo clear the
-        # short-reply rule by "covering" its one distinctive word.
-        return False
     carried = distinctive & _content_words(authored)
     return len(carried) >= _CONVEYANCE_MINIMUM and len(carried) / len(distinctive) >= _CONVEYANCE_RATIO
 
