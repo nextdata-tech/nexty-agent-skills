@@ -294,28 +294,36 @@ four counters at zero.
 
 #### Keeping the key around between runs
 
-`evals/dp-scenarios/.env` is gitignored for this. Create it once, `chmod 600`,
-and source it into the run:
+`evals/dp-scenarios/.env` is gitignored for local credentials. Create it once,
+`chmod 600`, and pass it explicitly to the live runner:
 
 ```bash
 umask 077
-printf 'OPENAI_API_KEY=%s\n' 'sk-...' > evals/dp-scenarios/.env
-
-set -a; . evals/dp-scenarios/.env; set +a    # value never reaches stdout
+cat > evals/dp-scenarios/.env <<'EOF'
+OPENAI_API_KEY=sk-...
+CLAUDE_CODE_OAUTH_TOKEN=...
+EOF
+chmod 600 evals/dp-scenarios/.env
 ```
 
-`set -a` exports the assignment into the runner's environment without echoing it.
 Confirm the ignore works before pasting a real key:
 `git check-ignore -v evals/dp-scenarios/.env` must print a matching rule.
 
-**The key comes from the environment and nowhere else** — there is no file
-fallback and no flag that takes a key; sourcing a `.env` puts the value in the
-environment before the process starts, and the runner has no notion of that file.
-It is missing from the agent session's environment allowlist and is popped from
-the Claude adapter's child environment, so the agent under test cannot read it.
-The provider's `repr` and every provider error are scrubbed of both the key and
-the `Authorization` header. A missing key is refused before the drift canary runs
-and before any fixture is generated, so it costs nothing.
+The runner reads only `OPENAI_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from the
+file. `--driver-model` uses the OpenAI key in the harness; the Claude OAuth
+token is passed only across the trusted adapter-to-Claude boundary. It is not
+added to the agent session allowlist, the Desktop supervisor environment, the
+manifest, or retained artifacts. OAuth-token runs also deny Bash so the agent
+cannot inherit the token through a shell. Environment variables with the same
+names override the file values.
+
+For a live run, pass the file explicitly:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --env-file evals/dp-scenarios/.env \
+  --scenario crm-pipeline
+```
 
 ### How a mock source reaches the agent
 

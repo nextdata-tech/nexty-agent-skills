@@ -795,3 +795,19 @@ def test_the_adapter_environment_is_unchanged_when_no_key_is_present(
 
     assert "OPENAI_API_KEY" not in variable_names
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
+
+
+def test_oauth_token_reaches_claude_and_withholds_bash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-test-token")
+    monkeypatch.setenv("DP_ADAPTER_ENV_CANARY", "present")
+
+    environment = _spawned_claude_environment(tmp_path, monkeypatch)
+
+    assert environment["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-test-token"
+    assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
+
+    argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=True)
+    denied = {tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")}
+    assert {"Bash", "BashOutput", "KillShell"} <= denied

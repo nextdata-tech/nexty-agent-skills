@@ -472,7 +472,9 @@ class ClaudeCodeAdapter:
         self.timeout_s = timeout_s
         self.max_budget_usd = max_budget_usd
         self.append_system_prompt = append_system_prompt
-        self.allow_bash = allow_bash
+        # An OAuth token is intentionally injected only into this trusted
+        # adapter-to-Claude boundary.  Do not let an agent shell inherit it.
+        self.allow_bash = allow_bash and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
         self.mcp_config = mcp_config
         self.strict_mcp_config = strict_mcp_config
         self.allowed_tools = allowed_tools

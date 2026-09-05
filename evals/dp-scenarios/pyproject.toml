@@ -9,6 +9,7 @@ dependencies = [
     "duckdb>=1.0",           # gold-row-set reconciliation against landed data
     "aiohttp>=3.9",          # the mock HTTP source server and its client-side tests
     "psycopg[binary]>=3.2",  # live Postgres readiness, seeding, and probes
+    "python-dotenv>=1.2",     # opt-in local credentials for live runner entrypoints
 ]
 
 [project.optional-dependencies]

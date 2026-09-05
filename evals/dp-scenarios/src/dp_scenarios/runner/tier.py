@@ -1176,6 +1176,7 @@ class TierRunner:
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
         live_command: Sequence[str] | None = None,
+        live_environment: Mapping[str, str] | None = None,
         supervisor_command: str | Path | Sequence[str] | None = None,
         supervisor_environment: Mapping[str, str] | None = None,
         knob_plan: KnobPlan | None = None,
@@ -1201,6 +1202,7 @@ class TierRunner:
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
         self.live_command = tuple(live_command) if live_command is not None else None
+        self.live_environment = dict(live_environment or {})
         self.supervisor_command = supervisor_command
         self.supervisor_environment = (
             dict(supervisor_environment) if supervisor_environment is not None else None
@@ -1451,6 +1453,7 @@ class TierRunner:
                 route_config=self.route_configs.get(scenario.id),
                 manifest_override=manifest_override,
                 live_command=self.live_command,
+                live_environment=self.live_environment,
                 supervisor_command=self.supervisor_command,
                 supervisor_environment=self.supervisor_environment,
                 allow_host_home=self.allow_host_home,

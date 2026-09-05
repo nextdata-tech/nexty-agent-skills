@@ -88,6 +88,38 @@ def test_local_runner_host_home_flag_and_bash_require_a_second_opt_in() -> None:
         module.main(["--allow-host-home-bash"])
 
 
+def test_local_runner_loads_only_supported_credentials_from_owner_only_env_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_runner_module()
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENAI_API_KEY=sk-from-file\n"
+        "CLAUDE_CODE_OAUTH_TOKEN=oauth-from-file\n"
+        "UNRELATED_SECRET=must-not-load\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    credentials = module._load_local_credentials(env_file)
+
+    assert credentials == {
+        "OPENAI_API_KEY": "sk-from-file",
+        "CLAUDE_CODE_OAUTH_TOKEN": "oauth-from-file",
+    }
+    assert "UNRELATED_SECRET" not in credentials
+
+
+def test_oauth_credentials_always_withhold_bash() -> None:
+    module = _load_runner_module()
+    args = module.build_parser().parse_args([])
+
+    assert module._tool_grant_arguments(args, oauth_token_present=True) == ["--no-bash"]
+
+
 @pytest.mark.parametrize(
     ("cli_arguments", "bash_withheld"),
     [

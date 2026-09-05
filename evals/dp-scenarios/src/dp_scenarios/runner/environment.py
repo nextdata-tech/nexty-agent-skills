@@ -412,6 +412,7 @@ class RunEnvironment:
     control_secret: str | None = None
     manifest_override: Manifest | Mapping[str, object] | None = None
     live_command: Sequence[str] | LiveCommandBuilder | None = None
+    live_environment: Mapping[str, str] | None = None
     supervisor_command: str | Path | Sequence[str] | None = None
     supervisor_args: Sequence[str] = ()
     supervisor_environment: Mapping[str, str] | None = None
@@ -542,7 +543,10 @@ class RunEnvironment:
 
                 transport = DesktopStdioTransport.create(
                     _desktop_command_builder(self.live_command),
-                    environment=self.agent_environment,
+                    environment={
+                        **self.agent_environment,
+                        **dict(self.live_environment or {}),
+                    },
                     cwd=self.live_cwd or (base / "agent"),
                     server_command=self.supervisor_command,
                     server_args=supervisor_args,

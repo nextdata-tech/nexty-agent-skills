@@ -210,17 +210,20 @@ class OpenAIDriverProvider:
         *,
         model: str,
         temperature: float,
+        api_key: str | None = None,
         **kwargs: object,
     ) -> "OpenAIDriverProvider":
-        """Build a provider with the key taken only from the environment.
+        """Build a provider with an explicitly supplied or environment key.
 
-        There is no file fallback and no default.  A missing or blank
-        ``OPENAI_API_KEY`` is a configuration error raised here, before any
-        run begins, rather than an authentication failure discovered on the
-        first authored turn of a paid live run.
+        A caller-supplied key is used for trusted local entrypoints that load
+        a gitignored credentials file.  Otherwise the key comes from the
+        process environment.  A missing or blank key is a configuration
+        error raised here, before any run begins, rather than an
+        authentication failure discovered on the first authored turn of a
+        paid live run.
         """
 
-        key = os.environ.get("OPENAI_API_KEY")
+        key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
         if not isinstance(key, str) or not key.strip():
             raise DriverConfigError("OPENAI_API_KEY is not set in the environment")
         return cls(model=model, temperature=temperature, api_key=key, **kwargs)  # type: ignore[arg-type]
