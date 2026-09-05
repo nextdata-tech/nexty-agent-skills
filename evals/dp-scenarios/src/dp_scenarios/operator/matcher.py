@@ -226,8 +226,8 @@ def solicits_operator(message: str) -> bool:
     mark, an interrogative opening clause, a bare ``which`` opener, or one of
     the request phrases in :data:`SOLICITATION_PATTERN`. A status update that
     merely mentions approval in passing matches none of them, and neither does
-    a line-head imperative -- see the note above
-    :data:`SOLICITATION_PATTERN` for why that shape is not inferred.
+    a line-head imperative -- see the note below :data:`SOLICITATION_PATTERN`
+    for why that shape is not inferred.
     """
 
     if not isinstance(message, str):
