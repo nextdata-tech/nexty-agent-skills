@@ -339,3 +339,110 @@ def test_supervisor_model_rows_are_appended_in_sorted_order() -> None:
         "per_model_row_counts.model-a",
         "per_model_row_counts.model-z",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Claim canonicalisation
+#
+# The supervisor-provenance guard compares an agent-supplied claim with the
+# supervisor's own fact by serializing both through `_json_bytes`. Mutation
+# testing found every option of that serializer unkilled: sorting, ASCII
+# escaping, separators and the `default=` fallback could each be changed with
+# the whole suite still green, because no test had ever compared two mappings
+# that were equal but not identically written. The two directions of the
+# comparison have very different costs -- a false mismatch rejects an honest
+# claim, and a false match is exactly the laundering the guard exists to stop.
+# ---------------------------------------------------------------------------
+
+
+def two_model_facts() -> SupervisorFacts:
+    return SupervisorFacts(
+        run_id="run-1",
+        artifact_id="artifact-1",
+        publish_sequence="7",
+        per_model_row_counts={"model-a": "42", "model-b": "7"},
+        lifecycle_state="served",
+    )
+
+
+def test_a_reordered_supervisor_claim_is_still_the_supervisors_own_fact() -> None:
+    """Key order is a writing choice, not a difference in the fact.
+
+    A byte comparison that respects insertion order would reject an honest
+    claim assembled in a different order and report it as laundering.
+    """
+
+    rows: list[object] = []
+    reader = StaticSupervisorRecordReader(two_model_facts())
+
+    payload = append_turn_row(
+        rows,  # type: ignore[arg-type]
+        turn(
+            action_kind="build",
+            phase=5,
+            claim={"per_model_row_counts": {"model-b": "7", "model-a": "42"}},
+        ),
+        supervisor_reader=reader,
+    )
+
+    assert payload["claim"] == {"per_model_row_counts": {"model-b": "7", "model-a": "42"}}
+
+
+@pytest.mark.parametrize(
+    ("claim", "label"),
+    [
+        ({"per_model_row_counts": {"model-a": "42", "model-b": "8"}}, "one-value-changed"),
+        ({"per_model_row_counts": {"model-a": "42"}}, "one-model-dropped"),
+        ({"per_model_row_counts": {"model-a": "42", "model-b": "7", "model-c": "1"}}, "model-added"),
+        ({"per_model_row_counts": {"model-a": 42, "model-b": 7}}, "string-vs-int"),
+        ({"per_model_row_counts": {"model_a": "42", "model_b": "7"}}, "key-renamed"),
+    ],
+)
+def test_any_real_difference_from_the_supervisor_fact_is_rejected(
+    claim: dict[str, object], label: str
+) -> None:
+    """Canonicalisation must survive reordering without erasing content."""
+
+    rows: list[object] = []
+    reader = StaticSupervisorRecordReader(two_model_facts())
+
+    with pytest.raises(AppenderError, match="must come from the supervisor reader"):
+        append_turn_row(
+            rows,  # type: ignore[arg-type]
+            turn(action_kind="build", phase=5, claim=claim),
+            supervisor_reader=reader,
+        )
+
+
+def test_a_non_ascii_supervisor_value_compares_by_content_not_by_escaping() -> None:
+    """`ensure_ascii` decides whether "ü" is two bytes or "\\u00fc".
+
+    Either encoding is fine as long as both sides use it, which is precisely
+    what a single-sided test cannot show.
+    """
+
+    rows: list[object] = []
+    reader = StaticSupervisorRecordReader(
+        SupervisorFacts(
+            run_id="run-1",
+            artifact_id="artifact-1",
+            publish_sequence="7",
+            per_model_row_counts={"modèle-ü": "42"},
+            lifecycle_state="served",
+        )
+    )
+
+    payload = append_turn_row(
+        rows,  # type: ignore[arg-type]
+        turn(action_kind="build", phase=5, claim={"per_model_row_counts": {"modèle-ü": "42"}}),
+        supervisor_reader=reader,
+    )
+
+    assert payload["claim"] == {"per_model_row_counts": {"modèle-ü": "42"}}
+
+    with pytest.raises(AppenderError, match="must come from the supervisor reader"):
+        append_turn_row(
+            rows,  # type: ignore[arg-type]
+            turn(action_kind="build", phase=5, claim={"per_model_row_counts": {"modele-u": "42"}}),
+            supervisor_reader=reader,
+        )

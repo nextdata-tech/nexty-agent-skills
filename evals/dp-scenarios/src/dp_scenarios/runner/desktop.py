@@ -27,7 +27,15 @@ class DesktopTransportError(RuntimeError):
 # The substrate is a repo-level eval module rather than an installed package.
 # Keep the import seam here, next to its sole consumer, so replay imports do
 # not need to load it and no copy of the substrate can drift into this package.
-_EVALS_ROOT = Path(__file__).resolve().parents[4]
+# Located by walking up for the substrate itself rather than by a fixed number
+# of parent hops: the mutation-testing run executes this package from a
+# relocated copy (``mutants/src/...``), where a fixed hop lands one directory
+# short and the import fails for a reason that has nothing to do with the
+# mutant under test.
+_EVALS_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "desktop_stdio.py").is_file()),
+    Path(__file__).resolve().parents[4],
+)
 if str(_EVALS_ROOT) not in sys.path:
     sys.path.append(str(_EVALS_ROOT))
 

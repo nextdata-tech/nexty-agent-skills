@@ -331,10 +331,128 @@ scenarios can be authored in parallel without conflicting.
    list the new kind.
 3. `tests/test_scenario_<name>.py` — property tests. **Mutation-test them:** break
    each check and confirm a test fails. Reading a diff has never caught a real
-   defect in this suite; mutation has.
+   defect in this suite; mutation has. For the operator and grading directories
+   this is automated — see [Mutation testing](#mutation-testing) below. A
+   follow-up check lives outside those directories, so mutating it is still a
+   hand job; the section below says how to do one that cannot lie to you.
 
 The loader tests derive the expected package set from disk, so a new package
 needs no test edit either.
+
+## Mutation testing
+
+The acceptance bar for a check in this suite is not "the tests pass", it is
+"break the check and a test fails". Two failure modes make that bar hard to hold
+by hand.
+
+A hand-rolled mutation can **silently fail to apply** — a regex that misses its
+target line, a `str.replace` that no-ops — and the run that follows is green for
+the boring reason, not the interesting one. That has twice produced a confident
+wrong conclusion here, once reporting a guard as unenforced when the guard was
+fine. And nobody hand-mutates code they did not just write, so the failure this
+harness actually keeps producing goes unlooked-for: **a gate that exists but
+never fires**, and **a test that asserts the code's self-report rather than the
+property**.
+
+`scripts/mutation_test.py` drives [mutmut](https://github.com/boxed/mutmut) over
+`src/dp_scenarios/operator/` and `src/dp_scenarios/grading/`. mutmut rewrites
+each function into a numbered set of variants behind a generated trampoline and
+selects the variant by environment variable, so a mutant that did not apply
+cannot be reported as a result at all — the first failure mode is structurally
+impossible. Scope, copy rules and pytest arguments live in `[tool.mutmut]` in
+`pyproject.toml`.
+
+```bash
+cd evals/dp-scenarios
+
+# Everything in the two guarded directories. ~2.5 min on a 14-core host.
+scripts/mutation_test.py full
+
+# Only the guarded files this branch changes. What CI runs on a pull request.
+scripts/mutation_test.py changed --base origin/main
+
+# One mutant, or one function, reproducing a CI failure verbatim.
+scripts/mutation_test.py filter 'dp_scenarios.grading.scans.x_supported_path_scan__mutmut_31'
+```
+
+**Run it from `evals/dp-scenarios/`.** mutmut reads its config from the
+`pyproject.toml` in the working directory, copies the tree into `./mutants/` and
+runs the suite from there. The wrapper `cd`s for you, so it can be invoked from
+anywhere; bare `uv run mutmut` cannot.
+
+### Reading the result
+
+A **surviving** mutant is a change to the guarded code that the whole suite still
+passes with. That is the finding. Each one is a genuinely equivalent mutant, a
+missing test, or a bug — and calling one equivalent is a claim that needs an
+argument, not a shrug.
+
+Runs are compared against `mutation-baseline.json`, a per-function count of
+known survivors, and both CI tiers fail only on counts that go **up**. The
+baseline is keyed by function rather than by mutant name because mutmut numbers
+mutants positionally: editing a function renumbers all of its mutants, so a
+name-keyed baseline would go red on every edit for reasons that have nothing to
+do with test quality. Regenerate it with
+`scripts/mutation_test.py full --update-baseline`, and say in the PR why each
+added entry is acceptable.
+
+`no tests` is reported but never failed on: it means the covering-test analysis
+found no test that touches the function at all. That is a coverage fact the
+suite already knows, not a regression.
+
+### Where it runs
+
+| Tier | Trigger | Scope |
+|---|---|---|
+| `.github/workflows/nightly-mutation.yml` | 04:10 UTC + manual | every mutant in both guarded directories |
+| `dp-scenarios-mutation` in `ci.yml` | every PR | only the guarded files the diff touches |
+
+The PR tier is scoped to the diff rather than capped at a mutant budget. A
+budget has to choose which mutants to skip, and any deterministic choice is one
+an author can learn to write around; scoping to the diff skips nothing inside
+what changed. Most pull requests touch neither directory, and the job decides
+that from a `git diff` before it installs anything.
+
+### Two things that will mislead you
+
+**On macOS, roughly a third of mutants report `segfault` and get no verdict.**
+`dp_scenarios.synthgen.reference` opens an in-memory SQLite database, and
+`sqlite3.connect` crashes in a `fork()`ed child on macOS — mutmut runs each
+mutant in a forked child, so every mutant whose covering tests reach fixture
+generation dies before it is judged. Twelve lines reproduce it with no mutmut
+involved:
+
+```python
+import os, sqlite3
+if os.fork() == 0:
+    sqlite3.connect(":memory:")   # SIGSEGV on macOS, fine on Linux
+    os._exit(0)
+```
+
+Linux is unaffected, so **CI is the authoritative run** and a local macOS score
+is a floor, not a measurement. A local survivor is still a real survivor; a local
+`segfault` is "not measured".
+
+**A flaky test makes every mutant look killed**, which is the worst possible
+outcome: perfect coverage reported by a suite that tested nothing. Two
+back-to-back whole-scope runs on identical source disagreed on **2 of 7930**
+mutants (0.03%), both at the segfault boundary above. That is low enough to gate
+on, and it is worth re-measuring after any change that adds sleeping, real
+sockets, or wall-clock assertions to the suite: run
+`scripts/mutation_test.py full` twice and diff the two `mutation-report.txt`
+files.
+
+### When to still mutate by hand
+
+The automated scope is deliberately narrow. Everything else — `followups/`,
+`runner/`, `scenario.py`, `ledger/`, and the scenario packages themselves —
+still expects the manual discipline, and so does any check whose property is not
+expressible as a source edit at all (a fixture value, a gold row-set, a
+scenario's declared order). When you do it by hand, **confirm the mutation
+applied** before you believe the result: `git diff` the file you edited, and
+check that the test you expected to fail is the one that failed. A green run
+after a mutation that did not land is the exact mistake this tooling exists to
+remove.
 
 ## Runtime control plans
 
@@ -397,7 +515,9 @@ while hiding drift in the pack that matters.
 | `src/dp_scenarios/grading/` | Mechanical gate checks and oracles |
 | `src/dp_scenarios/canary/` | Drift-canary claims extraction and verdict matrix |
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |
+| `scripts/` | Local live runner, conversation renderer, mutation-test driver |
 | `tests/` | Unit tests for the harness itself |
+| `mutation-baseline.json` | Known surviving mutants per function; CI fails on growth |
 
 ## Fixture hygiene
 

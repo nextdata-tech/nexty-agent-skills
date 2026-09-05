@@ -23,7 +23,11 @@ dependencies = [
 # artifact-based environments.
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pytest-timeout>=2.3"]
+dev = [
+    "mutmut>=3.7,<4",
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -46,3 +50,21 @@ markers = [
     "integration: requires a local Docker runtime and the configured Postgres image",
     "field_mapper: requires a declared NXD field_mapper artifact or source checkout",
 ]
+
+[tool.mutmut]
+# Automated mutation testing — see "Mutation testing" in README.md, and
+# scripts/mutation_test.sh for the wrapper that drives it.  mutmut copies the
+# tree into ./mutants and runs the suite from there, so `source_paths` is the
+# whole package (imports must resolve) while `only_mutate` narrows the actual
+# mutation to the two directories where a gate that never fires is the
+# recurring defect: the operator turn machinery and mechanical grading.
+source_paths = ["src"]
+only_mutate = [
+    "src/dp_scenarios/operator/*",
+    "src/dp_scenarios/grading/*",
+]
+# Read from disk by the suite, so the relocated copy needs them too.
+also_copy = ["scenarios", "scripts"]
+# Docker- and Postgres-backed tests are skipped in a normal run anyway;
+# deselecting them keeps the per-mutant runs from paying their collection cost.
+pytest_add_cli_args = ["-m", "not integration and not field_mapper", "-q"]

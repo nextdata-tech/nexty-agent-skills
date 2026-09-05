@@ -7,6 +7,8 @@ import shutil
 
 import pytest
 
+from _repo_paths import REPO_ROOT
+
 from dp_scenarios.canary.claims import Baseline, ClaimsDocument, claims_content_hash, document_json, load_claims
 from dp_scenarios.canary.extract import ClaimDriftError, extract_claims, source_skill_files
 
@@ -56,7 +58,7 @@ def test_extraction_round_trips_committed_fixture_claims(tmp_path: Path) -> None
 
 
 def test_committed_canary_claims_match_repository_skills() -> None:
-    repo_root = Path(__file__).parents[3]
+    repo_root = REPO_ROOT
     claims_path = repo_root / "evals/dp-scenarios/scenarios/drift-canary/claims.json"
 
     checked = extract_claims(

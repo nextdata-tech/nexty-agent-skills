@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""Drive mutmut over the guarded directories and report survivors as findings.
+
+Why this exists
+---------------
+``evals/dp-scenarios`` has always asked contributors to mutation-test a new
+check by hand: break the guard, rerun, confirm red.  Two things go wrong with
+that.  A hand-rolled mutation can fail to apply at all -- a regex that misses
+its line, a ``str.replace`` that silently no-ops -- and a run that never changed
+the code reads as "the guard is unenforced" when the guard was fine.  And
+nobody hand-mutates code they did not just write, which is exactly where the
+recurring defect of this suite lives: a gate that exists but never fires.
+
+mutmut applies each mutant through a generated trampoline, so a mutant that did
+not apply cannot be reported as a result at all -- the failure mode that
+produced two wrong conclusions in the past is structurally impossible here.
+
+Two tiers
+---------
+``full``     every mutant in the guarded directories.  Nightly.
+``changed``  only the modules the diff touches.  Fast enough for a PR.
+
+Both tiers compare against ``mutation-baseline.json``: a per-function count of
+surviving mutants.  The baseline is keyed by *function*, not by mutant name,
+because mutmut numbers mutants by position within a function -- editing a
+function renumbers all of its mutants, so a name-keyed baseline would go red on
+every edit for reasons unrelated to test quality.  A function-keyed count is
+stable under renumbering and still fails the moment a change adds an untested
+branch.
+
+Usage
+-----
+    scripts/mutation_test.py full
+    scripts/mutation_test.py changed [--base origin/main]
+    scripts/mutation_test.py full --update-baseline
+    scripts/mutation_test.py filter dp_scenarios.grading.gates.x_check_gate__mutmut_3
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BASELINE_PATH = PROJECT_ROOT / "mutation-baseline.json"
+REPORT_PATH = PROJECT_ROOT / "mutation-report.txt"
+
+# The two directories the tooling guards.  Kept here rather than derived from
+# pyproject's ``only_mutate`` so that `changed` can map a changed file back to
+# the mutmut module filter without parsing glob patterns.
+GUARDED_DIRS = (
+    Path("src/dp_scenarios/operator"),
+    Path("src/dp_scenarios/grading"),
+)
+
+# ``dp_scenarios.grading.gates.x_phase_ok__mutmut_12`` ->
+# ("dp_scenarios.grading.gates", "phase_ok")
+_MUTANT_NAME = re.compile(r"^(?P<module>[\w.]+?)\.x_(?P<function>\w+?)__mutmut_\d+$")
+
+# Statuses that mean "the tests did not notice this change".  ``no tests`` is
+# reported but not failed on: it means the stats phase found no test that
+# touches the function at all, which is a coverage fact the suite already knows
+# about, not a regression signal.
+REPORTED_STATUSES = ("survived", "no tests", "timeout", "suspicious", "segfault")
+
+# No verdict was reached for these: the child died or ran out of time, so the
+# mutant was neither killed nor shown to survive.
+UNVERDICTED_STATUSES = ("timeout", "suspicious", "segfault")
+
+
+class MutationError(RuntimeError):
+    pass
+
+
+class _Tee:
+    """Mirror everything printed into the report file CI publishes.
+
+    The findings are the product of this job, and a reader who only has the
+    workflow summary should see the same text the operator saw locally.
+    """
+
+    def __init__(self, stream: object, path: Path) -> None:
+        self._stream = stream
+        self._file = path.open("w", encoding="utf-8")
+
+    def write(self, text: str) -> int:
+        self._file.write(text)
+        self._file.flush()
+        return self._stream.write(text)  # type: ignore[attr-defined,no-any-return]
+
+    def flush(self) -> None:
+        self._file.flush()
+        self._stream.flush()  # type: ignore[attr-defined]
+
+    def close(self) -> None:
+        self._file.close()
+
+
+def _run(args: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=capture,
+        check=False,
+    )
+
+
+def _mutmut(*args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return _run(["uv", "run", "--project", str(PROJECT_ROOT), "mutmut", *args], capture=capture)
+
+
+def changed_modules(base: str) -> list[str]:
+    """Return mutmut module filters for guarded files changed against ``base``.
+
+    Deterministic by construction: the same diff always yields the same filter
+    list, in sorted order, so a red PR job is reproducible by copy-pasting the
+    command the job prints.
+    """
+
+    merge_base = _run(["git", "merge-base", base, "HEAD"], capture=True)
+    ref = merge_base.stdout.strip() if merge_base.returncode == 0 else base
+    diff = _run(["git", "diff", "--name-only", ref, "--"], capture=True)
+    if diff.returncode != 0:
+        raise MutationError(f"could not diff against {ref!r}: {diff.stderr.strip()}")
+
+    repo_root = Path(
+        _run(["git", "rev-parse", "--show-toplevel"], capture=True).stdout.strip()
+    )
+    filters: set[str] = set()
+    for line in diff.stdout.splitlines():
+        if not line.endswith(".py"):
+            continue
+        absolute = (repo_root / line).resolve()
+        try:
+            relative = absolute.relative_to(PROJECT_ROOT)
+        except ValueError:
+            continue
+        if not any(relative.is_relative_to(guarded) for guarded in GUARDED_DIRS):
+            continue
+        module = ".".join(relative.with_suffix("").parts[1:])  # drop the leading "src"
+        filters.add(f"{module}.*")
+    return sorted(filters)
+
+
+def parse_results(text: str) -> dict[str, list[str]]:
+    """Group ``mutmut results`` output by status."""
+
+    grouped: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if ": " not in stripped:
+            continue
+        name, _, status = stripped.rpartition(": ")
+        if status not in REPORTED_STATUSES:
+            continue
+        grouped.setdefault(status, []).append(name)
+    return grouped
+
+
+def function_key(mutant_name: str) -> str:
+    match = _MUTANT_NAME.match(mutant_name)
+    if not match:
+        # Method mutants carry a class segment; fall back to trimming the index
+        # so an unrecognised shape still lands in a stable bucket rather than
+        # being silently dropped from the comparison.
+        return mutant_name.rsplit("__mutmut_", 1)[0]
+    return f"{match['module']}.{match['function']}"
+
+
+def survivor_counts(survivors: list[str]) -> dict[str, int]:
+    return dict(sorted(Counter(function_key(name) for name in survivors).items()))
+
+
+def load_baseline() -> dict[str, int]:
+    if not BASELINE_PATH.is_file():
+        return {}
+    data = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    return {str(k): int(v) for k, v in data.get("survivors_by_function", {}).items()}
+
+
+def write_baseline(counts: dict[str, int], *, scope: str) -> None:
+    BASELINE_PATH.write_text(
+        json.dumps(
+            {
+                "_comment": (
+                    "Surviving mutants per function, from scripts/mutation_test.py. "
+                    "Keyed by function because mutmut numbers mutants positionally. "
+                    "Every entry is a mutation the suite does not notice: see the "
+                    "'Mutation testing' section of README.md before adding one."
+                ),
+                "scope": scope,
+                "survivors_by_function": counts,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def regressions(counts: dict[str, int], baseline: dict[str, int]) -> dict[str, tuple[int, int]]:
+    return {
+        key: (baseline.get(key, 0), observed)
+        for key, observed in counts.items()
+        if observed > baseline.get(key, 0)
+    }
+
+
+def explain(survivors: list[str], keys: set[str], limit: int) -> None:
+    """Print the diff of each survivor under a regressed function.
+
+    A count alone is not actionable.  ``mutmut show`` prints the exact source
+    change the suite failed to notice, which names the untested property
+    directly.
+    """
+
+    offenders = [name for name in survivors if function_key(name) in keys][:limit]
+    for name in offenders:
+        print(f"\n--- surviving mutant: {name} ---")
+        shown = _mutmut("show", name, capture=True)
+        sys.stdout.write(shown.stdout)
+        print(f"    reproduce: cd evals/dp-scenarios && uv run mutmut run '{name}'")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("mode", choices=("full", "changed", "filter"))
+    parser.add_argument("filters", nargs="*", help="explicit mutmut mutant-name filters (mode=filter)")
+    parser.add_argument("--base", default="origin/main", help="diff base for mode=changed")
+    parser.add_argument("--update-baseline", action="store_true")
+    parser.add_argument("--max-children", type=int, default=None)
+    parser.add_argument("--explain-limit", type=int, default=20)
+    parser.add_argument("--clean", action="store_true", help="discard ./mutants before running")
+    parser.add_argument(
+        "--allow-unverdicted",
+        action="store_true",
+        help="report a run in which some mutants crashed or timed out (never the default off macOS)",
+    )
+    args = parser.parse_args(argv)
+
+    if shutil.which("uv") is None:
+        raise MutationError("uv is required to run the dp-scenarios project environment")
+
+    if args.mode == "changed":
+        filters = changed_modules(args.base)
+        if not filters:
+            print("No guarded module changed; nothing to mutate.")
+            return 0
+    elif args.mode == "filter":
+        filters = list(args.filters)
+        if not filters:
+            raise MutationError("mode=filter needs at least one mutant-name filter")
+    else:
+        filters = []
+
+    if args.clean:
+        shutil.rmtree(PROJECT_ROOT / "mutants", ignore_errors=True)
+
+    run_args = ["run", *filters]
+    if args.max_children is not None:
+        run_args += ["--max-children", str(args.max_children)]
+    printable = " ".join(f"'{f}'" for f in filters) or "(all guarded modules)"
+    print(f"scope: {printable}")
+    print(f"reproduce: cd evals/dp-scenarios && uv run mutmut run {printable}\n", flush=True)
+
+    started = time.monotonic()
+    completed = _mutmut(*run_args)
+    elapsed = time.monotonic() - started
+    # mutmut exits non-zero when mutants survive, which is the normal state
+    # here; a genuine tool failure shows up as an empty result set below.
+    print(f"\nmutmut run finished in {elapsed / 60:.1f} min (exit {completed.returncode})")
+
+    results = _mutmut("results", capture=True)
+    if results.returncode != 0:
+        raise MutationError(f"mutmut results failed:\n{results.stdout}{results.stderr}")
+    grouped = parse_results(results.stdout)
+
+    survivors = grouped.get("survived", [])
+    for status in REPORTED_STATUSES:
+        print(f"  {status:<12} {len(grouped.get(status, []))}")
+
+    # A mutant that crashed or timed out has no verdict. Reporting it as
+    # anything other than an error is the failure this tooling exists to
+    # remove: a run that did not measure something must not read as a run that
+    # measured it and found nothing.
+    unverdicted = sum(len(grouped.get(status, [])) for status in UNVERDICTED_STATUSES)
+    if unverdicted:
+        print(
+            f"\n{unverdicted} mutant(s) reached no verdict (crash or timeout). "
+            "The score below is a floor, not a measurement."
+        )
+        if sys.platform == "darwin":
+            print(
+                "  On macOS this is expected: sqlite3.connect() segfaults in a forked "
+                "child, and mutmut forks per mutant. See 'Mutation testing' in README.md. "
+                "The authoritative run is CI, on Linux."
+            )
+        elif not args.allow_unverdicted:
+            print("  Refusing to report a partial run as a result. Pass --allow-unverdicted to override.")
+            return 3
+
+    counts = survivor_counts(survivors)
+
+    if args.update_baseline:
+        # Only the whole-scope run may write the baseline. A scoped run sees
+        # nothing outside the modules it mutated, so writing its counts would
+        # silently erase every recorded survivor in the rest of the package and
+        # turn the next full run into a wall of false regressions.
+        if args.mode != "full":
+            raise MutationError("--update-baseline requires mode=full")
+        write_baseline(counts, scope=printable)
+        print(f"\nWrote {BASELINE_PATH.name} ({len(counts)} functions).")
+        return 0
+
+    # Comparison is per observed function, so a scoped run needs no filtering:
+    # a baseline entry for a function this run did not mutate is simply never
+    # consulted.
+    new = regressions(counts, load_baseline())
+    if not new:
+        print("\nNo new surviving mutants against the baseline.")
+        return 0
+
+    print(f"\n{len(new)} function(s) gained surviving mutants:")
+    for key, (was, now) in sorted(new.items()):
+        print(f"  {key}: {was} -> {now}")
+    explain(survivors, set(new), args.explain_limit)
+    print(
+        "\nEach diff above is a change to the guarded code that the whole suite "
+        "still passes with. Either add a test that fails on it, or -- if it is "
+        "genuinely equivalent -- record it with "
+        "`scripts/mutation_test.py full --update-baseline` and say why in the PR."
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    tee = _Tee(sys.stdout, REPORT_PATH)
+    sys.stdout = tee  # type: ignore[assignment]
+    try:
+        code = main()
+    except MutationError as error:
+        print(f"error: {error}")
+        code = 2
+    finally:
+        sys.stdout = sys.__stdout__
+        tee.close()
+    raise SystemExit(code)

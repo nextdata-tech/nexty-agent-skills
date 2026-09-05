@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 
+from _repo_paths import EVALS_ROOT
 
-_EVALS_ROOT = Path(__file__).resolve().parents[2]
-if str(_EVALS_ROOT) not in sys.path:
-    sys.path.append(str(_EVALS_ROOT))
+
+if str(EVALS_ROOT) not in sys.path:
+    sys.path.append(str(EVALS_ROOT))
