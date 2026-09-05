@@ -111,10 +111,8 @@ def test_method_mutants_group_under_a_stable_key(mt) -> None:
 # --- the guard that makes an aborted run loud -----------------------------
 
 
-def _fake_mutmut(results_stdout: str, run_exit: int = 1, *, seen: list | None = None):
+def _fake_mutmut(results_stdout: str, run_exit: int = 1):
     def fake(*args, capture: bool = False):
-        if seen is not None:
-            seen.append(args[0] if args else "run")
         if args and args[0] == "results":
             return subprocess.CompletedProcess(args, 0, stdout=results_stdout, stderr="")
         return subprocess.CompletedProcess(args, run_exit, stdout="", stderr="")

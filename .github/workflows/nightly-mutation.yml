@@ -75,9 +75,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # This job never diffs, so it does not need history for itself.
-          # `mutation_test.py changed` does, and someone running that mode by
-          # hand from this checkout would otherwise hit a confusing failure.
+          # This job never diffs, so it does not need history for itself. Kept
+          # so a future step that does -- `mutation_test.py changed` resolves a
+          # merge base -- works without a checkout change. Free on a job with a
+          # 350-minute budget.
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
