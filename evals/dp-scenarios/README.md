@@ -365,7 +365,7 @@ impossible. Scope, copy rules and pytest arguments live in `[tool.mutmut]` in
 ```bash
 cd evals/dp-scenarios
 
-# Everything in the two guarded directories. Hours on Linux -- see Runtime.
+# Everything in the two guarded directories. Tens of minutes -- see Runtime.
 scripts/mutation_test.py full
 
 # Only the guarded files this branch changes. What CI runs on a pull request.
@@ -419,9 +419,15 @@ falls as tests are added.
 | Run | Machine | Wall |
 |---|---|---|
 | suite baseline | macOS, 14 cores | 47s |
-| whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests |
+| whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
-| whole scope, 7930 mutants | Linux container, 14 vCPU | **LINUX_FULL** |
+| whole scope, 7930 mutants | Linux container, 14 vCPU | LINUX_FULL |
+| **PR tier, no guarded file changed** | GitHub hosted runner | **7s** |
+| **PR tier, `grading/scans.py` changed** | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
+
+`grading/scans.py` is close to the worst case for the PR tier — a large module
+with a lot of survivors — and `grading/gates.py` is the other. A change to a
+module with fewer survivors is minutes.
 
 Two levers were tried and rejected:
 
@@ -456,11 +462,13 @@ what changed. Most pull requests touch neither directory, and the job decides
 that from a `git diff` before it installs anything.
 
 Every run — scoped or not — pays a fixed cost first: mutmut copies the tree and
-traces the suite once to build the function-to-covering-tests map. After that a
-scoped run is minutes for most modules. The known worst case is a diff to
-`grading/gates.py`, the largest guarded module and the one whose covering set
-includes the fixture-generating tier tests; the job's 45-minute cap is sized for
-that, and a change of that size is worth waiting on.
+traces the suite once to build the function-to-covering-tests map. **A pull
+request that changes nothing under the two guarded directories costs 7 seconds**
+(measured): the job decides that from a `git diff` and skips every install. A
+pull request that changes `grading/scans.py` costs **15m24s** (measured, on a
+hosted runner). That is the honest number, not a few minutes — it is a large
+module with many survivors, and survivors are what cost time. The 45-minute cap
+is sized for the other big one, `grading/gates.py`.
 
 ### Two things that will mislead you
 
