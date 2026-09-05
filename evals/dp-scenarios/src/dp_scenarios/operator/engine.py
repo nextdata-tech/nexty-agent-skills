@@ -253,6 +253,14 @@ class OperatorScript:
             "persona": {
                 "reply_bank": {key: list(value) for key, value in self.persona.reply_bank.items()},
                 "fallback": self.persona.fallback,
+                # An engine input, so script identity -- the same argument that
+                # puts ``gap_stance`` in the answer sheet's mapping. Flipping a
+                # persona from ``ask_back`` to ``assert_default`` changes what
+                # every undeclared-answer turn says to the agent; without this
+                # the paired-comparison guard would treat the two runs as the
+                # same script. ``label``, ``vocabulary`` and ``behaviors`` stay
+                # out: they are prompt colour, not a branch the engine takes.
+                "stance_when_unknown": self.persona.stance_when_unknown,
             },
             "answer_sheet": answer_sheet,
             "events": self.events.to_mapping(),
@@ -1147,7 +1155,6 @@ class OperatorEngine:
         turn_timed_out = False
         next_reply: str | None = None
         next_match: MatchResult | None = None
-        next_agent_message = ""
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
         previous_agent_message = ""
@@ -1178,15 +1185,29 @@ class OperatorEngine:
             directive = self._resolve_directive(
                 next_match,
                 answer_available=next_reply is not None,
-                agent_message=next_agent_message,
+                # Assigned at the foot of the previous iteration, so this is
+                # the message the pending reply was selected from.
+                agent_message=previous_agent_message,
             )
             # Turn one, a non-substitutable turn and an approval turn all
             # transmit their declared line whatever the directive says, so
             # recording one there would put a value in the ledger that governed
             # nothing -- and it changed the ``spec_approved`` row's claim shape,
             # which is evidence other things read.
+            #
+            # Without a driver the same is true of every value except
+            # ``yield``: the matcher's reply goes out unchanged, so a
+            # ``decision:*`` on a scripted row would tell a reader the operator
+            # handed a decision back when it did nothing of the kind. Scripted
+            # is the default mode, so that is most rows of most runs -- and the
+            # whole reason to record the field is that reading these lines is
+            # what finds defects here.
+            yielding = directive == "yield"
             directive_governs = (
-                index > 1 and scripted_turn.substitute_reply and not scripted_turn.approval
+                index > 1
+                and scripted_turn.substitute_reply
+                and not scripted_turn.approval
+                and (self.driver is not None or yielding)
             )
             recorded_directive = directive if directive_governs else "answer"
             # The yield rule is not driver-specific, and applying it only
@@ -1197,7 +1218,6 @@ class OperatorEngine:
             # agent work, and until now they were unreachable text, because
             # ``next_reply`` is falsy only after a repeat suppression and the
             # matcher always returns something.
-            yielding = directive == "yield"
             base = (
                 scripted_turn.text
                 if index == 1
@@ -1592,9 +1612,6 @@ class OperatorEngine:
             # discarding it here made a suppressed turn indistinguishable from
             # turn one.
             next_match = match
-            next_agent_message = result.agent_message
-            if isinstance(next_agent_message, bytes):
-                next_agent_message = next_agent_message.decode("utf-8", errors="replace")
             if repeat_suppressed:
                 next_reply = None
                 pending_sheet_key = None

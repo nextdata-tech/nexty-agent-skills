@@ -126,11 +126,20 @@ DEFAULT_OBSTACLE_TERMS = (
 APPROVAL_REQUEST_PATTERN = re.compile(r"\b(approve[sd]?|approval|sign\s*off)\b", re.IGNORECASE)
 
 # The opener that makes a leading clause a question even without a question
-# mark. Shared with :func:`solicits_operator` so the two never drift.
+# mark, as ``_classify`` has always defined it. Extracted verbatim: ``which``
+# is deliberately absent. ``is_question`` gates the obstacle branch, which
+# returns a different category, rule id, reply and ``matched`` flag, so
+# widening this moves ledger rows -- the same reason
+# ``APPROVAL_REQUEST_PATTERN`` is left alone above.
 INTERROGATIVE_OPENER_PATTERN = re.compile(
-    r"\s*(who|what|which|where|when|why|how|can|could|should|is|are|do|does)\b",
+    r"\s*(who|what|where|when|why|how|can|could|should|is|are|do|does)\b",
     re.IGNORECASE,
 )
+
+# What *asking the operator* additionally covers. "Which grain do you want"
+# solicits an answer without being an obstacle question, so it lives here and
+# not above.
+SOLICITING_OPENER_PATTERN = re.compile(r"\s*which\b", re.IGNORECASE)
 
 # Phrases in which the agent actually puts something to the operator. This is
 # deliberately narrower than APPROVAL_REQUEST_PATTERN and does not replace it:
@@ -163,7 +172,10 @@ SOLICITATION_PATTERN = re.compile(
     # No question mark and no interrogative opener, so without this a direct
     # instruction to the operator was silently dropped as a yield.
     r"|tell\s+me\s+(?:which|what|whether|if|a|an|the|who|where)|point\s+me)\b",
-    re.IGNORECASE,
+    # MULTILINE for the one anchored alternative: agent messages are routinely
+    # multi-line, and without it "Blueprint is ready.\nConfirm the metric
+    # definition" matched nothing at all.
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # A URL query string or a code span carries a "?" that is not a question. The
@@ -213,6 +225,7 @@ def solicits_operator(message: str) -> bool:
     return bool(
         "?" in prose
         or INTERROGATIVE_OPENER_PATTERN.match(prose)
+        or SOLICITING_OPENER_PATTERN.match(prose)
         or SOLICITATION_PATTERN.search(prose)
     )
 
@@ -510,6 +523,7 @@ __all__ = [
     "CHOICE_PATTERN",
     "INTERROGATIVE_OPENER_PATTERN",
     "SOLICITATION_PATTERN",
+    "SOLICITING_OPENER_PATTERN",
     "MatchResult",
     "MatcherBank",
     "MatcherError",

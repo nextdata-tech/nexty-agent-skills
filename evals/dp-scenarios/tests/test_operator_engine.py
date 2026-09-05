@@ -422,14 +422,10 @@ def test_turn_three_approval_writes_through_real_store_and_lints_clean(tmp_path:
     assert result.ledger_rows[2]["claim"] == row["claim"]
     assert row["phase"] == 3
     assert row["artifact_ref"] == "artifact://spec-v1"
-    # The directive is recorded on any turn it actually governed, so the
-    # approval row now says why the operator's line was chosen. "What is the
-    # status?" classifies as decision.request on the bare "?" alone, which is
-    # why this is a factual gap rather than a decision.
-    assert row["claim"] == {
-        "open_decision_marker": False,
-        "operator_directive": "unknown_fact:operator_is_uninformed",
-    }
+    # No directive is recorded here. This is a scripted run, where every value
+    # except ``yield`` is inert -- the matcher's reply goes out unchanged -- so
+    # recording one would put a false explanation on the row.
+    assert row["claim"] == {"open_decision_marker": False}
     assert row["qualification"] == "strong"
 
 
