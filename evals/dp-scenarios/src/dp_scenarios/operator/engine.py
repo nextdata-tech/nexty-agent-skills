@@ -602,13 +602,21 @@ _CONVEYANCE_STOPWORDS = frozenset({
 #: Calibrated against real driven turns: genuine restatements scored 0.45-0.89
 #: while deflections and bare echoes scored 0.00.
 _CONVEYANCE_RATIO = 0.34
-_CONVEYANCE_MINIMUM = 2
 
-#: Below this many distinctive words the ratio stops discriminating -- with
-#: three, any two shared words clear both floors (2/3 = 0.67), so a deflection
-#: that merely names them ("not sure about row or account, honestly") would
-#: consume the fact permanently. Short replies therefore require *every*
-#: distinctive word. The asymmetry is deliberate: failing to record a conveyed
+#: Three, not two. A deflection tends to pick up a couple of the reply's words
+#: incidentally, and with two the ratio floor only bites once the set reaches
+#: six -- so at four and five distinctive words a two-word deflection cleared
+#: both floors and consumed the fact. Three is above what an incidental mention
+#: produces and below what a genuine restatement carries: the real driven turns
+#: this was calibrated on carried five, eight and nine.
+_CONVEYANCE_MINIMUM = 3
+
+#: Below this many distinctive words the ratio cannot discriminate at all --
+#: with three, any two shared words give 0.67 -- so short replies require
+#: *every* distinctive word. Raising the minimum to three is what covers four
+#: and five, where the ratio alone still admitted a two-word deflection (0.50
+#: and 0.40, both above 0.34); the ratio only becomes the binding condition at
+#: six. The asymmetry throughout is deliberate: failing to record a conveyed
 #: fact costs a repeated sentence, while recording an unconveyed one stonewalls
 #: the agent for the rest of the run, since only a ``fresh_session`` card clears
 #: the set.
@@ -1233,7 +1241,9 @@ class OperatorEngine:
                 undelivered_ids = tuple(
                     injection.card_id for injection in injections if injection.card_id not in delivered_ids
                 )
-            # Driver-authored words add nothing to the served-fact memory. A
+            # Driver-authored words are never scanned for a fact's ``terms``.
+            # ``_authored_text_conveys`` reads the reply's own content instead,
+            # for the reason set out here: a
             # ground-truth fact's ``terms`` are the *question*'s trigger terms
             # (``AnswerSheet.answer_for_ground_truth`` matches them against the
             # agent's message), not the fact's content, so scanning authored

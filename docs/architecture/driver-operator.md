@@ -126,9 +126,18 @@ an answer the agent has still never been given.
 
 Under a driver the scripted sentence never goes out, so transmission is decided
 by whether the authored turn carried the reply's substance. That is measured
-deterministically: the reply's distinctive words, minus everything already in
-the agent's message, must appear in the authored text — at least two of them and
-at least a third.
+deterministically from the reply's distinctive words — its own content, minus
+everything already in the agent's message:
+
+- fewer than three distinctive words: never counted as conveyed, because the
+  reply adds too little beyond the question to judge either way;
+- three: every one must appear, since at that size any two give 0.67 and the
+  ratio cannot discriminate;
+- four or more: at least three of them, and at least a third.
+
+The three-word minimum is what covers four and five distinctive words, where a
+ratio floor alone still admitted a two-word deflection (0.50 and 0.40, both
+above a third); the ratio only becomes the binding condition at six.
 
 The subtraction is what makes it safe. A fact's trigger terms come from the
 question, so a driver that merely echoes the agent shares nothing with what
