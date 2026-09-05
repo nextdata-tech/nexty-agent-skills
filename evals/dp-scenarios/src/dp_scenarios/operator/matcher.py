@@ -166,15 +166,28 @@ SOLICITATION_PATTERN = re.compile(
     # fires on the agent's own reports -- "I can confirm that the build
     # finished cleanly" -- and turned a finished-build report into "I don't
     # know, look for yourself".
-    r"|(?:please|can\s+you|could\s+you|would\s+you)\s+confirm|^\s*confirm\b"
+    r"|(?:please|can\s+you|could\s+you|would\s+you)\s+confirm"
     r"|i'?d\s+like\s+your\s+(?:approval|sign\s*off|go-?ahead|steer|decision|view|input)"
     # The live turn-14 imperative: "Tell me a name, role, team, or channel."
     # No question mark and no interrogative opener, so without this a direct
     # instruction to the operator was silently dropped as a yield.
     r"|tell\s+me\s+(?:which|what|whether|if|a|an|the|who|where)|point\s+me)\b",
-    # MULTILINE for the one anchored alternative: agent messages are routinely
-    # multi-line, and without it "Blueprint is ready.\nConfirm the metric
-    # definition" matched nothing at all.
+    re.IGNORECASE,
+)
+
+# A bare imperative heading a line. Deliberately *not* an alternative inside
+# SOLICITATION_PATTERN: that pattern wraps its alternation in ``\b(...)\b``,
+# which pins the whole match to a word boundary, so an anchored alternative
+# there can only ever fire at column 0 -- its own ``\s*`` is unreachable. A
+# markdown bullet is the most common shape an agent's next-steps block takes,
+# and "Next steps:\n- Confirm the grain" matched nothing at all.
+#
+# The trailing ``\b`` is what keeps this off the agent's own reports:
+# "Confirmed the row counts" and "Approved the blueprint" are past tense, so
+# no boundary follows the verb and neither matches.
+_LINE_IMPERATIVE_PATTERN = re.compile(
+    r"^[^\w\n]*(?:\d+[.)][^\w\n]*)?"
+    r"(?:confirm|approve|decide|choose|pick|tell\s+me|let\s+me\s+know)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -227,6 +240,7 @@ def solicits_operator(message: str) -> bool:
         or INTERROGATIVE_OPENER_PATTERN.match(prose)
         or SOLICITING_OPENER_PATTERN.match(prose)
         or SOLICITATION_PATTERN.search(prose)
+        or _LINE_IMPERATIVE_PATTERN.search(prose)
     )
 
 _RULES = (

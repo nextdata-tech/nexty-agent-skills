@@ -972,6 +972,13 @@ def test_operator_script_hash_changes_for_each_script_material() -> None:
 
     assert operator_script_hash(replace(script, persona=changed_metadata)) == operator_script_hash(script)
     assert operator_script_hash(replace(script, persona=changed_reply)) != operator_script_hash(script)
+    # The persona's stance is an engine input -- it decides what the operator
+    # says on every turn with no declared answer -- so it belongs in this
+    # enumeration next to the reply bank, not only in the directive suite. With
+    # it absent, grading.statistics would compare an ask_back run against an
+    # assert_default run as the same script.
+    changed_stance = persona_from_mapping({**script.persona.to_mapping(), "stance_when_unknown": "assert_default"})
+    assert operator_script_hash(replace(script, persona=changed_stance)) != operator_script_hash(script)
     # A substitutable turn's text is transmitted whenever the agent asks for
     # nothing, so it is script identity. See
     # test_editing_a_substitutable_turn_changes_the_script_hash.

@@ -774,6 +774,42 @@ def test_a_bare_confirm_is_an_ask_on_any_line() -> None:
     assert solicits_operator("I can confirm that the build finished cleanly.") is False
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Next steps:\n- Confirm the metric definition before I build.",
+        "Next steps:\n  Confirm the metric definition before I build.",
+        "Next steps:\n1. Confirm the metric definition before I build.",
+        "Next steps:\n* Choose the grain and I will proceed.",
+    ],
+)
+def test_a_bulleted_imperative_is_an_ask(message: str) -> None:
+    """A markdown bullet is the usual shape of an agent's next-steps block.
+
+    Anchoring inside ``SOLICITATION_PATTERN`` could not reach these: that
+    pattern wraps its alternation in ``\b(...)\b``, which pins the match to a
+    word boundary, so an anchored alternative there fires only at column 0 and
+    its own ``\s*`` is dead. Every line above then read as "asked nothing",
+    and a direct instruction was answered with room-to-work filler.
+    """
+
+    assert solicits_operator(message) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Confirmed the row counts; moving on.",
+        "Approved the blueprint. Building now.",
+        "Next steps:\n- Confirmed the grain with the source.",
+    ],
+)
+def test_a_past_tense_report_at_the_head_of_a_line_is_not_an_ask(message: str) -> None:
+    """The trailing word boundary is what separates the ask from the report."""
+
+    assert solicits_operator(message) is False
+
+
 def test_which_opens_an_ask_without_opening_a_question() -> None:
     """``which`` solicits an answer but must not widen the classifier.
 
