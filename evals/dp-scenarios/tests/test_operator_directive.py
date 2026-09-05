@@ -818,10 +818,11 @@ def test_an_addressed_confirm_is_still_an_ask(message: str) -> None:
 
     ``solicits_operator`` has three cheaper signals than
     ``SOLICITATION_PATTERN`` and short-circuits on any of them, so a fixture
-    tripping one asserts nothing about the pattern it is named for. Both are
-    guarded below rather than argued: a question mark, and an interrogative
-    opening clause. The first was fixed by dropping the "?"; the second still
-    carried "Can you confirm the grain." on its leading ``Can``.
+    tripping one asserts nothing about the pattern it is named for. All three
+    are guarded below rather than argued: a question mark, an interrogative
+    opening clause, and a bare ``which`` opener. The first was fixed by
+    dropping the "?"; the second still carried "Can you confirm the grain."
+    on its leading ``Can``.
     """
 
     from dp_scenarios.operator.matcher import (
@@ -831,7 +832,7 @@ def test_an_addressed_confirm_is_still_an_ask(message: str) -> None:
 
     assert "?" not in message, "a question mark would short-circuit the pattern under test"
     assert not INTERROGATIVE_OPENER_PATTERN.match(message), "an opener would short-circuit it too"
-    assert not SOLICITING_OPENER_PATTERN.match(message)
+    assert not SOLICITING_OPENER_PATTERN.match(message), "a bare 'which' opener would too"
     assert solicits_operator(message) is True
 
 
