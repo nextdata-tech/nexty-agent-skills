@@ -779,7 +779,7 @@ def test_a_short_fact_needs_every_distinctive_word_not_just_two() -> None:
     assert _authored_text_conveys(fact, question, "One row per account is the level.") is True
 
 
-@pytest.mark.parametrize("distinctive_words", [2, 3, 4, 5, 6, 7, 9])
+@pytest.mark.parametrize("distinctive_words", [3, 4, 5, 6, 7, 9])
 def test_a_two_word_deflection_never_consumes_a_fact_at_any_length(distinctive_words: int) -> None:
     """The floors have to hold across set sizes, not at one of them.
 
@@ -797,8 +797,23 @@ def test_a_two_word_deflection_never_consumes_a_fact_at_any_length(distinctive_w
     question = "What is it?"
     assert len(_content_words(reply) - _content_words(question)) == distinctive_words
 
-    # A deflection that incidentally names two of them.
+    # A deflection that incidentally names two of them. Starts at three
+    # distinctive words on purpose: at two, naming two is *full* coverage, so
+    # that case pins the refuses-to-judge rule rather than this one -- it is
+    # asserted separately below.
     assert _authored_text_conveys(reply, question, " ".join(words[:2]) + "?") is False
+
+
+def test_a_reply_that_barely_differs_from_the_question_is_never_judged() -> None:
+    """Two distinctive words is too little evidence either way.
+
+    Naming both of them is full coverage, not a deflection, so this pins the
+    refuses-to-judge rule rather than the incidental-mention floor.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    assert _authored_text_conveys("Alpha beta.", "Question?", "Alpha beta?") is False
 
 
 def test_a_genuine_restatement_still_counts_at_the_lengths_that_matter() -> None:

@@ -597,30 +597,26 @@ _CONVEYANCE_STOPWORDS = frozenset({
     "where", "what", "which", "who", "how",
 })
 
-#: A fact counts as conveyed when the authored turn carries at least this
-#: fraction of the reply's distinctive words, and at least two of them.
+#: A fact counts as conveyed when the authored turn carries at least three of
+#: the reply's distinctive words *and* at least this fraction of them.
 #: Calibrated against real driven turns: genuine restatements scored 0.45-0.89
 #: while deflections and bare echoes scored 0.00.
+#:
+#: The three-word floor is what does the work almost everywhere -- the ratio
+#: only becomes the stricter of the two at nine distinctive words, where a
+#: third first exceeds three. Below that, three words is the whole rule.
 _CONVEYANCE_RATIO = 0.34
 
 #: Three, not two. A deflection tends to pick up a couple of the reply's words
-#: incidentally, and with two the ratio floor only bites once the set reaches
-#: six -- so at four and five distinctive words a two-word deflection cleared
-#: both floors and consumed the fact. Three is above what an incidental mention
-#: produces and below what a genuine restatement carries: the real driven turns
-#: this was calibrated on carried five, eight and nine.
+#: incidentally, and with a two-word floor the ratio did not bind until six --
+#: so at four and five distinctive words a two-word deflection cleared both and
+#: consumed the fact. Three is above what an incidental mention produces and
+#: below what a genuine restatement carries: the real driven turns this was
+#: calibrated on carried five, eight and nine. It also subsumes the special
+#: case short replies used to need -- with a three-word floor, three
+#: distinctive words already require all three.
 _CONVEYANCE_MINIMUM = 3
 
-#: Below this many distinctive words the ratio cannot discriminate at all --
-#: with three, any two shared words give 0.67 -- so short replies require
-#: *every* distinctive word. Raising the minimum to three is what covers four
-#: and five, where the ratio alone still admitted a two-word deflection (0.50
-#: and 0.40, both above 0.34); the ratio only becomes the binding condition at
-#: six. The asymmetry throughout is deliberate: failing to record a conveyed
-#: fact costs a repeated sentence, while recording an unconveyed one stonewalls
-#: the agent for the rest of the run, since only a ``fresh_session`` card clears
-#: the set.
-_CONVEYANCE_SHORT_REPLY = 4
 
 
 def _content_words(text: str) -> set[str]:
@@ -650,8 +646,6 @@ def _authored_text_conveys(reply: str, agent_message: str, authored: str) -> boo
         # short-reply rule by "covering" its one distinctive word.
         return False
     carried = distinctive & _content_words(authored)
-    if len(distinctive) < _CONVEYANCE_SHORT_REPLY:
-        return carried == distinctive
     return len(carried) >= _CONVEYANCE_MINIMUM and len(carried) / len(distinctive) >= _CONVEYANCE_RATIO
 
 

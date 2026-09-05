@@ -129,15 +129,14 @@ by whether the authored turn carried the reply's substance. That is measured
 deterministically from the reply's distinctive words — its own content, minus
 everything already in the agent's message:
 
-- fewer than three distinctive words: never counted as conveyed, because the
-  reply adds too little beyond the question to judge either way;
-- three: every one must appear, since at that size any two give 0.67 and the
-  ratio cannot discriminate;
-- four or more: at least three of them, and at least a third.
+at least three of them must appear, and at least a third. Fewer than three
+distinctive words is never counted as conveyed: the reply adds too little
+beyond the question to judge either way.
 
-The three-word minimum is what covers four and five distinctive words, where a
-ratio floor alone still admitted a two-word deflection (0.50 and 0.40, both
-above a third); the ratio only becomes the binding condition at six.
+The three-word floor is what does the work almost everywhere. A ratio alone
+admitted a two-word deflection at four and five distinctive words (0.50 and
+0.40, both above a third), and the ratio only becomes the stricter of the two
+at nine, where a third first exceeds three.
 
 The subtraction is what makes it safe. A fact's trigger terms come from the
 question, so a driver that merely echoes the agent shares nothing with what
