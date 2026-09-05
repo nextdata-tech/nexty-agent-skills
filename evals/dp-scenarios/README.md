@@ -402,6 +402,10 @@ have nothing to do with test quality. Regenerate it with
 `scripts/mutation_test.py full --update-baseline`, and say in the PR why each
 added entry is acceptable.
 
+With **no** baseline file at all, a run fails on nothing and says so. The first
+run on a fresh scope must not report every long-standing gap as something the
+change in front of it introduced.
+
 ### Runtime, and what actually costs the time
 
 A **killed** mutant is cheap and a **surviving** one is expensive. mutmut runs a

@@ -346,6 +346,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nWrote {BASELINE_PATH.name} ({len(counts)} functions).")
         return 0
 
+    # An absent baseline is not a regression. Failing here would mean the first
+    # run on a fresh checkout reports every long-standing gap as something this
+    # change introduced -- the loudest possible false alarm, and the fastest way
+    # to get the job switched off.
+    if not BASELINE_PATH.is_file():
+        print(
+            f"\nNo {BASELINE_PATH.name} to compare against, so nothing is failed on. "
+            f"Record the current state with `scripts/mutation_test.py full --update-baseline`; "
+            f"from then on this run fails on anything above it."
+        )
+        return 0
+
     # Comparison is per observed function, so a scoped run needs no filtering:
     # a baseline entry for a function this run did not mutate is simply never
     # consulted.
