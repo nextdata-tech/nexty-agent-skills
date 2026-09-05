@@ -1,0 +1,3 @@
+*.json -filter -diff -merge text
+*.yaml -filter -diff -merge text
+

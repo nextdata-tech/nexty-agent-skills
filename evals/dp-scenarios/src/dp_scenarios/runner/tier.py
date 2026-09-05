@@ -931,6 +931,23 @@ def _closure_artifact(artifact_root: Path) -> Path | Mapping[str, object]:
     return artifact_root
 
 
+def _follow_up_artifact(scenario: Scenario, artifact_root: Path) -> Mapping[str, object] | None:
+    """Load the scenario-declared agent evidence, failing closed on any defect."""
+
+    relative = getattr(scenario, "follow_up_artifact", None)
+    if not isinstance(relative, str) or not relative:
+        return None
+    candidate = (artifact_root / relative).resolve()
+    root = artifact_root.resolve()
+    if root not in candidate.parents or not candidate.is_file():
+        return None
+    try:
+        value = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return dict(value) if isinstance(value, Mapping) else None
+
+
 # Tool namespaces whose *results* are product surfaces rather than source
 # surfaces. A planted PII sentinel reaching a served query result or a
 # supervisor-reported model means the sentinel survived into the product,
@@ -1752,6 +1769,12 @@ class TierRunner:
         elif isinstance(query, list):
             query_rows = [row for row in query if isinstance(row, Mapping)]
         follow_up_method = scenario.follow_up_gate
+        follow_up_target: object = closure
+        if getattr(scenario, "follow_up_artifact", None) is not None:
+            # Scenario-specific evidence is an explicit artifact boundary. A
+            # missing or malformed artifact becomes ``not-examined`` in the
+            # follow-up handler instead of falling back to a closure path.
+            follow_up_target = _follow_up_artifact(scenario, artifact_root)
         try:
             follow_up_parameters = inspect.signature(follow_up_method).parameters
         except (TypeError, ValueError):
@@ -1764,15 +1787,15 @@ class TierRunner:
             if "row_count_oracle" in follow_up_parameters:
                 follow_up_kwargs["row_count_oracle"] = row_counts
             follow_up = follow_up_method(
-                closure,
+                follow_up_target,
                 environment.oracle_dir,
                 query_rows,
                 **follow_up_kwargs,
             )
         elif "query_rows" in follow_up_parameters:
-            follow_up = follow_up_method(closure, query_rows)
+            follow_up = follow_up_method(follow_up_target, query_rows)
         else:
-            follow_up = follow_up_method(closure)
+            follow_up = follow_up_method(follow_up_target)
         ungraded = observations.get("ungraded_criteria", ())
         if not isinstance(ungraded, Sequence) or isinstance(ungraded, (str, bytes)):
             ungraded = ()

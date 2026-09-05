@@ -12,10 +12,45 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
+import importlib
 import json
 from pathlib import Path
+import pkgutil
 import sqlite3
 from typing import Any, Mapping
+
+
+ReferenceBuilder = Any
+_REFERENCE_BUILDERS: dict[str, ReferenceBuilder] = {}
+_REFERENCE_PLUGINS_DISCOVERED = False
+
+
+def register_reference_builder(dataset_name: str, builder: ReferenceBuilder) -> ReferenceBuilder:
+    """Register an additive independent reference builder."""
+
+    if not isinstance(dataset_name, str) or not dataset_name:
+        raise ValueError("reference builder dataset name must be non-empty")
+    if not callable(builder):
+        raise TypeError("reference builder must be callable")
+    if dataset_name in _REFERENCE_BUILDERS:
+        raise ValueError(f"reference builder {dataset_name!r} is already registered")
+    _REFERENCE_BUILDERS[dataset_name] = builder
+    return builder
+
+
+def _discover_reference_plugins() -> None:
+    """Import every additive reference builder exactly once."""
+
+    global _REFERENCE_PLUGINS_DISCOVERED
+    if _REFERENCE_PLUGINS_DISCOVERED:
+        return
+    _REFERENCE_PLUGINS_DISCOVERED = True
+    from . import reference_plugins
+
+    for module in pkgutil.iter_modules(reference_plugins.__path__):
+        if module.name.startswith("_"):
+            continue
+        importlib.import_module(f"{reference_plugins.__name__}.{module.name}")
 
 
 @dataclass(frozen=True)
@@ -207,12 +242,18 @@ def _zero_row_optional_gold(data_dir: Path) -> ReferenceGold:
 def reference_gold(dataset_name: str, data_dir: str | Path) -> ReferenceGold:
     """Return frozen gold content for ``dataset_name`` from source files."""
 
+    _discover_reference_plugins()
     data_path = Path(data_dir)
-    if dataset_name == "grain_trap":
-        return _grain_trap_gold(data_path)
-    if dataset_name == "zero_row_optional":
-        return _zero_row_optional_gold(data_path)
-    raise ValueError(f"unknown dataset {dataset_name!r}")
+    try:
+        builder = _REFERENCE_BUILDERS[dataset_name]
+    except KeyError as exc:
+        available = ", ".join(sorted(_REFERENCE_BUILDERS))
+        raise ValueError(f"unknown dataset {dataset_name!r}; choose one of: {available}") from exc
+    return builder(data_path)
+
+
+register_reference_builder("grain_trap", _grain_trap_gold)
+register_reference_builder("zero_row_optional", _zero_row_optional_gold)
 
 
 def _write_csv(path: Path, rows: list[Mapping[str, Any]]) -> None:
@@ -298,6 +339,7 @@ __all__ = [
     "compute_gold",
     "generate_gold",
     "reference_gold",
+    "register_reference_builder",
     "write_reference_data",
     "write_reference_gold",
 ]

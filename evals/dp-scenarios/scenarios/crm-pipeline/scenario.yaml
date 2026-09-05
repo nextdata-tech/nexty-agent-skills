@@ -1,0 +1,129 @@
+version: 1
+id: crm-pipeline
+tier: core
+run_order: 7
+fixture:
+  dataset: crm_pipeline
+  seed: 29
+  variant: crm-rest-pagination-auth-expiry
+  plant: crm_pipeline_pagination
+coverage:
+  variant: crm-rest-pagination-auth-expiry
+  untested: This package exercises the local mock CRM transport and agent evidence contract; it does not claim a real CRM credential or an authenticated live agent run.
+turn_budget: 8
+repeatability:
+  tier: mock-source
+  epochs: 3
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/impatient.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+  8: 7
+required_plants:
+  - crm_pipeline_pagination
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: crm_pipeline
+    pii_sentinel: crm-pii-sentinel-4e2b7f9c
+    stage_enum: [prospecting, qualification, negotiation, closed_won, closed_lost]
+gold:
+  pipeline: gold/crm_pipeline_output.json
+follow_up_artifact: evidence/crm_pipeline.json
+operator:
+  sentinel: null
+  obstacle_terms: []
+route_table:
+  version: 1
+  auth:
+    token: crm-run-token
+    initial_requests: 2
+    refresh_path: /auth/refresh
+  routes:
+    - path: /deals
+      method: GET
+      auth_required: true
+      rate_limit_every: 3
+      pagination:
+        page_size: 2
+        cursor_param: cursor
+        items_field: data
+        cursor_field: next_cursor
+      response:
+        json:
+          - id: DEAL-2001
+            name: Northwind Renewal
+            stage: negotiation
+            amount: 48200
+            status: active
+            updatedAt: "2024-01-05T10:00:00+00:00"
+            owner:
+              name: Analyst One
+              email: crm-pii-sentinel-4e2b7f9c@example.invalid
+          - id: DEAL-2002
+            name: Acme Expansion
+            stage: qualification
+            amount: 15600
+            status: active
+            updatedAt: "2024-01-04T16:30:00+00:00"
+            owner:
+              name: Analyst Two
+              email: analyst-two@example.invalid
+          - id: DEAL-2003
+            name: Globex Renewal
+            stage: closed_won
+            amount: 72300
+            status: active
+            updatedAt: "2024-01-06T09:15:00+00:00"
+            owner:
+              name: Analyst One
+              email: crm-pii-sentinel-4e2b7f9c@example.invalid
+          - id: DEAL-2004
+            name: Initech Upsell
+            stage: prospecting
+            amount: 9100
+            status: active
+            updatedAt: "2024-01-02T11:45:00+00:00"
+            owner:
+              name: Analyst Three
+              email: analyst-three@example.invalid
+          - id: DEAL-2005
+            name: Umbrella Renewal
+            stage: closed_lost
+            amount: 26400
+            status: active
+            updatedAt: "2024-01-03T14:20:00+00:00"
+            owner:
+              name: Analyst Two
+              email: analyst-two@example.invalid
+          - id: DEAL-2006
+            name: Deleted Renewal
+            stage: closed_lost
+            amount: 3000
+            updatedAt: "2024-01-01T09:00:00+00:00"
+            status: deleted
+            owner:
+              name: Analyst Four
+              email: analyst-four@example.invalid
+    - path: /deals/history
+      method: GET
+      status: 404
+    - path: /deals/{id}/stage
+      method: PATCH
+      status: 403
+      write_forbidden: true

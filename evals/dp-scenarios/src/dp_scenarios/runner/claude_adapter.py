@@ -51,6 +51,12 @@ and not proof by itself. The only accepted attestation shape is a JSON array
 of objects with exactly these keys: action_kind (self_check or
 adversarial_review), turn (positive integer), outcome (non-empty string), and
 evidence_ref (string). Do not add any other keys.
+If scenario-evidence-contract.json exists at the workspace root, read it and
+write the requested JSON object at its artifact_path. The runner grades that
+artifact against independent references; do not edit the contract, copy hidden
+gold, or place credentials in the evidence object. For an authenticated mock
+source, the infra profile names the credential_env variable; use it in the
+request header without printing its value.
 """
 
 

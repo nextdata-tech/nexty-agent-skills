@@ -1,0 +1,35 @@
+{
+  "rows": [
+    {
+      "amount": 48200,
+      "deal_id": "DEAL-2001",
+      "stage": "negotiation",
+      "updated_at": "2024-01-05T10:00:00+00:00"
+    },
+    {
+      "amount": 15600,
+      "deal_id": "DEAL-2002",
+      "stage": "qualification",
+      "updated_at": "2024-01-04T16:30:00+00:00"
+    },
+    {
+      "amount": 72300,
+      "deal_id": "DEAL-2003",
+      "stage": "closed_won",
+      "updated_at": "2024-01-06T09:15:00+00:00"
+    },
+    {
+      "amount": 9100,
+      "deal_id": "DEAL-2004",
+      "stage": "prospecting",
+      "updated_at": "2024-01-02T11:45:00+00:00"
+    },
+    {
+      "amount": 26400,
+      "deal_id": "DEAL-2005",
+      "stage": "closed_lost",
+      "updated_at": "2024-01-03T14:20:00+00:00"
+    }
+  ]
+}
+

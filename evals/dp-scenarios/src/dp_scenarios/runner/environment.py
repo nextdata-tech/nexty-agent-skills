@@ -26,6 +26,7 @@ from dp_scenarios.ledger import LedgerRow, LedgerStore, Manifest, fixture_dir_ha
 from dp_scenarios.ledger.manifest import NOT_APPLICABLE, REPLAY_SESSION_PATH_FIELDS
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_transform_latency
 from dp_scenarios.mockrest import MockRestServer
+from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
 
 
@@ -62,6 +63,24 @@ def _agent_fixture_manifest(manifest: Mapping[str, object], oracle_path: Path) -
         (oracle_path / "fixture-manifest.json").read_bytes()
     ).hexdigest()
     return safe
+
+
+def _evidence_contract(scenario: Scenario) -> dict[str, object] | None:
+    """Describe agent evidence without exposing hidden reference values."""
+
+    path = getattr(scenario, "follow_up_artifact", None)
+    if path is None:
+        return None
+    kind = followups.get(scenario.gates["follow-up"].kind)
+    return {
+        "format_version": 1,
+        "artifact_path": path,
+        "required_fields": dict(kind.evidence_contract),
+        "instruction": (
+            "Write only the required JSON object at artifact_path; do not include "
+            "secrets or hidden reference values."
+        ),
+    }
 
 
 _SESSION_ENVIRONMENT_ALLOWLIST = frozenset(
@@ -323,7 +342,12 @@ def advertised_endpoints(routes: Sequence[Any]) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def render_source_profile(base_url: str, endpoints: Sequence[str]) -> str:
+def render_source_profile(
+    base_url: str,
+    endpoints: Sequence[str],
+    *,
+    auth: object | None = None,
+) -> str:
     """Render the agent-visible infra profile for a run-local API source."""
 
     lines = [
@@ -340,6 +364,20 @@ def render_source_profile(base_url: str, endpoints: Sequence[str]) -> str:
         f"          value: {json.dumps(base_url)}",
         "          public: true",
     ]
+    if auth is not None:
+        lines.extend(
+            [
+                "        - key: auth_header",
+                f"          value: {json.dumps(str(getattr(auth, 'header', 'Authorization')))}",
+                "          public: true",
+                "        - key: auth_scheme",
+                f"          value: {json.dumps(str(getattr(auth, 'scheme', 'Bearer')))}",
+                "          public: true",
+                "        - key: credential_env",
+                '          value: "NXD_EVAL_SOURCE_TOKEN"',
+                "          public: true",
+            ]
+        )
     for path in endpoints:
         lines.extend(
             [
@@ -437,6 +475,14 @@ class RunEnvironment:
                 json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            contract = _evidence_contract(self.scenario)
+            if contract is not None:
+                workspace = self.workspace_dir
+                workspace.mkdir(parents=True, exist_ok=True)
+                (workspace / "scenario-evidence-contract.json").write_text(
+                    json.dumps(contract, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
         except Exception as error:
             try:
                 self.close()
@@ -718,6 +764,7 @@ class RunEnvironment:
             render_source_profile(
                 source.server.data_url,
                 advertised_endpoints(source.server.config.routes),
+                auth=source.server.config.auth,
             ),
             encoding="utf-8",
         )
@@ -794,6 +841,9 @@ class RunEnvironment:
             values.update({"HOME": host_home, "USERPROFILE": host_home})
         if self._mock_source is not None:
             values["NXD_EVAL_SOURCE_URL"] = self._mock_source.server.data_url
+            auth = self._mock_source.server.config.auth
+            if auth is not None:
+                values["NXD_EVAL_SOURCE_TOKEN"] = auth.token
         if self._source_profile_path is not None:
             values["NXD_EVAL_SOURCE_PROFILE"] = str(self._source_profile_path)
         return MappingProxyType(values)

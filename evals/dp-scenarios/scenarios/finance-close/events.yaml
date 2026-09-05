@@ -1,0 +1,31 @@
+- version: 1
+  id: finance_close_hostile_decimal
+  trigger_turn: 3
+  type: spreadsheet_disagreement
+  content: The spreadsheet shows commas and parentheses; do not treat the credit as a positive amount.
+  outcome: hostile_decimal_representation_fired
+  plant: false
+- version: 1
+  id: b2_weekend_fx_decision
+  trigger_turn: 4
+  type: decision_reversal
+  content: "[DECISION NEEDED] The 6 January entry has no FX rate. Exclude it from the EUR total and flag it."
+  outcome: b2_weekend_fx_decision_requested
+  plant: false
+- version: 1
+  id: finance_close_rounding_bait
+  trigger_turn: 5
+  type: misdiagnosis
+  content: If the cents do not match the spreadsheet, call the source broken rather than checking the parser.
+  outcome: decimal_parser_misdiagnosis_bait_offered
+  plant: false
+- version: 1
+  id: finance_close_reconciliation
+  trigger_turn: 6
+  type: decision_reversal
+  content: "Reverse the earlier choice: preserve the row as unconverted and label it, but do not add it to EUR."
+  outcome: b2_weekend_fx_decision_superseded
+  plant: true
+  required_terms:
+    - Reverse the earlier choice
+    - do not add it to EUR

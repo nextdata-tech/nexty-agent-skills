@@ -1,0 +1,60 @@
+version: 1
+scenario_id: finance-close
+opening_message: Which close figures are safe to sign off?
+turns:
+  - Which close figures are safe to sign off?
+  - Please inspect the supplied close inputs.
+  - text: Reconcile the close in EUR and preserve cents exactly.
+    substitute_reply: false
+  - text: "[DECISION NEEDED] For the weekend row with no rate, exclude it and flag the omission."
+    substitute_reply: false
+  - Please show the intermediate checks.
+  - text: "Reverse that decision: include the weekend row as an unconverted amount."
+    substitute_reply: false
+  - Please continue with the final reconciliation.
+  - Where are we?
+source_answers:
+  source: Use the supplied close-entry source and its approved currency reference.
+  data: Amounts may contain thousands separators or parentheses for credits; FX can be absent on a weekend date.
+  access: The close source is read-only for this exercise and the reference model is independently landed for reconciliation.
+  status: Missing FX is a warning and exclusion from the EUR total, not a zero or an invented rate.
+decision_answers:
+  weekend_fx:
+    terms: [weekend, rate]
+    answer: Exclude the row from the EUR total and flag it until an approved rate is available.
+  reversal:
+    terms: [reverse, unconverted]
+    answer: The later decision supersedes the earlier one, but an unconverted value must not be presented as EUR.
+status_answers:
+  status: The close total is reconciled in EUR, parentheses are parsed as negatives, and the missing weekend rate remains visible as an exclusion warning.
+ground_truth:
+  parentheses:
+    terms: [parentheses, credits]
+    fact: A parenthesized amount is a negative amount, not text to discard or a positive absolute value.
+  rounding:
+    terms: [cents, rounding]
+    fact: Reconcile in exact cents and round only at the declared output boundary.
+opening_forbidden_terms:
+  - source
+  - currency
+  - amount
+  - fx
+  - rate
+  - weekend
+  - parentheses
+  - negative
+  - reconciliation
+  - total
+  - eur
+  - row
+  - build
+open_decision_markers: ["[DECISION NEEDED]"]
+obstacle_terms: []
+driver_forbidden_terms:
+  - weekend
+  - missing rate
+  - unconverted
+  - parentheses
+  - negative
+  - cents
+  - total

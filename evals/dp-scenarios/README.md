@@ -149,6 +149,18 @@ never pulled into a smoke run:
 - **restart-and-switch** — an attempt-keyed, no-stderr bind fault paired with a
   scripted restart and workflow switch. The agent must distinguish serving-down
   from build-broken and change the plan rather than retry until lucky.
+- **crm-pipeline** — B1's paginated CRM-shaped source with bearer expiry,
+  rate limiting, nested owner PII, tombstone-safe current records, and a closed
+  stage enum. The package has local mock-source E2E coverage; it does not claim
+  a real CRM credential or authenticated agent run.
+- **finance-close** — B2's deterministic close reconciliation with hostile
+  decimal formats, parenthesized negatives, missing weekend FX, and a later
+  decision supersession. It exposes a local mock close source and reconciles
+  exact cents against an independent reference model.
+- **inventory-position** — B5's profile-only inventory join with orphan
+  warehouse identifiers and negative stock. The local mock profile preserves
+  these as data-quality warnings and documents the retained-run boundary for
+  B10.
 
 **Live** is the only tier whose runs cannot be replayed:
 

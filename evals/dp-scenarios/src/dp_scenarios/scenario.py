@@ -75,6 +75,22 @@ def _relative_reference(root: Path, value: object, location: str, *, must_exist:
     return resolved
 
 
+def _agent_artifact_reference(value: object, location: str) -> str | None:
+    """Validate an agent-written artifact path without resolving it on disk."""
+
+    if value is None:
+        return None
+    reference = _string(value, location)
+    path = Path(reference)
+    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+        raise ScenarioError(f"{location} must be a contained relative path")
+    if path.suffix.casefold() != ".json":
+        raise ScenarioError(f"{location} must name a JSON artifact")
+    if "artifacts" in path.parts:
+        raise ScenarioError(f"{location} may not target the runner evidence directory")
+    return path.as_posix()
+
+
 @dataclass(frozen=True, slots=True)
 class FixtureSpec:
     """The named, seeded fixture generated at scenario-run start."""
@@ -168,6 +184,10 @@ class Scenario:
     # it "not-applicable". ``None`` means this scenario names no source, the
     # same as every scenario before this field existed.
     route_table: MockRouteTable | None = None
+    # Optional JSON evidence authored during a run and consumed by the
+    # scenario-specific follow-up. It is always relative to the runner's
+    # artifact root; hidden gold is never inferred from this path.
+    follow_up_artifact: str | None = None
 
     @property
     def id(self) -> str:
@@ -621,7 +641,7 @@ _SCENARIO_KEYS = {
 # package, so they live outside ``_SCENARIO_KEYS`` rather than being added to
 # it, which would make every existing scenario.yaml fail the "missing key(s)"
 # check the moment this key exists at all.
-_OPTIONAL_SCENARIO_KEYS = {"route_table"}
+_OPTIONAL_SCENARIO_KEYS = {"route_table", "follow_up_artifact"}
 _FIXTURE_KEYS = {"dataset", "seed", "variant", "plant"}
 _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
@@ -653,12 +673,6 @@ def requires_live_session(tier: str) -> bool:
     """
 
     return _TIER_ALIASES.get(tier, tier) in _LIVE_ONLY_TIERS
-
-
-_DATASET_PLANT_DECLARATIONS = {
-    "grain_trap": "grain_trap_fanout",
-    "zero_row_optional": "optional_zero_row",
-}
 
 
 def _canonical_hash(value: object) -> str:
@@ -726,8 +740,8 @@ def _plant_vocabulary(dataset: str, explicit_plant: str | None = None) -> frozen
 
     definition = get_dataset(dataset)
     result = {injector.name for injector in definition.injectors}
-    declared_plant = _DATASET_PLANT_DECLARATIONS.get(dataset)
-    if declared_plant is None:
+    declared_plant = getattr(definition, "plant", None)
+    if not isinstance(declared_plant, str) or not declared_plant:
         raise ScenarioError(f"dataset {dataset!r} has no explicit planted-difficulty declaration")
     if explicit_plant is not None and explicit_plant != declared_plant:
         raise ScenarioError(
@@ -955,9 +969,9 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("fixture.seed must be a non-negative integer")
     explicit_plant = fixture_raw.get("plant")
     if explicit_plant is None:
-        if dataset == "zero_row_optional":
+        if getattr(get_dataset(dataset), "requires_explicit_plant", False):
             raise ScenarioError("fixture requires dataset, seed, variant, and plant")
-        explicit_plant = _DATASET_PLANT_DECLARATIONS.get(dataset)
+        explicit_plant = getattr(get_dataset(dataset), "plant", None)
     fixture = FixtureSpec(
         dataset,
         seed,
@@ -994,6 +1008,15 @@ def load_scenario(path: str | Path) -> Scenario:
     gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
     _run_kind_hook(gates, "validate_fixture_gold", gates["follow-up"].settings, gold)
     _validate_certification_gold(repeatability, gates["follow-up"].kind, gold)
+    follow_up_artifact = _agent_artifact_reference(
+        raw.get("follow_up_artifact"), "follow_up_artifact"
+    )
+    evidence_contract = followups.get(gates["follow-up"].kind).evidence_contract
+    if evidence_contract and follow_up_artifact is None:
+        raise ScenarioError(
+            "follow_up_artifact is required for follow-up kind "
+            f"{gates['follow-up'].kind!r}"
+        )
     route_table = _parse_route_table(raw.get("route_table"))
     script = OperatorScript.from_components(
         persona,
@@ -1028,6 +1051,7 @@ def load_scenario(path: str | Path) -> Scenario:
         gold_refs=gold_refs,
         operator_script=script,
         route_table=route_table,
+        follow_up_artifact=follow_up_artifact,
     )
 
 
