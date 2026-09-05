@@ -421,7 +421,7 @@ that from a `git diff` before it installs anything.
 `dp_scenarios.synthgen.reference` opens an in-memory SQLite database, and
 `sqlite3.connect` crashes in a `fork()`ed child on macOS — mutmut runs each
 mutant in a forked child, so every mutant whose covering tests reach fixture
-generation dies before it is judged. Twelve lines reproduce it with no mutmut
+generation dies before it is judged. Six lines reproduce it with no mutmut
 involved:
 
 ```python

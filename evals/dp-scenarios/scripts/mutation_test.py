@@ -42,7 +42,6 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -238,7 +237,7 @@ def regressions(counts: dict[str, int], baseline: dict[str, int]) -> dict[str, t
     }
 
 
-def explain(survivors: list[str], keys: set[str], limit: int) -> None:
+def explain(mutants: list[str], keys: set[str], limit: int) -> None:
     """Print the diff of each survivor under a regressed function.
 
     A count alone is not actionable.  ``mutmut show`` prints the exact source
@@ -246,7 +245,7 @@ def explain(survivors: list[str], keys: set[str], limit: int) -> None:
     directly.
     """
 
-    offenders = [name for name in survivors if function_key(name) in keys][:limit]
+    offenders = [name for name in mutants if function_key(name) in keys][:limit]
     for name in offenders:
         print(f"\n--- surviving mutant: {name} ---")
         shown = _mutmut("show", name, capture=True)
@@ -291,9 +290,12 @@ def main(argv: list[str] | None = None) -> int:
     run_args = ["run", *filters]
     if args.max_children is not None:
         run_args += ["--max-children", str(args.max_children)]
-    printable = " ".join(f"'{f}'" for f in filters) or "(all guarded modules)"
+    quoted = " ".join(f"'{f}'" for f in filters)
+    printable = quoted or "(all guarded modules)"
     print(f"scope: {printable}")
-    print(f"reproduce: cd evals/dp-scenarios && uv run mutmut run {printable}\n", flush=True)
+    # Printed even on a green run: when this job goes red weeks from now, the
+    # first thing its reader needs is the command that reproduces it.
+    print(f"reproduce: cd evals/dp-scenarios && uv run mutmut run {quoted}\n".rstrip() + "\n", flush=True)
 
     started = time.monotonic()
     completed = _mutmut(*run_args)
