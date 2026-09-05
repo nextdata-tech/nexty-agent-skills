@@ -53,7 +53,12 @@ jobs:
     # The cap is deliberately far above the expected run. A mutation job killed
     # mid-run reports fewer survivors, and fewer survivors reads as an
     # improvement.
-    timeout-minutes: 300
+    #
+    # Measured whole-scope run: 2h39m on a 14-vCPU Linux container. A hosted
+    # runner has fewer cores, so this is close to GitHub's 6-hour ceiling; if it
+    # ever times out, cut the scope with a `workflow_dispatch` filter rather
+    # than lowering the cap.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v6
         with:
