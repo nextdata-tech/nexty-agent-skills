@@ -402,6 +402,11 @@ have nothing to do with test quality. Regenerate it with
 `scripts/mutation_test.py full --update-baseline`, and say in the PR why each
 added entry is acceptable.
 
+**There is no baseline file yet**, so both tiers currently report and fail on
+nothing. Record one with a single whole-scope run on Linux — macOS cannot
+produce an accurate one, for the reason below — and commit it; from that commit
+on, both tiers are gates.
+
 With **no** baseline file at all, a run fails on nothing and says so. The first
 run on a fresh scope must not report every long-standing gap as something the
 change in front of it introduced.
@@ -421,7 +426,7 @@ falls as tests are added.
 | suite baseline | macOS, 14 cores | 47s |
 | whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
-| whole scope, 7930 mutants | Linux container, 14 vCPU | LINUX_FULL |
+| whole scope, 7930 mutants | Linux container, 14 vCPU | >60 min (4500/7930 at 60 min, slowing through `operator/engine.py`; not run to completion) |
 | **PR tier, no guarded file changed** | GitHub hosted runner | **7s** |
 | **PR tier, `grading/scans.py` changed** | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
 
