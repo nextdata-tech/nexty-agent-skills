@@ -408,20 +408,23 @@ mutants unverdicted (below), so a baseline recorded there understates the count
 for every function whose covering tests reach fixture generation — and an
 understated baseline makes the next Linux run red for work nobody did.
 
-**There is no baseline file yet**, so the nightly run reports and fails on
-nothing. Record one on `main`, not on a branch: a baseline describes the exact
-tree it was measured against, and this PR is why that matters. One was recorded
-here from a whole-scope Linux run (153 functions, 2741 unnoticed mutants), then
-invalidated when the branch was rebased onto a change that added five functions
-inside the guarded directories. A stale baseline is worse than none — it has no
-entry for new code, so every unnoticed mutant there reads as a regression
-introduced by whoever merges next.
+**Record it on `main`, never on a branch.** A baseline describes the exact tree
+it was measured against. The first one was recorded on a branch (153 functions,
+2741 unnoticed mutants) and invalidated by the rebase that followed, which added
+five functions inside the guarded directories. A stale baseline is worse than
+none — it has no entry for new code, so every unnoticed mutant there reads as a
+regression introduced by whoever merges next.
 
-So: merge this, then run the nightly workflow on `main` by hand with its
-`update_baseline` input set. It records the file from that run and uploads it as
-the `mutation-baseline` artifact; download it, commit it, and from that commit
-the nightly is a gate rather than a report. No local three-hour run is needed,
-and the baseline describes the tree it will be compared against.
+The current file was recorded by the workflow itself, from a whole-scope Linux
+run on `main` (run 33969998522, 238.6 min): **157 functions, 2652 survived and
+108 with no tests**, with `timeout`, `suspicious` and `segfault` all zero, so
+every mutant reached a verdict and no count in it is understated.
+
+To re-record it, run the workflow by hand with its `update_baseline` input set.
+It writes the file from that run and uploads it as the `mutation-baseline`
+artifact; download it, commit it, and say in the PR why each *added* entry is
+acceptable. Lowering a count needs no baseline edit at all. No local four-hour
+run is needed, and the result describes the tree it will be compared against.
 
 With **no** baseline file at all, a run fails on nothing and says so. The first
 run on a fresh scope must not report every long-standing gap as something the
@@ -476,13 +479,36 @@ inherited by every mutant for free.
 
 ### Where it runs
 
+Both tiers live in `.github/workflows/nightly-mutation.yml`, on disjoint days.
+
 | Tier | Trigger | Scope |
 |---|---|---|
-| `.github/workflows/nightly-mutation.yml` | 04:10 UTC + manual dispatch | every mutant in both guarded directories |
+| nightly | 04:10 UTC, Mon-Sat | only the guarded modules changed in the last 26 hours |
+| weekly | 04:10 UTC, Sunday | every mutant in both guarded directories |
+| manual | `workflow_dispatch` | whole scope, or the `scope` input's filters |
 
 **Nothing runs on a pull request.** A single-module run costs 15m24s on the worst of
 the guarded modules (measured, hosted runner), which is too much to add to the
 critical path of every PR that touches them. The gate is nightly instead.
+
+The nightly tier resolves its own base with `git rev-list -1 --before='26 hours ago'`
+rather than diffing against a branch: the job runs *on* `main`, so a
+`--base origin/main` diff would compare `main` against itself and find nothing
+every time. The window is 26 hours and not 24 because the scheduler fires late
+under load; an overlap re-measures a module that was already clean, which is
+merely slower, while a gap skips a merge entirely, which is a false green.
+A day with no guarded change exits 0 without invoking mutmut at all.
+
+**Why a weekly whole-scope run still earns its four hours.** The nightly tier only
+sees modules the diff names, so it cannot see a survivor created from a distance:
+delete the one test that killed a mutant in a module nobody touched and every
+nightly stays green. The weekly run is what closes that gap. It arrives up to
+seven days late, which is the price of not paying four hours a night.
+
+Both tiers compare against the same whole-scope `mutation-baseline.json`, and the
+nightly's narrow scope needs no baseline of its own: `regressions()` iterates the
+counts a run actually *observed*, so a scoped run compares only the functions it
+measured and never has to explain away the ones it skipped.
 
 The cost is what it is because every run pays a fixed price first: mutmut copies
 the tree and traces the suite once to build the function-to-covering-tests map.
@@ -491,8 +517,10 @@ at its first failing test, while a survivor pays for every covering test — so
 the number falls as coverage improves.
 
 What this trades away is worth stating plainly: a change that adds an untested
-gate now merges green and is caught the following morning, attributed to
-whoever merged next rather than to its author. Run
+gate merges green and is caught the following morning rather than on its PR. The
+nightly tier keeps that cheap to act on -- a red run covers one day of merges, so
+attribution is usually a one-PR question -- but a red *weekly* run can span a
+week of them, and then you are bisecting. Run
 `scripts/mutation_test.py changed --base origin/main` locally before merging
 anything under the two guarded directories, and read the nightly result the day
 after a merge that touches them.
