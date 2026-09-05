@@ -395,8 +395,8 @@ add a completely unexercised gate and still go green — the exact defect this
 tooling exists to catch.
 
 Runs are compared against `mutation-baseline.json`, a per-function count of
-mutants the suite does not notice, and the nightly run fails only on counts that go
-**up**. The baseline is keyed by function rather than by mutant name because
+mutants the suite does not notice, and the nightly run fails only on counts
+that go **up**. The baseline is keyed by function rather than by mutant name because
 mutmut numbers mutants positionally: editing a function renumbers all of its
 mutants, so a name-keyed baseline would go red on every edit for reasons that
 have nothing to do with test quality. Regenerate it with
@@ -492,9 +492,10 @@ the number falls as coverage improves.
 
 What this trades away is worth stating plainly: a change that adds an untested
 gate now merges green and is caught the following morning, attributed to
-whoever merged next rather than to its author. Run `scripts/mutation_test.py changed --base origin/main` locally before merging anything under the two
-guarded directories, and
-read the nightly result the day after a merge that touches them.
+whoever merged next rather than to its author. Run
+`scripts/mutation_test.py changed --base origin/main` locally before merging
+anything under the two guarded directories, and read the nightly result the day
+after a merge that touches them.
 
 ### Two things that will mislead you
 

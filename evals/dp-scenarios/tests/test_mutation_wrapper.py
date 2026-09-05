@@ -111,8 +111,10 @@ def test_method_mutants_group_under_a_stable_key(mt) -> None:
 # --- the guard that makes an aborted run loud -----------------------------
 
 
-def _fake_mutmut(results_stdout: str, run_exit: int = 1):
+def _fake_mutmut(results_stdout: str, run_exit: int = 1, *, seen: list | None = None):
     def fake(*args, capture: bool = False):
+        if seen is not None:
+            seen.append(args[0] if args else "run")
         if args and args[0] == "results":
             return subprocess.CompletedProcess(args, 0, stdout=results_stdout, stderr="")
         return subprocess.CompletedProcess(args, run_exit, stdout="", stderr="")
@@ -185,15 +187,23 @@ def test_the_function_key_fallback_produces_a_stable_bucket(mt) -> None:
     account for.
     """
 
-    assert mt.function_key("operator.matcher.solicits_operator__mutmut_4") == (
-        "operator.matcher.solicits_operator"
+    # A real mutmut name carries an ``x_`` prefix on the function segment --
+    # ``dp_scenarios.operator.matcher.x_solicits_operator__mutmut_4`` -- and the
+    # regex exists to strip it. Without the prefix the name falls through to the
+    # fallback, which returns the same string, so a fixture that omits it tests
+    # the fallback while appearing to test the regex.
+    real = "dp_scenarios.operator.matcher.x_solicits_operator__mutmut_4"
+    assert mt._MUTANT_NAME.match(real), "fixture must exercise the regex branch"
+    assert mt.function_key(real) == "dp_scenarios.operator.matcher.solicits_operator"
+
+    # Method mutants carry mutmut's class mangling and do not match the regex;
+    # they must still bucket stably rather than being dropped.
+    method = "dp_scenarios.operator.engine.xǁOperatorEngineǁrun__mutmut_1"
+    assert not mt._MUTANT_NAME.match(method), "fixture must exercise the fallback"
+    assert mt.function_key(method) == mt.function_key(
+        "dp_scenarios.operator.engine.xǁOperatorEngineǁrun__mutmut_2"
     )
-    # Unparseable shapes trim the index rather than vanishing, and two mutants
-    # of the same thing still share a bucket.
-    odd_a = mt.function_key("weird::shape__mutmut_1")
-    odd_b = mt.function_key("weird::shape__mutmut_2")
-    assert odd_a == odd_b
-    assert "__mutmut_" not in odd_a
+    assert "__mutmut_" not in mt.function_key(method)
 
 
 def test_an_unverdicted_run_is_refused_unless_explicitly_allowed(mt, capsys, monkeypatch) -> None:
@@ -229,7 +239,23 @@ def test_recording_a_baseline_clears_another_runs_verdicts_first(mt, tmp_path, m
     monkeypatch.setattr(mt, "MUTANTS_DIR", stale)
     monkeypatch.setattr(mt, "BASELINE_PATH", tmp_path / "mutation-baseline.json")
 
-    mt._mutmut = _fake_mutmut("operator.matcher.solicits_operator__mutmut_1: survived")
+    # Ordering is the property, not the end state: clearing *after* the run
+    # would leave the assertion below true while reintroducing the bug, because
+    # `mutmut results` would already have read the leftovers. Record whether the
+    # tree still existed at each mutmut call instead.
+    existed_at: dict[str, bool] = {}
+
+    def fake(*args, capture: bool = False):
+        existed_at[args[0] if args else "run"] = stale.exists()
+        if args and args[0] == "results":
+            return subprocess.CompletedProcess(
+                args, 0, stdout="dp_scenarios.operator.matcher.x_solicits_operator__mutmut_1: survived\n", stderr=""
+            )
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    mt._mutmut = fake
     assert mt.main(["full", "--update-baseline"]) == 0
-    assert not stale.exists(), "the stale mutants tree must be gone before the run"
+    assert existed_at["run"] is False, "the run must not inherit another scope's verdicts"
+    assert existed_at["results"] is False
+    assert not stale.exists()
     assert (tmp_path / "mutation-baseline.json").is_file()

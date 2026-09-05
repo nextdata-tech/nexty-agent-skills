@@ -309,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         filters = []
 
     if args.clean:
-        shutil.rmtree(PROJECT_ROOT / "mutants", ignore_errors=True)
+        shutil.rmtree(MUTANTS_DIR, ignore_errors=True)
 
     run_args = ["run", *filters]
     if args.max_children is not None:

@@ -17,10 +17,10 @@ name: nightly-mutation
 #
 # THIS IS THE ONLY TIER. A pull-request tier was built and measured at 15m24s on
 # the worst guarded module, then dropped as too much to add to the critical path
-# of every PR touching that code; `scripts/mutation_test.py changed --base origin/main` remains the
-# local equivalent. The consequence is that an untested gate merges green and is
-# caught here the following morning, so read this the day after a merge under
-# the guarded directories.
+# of every PR touching that code; `scripts/mutation_test.py changed --base
+# origin/main` remains the local equivalent. The consequence is that an untested
+# gate merges green and is caught here the following morning, so read this the
+# day after a merge under the guarded directories.
 #
 # NO BASELINE IS RECORDED YET, so a green run here currently means only that
 # mutmut ran to completion -- `main()` returns 0 when the file is absent. Record
@@ -41,7 +41,7 @@ on:
         required: false
         default: ''
       update_baseline:
-        description: 'Record mutation-baseline.json from this run and upload it (whole scope only)'
+        description: 'Record mutation-baseline.json from this run and upload it (whole scope)'
         type: boolean
         required: false
         default: false
@@ -75,9 +75,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # `mutation_test.py changed` needs history; the full tier does not,
-          # but keeping both jobs on the same checkout avoids a surprise the
-          # first time someone runs this one with a scope filter.
+          # This job never diffs, so it does not need history for itself.
+          # `mutation_test.py changed` does, and someone running that mode by
+          # hand from this checkout would otherwise hit a confusing failure.
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -119,7 +119,10 @@ jobs:
         # rather than committed: a workflow that pushes to `main` is a much
         # larger permission than this job needs, and the file is reviewed
         # before it becomes a gate.
-        if: always() && github.event.inputs.update_baseline == 'true'
+        # Not `always()`: when the run fails before writing the file,
+        # `if-no-files-found: error` would stack a second, misleading failure on
+        # top of the real one.
+        if: success() && github.event.inputs.update_baseline == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mutation-baseline
