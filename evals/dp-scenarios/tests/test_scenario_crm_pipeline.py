@@ -129,7 +129,9 @@ def test_runner_handover_names_auth_without_printing_the_token(tmp_path: Path) -
         assert "credential_env" in profile
         assert "NXD_EVAL_SOURCE_TOKEN" in profile
         assert "crm-run-token" not in profile
-        assert environment.agent_environment["NXD_EVAL_SOURCE_TOKEN"] == "crm-run-token"
+        assert "endpoint_deals_fields" in profile
+        assert "endpoint_deals_pagination" in profile
+        assert "NXD_EVAL_SOURCE_TOKEN" not in environment.agent_environment
         contract = (environment.workspace_dir / "scenario-evidence-contract.json").read_text(
             encoding="utf-8"
         )

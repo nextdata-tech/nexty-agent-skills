@@ -93,10 +93,26 @@ KIND = register(
         gold_keys=frozenset({"reconciliation", "diagnostics"}),
         handler=check,
         evidence_contract={
-            "landed": "reconciled rows, total_eur, and excluded_missing_fx count",
-            "promise": "the parser, missing-FX, output-currency, and rounding promises",
-            "diagnostics": "reported close diagnostics compared with the independent reference",
-            "decision_history": "ordered decision records including the superseding reversal",
+            "landed": (
+                "object with exactly rows (array of objects with exactly the keys "
+                "close_id, account_id, currency, amount_eur; amount_eur is a "
+                "two-decimal string), total_eur (two-decimal string), and "
+                "excluded_missing_fx (integer); do not add cents or other keys"
+            ),
+            "promise": (
+                "object with exactly amount_parser='comma_and_parentheses', "
+                "missing_fx_policy='exclude_and_warn', output_total='eur', and "
+                "rounding='cents'"
+            ),
+            "diagnostics": (
+                "object with integer keys input_row_count, converted_row_count, "
+                "missing_fx_count, weekend_close_count, negative_amount_count, "
+                "and parenthesized_amount_count"
+            ),
+            "decision_history": (
+                "array of objects; include {id: 'b2-weekend-fx'} and "
+                "{id: 'b2-weekend-fx-reversal', supersedes: 'b2-weekend-fx'}"
+            ),
         },
         validate_settings=_validate_settings,
         gold_reproducible_from_fixture=True,

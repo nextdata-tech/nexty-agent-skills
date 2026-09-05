@@ -46,6 +46,7 @@ _ASSIGN_SECRET = re.compile(
     r"passwd|access[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
     r"pg\w*password)\s*(?:[:=]|\bis\b)\s*)[^\s,;]+"
 )
+_TRUSTED_EXPLICIT_SECRET_KEYS = frozenset({"NXD_EVAL_SOURCE_TOKEN"})
 PROXY_MODULE = Path(__file__).resolve()
 PROXY_CHILD_TERM_GRACE_S = 2.0
 PROXY_CHILD_KILL_REAP_GRACE_S = 0.5
@@ -382,9 +383,9 @@ def run_stdio_proxy(spec_path: Path) -> int:
         trace_path = Path(spec["trace_path"])
         result_path = Path(spec["result_path"])
         # Do not inherit the runner's or user's credential-bearing environment
-        # into the supervisor child. The private spec is the only supported
-        # injection point; keep only process plumbing needed to locate the
-        # binary and write its isolated state.
+        # into the supervisor child. The private spec is the supported
+        # injection point for explicitly trusted runtime credentials; keep
+        # only process plumbing from the ambient environment.
         env = {
             key: os.environ[key]
             for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
@@ -392,7 +393,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
         }
         env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
         for key in tuple(env):
-            if _SECRET_KEY.search(key):
+            if _SECRET_KEY.search(key) and key not in _TRUSTED_EXPLICIT_SECRET_KEYS:
                 env.pop(key, None)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return 2

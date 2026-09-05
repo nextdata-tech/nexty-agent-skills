@@ -135,10 +135,24 @@ KIND = register(
         gold_keys=frozenset({"pipeline"}),
         handler=check,
         evidence_contract={
-            "pages": "ordered successful source pages with status, rows, and next_cursor",
-            "transport_trace": "ordered HTTP status observations including 401, 429, and a successful retry",
-            "result_rows": "final active deal rows after tombstones and PII redaction",
-            "output_contract": "field inclusion and exclusion decisions for the landed output",
+            "pages": (
+                "ordered page objects with integer status=200, rows containing "
+                "source id/stage/amount/status/updatedAt fields, and next_cursor "
+                "(null on the final page)"
+            ),
+            "transport_trace": (
+                "ordered objects with integer status values including 401, 429, "
+                "and a successful 200 retry"
+            ),
+            "result_rows": (
+                "array of active rows with exactly deal_id (string), stage "
+                "(string), amount (integer), and updated_at (string); exclude "
+                "deleted rows and owner/email fields"
+            ),
+            "output_contract": (
+                "object with deal_id, stage, amount, updated_at set to included "
+                "and owner, email set to excluded"
+            ),
             "surfaces": "named product-surface text or bytes to scan for the PII marker",
         },
         validate_settings=_validate_settings,

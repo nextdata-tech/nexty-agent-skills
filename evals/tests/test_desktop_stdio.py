@@ -154,6 +154,7 @@ def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_pat
             "NXD_DESKTOP_PYTHON": "/tmp/eval-python",
             "EVAL_MARKER": "allowed",
             "ANTHROPIC_API_KEY": "must-not-pass",
+            "NXD_EVAL_SOURCE_TOKEN": "trusted-source-token",
         },
     ).start()
     old = os.environ.get("ANTHROPIC_API_KEY")
@@ -171,6 +172,7 @@ def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_pat
         assert child_env["NXD_DESKTOP_PYTHON"] == "/tmp/eval-python"
         assert child_env["EVAL_MARKER"] == "allowed"
         assert "ANTHROPIC_API_KEY" not in child_env
+        assert child_env["NXD_EVAL_SOURCE_TOKEN"] == "trusted-source-token"
         if proxy.stdin is not None:
             proxy.stdin.close()
         proxy.wait(timeout=10)

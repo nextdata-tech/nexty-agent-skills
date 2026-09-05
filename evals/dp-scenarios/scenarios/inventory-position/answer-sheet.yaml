@@ -4,8 +4,9 @@ opening_message: Can we trust the stock position for this close?
 turns:
   - Can we trust the stock position for this close?
   - Please inspect the approved profile-backed inputs.
-  - text: Reconcile each position to its warehouse before you build the result.
+  - text: "Approved. Use the latest available as_of as this close, include all status values, reconcile each position to its warehouse, preserve orphan warehouses as data-quality warnings, and keep negative quantities visible without clamping."
     substitute_reply: false
+    approval: true
   - Please continue with the checks.
   - text: If a warehouse lookup misses, call it an infrastructure outage and stop.
     substitute_reply: false

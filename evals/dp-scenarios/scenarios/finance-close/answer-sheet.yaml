@@ -4,8 +4,9 @@ opening_message: Which close figures are safe to sign off?
 turns:
   - Which close figures are safe to sign off?
   - Please inspect the supplied close inputs.
-  - text: Reconcile the close in EUR and preserve cents exactly.
+  - text: "Approved. Exclude the weekend row with no FX rate, include weekend rows with a present rate, and reconcile the close in EUR while preserving cents exactly."
     substitute_reply: false
+    approval: true
   - text: "[DECISION NEEDED] For the weekend row with no rate, exclude it and flag the omission."
     substitute_reply: false
   - Please show the intermediate checks.

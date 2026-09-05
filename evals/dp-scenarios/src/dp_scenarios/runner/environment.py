@@ -342,11 +342,64 @@ def advertised_endpoints(routes: Sequence[Any]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _response_shape(route: Any) -> dict[str, object] | None:
+    """Return non-secret field metadata for one successful response."""
+
+    response = getattr(route, "response", None)
+    if response is None:
+        states = getattr(route, "states", {})
+        response = next(iter(states.values()), None) if states else None
+    data = getattr(response, "data", None)
+    if isinstance(data, Mapping):
+        rows: list[Mapping[str, object]] = [data]
+    elif isinstance(data, list) and all(isinstance(row, Mapping) for row in data):
+        rows = [row for row in data if isinstance(row, Mapping)]
+    else:
+        return None
+    fields: list[str] = []
+    nested: dict[str, list[str]] = {}
+    for row in rows:
+        for key, value in row.items():
+            name = str(key)
+            if name not in fields:
+                fields.append(name)
+            if isinstance(value, Mapping):
+                nested_fields = nested.setdefault(name, [])
+                for child in value:
+                    child_name = str(child)
+                    if child_name not in nested_fields:
+                        nested_fields.append(child_name)
+    return {"fields": fields, "nested_fields": nested}
+
+
+def _profile_metadata(routes: Sequence[Any], path: str) -> dict[str, object]:
+    """Describe the public request/response contract without row values."""
+
+    route = next((item for item in routes if getattr(item, "path", None) == path), None)
+    if route is None:
+        return {}
+    metadata = _response_shape(route) or {}
+    pagination = getattr(route, "pagination", None)
+    if pagination is not None:
+        metadata["pagination"] = {
+            "page_size": pagination.page_size,
+            "cursor_param": pagination.cursor_param,
+            "items_field": pagination.items_field,
+            "cursor_field": pagination.cursor_field,
+        }
+        metadata["data_selector"] = pagination.items_field
+    rate_limit_every = getattr(route, "rate_limit_every", None)
+    if rate_limit_every is not None:
+        metadata["rate_limit_every"] = rate_limit_every
+    return metadata
+
+
 def render_source_profile(
     base_url: str,
     endpoints: Sequence[str],
     *,
     auth: object | None = None,
+    routes: Sequence[Any] = (),
 ) -> str:
     """Render the agent-visible infra profile for a run-local API source."""
 
@@ -376,6 +429,9 @@ def render_source_profile(
                 "        - key: credential_env",
                 '          value: "NXD_EVAL_SOURCE_TOKEN"',
                 "          public: true",
+                "        - key: auth_refresh_path",
+                f"          value: {json.dumps(str(getattr(auth, 'refresh_path', '')))}",
+                "          public: true",
             ]
         )
     for path in endpoints:
@@ -386,6 +442,14 @@ def render_source_profile(
                 "          public: true",
             ]
         )
+        for suffix, value in _profile_metadata(routes, path).items():
+            lines.extend(
+                [
+                    f"        - key: {_endpoint_key(path)}_{suffix}",
+                    f"          value: {json.dumps(value, ensure_ascii=False)}",
+                    "          public: true",
+                ]
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -532,6 +596,12 @@ class RunEnvironment:
                 supervisor_environment.update(
                     {"HOME": str(self.home), "USERPROFILE": str(self.home)}
                 )
+                if self._mock_source is not None:
+                    auth = self._mock_source.server.config.auth
+                    if auth is not None:
+                        # The source token belongs to the trusted supervisor
+                        # and its transform children, never to the agent shell.
+                        supervisor_environment["NXD_EVAL_SOURCE_TOKEN"] = auth.token
                 if self.knobs.broker_fault is not None:
                     supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
                         self.attempt,
@@ -769,6 +839,7 @@ class RunEnvironment:
                 source.server.data_url,
                 advertised_endpoints(source.server.config.routes),
                 auth=source.server.config.auth,
+                routes=source.server.config.routes,
             ),
             encoding="utf-8",
         )
@@ -845,9 +916,6 @@ class RunEnvironment:
             values.update({"HOME": host_home, "USERPROFILE": host_home})
         if self._mock_source is not None:
             values["NXD_EVAL_SOURCE_URL"] = self._mock_source.server.data_url
-            auth = self._mock_source.server.config.auth
-            if auth is not None:
-                values["NXD_EVAL_SOURCE_TOKEN"] = auth.token
         if self._source_profile_path is not None:
             values["NXD_EVAL_SOURCE_PROFILE"] = str(self._source_profile_path)
         return MappingProxyType(values)

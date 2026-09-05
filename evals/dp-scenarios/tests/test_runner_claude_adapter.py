@@ -679,6 +679,7 @@ def test_withheld_bash_is_denied_on_the_spawned_argv_not_merely_left_unlisted(
     assert denied, "no --disallowedTools flag: an unlisted tool is not a denied tool"
     denied_tools = {tool for value in denied for tool in value.split(",")}
     assert {"Bash", "BashOutput", "KillShell"} <= denied_tools
+    assert {"Task", "TaskOutput", "Agent"} <= denied_tools
     allowed_tools = {
         tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
     }
@@ -810,4 +811,4 @@ def test_oauth_token_reaches_claude_and_withholds_bash(
 
     argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=True)
     denied = {tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")}
-    assert {"Bash", "BashOutput", "KillShell"} <= denied
+    assert {"Bash", "BashOutput", "KillShell", "Task", "TaskOutput", "Agent"} <= denied

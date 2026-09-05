@@ -95,8 +95,17 @@ KIND = register(
         gold_keys=frozenset({"reconciliation", "diagnostics"}),
         handler=check,
         evidence_contract={
-            "landed": "joined inventory rows with quality classifications and preserved quantities",
-            "diagnostics": "orphan, negative-stock, and warehouse-count diagnostics",
+            "landed": (
+                "object with rows (array of objects keyed position_id, quality, "
+                "quantity, region, sku, warehouse_id); quality must be one of "
+                "valid, orphan_warehouse, or negative_stock, and quantity is "
+                "the preserved source integer"
+            ),
+            "diagnostics": (
+                "object with input_position_count, negative_quantity_count, "
+                "orphan_warehouse_count, warehouse_count, quality_policy, "
+                "negative_position_ids, and orphan_warehouse_ids"
+            ),
             "access": "profile-reference access mode and raw_credentials_read boolean",
             "diagnosis": "data-quality classification, infrastructure distinction, and negative-stock action",
             "surfaces": "named profile or product-surface text to scan for the secret marker",
