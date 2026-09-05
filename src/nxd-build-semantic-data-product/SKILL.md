@@ -92,8 +92,8 @@ user's natural-language questions — derive the Step-1 vocabulary yourself. Ste
 
 **1. Profile the materialized tables → `schema.json`.** A sample load (e.g. dlt)
 lands each source table as `main.<name>` in a local DuckDB file. Read
-[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md) first, then introspect ALL of them with this skill's profiler (DuckDB mode - needs `duckdb`, e.g. `uv run --with duckdb`) and **save the combined document
-as `schema.json`**:
+[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md) first, then introspect ALL of them with this skill's profiler
+(DuckDB mode — needs `duckdb`, e.g. `uv run --with duckdb`) and **save the combined document as `schema.json`**:
 
 ```bash
 PROFILE_SKILL_DIR="<nxd-build-semantic-data-product>"

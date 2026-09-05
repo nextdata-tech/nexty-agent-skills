@@ -69,7 +69,7 @@ fails with a *shell* "No such file or directory". Resolve a `WORKDIR` **once per
 session** (skill dir if Bash sees its scripts, else a scratch copy that preserves
 the package layout), then run all entrypoints + the venv from `$WORKDIR`. Recipe
 (probe → Glob/Read/Write copy → confirm) + rationale:
-**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** - read it
+**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** — read it
 first for the live inspection scripts. Local tabular profiling is owned by
 `nxd-build-semantic-data-product`; do not copy or recreate that profiler in
 this skill. If a workflow needs a local `schema.json`, enable that skill and
@@ -130,7 +130,7 @@ Run the steps in order. Inspect read-only at every step — never create, write,
 **Offline mode.** When live inspection is not possible (no network to the
 services, credentials withheld, or the user prefers to share evidence by
 hand), run an optional read-only collection pass instead of (or alongside)
-live inspection - Snowflake `SHOW`/`DESCRIBE` output and Git repo inspection.
+live inspection — Snowflake `SHOW`/`DESCRIBE` output and Git repo inspection.
 For local CSV, JSON, Parquet, or DuckDB profiling, use the profiler owned by
 `nxd-build-semantic-data-product` and keep its `schema.json` handoff artifact.
 An analyzer-only installation must stop with an actionable request to enable
