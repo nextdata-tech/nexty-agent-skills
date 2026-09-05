@@ -15,12 +15,13 @@ mutmut applies each mutant through a generated trampoline, so a mutant that did
 not apply cannot be reported as a result at all -- the failure mode that
 produced two wrong conclusions in the past is structurally impossible here.
 
-Two tiers
----------
-``full``     every mutant in the guarded directories.  Nightly.
-``changed``  only the modules the diff touches.  Fast enough for a PR.
+Modes
+-----
+``full``     every mutant in the guarded directories.  What the nightly runs.
+``changed``  only the modules the diff touches.  Local, before you merge.
 
-Both tiers compare against ``mutation-baseline.json``: a per-function count of
+Nothing runs on a pull request; see "Where it runs" in README.md.  Both modes
+compare against ``mutation-baseline.json``: a per-function count of
 mutants the suite did not notice -- ones that survived, and ones no test
 reaches at all.  The baseline is keyed by *function* rather than by mutant name
 because mutmut numbers mutants by position within a function -- editing a
@@ -53,6 +54,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = PROJECT_ROOT / "mutation-baseline.json"
+#: Where mutmut copies the tree and leaves one ``.meta`` verdict per mutant.
+MUTANTS_DIR = PROJECT_ROOT / "mutants"
 REPORT_PATH = PROJECT_ROOT / "mutation-report.txt"
 
 # The two directories the tooling guards.  Kept here rather than derived from
@@ -318,6 +321,17 @@ def main(argv: list[str] | None = None) -> int:
     # first thing its reader needs is the command that reproduces it.
     print(f"reproduce: cd evals/dp-scenarios && uv run mutmut run {quoted}\n".rstrip() + "\n", flush=True)
 
+    # A baseline must describe only what this run measured. ``mutmut results``
+    # reads every ``.meta`` under ``mutants/``, so verdicts left by an earlier
+    # run of a different scope would otherwise be written into it -- and in
+    # ``full`` mode ``in_scope`` returns True for everything, so nothing filters
+    # them out. Recording the baseline is exactly the moment that blind spot
+    # writes a wrong file, and a wrong baseline is the failure this whole
+    # wrapper exists to prevent.
+    if args.update_baseline and MUTANTS_DIR.exists():
+        print(f"clearing {MUTANTS_DIR.name}/ so the baseline records only this run")
+        shutil.rmtree(MUTANTS_DIR)
+
     started = time.monotonic()
     completed = _mutmut(*run_args)
     elapsed = time.monotonic() - started
@@ -365,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     # structurally green.
     #
     # The scope having no mutants at all is a different thing and is legitimate:
-    # `scoped` mode with a diff that touches no guarded file exits before this
+    # `changed` mode with a diff that touches no guarded file exits before this
     # point.
     evaluated = evaluated_count(results.stdout, filters)
     if not evaluated:

@@ -12,7 +12,7 @@ record: null
 ## Notes
 
 This change is harness tooling and harness tests. It ships a mutmut wrapper
-(`evals/dp-scenarios/scripts/mutation_test.py`), its configuration, two CI tiers,
+(`evals/dp-scenarios/scripts/mutation_test.py`), its configuration, one CI tier,
 and the property tests that the first mutation run turned up as missing. No
 skill under `src/` changes, no scenario changes, and no agent prompt changes, so
 no runnable public scenario can distinguish before from after: an agent run
@@ -50,7 +50,8 @@ introduced by whoever merged next.
   suite could not run at all from `mutants/` before this.
 - `evals/dp-scenarios/scripts/mutation_test.py` — the wrapper, its baseline
   comparison, and the survivor explanation output CI publishes.
-- `.github/workflows/nightly-mutation.yml` — the gate. A pull-request tier was
+- `.github/workflows/nightly-mutation.yml` — the nightly run: a report until a
+  baseline is recorded on `main`, a gate from then on. A pull-request tier was
   built and measured at 15m24s on the worst guarded module, then dropped: too
   much to add to the critical path of every PR touching that code. The scoped
   mode remains a local and manual tool.

@@ -365,7 +365,7 @@ impossible. Scope, copy rules and pytest arguments live in `[tool.mutmut]` in
 ```bash
 cd evals/dp-scenarios
 
-# Everything in the two guarded directories. Tens of minutes -- see Runtime.
+# Everything in the two guarded directories. Hours -- see Runtime.
 scripts/mutation_test.py full
 
 # Only the guarded files this branch changes. Run this before merging a change
@@ -395,7 +395,7 @@ add a completely unexercised gate and still go green — the exact defect this
 tooling exists to catch.
 
 Runs are compared against `mutation-baseline.json`, a per-function count of
-mutants the suite does not notice, and both CI tiers fail only on counts that go
+mutants the suite does not notice, and the nightly run fails only on counts that go
 **up**. The baseline is keyed by function rather than by mutant name because
 mutmut numbers mutants positionally: editing a function renumbers all of its
 mutants, so a name-keyed baseline would go red on every edit for reasons that
@@ -417,8 +417,11 @@ inside the guarded directories. A stale baseline is worse than none — it has n
 entry for new code, so every unnoticed mutant there reads as a regression
 introduced by whoever merges next.
 
-So: merge this, then run one whole-scope job on `main` and commit the result.
-From that commit the nightly is a gate; until then it is a report.
+So: merge this, then run the nightly workflow on `main` by hand with its
+`update_baseline` input set. It records the file from that run and uploads it as
+the `mutation-baseline` artifact; download it, commit it, and from that commit
+the nightly is a gate rather than a report. No local three-hour run is needed,
+and the baseline describes the tree it will be compared against.
 
 With **no** baseline file at all, a run fails on nothing and says so. The first
 run on a fresh scope must not report every long-standing gap as something the
@@ -440,16 +443,16 @@ falls as tests are added.
 | whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
 | whole scope, 7930 mutants | Linux container, 14 vCPU | **2h39m** (5189 killed, 2633 survived, 108 untested, 0 unverdicted) |
+| one module (`grading/scans.py`) | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
 
-That row is from the pre-rebase tree. The current tree generates 8077 mutants,
-so expect somewhat longer.
-| scoped to `grading/scans.py` | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
+Both whole-scope figures are from the pre-rebase tree; the current one
+generates 8077 mutants, so expect somewhat longer.
 
 That last row is why this does not run on pull requests. `grading/scans.py` is
-close to the worst case for a scoped run — a large module with a lot of
+close to the worst case for a single-module run — a large module with a lot of
 survivors — and `grading/gates.py` is the other; a module with fewer survivors
 is minutes. Fifteen minutes on the PRs that touch the guarded code was judged
-too much to add to the critical path, so the scoped mode stays as a local and
+too much to add to the critical path, so `changed` mode stays as a local and
 manual tool and the gate is nightly only.
 
 Two levers were tried and rejected:
@@ -477,7 +480,7 @@ inherited by every mutant for free.
 |---|---|---|
 | `.github/workflows/nightly-mutation.yml` | 04:10 UTC + manual dispatch | every mutant in both guarded directories |
 
-**Nothing runs on a pull request.** A scoped run costs 15m24s on the worst of
+**Nothing runs on a pull request.** A single-module run costs 15m24s on the worst of
 the guarded modules (measured, hosted runner), which is too much to add to the
 critical path of every PR that touches them. The gate is nightly instead.
 
@@ -489,8 +492,8 @@ the number falls as coverage improves.
 
 What this trades away is worth stating plainly: a change that adds an untested
 gate now merges green and is caught the following morning, attributed to
-whoever merged next rather than to its author. Run `scripts/mutation_test.py
-scoped` locally before merging anything under the two guarded directories, and
+whoever merged next rather than to its author. Run `scripts/mutation_test.py changed --base origin/main` locally before merging anything under the two
+guarded directories, and
 read the nightly result the day after a merge that touches them.
 
 ### Two things that will mislead you
@@ -597,7 +600,7 @@ while hiding drift in the pack that matters.
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |
 | `scripts/` | Local live runner, conversation renderer, mutation-test driver |
 | `tests/` | Unit tests for the harness itself |
-| `mutation-baseline.json` | Known surviving mutants per function; CI fails on growth |
+| `mutation-baseline.json` | Known surviving mutants per function. **Not yet recorded** — see Mutation testing; until it exists the nightly reports rather than gates |
 
 ## Fixture hygiene
 

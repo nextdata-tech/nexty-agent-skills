@@ -17,14 +17,17 @@ name: nightly-mutation
 #
 # THIS IS THE ONLY TIER. A pull-request tier was built and measured at 15m24s on
 # the worst guarded module, then dropped as too much to add to the critical path
-# of every PR touching that code; `scripts/mutation_test.py scoped` remains the
+# of every PR touching that code; `scripts/mutation_test.py changed --base origin/main` remains the
 # local equivalent. The consequence is that an untested gate merges green and is
 # caught here the following morning, so read this the day after a merge under
 # the guarded directories.
 #
-# It compares against evals/dp-scenarios/mutation-baseline.json and fails on
-# *new* survivors, so a green run means "nothing was added that the suite cannot
-# see", not "there are no unkilled mutants".
+# NO BASELINE IS RECORDED YET, so a green run here currently means only that
+# mutmut ran to completion -- `main()` returns 0 when the file is absent. Record
+# one with the `update_baseline` input below; from then on this compares against
+# evals/dp-scenarios/mutation-baseline.json and fails on *new* survivors, and a
+# green run means "nothing was added that the suite cannot see", not "there are
+# no unkilled mutants".
 
 on:
   schedule:
@@ -37,6 +40,11 @@ on:
         description: 'mutmut mutant-name filters (blank = the whole guarded scope)'
         required: false
         default: ''
+      update_baseline:
+        description: 'Record mutation-baseline.json from this run and upload it (whole scope only)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -85,14 +93,38 @@ jobs:
           # command line: a workflow_dispatch input is attacker-controllable
           # text and must never become shell.
           MUTATION_SCOPE: ${{ github.event.inputs.scope }}
+          MUTATION_UPDATE_BASELINE: ${{ github.event.inputs.update_baseline }}
         run: |
           set -euo pipefail
-          if [ -n "${MUTATION_SCOPE:-}" ]; then
+          if [ "${MUTATION_UPDATE_BASELINE:-false}" = "true" ]; then
+            # The baseline must describe the whole scope, and the wrapper
+            # refuses --update-baseline in any other mode. Recording it from a
+            # CI run on `main` is what makes it describe the tree it is
+            # compared against: a baseline measured on a branch is invalidated
+            # by the rebase that follows, which is how the first one was lost.
+            if [ -n "${MUTATION_SCOPE:-}" ]; then
+              echo "update_baseline cannot be combined with a scope filter" >&2
+              exit 2
+            fi
+            python3 evals/dp-scenarios/scripts/mutation_test.py full --update-baseline
+          elif [ -n "${MUTATION_SCOPE:-}" ]; then
             # shellcheck disable=SC2086  # a filter list is intentionally split
             python3 evals/dp-scenarios/scripts/mutation_test.py filter $MUTATION_SCOPE
           else
             python3 evals/dp-scenarios/scripts/mutation_test.py full
           fi
+
+      - name: Upload the recorded baseline
+        # Only produced when update_baseline was requested. It is uploaded
+        # rather than committed: a workflow that pushes to `main` is a much
+        # larger permission than this job needs, and the file is reviewed
+        # before it becomes a gate.
+        if: always() && github.event.inputs.update_baseline == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-baseline
+          path: evals/dp-scenarios/mutation-baseline.json
+          if-no-files-found: error
 
       - name: Publish the survivor report
         if: always()

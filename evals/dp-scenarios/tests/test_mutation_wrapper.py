@@ -173,3 +173,63 @@ def test_the_evaluated_count_respects_the_run_scope(mt) -> None:
     assert mt.evaluated_count(text, []) == 2
     assert mt.evaluated_count(text, ["operator.matcher.*"]) == 0
     assert mt.evaluated_count(text, ["grading.scans.*"]) == 1
+
+
+def test_the_function_key_fallback_produces_a_stable_bucket(mt) -> None:
+    """The branch that keys every real baseline entry, and its escape hatch.
+
+    `_MUTANT_NAME` matches the ordinary `module.function__mutmut_N` shape.
+    Method mutants carry mutmut's `xǁClassǁmethod` mangling and a name it
+    cannot parse must still land somewhere stable, or it is silently dropped
+    from the comparison -- an unnoticed mutant that no baseline entry can ever
+    account for.
+    """
+
+    assert mt.function_key("operator.matcher.solicits_operator__mutmut_4") == (
+        "operator.matcher.solicits_operator"
+    )
+    # Unparseable shapes trim the index rather than vanishing, and two mutants
+    # of the same thing still share a bucket.
+    odd_a = mt.function_key("weird::shape__mutmut_1")
+    odd_b = mt.function_key("weird::shape__mutmut_2")
+    assert odd_a == odd_b
+    assert "__mutmut_" not in odd_a
+
+
+def test_an_unverdicted_run_is_refused_unless_explicitly_allowed(mt, capsys, monkeypatch) -> None:
+    """A crashed or timed-out mutant has no verdict, so the score is a floor.
+
+    Reporting it as anything else is the failure this tooling exists to remove.
+    The override exists because macOS cannot avoid it, so it must be explicit.
+    """
+
+    monkeypatch.setattr(mt.sys, "platform", "linux")
+    mt._mutmut = _fake_mutmut("operator.engine.xǁOperatorEngineǁrun__mutmut_1: segfault")
+    assert mt.main(["full"]) == 3
+    assert "Refusing to report a partial run" in capsys.readouterr().out
+
+    mt._mutmut = _fake_mutmut("operator.engine.xǁOperatorEngineǁrun__mutmut_1: segfault")
+    mt.BASELINE_PATH = Path("/nonexistent/mutation-baseline.json")
+    assert mt.main(["full", "--allow-unverdicted"]) == 0
+
+
+def test_recording_a_baseline_clears_another_runs_verdicts_first(mt, tmp_path, monkeypatch) -> None:
+    """`--update-baseline` must record only what this run measured.
+
+    `mutmut results` reads every `.meta` under `mutants/`, and in `full` mode
+    `in_scope` returns True for everything, so a run that aborted early would
+    otherwise write a previous scoped run's leftovers into the baseline. That
+    is the one moment a wrong baseline gets created, and a wrong baseline is
+    what this wrapper exists to prevent.
+    """
+
+    stale = tmp_path / "mutants"
+    stale.mkdir()
+    (stale / "leftover.meta").write_text("from an earlier scope", encoding="utf-8")
+    monkeypatch.setattr(mt, "MUTANTS_DIR", stale)
+    monkeypatch.setattr(mt, "BASELINE_PATH", tmp_path / "mutation-baseline.json")
+
+    mt._mutmut = _fake_mutmut("operator.matcher.solicits_operator__mutmut_1: survived")
+    assert mt.main(["full", "--update-baseline"]) == 0
+    assert not stale.exists(), "the stale mutants tree must be gone before the run"
+    assert (tmp_path / "mutation-baseline.json").is_file()
