@@ -15,24 +15,56 @@ name: nightly-mutation
 # the mechanical grading, where "a gate that exists but never fires" is the
 # recurring defect.
 #
-# THIS IS THE ONLY TIER. A pull-request tier was built and measured at 15m24s on
-# the worst guarded module, then dropped as too much to add to the critical path
-# of every PR touching that code; `scripts/mutation_test.py changed --base
-# origin/main` remains the local equivalent. The consequence is that an untested
-# gate merges green and is caught here the following morning, so read this the
-# day after a merge under the guarded directories.
+# TWO TIERS, ON DISJOINT DAYS
+# ---------------------------
+# Mon-Sat  `changed` against everything not yet covered by a *green* run of this
+#          workflow. Only the guarded modules a merge touched, so a red run
+#          belongs to one day's merges and attribution is a one-PR question. A
+#          whole-scope run costs ~4h; the worst single guarded module was
+#          measured at 15m24s, and a day with no guarded change exits 0 without
+#          running mutmut at all.
+# Sun      `full`. The nightly tier only sees modules the diff names, so it
+#          cannot see a survivor created from a distance -- delete the one test
+#          that killed a mutant in an untouched module and every nightly stays
+#          green. The weekly whole-scope run is what closes that gap, at the
+#          cost of arriving up to seven days late.
 #
-# NO BASELINE IS RECORDED YET, so a green run here currently means only that
-# mutmut ran to completion -- `main()` returns 0 when the file is absent. Record
-# one with the `update_baseline` input below; from then on this compares against
-# evals/dp-scenarios/mutation-baseline.json and fails on *new* survivors, and a
-# green run means "nothing was added that the suite cannot see", not "there are
-# no unkilled mutants".
+# The nightly base is floored at the last successful run rather than being a
+# bare 26-hour clock window, because a clock window silently heals. Under a
+# clock window a merge is in scope for exactly one morning: if that run is
+# delayed, dropped (GitHub drops scheduled events under load, and disables them
+# entirely after 60 days of repository inactivity) or dies on an infra flake,
+# the day's merges get no coverage until Sunday -- and worse, a run that goes
+# *red* comes back *green* the next morning with nothing fixed, because the
+# offending module has left the window. That is this file's own "a gate that
+# exists but never fires" defect, in its most deniable form: it fires once,
+# then un-fires. Flooring at the last green run means an uncovered night widens
+# the next night's scope instead of leaving a hole, and a red night stays red
+# until someone acts on it.
+#
+# A pull-request tier was built, measured, and dropped as too much to add to the
+# critical path of every PR touching this code; `scripts/mutation_test.py
+# changed --base origin/main` remains the local equivalent. The consequence is
+# that an untested gate merges green and is caught the following morning, so
+# read this the day after a merge under the guarded directories.
+#
+# Both tiers compare against evals/dp-scenarios/mutation-baseline.json and fail
+# on *new* survivors. `regressions()` iterates the counts a run actually
+# observed, so the nightly's narrow scope compares only the functions it
+# measured -- the whole-scope baseline is the right one for both tiers and a
+# scoped run never has to explain away the functions it skipped. A green run
+# means "nothing was added that the suite cannot see", not "there are no
+# unkilled mutants".
 
 on:
   schedule:
     # 04:10 UTC, before the MCP canary, so a red mutation run and a red canary
     # do not arrive as one indistinguishable batch of morning noise.
+    #
+    # One schedule, not two. Which tier runs is decided from the day of the week
+    # in the step below: a second `cron:` entry would have to be kept
+    # character-identical to a string matched in shell, and editing one without
+    # the other silently routes six nights a week into the whole-scope branch.
     - cron: '10 4 * * *'
   workflow_dispatch:
     inputs:
@@ -48,6 +80,8 @@ on:
 
 permissions:
   contents: read
+  # `gh run list`, to floor the nightly scope at the last green run.
+  actions: read
 
 concurrency:
   group: nightly-mutation
@@ -55,7 +89,7 @@ concurrency:
 
 jobs:
   mutation:
-    name: dp-scenarios mutation (full scope)
+    name: dp-scenarios mutation
     runs-on: ubuntu-latest
     # Runtime is dominated by the *surviving* mutants, not the killed ones:
     # mutmut runs a mutant's covering tests fastest-first and stops at the first
@@ -63,22 +97,23 @@ jobs:
     # every test that touches it -- including the fixture-generating ones. See
     # the runtime table in evals/dp-scenarios/README.md for measured figures.
     #
-    # The cap is deliberately far above the expected run. A mutation job killed
+    # The cap is deliberately far above the expected run, and is sized for the
+    # weekly whole-scope tier rather than the nightly one. A mutation job killed
     # mid-run reports fewer survivors, and fewer survivors reads as an
-    # improvement.
+    # improvement -- so a cap that truncates a slow nightly would be worse than
+    # one that lets it run long.
     #
-    # Measured whole-scope run: 2h39m on a 14-vCPU Linux container. A hosted
-    # runner has fewer cores, so this is close to GitHub's 6-hour ceiling; if it
-    # ever times out, cut the scope with a `workflow_dispatch` filter rather
-    # than lowering the cap.
+    # Measured whole-scope runs: 2h39m on a 14-vCPU Linux container, 3h59m on a
+    # hosted runner (run 33969998522). If the weekly tier ever times out, cut the
+    # scope with a `workflow_dispatch` filter rather than lowering the cap.
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v6
         with:
-          # This job never diffs, so it does not need history for itself. Kept
-          # so a future step that does -- `mutation_test.py changed` resolves a
-          # merge base -- works without a checkout change. Free on a job with a
-          # 350-minute budget.
+          # The nightly tier resolves its own base out of the history with
+          # `git rev-list --before`, so this job genuinely needs full history --
+          # on a shallow clone that lookup returns nothing and the run would
+          # fall back to mutating everything.
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -95,6 +130,10 @@ jobs:
           # text and must never become shell.
           MUTATION_SCOPE: ${{ github.event.inputs.scope }}
           MUTATION_UPDATE_BASELINE: ${{ github.event.inputs.update_baseline }}
+          # Empty for workflow_dispatch, which is what routes a manual run to
+          # the whole scope.
+          MUTATION_SCHEDULE: ${{ github.event.schedule }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "${MUTATION_UPDATE_BASELINE:-false}" = "true" ]; then
@@ -111,6 +150,53 @@ jobs:
           elif [ -n "${MUTATION_SCOPE:-}" ]; then
             # shellcheck disable=SC2086  # a filter list is intentionally split
             python3 evals/dp-scenarios/scripts/mutation_test.py filter $MUTATION_SCOPE
+          elif [ -n "${MUTATION_SCHEDULE:-}" ] && [ "$(date -u +%u)" != 7 ]; then
+            # Start from a clock window. 26 hours, not 24, because the scheduler
+            # fires late under load: an overlap re-measures a module that was
+            # already clean and merely costs time, while a gap skips a merge.
+            base="$(git rev-list -1 --before='26 hours ago' HEAD || true)"
+            if [ -z "$base" ]; then
+              base="$(git rev-list --max-parents=0 HEAD | tail -1)"
+              echo "::warning::no commit older than 26h; falling back to the root commit, which mutates the whole scope"
+            fi
+            # Then floor it at the last *successful* run of this workflow, so
+            # the scope covers everything no green run has covered yet. Whichever
+            # is older wins. Without this the window heals silently: a night that
+            # never fired leaves a hole until Sunday, and a night that went red
+            # comes back green the next morning with nothing fixed, because the
+            # offending module has aged out of the window.
+            #
+            # Two filters, and both are load-bearing.
+            #
+            # `--status success` is a conclusion filter, so a red or cancelled
+            # run does not advance the floor -- which is the point.
+            #
+            # `--event schedule` is what makes "successful" mean "covered". A
+            # green run is not evidence of coverage on its own: a `scope`
+            # dispatch gates only the functions its filter names, and an
+            # `update_baseline` dispatch writes the file and returns 0 before
+            # the comparison runs, so it gates on nothing at all and can never
+            # be red. Either would advance the floor past merges it never
+            # looked at -- and the realistic trigger is triage itself, where a
+            # maintainer dispatches a scoped run to check a fix for the very
+            # regression the red nightly found, and thereby retires it. Both
+            # tiers are schedule events under the single cron, and each covers
+            # the range it claims. Manual runs deliberately do not move the
+            # floor, which errs toward a wider scope.
+            last="$(gh run list --workflow nightly-mutation.yml --branch main \
+                      --event schedule --status success --limit 1 --json headSha \
+                      --jq '.[0].headSha // empty' 2>/dev/null || true)"
+            # `cat-file -e` guards a force-push having orphaned the recorded SHA,
+            # and `--is-ancestor` guards it being *newer* than the clock window
+            # (a manual run minutes ago), which would narrow the scope instead of
+            # widening it. In either case the clock window stands.
+            if [ -n "$last" ] && git cat-file -e "${last}^{commit}" 2>/dev/null \
+               && git merge-base --is-ancestor "$last" "$base"; then
+              echo "flooring at the last green run: $last"
+              base="$last"
+            fi
+            echo "nightly tier: diffing against $base ($(git log -1 --format=%cI "$base"))"
+            python3 evals/dp-scenarios/scripts/mutation_test.py changed --base "$base"
           else
             python3 evals/dp-scenarios/scripts/mutation_test.py full
           fi

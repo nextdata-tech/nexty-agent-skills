@@ -17,8 +17,9 @@ produced two wrong conclusions in the past is structurally impossible here.
 
 Modes
 -----
-``full``     every mutant in the guarded directories.  What the nightly runs.
-``changed``  only the modules the diff touches.  Local, before you merge.
+``full``     every mutant in the guarded directories.  What the weekly tier runs.
+``changed``  only the modules the diff touches.  The nightly tier, and what to
+             run locally before you merge.
 
 Nothing runs on a pull request; see "Where it runs" in README.md.  Both modes
 compare against ``mutation-baseline.json``: a per-function count of
