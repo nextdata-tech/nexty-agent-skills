@@ -446,17 +446,20 @@ falls as tests are added.
 | whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
 | whole scope, 7930 mutants | Linux container, 14 vCPU | **2h39m** (5189 killed, 2633 survived, 108 untested, 0 unverdicted) |
+| whole scope, 8077 mutants | GitHub hosted runner | **3h59m** (2652 survived, 108 untested, 0 unverdicted) |
 | one module (`grading/scans.py`) | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
 
-Both whole-scope figures are from the pre-rebase tree; the current one
-generates 8077 mutants, so expect somewhat longer.
+The 8077-mutant row is the authoritative one — current tree, and the same class
+of machine CI actually uses. It is what sizes `timeout-minutes: 350` in the
+workflow, and what the weekly tier costs. The two 7930-mutant rows are from the
+pre-rebase tree and are kept only for the machine-to-machine comparison.
 
 That last row is why this does not run on pull requests. `grading/scans.py` is
 close to the worst case for a single-module run — a large module with a lot of
 survivors — and `grading/gates.py` is the other; a module with fewer survivors
 is minutes. Fifteen minutes on the PRs that touch the guarded code was judged
-too much to add to the critical path, so `changed` mode stays as a local and
-manual tool and the gate is nightly only.
+too much to add to the critical path. `changed` mode runs as the nightly tier
+instead, and locally before you merge.
 
 Two levers were tried and rejected:
 
@@ -480,10 +483,12 @@ inherited by every mutant for free.
 ### Where it runs
 
 Both tiers live in `.github/workflows/nightly-mutation.yml`, on disjoint days.
+There is a single `cron:` entry; the day of the week picks the tier inside the
+job, so there is no schedule literal to keep in sync with a shell comparison.
 
 | Tier | Trigger | Scope |
 |---|---|---|
-| nightly | 04:10 UTC, Mon-Sat | only the guarded modules changed in the last 26 hours |
+| nightly | 04:10 UTC, Mon-Sat | only guarded modules not yet covered by a green run |
 | weekly | 04:10 UTC, Sunday | every mutant in both guarded directories |
 | manual | `workflow_dispatch` | whole scope, or the `scope` input's filters |
 
@@ -491,13 +496,29 @@ Both tiers live in `.github/workflows/nightly-mutation.yml`, on disjoint days.
 the guarded modules (measured, hosted runner), which is too much to add to the
 critical path of every PR that touches them. The gate is nightly instead.
 
-The nightly tier resolves its own base with `git rev-list -1 --before='26 hours ago'`
-rather than diffing against a branch: the job runs *on* `main`, so a
-`--base origin/main` diff would compare `main` against itself and find nothing
-every time. The window is 26 hours and not 24 because the scheduler fires late
-under load; an overlap re-measures a module that was already clean, which is
-merely slower, while a gap skips a merge entirely, which is a false green.
-A day with no guarded change exits 0 without invoking mutmut at all.
+The nightly tier resolves its own base rather than diffing against a branch: the
+job runs *on* `main`, so a `--base origin/main` diff would compare `main` against
+itself and find nothing every time. It starts from a 26-hour clock window — 26
+and not 24 because the scheduler fires late under load, and an overlap only costs
+time — then **floors that at the last successful run of the workflow**, whichever
+is older. A day with no guarded change exits 0 without invoking mutmut at all.
+
+The floor is the part that matters, and a bare clock window would be a bug
+without it. Under a bare window a merge is in scope for exactly one morning. So
+if that run is delayed, dropped (GitHub drops scheduled events under load, and
+disables schedules entirely after 60 days of repository inactivity) or dies on an
+infra flake, the day's merges go unmeasured until Sunday — and worse, **a run
+that goes red comes back green the next morning with nothing fixed**, because the
+offending module has aged out of the window. That is this suite's "a gate that
+exists but never fires" defect in its most deniable form: it fires once, then
+un-fires. Flooring at the last green run means an uncovered night widens the next
+night's scope, and a red night stays red until someone acts on it.
+
+`--status success` is a conclusion filter, so a red or cancelled run does not
+advance the floor. A weekly or manual whole-scope run does, correctly — it
+covered everything. If the `gh` lookup fails for any reason (no `actions: read`,
+a force-push having orphaned the recorded SHA, or a floor somehow *newer* than
+the clock window), the clock window stands rather than the scope narrowing.
 
 **Why a weekly whole-scope run still earns its four hours.** The nightly tier only
 sees modules the diff names, so it cannot see a survivor created from a distance:
@@ -629,7 +650,7 @@ while hiding drift in the pack that matters.
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |
 | `scripts/` | Local live runner, conversation renderer, mutation-test driver |
 | `tests/` | Unit tests for the harness itself |
-| `mutation-baseline.json` | Known surviving mutants per function. **Not yet recorded** — see Mutation testing; until it exists the nightly reports rather than gates |
+| `mutation-baseline.json` | Known surviving mutants per function — 157 functions, 2760 unnoticed mutants, recorded on Linux in CI. Both tiers fail on any count that goes **up**; see Mutation testing before adding an entry |
 
 ## Fixture hygiene
 
