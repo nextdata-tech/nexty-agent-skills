@@ -27,9 +27,16 @@ whole-scope run over `src/dp_scenarios/operator/` and `src/dp_scenarios/grading/
 produced 7930 mutants and a large block of survivors concentrated in the scan
 decision tables — 143 in `supported_path_scan` alone, where deleting `httplib2`
 from the forbidden import roots or `bash` from the executable tool kinds changed
-no test's verdict. `tests/test_grading_scan_tables.py` closes that gap, and the
-committed `mutation-baseline.json` is what CI compares against so the count
-cannot silently grow again.
+no test's verdict. `tests/test_grading_scan_tables.py` closes that gap.
+
+No `mutation-baseline.json` ships here. One was recorded from a whole-scope
+Linux run and then invalidated when this branch was rebased onto a change that
+added five functions inside the guarded directories — a baseline describes the
+exact tree it was measured against, and a branch is the wrong place to record
+one. Until a baseline is recorded on `main`, the nightly job reports rather
+than gates. A stale baseline would have been worse than none: it carries no
+entry for new code, so every unnoticed mutant there reads as a regression
+introduced by whoever merged next.
 
 ## Evidence
 

@@ -406,10 +406,19 @@ added entry is acceptable.
 **Regenerate it on Linux, never on macOS.** A macOS run leaves a third of its
 mutants unverdicted (below), so a baseline recorded there understates the count
 for every function whose covering tests reach fixture generation — and an
-understated baseline makes the next Linux run red for work nobody did. The
-committed one came from a whole-scope Linux run: 153 functions, 2741 unnoticed
-mutants, concentrated in `grading/gates.py` (922), `grading/scans.py` (460) and
-`operator/engine.py` (290).
+understated baseline makes the next Linux run red for work nobody did.
+
+**There is no baseline file yet**, so the nightly run reports and fails on
+nothing. Record one on `main`, not on a branch: a baseline describes the exact
+tree it was measured against, and this PR is why that matters. One was recorded
+here from a whole-scope Linux run (153 functions, 2741 unnoticed mutants), then
+invalidated when the branch was rebased onto a change that added five functions
+inside the guarded directories. A stale baseline is worse than none — it has no
+entry for new code, so every unnoticed mutant there reads as a regression
+introduced by whoever merges next.
+
+So: merge this, then run one whole-scope job on `main` and commit the result.
+From that commit the nightly is a gate; until then it is a report.
 
 With **no** baseline file at all, a run fails on nothing and says so. The first
 run on a fresh scope must not report every long-standing gap as something the
@@ -431,6 +440,9 @@ falls as tests are added.
 | whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
 | whole scope, 7930 mutants | Linux container, 14 vCPU | **2h39m** (5189 killed, 2633 survived, 108 untested, 0 unverdicted) |
+
+That row is from the pre-rebase tree. The current tree generates 8077 mutants,
+so expect somewhat longer.
 | scoped to `grading/scans.py` | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
 
 That last row is why this does not run on pull requests. `grading/scans.py` is
