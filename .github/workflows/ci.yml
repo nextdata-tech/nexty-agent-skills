@@ -283,9 +283,13 @@ jobs:
     # to write around. Scoping to the diff skips nothing inside what changed.
     name: dp-scenarios mutation (changed files)
     runs-on: ubuntu-latest
-    # The scoped run is minutes; the cap guards against a pathological diff
-    # that rewrites every guarded module, which is the nightly job's workload.
-    timeout-minutes: 30
+    # Every run pays a fixed cost before any mutant is checked: mutmut copies
+    # the tree and traces the suite once to map each function to its covering
+    # tests. After that, only the changed modules' mutants run. The worst case
+    # is a diff to grading/gates.py, whose covering set includes the
+    # fixture-generating tier tests -- see the runtime table in
+    # evals/dp-scenarios/README.md.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:

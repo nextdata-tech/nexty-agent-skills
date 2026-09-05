@@ -44,12 +44,16 @@ jobs:
   mutation:
     name: dp-scenarios mutation (full scope)
     runs-on: ubuntu-latest
-    # Measured: 2m25s wall on a 14-core macOS host (739% CPU, ~1070s of CPU
-    # time for 7930 mutants). A 4-core hosted runner is CPU-bound on the same
-    # work, so budget roughly 8 minutes plus a minute of dependency install.
-    # The cap is deliberately far above that: a mutation job that is killed
-    # mid-run reports fewer survivors, which reads as an improvement.
-    timeout-minutes: 45
+    # Runtime is dominated by the *surviving* mutants, not the killed ones:
+    # mutmut runs a mutant's covering tests fastest-first and stops at the first
+    # failure, so a killed mutant costs milliseconds while a survivor pays for
+    # every test that touches it -- including the fixture-generating ones. See
+    # the runtime table in evals/dp-scenarios/README.md for measured figures.
+    #
+    # The cap is deliberately far above the expected run. A mutation job killed
+    # mid-run reports fewer survivors, and fewer survivors reads as an
+    # improvement.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
         with:

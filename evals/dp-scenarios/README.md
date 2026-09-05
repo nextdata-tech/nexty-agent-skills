@@ -365,7 +365,7 @@ impossible. Scope, copy rules and pytest arguments live in `[tool.mutmut]` in
 ```bash
 cd evals/dp-scenarios
 
-# Everything in the two guarded directories. ~2.5 min on a 14-core host.
+# Everything in the two guarded directories. Hours on Linux -- see Runtime.
 scripts/mutation_test.py full
 
 # Only the guarded files this branch changes. What CI runs on a pull request.
@@ -402,6 +402,42 @@ have nothing to do with test quality. Regenerate it with
 `scripts/mutation_test.py full --update-baseline`, and say in the PR why each
 added entry is acceptable.
 
+### Runtime, and what actually costs the time
+
+A **killed** mutant is cheap and a **surviving** one is expensive. mutmut runs a
+mutant's covering tests fastest-first and stops at the first failure, so a
+killed mutant usually costs one fast unit test; a survivor pays for every test
+that touches the function, and in this suite that includes the tier tests, which
+generate a fixture from the seeded generator on each call. The whole-scope
+runtime therefore tracks the *survivor* count, not the mutant count, and it
+falls as tests are added.
+
+| Run | Machine | Wall |
+|---|---|---|
+| suite baseline | macOS, 14 cores | 47s |
+| whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests |
+| suite baseline | Linux container, 14 vCPU | 77s |
+| whole scope, 7930 mutants | Linux container, 14 vCPU | **LINUX_FULL** |
+
+Two levers were tried and rejected:
+
+- **`max_stack_depth`**, which would associate each function only with tests
+  that call it near-directly, is broken in mutmut 3.7.0: it calls
+  `Path(filename).resolve(strict=True)` on every stack frame and raises
+  `FileNotFoundError` on the synthetic `<string>` frames that generated code
+  produces. Setting it aborts the run during stats collection.
+- **Deselecting the fixture-generating tests.** `tests/test_grading_gates.py` is
+  one of them, and it is the primary test file for the largest guarded module.
+  Dropping it would buy speed by removing exactly the coverage the tier exists
+  to measure.
+
+The lever that would actually work is in the suite rather than in mutmut:
+`populated_parent_child_recordings` and its neighbours in
+`tests/test_runner_tier.py` regenerate a fixture on every call. Caching them
+would speed up the ordinary suite as well, and — because mutmut forks each
+mutant from a warm parent — a cache populated during stats collection would be
+inherited by every mutant for free.
+
 ### Where it runs
 
 | Tier | Trigger | Scope |
@@ -414,6 +450,13 @@ budget has to choose which mutants to skip, and any deterministic choice is one
 an author can learn to write around; scoping to the diff skips nothing inside
 what changed. Most pull requests touch neither directory, and the job decides
 that from a `git diff` before it installs anything.
+
+Every run — scoped or not — pays a fixed cost first: mutmut copies the tree and
+traces the suite once to build the function-to-covering-tests map. After that a
+scoped run is minutes for most modules. The known worst case is a diff to
+`grading/gates.py`, the largest guarded module and the one whose covering set
+includes the fixture-generating tier tests; the job's 45-minute cap is sized for
+that, and a change of that size is worth waiting on.
 
 ### Two things that will mislead you
 
