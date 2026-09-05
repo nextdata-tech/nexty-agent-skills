@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-05 | evals: the operator's turn has a directive composed from persona and scenario | NO_EVAL | — | [`2026-09-05-operator-directive-composition`](entries/2026-09-05-operator-directive-composition.md) |
+| 2026-09-05 | structured terminal reasons for an interrupted live scenario run | NO_EVAL | — | [`2026-09-05-live-run-interruption-reasons`](entries/2026-09-05-live-run-interruption-reasons.md) |
 | 2026-09-05 | automated mutation testing for the dp-scenarios harness | NO_EVAL | — | [`2026-09-05-dp-scenarios-mutation-testing`](entries/2026-09-05-dp-scenarios-mutation-testing.md) |
 | 2026-09-04 | nxd-run-job-loop: incremental transform state persistence checks | NO_EVAL | — | [`2026-09-04-nxd-run-job-loop-incremental-state`](entries/2026-09-04-nxd-run-job-loop-incremental-state.md) |
 | 2026-09-04 | nexty plugin projections and local profiler ownership | NO_EVAL | — | [`2026-09-04-nexty-plugin-projections`](entries/2026-09-04-nexty-plugin-projections.md) |

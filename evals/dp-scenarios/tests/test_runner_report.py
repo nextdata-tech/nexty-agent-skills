@@ -296,3 +296,26 @@ def test_a_failed_render_warns_and_still_returns_the_finished_run(
     warning = capsys.readouterr().err
     assert "could not render conversation" in warning
     assert "RuntimeError" in warning, "the operator cannot tell what failed"
+
+
+def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> None:
+    """An operator reads stdout first; a provider ceiling has to appear there."""
+
+    scenario = make_scenario("interrupted", turns=3)
+    interrupted = TurnResult(
+        turn_timed_out=True,
+        environment_detail="Claude did not complete the turn within 324.0s",
+        failure_reason="provider_session_limit",
+        last_mcp_call="build_data_product:error",
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario, first=interrupted))},
+    ).run()
+    text = human_summary(result)
+
+    assert "interrupted: provider_session_limit" in text
+    assert "last MCP call: build_data_product:error" in text
+    assert "detail: Claude did not complete the turn within 324.0s" in text

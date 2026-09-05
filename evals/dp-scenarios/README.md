@@ -325,6 +325,38 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --scenario crm-pipeline
 ```
 
+### When a live run stops without being graded
+
+A live run can end for reasons that say nothing about the agent: the provider
+declines another turn, the Claude child stops producing terminal stream
+results, or two runs contend on the same runtime state. Those used to reach
+the report as `ungraded` and nothing else, which reads exactly like a scenario
+defect.
+
+Each interrupted run now carries a closed-vocabulary reason, and every run
+carries the block whether or not it was interrupted:
+
+```json
+"interruption": {
+  "failure_reason": "provider_session_limit",
+  "failure_detail": "Claude did not complete the turn within 324.0s",
+  "last_mcp_call": "build_data_product:error"
+}
+```
+
+| `failure_reason` | What happened | What to do |
+| --- | --- | --- |
+| `provider_session_limit` | The provider refused another turn (usage, rate, or credit ceiling). | Wait for the reset; the scenario is untested, not failed. |
+| `child_no_terminal_result` | The child stayed alive past the turn deadline without emitting a `result`. | Reruns are worth trying; check `last_mcp_call` for where it stalled. |
+| `child_exited_early` | The child exited before emitting a `result`. | Read `failure_detail`; usually a startup or config fault. |
+| `shared_runtime_contention` | Two runs contended on shared runtime state (locked store, busy port). | Rerun; live canary closures are already copied per run. |
+
+`summary.txt` prints the same three lines, because stdout is where the
+decision to rerun or to wait actually gets made.
+
+None of these is a pass. A green live run is one whose required gates passed,
+not one that stopped politely.
+
 ### How a mock source reaches the agent
 
 A scenario whose source is the run-local mock REST server hands it over the way

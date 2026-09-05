@@ -2082,3 +2082,60 @@ def test_closure_is_found_in_both_layouts_the_product_writes(tmp_path: Path) -> 
         rows = _decisions_artifact(root)
         assert rows is not None and len(rows) == 1
         assert rows[0]["decision_id"] == "d1"
+
+
+# --------------------------------------------------------------------------
+# Report completeness for a run that never reached a graded turn (issue #238)
+
+
+def test_an_interrupted_run_reaches_the_report_with_its_structured_reason() -> None:
+    """"Ungraded" alone cannot separate a provider ceiling from a defect.
+
+    The reason, the sanitized detail and the last MCP call are the three
+    things a reader needs to decide whether to rerun the scenario or wait for
+    the account, so they must survive the whole path from the transport turn
+    into report.json -- not stop at the engine, which is where they used to.
+    """
+
+    scenario = make_scenario("interrupted", turns=3)
+    interrupted = TurnResult(
+        turn_timed_out=True,
+        environment_detail="Claude did not complete the turn within 324.0s",
+        failure_reason="provider_session_limit",
+        last_mcp_call="build_data_product:error",
+    )
+    recording = recording_for(scenario, responses_for(scenario, first=interrupted))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    run = result.scenarios[0].runs[0]
+    assert run.terminal_state is EngineTerminalState.TURN_TIMEOUT
+    interruption = run.as_dict()["interruption"]
+    assert interruption == {
+        "failure_reason": "provider_session_limit",
+        "failure_detail": "Claude did not complete the turn within 324.0s",
+        "last_mcp_call": "build_data_product:error",
+    }
+
+
+def test_a_clean_run_reports_an_empty_interruption_block() -> None:
+    """One shape for both outcomes; a consumer never has to probe for a key."""
+
+    scenario = make_scenario("uninterrupted", turns=3)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario))},
+    ).run()
+
+    assert result.scenarios[0].runs[0].as_dict()["interruption"] == {
+        "failure_reason": None,
+        "failure_detail": None,
+        "last_mcp_call": None,
+    }

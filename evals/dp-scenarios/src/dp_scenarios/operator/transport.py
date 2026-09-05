@@ -72,6 +72,12 @@ class TurnResult:
     environment_wedged: bool = False
     turn_timed_out: bool = False
     environment_detail: str | None = None
+    #: Closed-vocabulary reason from ``dp_scenarios.runner.failure_reasons``.
+    #: ``environment_detail`` stays the human string; this is the gateable one.
+    failure_reason: str | None = None
+    #: Sanitized identity of the last MCP call this turn observed, so an
+    #: incomplete run still says where it stopped rather than only that it did.
+    last_mcp_call: str | None = None
     session_id: str | None = None
 
     def __post_init__(self) -> None:

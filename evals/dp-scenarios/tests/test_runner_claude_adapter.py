@@ -18,6 +18,7 @@ from _repo_paths import REPO_ROOT
 import dp_scenarios.runner.claude_adapter as adapter_module
 from dp_scenarios.runner.claude_adapter import ClaudeCodeAdapter, _update_machine_artifacts, parse_claude_events
 from dp_scenarios.operator.transport import TouchedFile, ToolCall, TurnResult
+from dp_scenarios.runner.failure_reasons import CHILD_NO_TERMINAL_RESULT, PROVIDER_SESSION_LIMIT
 from dp_scenarios.runner.session import turn_result_to_dict
 from dp_scenarios.runner.local import FileSupervisorRecordReader, LocalRunnerError
 
@@ -503,6 +504,7 @@ def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstructi
     adapter._before = {}
     adapter._facts = {}
     adapter._build_context = {}
+    adapter._last_mcp_call = None
     adapter._session_id = "session-1"
     adapter._stdio = None
     adapter._redact_json_rpc = lambda value: value
@@ -812,3 +814,151 @@ def test_oauth_token_reaches_claude_and_withholds_bash(
     argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=True)
     denied = {tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")}
     assert {"Bash", "BashOutput", "KillShell", "Task", "TaskOutput", "Agent"} <= denied
+
+
+def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> ClaudeCodeAdapter:
+    """Build an adapter whose only real child is ``fake_claude``."""
+
+    fake_claude.chmod(0o700)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir(exist_ok=True)
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir(exist_ok=True)
+    return ClaudeCodeAdapter(
+        claude=fake_claude,
+        model="test",
+        effort="low",
+        plugin_dir=plugin_dir,
+        repo_root=REPO_ROOT,
+        fixture_dir=fixture_dir,
+        artifact_dir=tmp_path / "artifacts",
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path(sys.executable),
+        claude_config_dir=None,
+        timeout_s=timeout_s,
+        max_budget_usd=None,
+        append_system_prompt="test",
+        mcp_config=tmp_path / "mcp.json",
+    )
+
+
+def test_a_child_that_stalls_past_the_deadline_names_the_missing_terminal_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline already existed; the structured reason did not.
+
+    Without it a stalled child and a Claude account that refused another turn
+    produce the same report, which is exactly the confusion issue #238 is
+    about.
+    """
+
+    fake_claude = tmp_path / "stalling-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    json.loads(line)
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "thinking"}
+    ]}}), flush=True)
+    time.sleep(600)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.75)
+
+    try:
+        result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    finally:
+        adapter.close()
+
+    assert result.turn_timed_out is True
+    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    # The partial turn is still retained: the reason explains the stop, it
+    # does not replace the evidence.
+    assert "thinking" in result.transcript_delta
+
+
+def test_a_provider_ceiling_on_the_childs_stderr_outranks_a_bare_stall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_claude = tmp_path / "limited-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    json.loads(line)
+    sys.stderr.write("Claude usage limit reached. Your limit will reset at 4pm.\\n")
+    sys.stderr.flush()
+    time.sleep(600)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.75)
+
+    try:
+        result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    finally:
+        adapter.close()
+
+    assert result.turn_timed_out is True
+    assert result.failure_reason == PROVIDER_SESSION_LIMIT
+
+
+def test_the_last_mcp_call_is_retained_on_the_turn_that_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Where did it get to" is the first question about an incomplete run."""
+
+    fake_claude = tmp_path / "mcp-then-stall-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    json.loads(line)
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "b1", "name": "mcp__nxd-desktop__build_data_product", "input": {}}
+    ]}}), flush=True)
+    print(json.dumps({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "b1", "is_error": True, "content": "boom"}
+    ]}}), flush=True)
+    time.sleep(600)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.75)
+
+    try:
+        result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    finally:
+        adapter.close()
+
+    assert result.turn_timed_out is True
+    assert result.last_mcp_call == "build_data_product:error"

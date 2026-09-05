@@ -118,6 +118,15 @@ def human_summary(result: TierResult) -> str:
             lines.append(
                 f"  route fidelity: {run.route_fidelity_status} ({run.route_fidelity_reason})"
             )
+            if run.failure_reason is not None:
+                # stdout is where an operator decides whether to rerun the
+                # scenario or wait for the account.  A run that stopped on a
+                # provider ceiling must say so here, not only in report.json.
+                lines.append(f"  interrupted: {run.failure_reason}")
+                if run.last_mcp_call is not None:
+                    lines.append(f"  last MCP call: {run.last_mcp_call}")
+                if run.failure_detail is not None:
+                    lines.append(f"  detail: {run.failure_detail}")
             if run.qualification.operator_mode == "driver":
                 # Without this a driven run whose every authored turn fell back
                 # to the scripted line is indistinguishable from a scripted run

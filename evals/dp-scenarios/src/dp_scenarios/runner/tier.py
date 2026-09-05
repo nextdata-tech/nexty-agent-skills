@@ -153,6 +153,9 @@ class ScenarioRun:
     replay_verification_status: str
     replay_verification_reason: str
     qualification: QualificationRecord
+    failure_reason: str | None = None
+    failure_detail: str | None = None
+    last_mcp_call: str | None = None
 
     @property
     def invalid(self) -> bool:
@@ -220,6 +223,13 @@ class ScenarioRun:
             "reason": self.replay_verification_reason,
         }
         result["qualification"] = self.qualification.to_dict()
+        # Always present, so a consumer reads one shape whether the run was
+        # graded or interrupted.  A clean run leaves every member null.
+        result["interruption"] = {
+            "failure_reason": self.failure_reason,
+            "failure_detail": self.failure_detail,
+            "last_mcp_call": self.last_mcp_call,
+        }
         return result
 
 
@@ -342,13 +352,24 @@ def run_drift_canary(
     claims = load_claims(claims_file)
     extraction = extract_claims(skills_root, existing=claims, fail_on_drift=False)
     temporary_data: tempfile.TemporaryDirectory[str] | None = None
+    temporary_closure: tempfile.TemporaryDirectory[str] | None = None
+    closure = root
     try:
         if probe is None:
             # Supervisor create/build paths may materialize content-addressed
             # state.  Keep that state outside the checked-in canary package.
             temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
             data_dir = Path(temporary_data.name)
-            probed = run_preflight(root, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary")
+            # The supervisor runs with the closure as its working directory
+            # and writes run state beside it.  Two live runs sharing the
+            # checked-in package therefore share one store, which surfaces as
+            # "database is locked" in whichever run loses the race -- a
+            # contention failure wearing the costume of a canary defect.
+            # Each live run gets its own copy instead.
+            temporary_closure = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-closure-")
+            closure = Path(temporary_closure.name) / root.name
+            shutil.copytree(root, closure)
+            probed = run_preflight(closure, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary")
         else:
             probed = probe
         if isinstance(probed, ProbeResult):
@@ -392,7 +413,7 @@ def run_drift_canary(
                 if temporary_data is None:
                     temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
                 built = run_build(
-                    root,
+                    closure,
                     supervisor=probed.supervisor,
                     data_dir=Path(temporary_data.name),
                     workflow="drift-canary",
@@ -424,6 +445,8 @@ def run_drift_canary(
     finally:
         if temporary_data is not None:
             temporary_data.cleanup()
+        if temporary_closure is not None:
+            temporary_closure.cleanup()
 
 
 def _load_json(path: Path) -> object | None:
@@ -1644,6 +1667,9 @@ class TierRunner:
                         replay_verification_status=replay_status,
                         replay_verification_reason=replay_reason,
                         qualification=qualification,
+                        failure_reason=getattr(run_result, "failure_reason", None),
+                        failure_detail=getattr(run_result, "failure_detail", None),
+                        last_mcp_call=getattr(run_result, "last_mcp_call", None),
                     )
                 )
         return tuple(runs)

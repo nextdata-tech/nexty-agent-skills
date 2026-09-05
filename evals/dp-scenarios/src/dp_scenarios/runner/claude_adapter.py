@@ -30,6 +30,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
+from dp_scenarios.runner.failure_reasons import (
+    CHILD_EXITED_EARLY,
+    CHILD_NO_TERMINAL_RESULT,
+    classify_failure_reason,
+    first_reason,
+)
 
 
 DEFAULT_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
@@ -109,6 +115,7 @@ class ClaudeAdapterError(RuntimeError):
         message: str,
         *,
         events: Sequence[Mapping[str, object]] = (),
+        reason: str | None = None,
     ) -> None:
         super().__init__(message)
         # Keep complete stream events available when a turn times out or the
@@ -116,6 +123,9 @@ class ClaudeAdapterError(RuntimeError):
         # observations without treating an infrastructure interruption as an
         # agent-produced build failure.
         self.events = tuple(events)
+        # The closed-vocabulary classification of why this turn ended, so the
+        # report can distinguish a provider ceiling from a stalled child.
+        self.reason = reason
 
 
 class ClaudeTurnTimeout(ClaudeAdapterError):
@@ -358,6 +368,20 @@ def parse_claude_events(
     if unpaired_mcp_tools:
         names = ", ".join(sorted(set(unpaired_mcp_tools)))
         environment_details.append(f"MCP tool use had no matching result: {names}")
+    # The last MCP call is the most useful single line about where an
+    # incomplete turn stopped, so it is retained even when the turn graded
+    # cleanly.  Only the tool name and its error flag cross the boundary; the
+    # arguments may carry fixture content.
+    last_mcp_call: str | None = None
+    if mcp_observations:
+        last = mcp_observations[-1]
+        state = "error" if last.get("is_error") else ("ok" if last.get("result") is not None else "pending")
+        last_mcp_call = f"{last.get('tool')}:{state}"
+    # Only the stream-level error is a transport fact.  A failed MCP tool call
+    # is an agent-visible outcome that ``build_failed`` already grades, and
+    # classifying its payload here would relabel an ordinary build failure
+    # whose message happens to mention a lock as an infrastructure fault.
+    failure_reason = classify_failure_reason(result_error_detail)
     return (
         TurnResult(
             transcript_delta="\n".join(transcript),
@@ -372,6 +396,8 @@ def parse_claude_events(
             reported=False,
             environment_wedged=bool(environment_details),
             environment_detail=redact_text(" | ".join(environment_details)) if environment_details else None,
+            failure_reason=failure_reason,
+            last_mcp_call=last_mcp_call,
             session_id=session_id,
         ),
         mcp_observations,
@@ -523,8 +549,17 @@ class ClaudeCodeAdapter:
         self._stdout_buffer = b""
         self._before: dict[str, bytes] = {}
         self._facts: dict[str, object] = {}
+        # Retained across turns so a turn that stalls before calling any MCP
+        # tool still reports the last place the run actually reached.
+        self._last_mcp_call: str | None = None
         self._build_context: dict[str, object] = {}
         self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
+
+    @property
+    def last_mcp_call(self) -> str | None:
+        """Return the sanitized identity of the last MCP call seen so far."""
+
+        return self._last_mcp_call
 
     def build_claude_command(
         self,
@@ -698,35 +733,39 @@ class ClaudeCodeAdapter:
                 if value.get("type") == "result":
                     return events
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                detail = " | ".join(self._stderr)
-                state = process.poll()
-                suffix = f"; exit_code={state}"
-                if detail:
-                    suffix += f"; stderr={detail[-1000:]}"
-                raise ClaudeTurnTimeout(
-                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
-                    events=events,
-                )
-            ready, _, _ = select.select([process.stdout.fileno()], [], [], remaining)
-            if not ready:
-                detail = " | ".join(self._stderr)
-                state = process.poll()
-                suffix = f"; exit_code={state}"
-                if detail:
-                    suffix += f"; stderr={detail[-1000:]}"
-                raise ClaudeTurnTimeout(
-                    f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
-                    events=events,
-                )
+            timed_out = remaining <= 0
+            if not timed_out:
+                ready, _, _ = select.select([process.stdout.fileno()], [], [], remaining)
+                timed_out = not ready
+            if timed_out:
+                message, reason = self._timeout_diagnostic(process)
+                raise ClaudeTurnTimeout(message, events=events, reason=reason)
             chunk = os.read(process.stdout.fileno(), 65536)
             if not chunk:
                 detail = " | ".join(self._stderr)
                 raise ClaudeAdapterError(
                     f"Claude exited before a result event: {detail[-1000:]}",
                     events=events,
+                    reason=classify_failure_reason(detail) or CHILD_EXITED_EARLY,
                 )
             self._stdout_buffer += chunk
+
+    def _timeout_diagnostic(self, process: subprocess.Popen[bytes]) -> tuple[str, str]:
+        """Return the message for a turn that produced no terminal result.
+
+        A deadline hit and an idle-select hit are the same condition -- the
+        child owed a ``result`` event and did not produce one -- so they must
+        report the same structured reason, not two prose variants of it.
+        """
+
+        detail = " | ".join(self._stderr)
+        suffix = f"; exit_code={process.poll()}"
+        if detail:
+            suffix += f"; stderr={detail[-1000:]}"
+        return (
+            f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
+            classify_failure_reason(detail) or CHILD_NO_TERMINAL_RESULT,
+        )
 
     def _finish_turn(
         self,
@@ -734,6 +773,7 @@ class ClaudeCodeAdapter:
         *,
         environment_detail: str | None = None,
         turn_timed_out: bool = False,
+        failure_reason: str | None = None,
     ) -> TurnResult:
         """Convert complete or partial stream events into one typed result."""
 
@@ -743,6 +783,8 @@ class ClaudeCodeAdapter:
             redact_text=self._redact_text,
             session_id=self._session_id,
         )
+        if result.last_mcp_call is not None:
+            self._last_mcp_call = result.last_mcp_call
         after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
         changed = _changed_files(self._before, after)
         self._before = after
@@ -771,6 +813,11 @@ class ClaudeCodeAdapter:
             environment_wedged=(result.environment_wedged or environment_detail is not None) and not turn_timed_out,
             turn_timed_out=result.turn_timed_out or turn_timed_out,
             environment_detail=safe_detail,
+            # The transport-level classification is the more specific one: it
+            # saw the child's stderr and exit code, which the stream events
+            # cannot carry.  A parsed reason only fills the gap.
+            failure_reason=first_reason((failure_reason, result.failure_reason)),
+            last_mcp_call=result.last_mcp_call or self._last_mcp_call,
             session_id=result.session_id,
         )
 
@@ -819,12 +866,17 @@ class ClaudeCodeAdapter:
         try:
             events = self._read_until_result()
         except ClaudeAdapterError as exc:
-            if not exc.events:
+            if not exc.events and exc.reason is None:
+                # No events and no classification is a defect in this adapter,
+                # not an outcome of the run.  Anything the run *did* produce --
+                # partial events, or a reason read off the child's stderr --
+                # is worth more to the report than a traceback.
                 raise
             result = self._finish_turn(
                 exc.events,
                 environment_detail=str(exc),
                 turn_timed_out=isinstance(exc, ClaudeTurnTimeout),
+                failure_reason=exc.reason,
             )
             # The child cannot satisfy another turn after a timeout or an
             # early exit. Close it here while the adapter remains alive so the
@@ -945,6 +997,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         turn_timed_out=isinstance(exc, ClaudeTurnTimeout),
                         environment_wedged=not isinstance(exc, ClaudeTurnTimeout),
                         environment_detail=str(exc),
+                        failure_reason=first_reason(
+                            (
+                                getattr(exc, "reason", None),
+                                classify_failure_reason(str(exc)),
+                            )
+                        ),
+                        last_mcp_call=getattr(adapter, "last_mcp_call", None),
                         session_id=adapter._session_id,
                     )
                 )
