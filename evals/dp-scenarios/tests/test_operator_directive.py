@@ -776,6 +776,12 @@ def test_the_persona_stance_is_script_identity() -> None:
         "Plan:\n- Choose the closest matching field for each target column.",
         "I will:\n- Confirm the row counts against the source myself.",
         "Remaining work:\n- Decide the tie-break rule; I will default to latest.",
+        # Column 0, unbulleted. Every other fixture opens with a heading, so
+        # without this one an `^\s*confirm\b` alternative could be re-added
+        # inside SOLICITATION_PATTERN's `\b(...)\b` wrapper -- where it matches
+        # at offset 0 and nowhere else -- and the whole list would still pass.
+        "Decide the tie-break rule; I will default to latest.",
+        "Confirm the metric definition.",
     ],
 )
 def test_a_bulleted_imperative_is_not_read_as_an_ask(message: str) -> None:
@@ -798,13 +804,22 @@ def test_a_bulleted_imperative_is_not_read_as_an_ask(message: str) -> None:
     "message",
     [
         "Please confirm the metric definition before I build.",
-        "Can you confirm the grain?",
-        "Blueprint is ready.\nCould you confirm the metric definition?",
+        "Can you confirm the grain before I build.",
+        # Not on the first line, and no question mark: this is the fixture that
+        # carries the claim the deleted line-head test used to make.
+        "Blueprint is ready.\nPlease confirm the metric definition before I build.",
     ],
 )
 def test_an_addressed_confirm_is_still_an_ask(message: str) -> None:
-    """What replaces the shape heuristic: the message says who is being asked."""
+    """What replaces the shape heuristic: the message says who is being asked.
 
+    Every fixture is deliberately free of a question mark. ``solicits_operator``
+    short-circuits on ``"?"`` before it consults ``SOLICITATION_PATTERN``, so a
+    fixture carrying one would pass with the addressed-confirm alternative
+    deleted outright and assert nothing about it.
+    """
+
+    assert "?" not in message, "a question mark would short-circuit the pattern under test"
     assert solicits_operator(message) is True
 
 
