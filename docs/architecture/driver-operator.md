@@ -119,18 +119,36 @@ driver repeats itself.
 ## Served-fact memory
 
 `served_reply_keys` records a ground-truth fact once it has actually been
-transmitted, so the operator does not restate it. A fact counts as served only
-when the scripted reply went out, which on a driven run means only on a
-fallback.
+transmitted, so the operator does not restate it. Selection is not
+transmission: a reply picked on the turn before a `substitute_reply: false`
+ask, or before an approval turn, never goes out, and marking it would suppress
+an answer the agent has still never been given.
 
-Consuming the key on driver success alone would be wrong: a driver may deflect
-("I am not sure about the grain, ask me later") while succeeding, and since only
-a `fresh_session` card clears the set, that would stonewall the agent on the
-question for the rest of the run. The cost is that the memory stays empty under
-a driver, so the driver may restate a fact the agent already has. Closing that
-needs a deterministic test for whether authored text carried the selection's
-substance; the answer sheet cannot support one, because a fact's `terms` trigger
-the *question*, not the answer.
+Under a driver the scripted sentence never goes out, so transmission is decided
+by whether the authored turn carried the reply's substance. That is measured
+deterministically from the reply's distinctive words — its own content, minus
+everything already in the agent's message. At least three of them must appear,
+and at least a third. Fewer than three
+distinctive words is never counted as conveyed: the reply adds too little
+beyond the question to judge either way.
+
+The three-word floor is what does the work almost everywhere. A ratio alone
+admitted a two-word deflection at four and five distinctive words (0.50 and
+0.40, both above a third), and the ratio only becomes the stricter of the two
+at nine, where a third first exceeds three.
+
+The subtraction is what makes it safe. A fact's trigger terms come from the
+question, so a driver that merely echoes the agent shares nothing with what
+remains and scores zero, which is the deflection case that must not consume the
+fact. Consuming on driver success alone would be wrong for exactly that reason:
+a driver may deflect while succeeding, and since only a `fresh_session` card
+clears the set, that would stonewall the agent for the rest of the run.
+
+Calibrated against real driven turns: genuine restatements scored 0.45–0.89,
+deflections and bare echoes scored 0.00. Leaving this unmeasured kept the memory
+empty for a whole driven run — a live 15-turn run re-selected one fact ten times
+and another six, with zero suppressions, while the agent answered "already done"
+four turns running.
 
 ## Test strategy
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -554,7 +555,6 @@ def _snapshot(reader: object) -> Mapping[str, object]:
     return dict(value)
 
 
-
 def _artifact_text(artifact: str | bytes | None) -> str:
     """Return an approval artifact as text, empty when the agent supplied none."""
 
@@ -584,6 +584,67 @@ def _qualification_for(
     if claim:
         return "strong-for-this-attempt"
     return None
+
+
+#: Words too common to be evidence that a fact was conveyed.
+_CONVEYANCE_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "in", "on", "of", "to", "that", "this",
+    "it", "its", "and", "or", "not", "for", "you", "your", "i", "my", "me", "do",
+    "have", "any", "there", "those", "their", "them", "they", "as", "at", "by",
+    "with", "from", "be", "has", "had", "one", "no", "if", "so", "but", "we",
+    "us", "our", "can", "will", "would", "should", "must", "may", "when",
+    "where", "what", "which", "who", "how",
+})
+
+#: A fact counts as conveyed when the authored turn carries at least three of
+#: the reply's distinctive words *and* at least this fraction of them.
+#: Calibrated against real driven turns: genuine restatements scored 0.45-0.89
+#: while deflections and bare echoes scored 0.00.
+#:
+#: The three-word floor is what does the work almost everywhere -- the ratio
+#: only becomes the stricter of the two at nine distinctive words, where a
+#: third first exceeds three. Below that, three words is the whole rule.
+_CONVEYANCE_RATIO = 0.34
+
+#: Three, not two. A deflection tends to pick up a couple of the reply's words
+#: incidentally, and with a two-word floor the ratio did not bind until six --
+#: so at four and five distinctive words a two-word deflection cleared both and
+#: consumed the fact. Three is above what an incidental mention produces and
+#: below what a genuine restatement carries: the real driven turns this was
+#: calibrated on carried five, eight and nine. It also subsumes the special
+#: case short replies used to need -- with a three-word floor, three
+#: distinctive words already require all three.
+_CONVEYANCE_MINIMUM = 3
+
+
+def _content_words(text: str) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", (text or "").casefold())
+        if len(word) > 2 and word not in _CONVEYANCE_STOPWORDS
+    }
+
+
+def _authored_text_conveys(reply: str, agent_message: str, authored: str) -> bool:
+    """Whether an authored turn actually carried the selected reply's substance.
+
+    The distinctive words are the reply's own, *minus* everything already in
+    the agent's message. That subtraction is what makes this safe: a fact's
+    trigger terms come from the question, so a driver that merely echoes the
+    agent -- "the owner field? you tell me" -- shares nothing with what is left
+    and scores zero, which is exactly the deflection case that must not consume
+    the fact.
+    """
+
+    # A short reply needs no guard of its own: ``carried`` is a subset of
+    # ``distinctive``, so the minimum below already refuses anything smaller
+    # than it. That includes the empty set, where the ``and`` short-circuits
+    # before the ratio would divide by zero -- keep the minimum as the first
+    # operand.
+    distinctive = _content_words(reply) - _content_words(agent_message)
+    carried = distinctive & _content_words(authored)
+    return len(carried) >= _CONVEYANCE_MINIMUM and len(carried) / len(distinctive) >= _CONVEYANCE_RATIO
+
 
 class OperatorEngine:
     """Run one resolved script against an injected offline transport."""
@@ -1171,7 +1232,9 @@ class OperatorEngine:
                 undelivered_ids = tuple(
                     injection.card_id for injection in injections if injection.card_id not in delivered_ids
                 )
-            # Driver-authored words add nothing to the served-fact memory. A
+            # Driver-authored words are never scanned for a fact's ``terms``.
+            # ``_authored_text_conveys`` reads the reply's own content instead,
+            # for the reason set out here: a
             # ground-truth fact's ``terms`` are the *question*'s trigger terms
             # (``AnswerSheet.answer_for_ground_truth`` matches them against the
             # agent's message), not the fact's content, so scanning authored
@@ -1187,29 +1250,37 @@ class OperatorEngine:
             # test for that on every path: a reply selected on the turn before
             # a ``substitute_reply: false`` ask, or before an approval turn,
             # is never sent, and marking it here would suppress an answer the
-            # agent has still never been given. On the driver path the reply
-            # only goes out as the fallback composition.
+            # agent has still never been given.
             #
-            # KNOWN LIMITATION (driver path): a driver that authors the turn
-            # successfully is handed ``selected_reply`` and told to convey it,
-            # but nothing here verifies that it did.  Consuming the key on
-            # driver success alone is wrong -- a driver is free to deflect
-            # ("I am not sure about the grain, ask me later"), and since only a
-            # ``fresh_session`` card clears ``served_reply_keys``, marking the
-            # fact there would stonewall the agent on that question for the
-            # rest of the run.  The cost of the safe choice is that the memory
-            # stays empty under a driver: ``facts_already_stated`` is always
-            # ``()`` and the suppression below never fires on the driver path,
-            # so the driver may restate a fact the agent already has.  Closing
-            # that needs a deterministic test for whether the authored text
-            # actually carried the selection's substance, which the answer
-            # sheet does not currently support -- a fact's ``terms`` trigger
-            # the *question*, not the answer.  Recorded in the design doc's
-            # named follow-ups; do not "fix" this by dropping the guard.
+            # On the driver path the scripted sentence never goes out, so
+            # transmission is decided by whether the authored turn carried the
+            # reply's substance. Leaving that unmeasured -- the previous
+            # behaviour -- kept the memory empty for a whole driven run: a live
+            # 15-turn run re-selected one fact ten times and another six, with
+            # zero suppressions, while the agent answered "already done" four
+            # turns running. That is the operator-repeats-itself failure the
+            # driver exists to remove, reproduced by the driver.
+            #
+            # A driver that authors the turn is handed ``selected_reply`` and
+            # told to convey it, and ``_authored_text_conveys`` is what checks
+            # that it did.  Consuming the key on driver success *alone* would
+            # be wrong -- a driver is free to deflect ("I am not sure about the
+            # grain, ask me later"), and since only a ``fresh_session`` card
+            # clears ``served_reply_keys``, marking the fact there would
+            # stonewall the agent on that question for the rest of the run.
+            # That is why the check subtracts the agent's own message: a fact's
+            # terms trigger the *question*, so an echo carries none of what is
+            # left.  Do not replace it with a bare ``not used_fallback``.
+            driver_conveyed = (
+                authorable
+                and driver_render is not None
+                and not driver_render.used_fallback
+                and _authored_text_conveys(next_reply or "", previous_agent_message or "", base)
+            )
             if (
                 pending_sheet_key is not None
                 and selected_base is next_reply
-                and (not authorable or driver_fallback_transmitted)
+                and (not authorable or driver_fallback_transmitted or driver_conveyed)
             ):
                 served_reply_keys.add(pending_sheet_key)
             for injection in delivered:

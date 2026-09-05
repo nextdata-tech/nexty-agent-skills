@@ -668,3 +668,193 @@ def test_a_driver_that_echoes_a_planted_marker_is_rejected_and_never_transmits_i
     # not quote the marker it is rejecting.
     assert views[1].rejection_notice is not None
     assert marker not in json.dumps(views[1].to_mapping())
+
+
+def test_a_driver_that_conveys_a_fact_stops_being_handed_it_again() -> None:
+    """The live failure: the operator restating what it already said.
+
+    A 15-turn driven run re-selected one ground-truth fact ten times and
+    another six, with zero suppressions, while the agent replied "already
+    done" four turns running -- the operator-repeats-itself failure the driver
+    exists to remove, reproduced by the driver. The cause was that
+    ``served_reply_keys`` only filled when the *scripted* sentence went out,
+    which under a driver means only on a fallback, so the memory stayed empty
+    for the whole run.
+
+    A driver that restates the fact in its own words has transmitted it, so it
+    must be recorded as served and not offered again.
+    """
+
+    fact = "The grain is one row per account; FACT-ONLY-MARKER."
+    script = make_script(
+        turns=("Improve weekly visibility.", "Please continue.", "Please continue again."),
+    )
+    views: list[DriverView] = []
+
+    def provider(view: DriverView) -> str:
+        views.append(view)
+        # Carries the substance in the driver's own words, not the scripted line.
+        return "Each row stands for a single account, so the grain is one account per row."
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the grain?"),
+            TurnResult(agent_message="I still need the grain, what is it?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport, driver=driver(provider)).run()
+
+    assert views[0].selected_reply == fact
+    assert views[0].facts_already_stated == ()
+    # Turn 2 conveyed it, so the re-ask on turn 2 is suppressed rather than
+    # answered again, and the next authored turn is handed no fact at all.
+    assert result.turns[1].operator_repeat_suppressed is True, (
+        "the driver restated the fact and the memory still did not record it"
+    )
+    assert "ground_truth.grain_fact" in views[1].facts_already_stated
+    assert views[1].selected_reply == "", "the same fact was offered to the driver again"
+
+
+def test_conveyance_ignores_words_the_agent_supplied_itself() -> None:
+    """Echoing the question back is not conveying the answer.
+
+    The distinctive words are the reply's own *minus* the agent's message, and
+    this is the case where that subtraction is the only thing standing between
+    a pure echo and a consumed fact: every content word of the reply also
+    appears in the question, so without the subtraction the echo scores a
+    perfect 1.0 and the agent is stonewalled on a question it never got an
+    answer to.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    reply = "The owner object belongs to sales."
+    question = "Does the owner object belong to sales?"
+
+    assert _authored_text_conveys(reply, question, "The owner object belongs to sales?") is False
+
+    # The same reply *does* count when the driver adds the substance the
+    # question did not contain.
+    informative = "Yes -- each owner object is the individual sales rep who holds that deal."
+    assert _authored_text_conveys(
+        "The owner object is the individual sales rep who holds that deal.",
+        "Who does the owner object belong to?",
+        informative,
+    ) is True
+
+
+def test_a_short_fact_needs_every_distinctive_word_not_just_two() -> None:
+    """On a short reply the two-word floor stops discriminating.
+
+    With three distinctive words any two clear both floors (2/3 = 0.67), so a
+    deflection that merely names them would consume the fact permanently --
+    only a ``fresh_session`` card clears the set, so the agent would be
+    stonewalled on that question for the rest of the run. Short replies
+    therefore require every distinctive word.
+
+    The cost is deliberate and asymmetric: a genuine short restatement that
+    drops a word is re-offered, which repeats a sentence, while the failure it
+    prevents silently withholds an answer.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    fact = "The grain is one row per account."
+    question = "What grain should I use?"
+
+    # Names two of the three distinctive words while stating nothing.
+    assert _authored_text_conveys(fact, question, "Not sure about row or account, honestly.") is False
+    # The repo's own short fixture fact, deflected. Note this one carries a
+    # single distinctive word, so it is rejected by the two-word floor and
+    # would pass against the previous implementation too -- kept as a
+    # regression pin on a real fixture, not as evidence for this rule.
+    assert _authored_text_conveys(
+        "The join uses account_id.",
+        "What is the join key?",
+        "I am not sure - something about account_id, you tell me.",
+    ) is False
+    # Full coverage still counts.
+    assert _authored_text_conveys(fact, question, "One row per account is the level.") is True
+
+
+@pytest.mark.parametrize("distinctive_words", [3, 4, 5, 6, 7, 9])
+def test_a_two_word_deflection_never_consumes_a_fact_at_any_length(distinctive_words: int) -> None:
+    """The floors have to hold across set sizes, not at one of them.
+
+    The first version of this check fixed only three distinctive words: at four
+    and five a two-word deflection still cleared both floors (0.50 and 0.40,
+    both above the 0.34 ratio), because the ratio does not bind until six while
+    the minimum was two. Testing a single size is what let that through, so this
+    sweeps the range.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys, _content_words
+
+    words = [f"zeta{index}" for index in range(distinctive_words)]
+    reply = " ".join(words) + "."
+    question = "What is it?"
+    assert len(_content_words(reply) - _content_words(question)) == distinctive_words
+
+    # A deflection that incidentally names two of them. Starts at three
+    # distinctive words on purpose: at two, naming two is *full* coverage, so
+    # that case pins the refuses-to-judge rule rather than this one -- it is
+    # asserted separately below.
+    assert _authored_text_conveys(reply, question, " ".join(words[:2]) + "?") is False
+
+
+def test_a_reply_that_barely_differs_from_the_question_is_never_judged() -> None:
+    """Two distinctive words is too little evidence either way.
+
+    Naming both of them is full coverage, not a deflection, so this pins the
+    refuses-to-judge rule rather than the incidental-mention floor.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    assert _authored_text_conveys("Alpha beta.", "Question?", "Alpha beta?") is False
+
+
+def test_a_genuine_restatement_still_counts_at_the_lengths_that_matter() -> None:
+    """The floors must not be so strict that real conveyance stops registering.
+
+    Guards the other direction of the same change: raising the minimum to three
+    is only safe if the driven turns it was calibrated on still pass.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    assert _authored_text_conveys(
+        "The deals endpoint is an HTTP API. Its address is in the infra-profile.yaml"
+        " sitting in your working directory.",
+        "Where is the deals endpoint?",
+        "The deals endpoint is an HTTP API, and its address is in infra-profile.yaml"
+        " in the working directory.",
+    ) is True
+    assert _authored_text_conveys(
+        "updatedAt is the last time any field on that deal record changed, not the"
+        " time it entered its current stage.",
+        "What does updatedAt mean?",
+        "Understood: updatedAt shows the latest change to any field on the deal"
+        " record, not when it entered its current stage.",
+    ) is True
+
+
+def test_a_reply_that_adds_nothing_to_the_question_does_not_divide_by_zero() -> None:
+    """The empty distinctive set is guarded by evaluation order alone.
+
+    Every content word of the reply also appears in the question, so
+    ``distinctive`` is empty and the ratio would divide by zero. Nothing but
+    the ``and`` short-circuiting on the minimum prevents it, and no other test
+    reaches a set smaller than two -- so this pins the ordering rather than
+    trusting it.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys, _content_words
+
+    reply = "The owner belongs to sales."
+    question = "Is it true that the owner belongs to sales?"
+    assert _content_words(reply) - _content_words(question) == set(), "fixture no longer empties the set"
+
+    assert _authored_text_conveys(reply, question, "The owner belongs to sales.") is False
