@@ -175,21 +175,18 @@ SOLICITATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# A bare imperative heading a line. Deliberately *not* an alternative inside
-# SOLICITATION_PATTERN: that pattern wraps its alternation in ``\b(...)\b``,
-# which pins the whole match to a word boundary, so an anchored alternative
-# there can only ever fire at column 0 -- its own ``\s*`` is unreachable. A
-# markdown bullet is the most common shape an agent's next-steps block takes,
-# and "Next steps:\n- Confirm the grain" matched nothing at all.
+# There is deliberately no bare line-head imperative here. "Next steps:\n-
+# Confirm the metric definition" and "I will:\n- Confirm the row counts
+# myself" are the same shape, and `choose`, `pick` and `decide` heading a
+# bulleted line are how a build agent narrates its *own* plan -- "choose the
+# closest matching field" is field-mapper vocabulary. Matching them made the
+# operator hand back a decision on a turn that requested none, which is the
+# regression this whole module is being changed to remove.
 #
-# The trailing ``\b`` is what keeps this off the agent's own reports:
-# "Confirmed the row counts" and "Approved the blueprint" are past tense, so
-# no boundary follows the verb and neither matches.
-_LINE_IMPERATIVE_PATTERN = re.compile(
-    r"^[^\w\n]*(?:\d+[.)][^\w\n]*)?"
-    r"(?:confirm|approve|decide|choose|pick|tell\s+me|let\s+me\s+know)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
+# The signal is not in the text, so it is not inferred: an ask has to name its
+# addressee ("please confirm", "can you confirm"). A bulleted imperative is
+# therefore read as the agent's plan and yielded on, which is the safe error
+# of the two -- the operator says "keep going" instead of inventing a request.
 
 # A URL query string or a code span carries a "?" that is not a question. The
 # live agent pastes request paths ("/deals?limit=5") routinely.
@@ -240,7 +237,6 @@ def solicits_operator(message: str) -> bool:
         or INTERROGATIVE_OPENER_PATTERN.match(prose)
         or SOLICITING_OPENER_PATTERN.match(prose)
         or SOLICITATION_PATTERN.search(prose)
-        or _LINE_IMPERATIVE_PATTERN.search(prose)
     )
 
 _RULES = (

@@ -67,6 +67,9 @@ from test_operator_engine_driver import (  # type: ignore[import-not-found]
         "I can confirm that the build finished cleanly. Serving it now.",
         "Self-check passed; I confirm the row counts match. Moving on.",
         "I'd like your patience here -- the transform is slow.",
+        "Confirmed the row counts; moving on.",
+        "Approved the blueprint. Building now.",
+        "Next steps:\n- Confirmed the grain with the source.",
         "Blueprint: approved. Building it now.",
         "Done. I'll keep going.",
         "I've recorded the decision and will proceed.",
@@ -757,60 +760,52 @@ def test_the_persona_stance_is_script_identity() -> None:
     ) == operator_script_hash(script)
 
 
-def test_a_bare_confirm_is_an_ask_on_any_line() -> None:
-    """The one anchored alternative needs MULTILINE; agent messages wrap.
-
-    Without it "Blueprint is ready.\\nConfirm the metric definition" matched
-    nothing at all -- the anchor only reaches offset 0 of the whole message --
-    so a direct instruction on the second line was dropped as a yield.
-    """
-
-    message = "Blueprint is ready.\nConfirm the metric definition and I will build."
-    assert "\n" in message, "the fixture must span lines or it tests nothing"
-    assert solicits_operator(message) is True
-    # The single-line form must keep working, so this is a widening only.
-    assert solicits_operator("Confirm the metric definition and I will build.") is True
-    # Still not the agent's own report.
-    assert solicits_operator("I can confirm that the build finished cleanly.") is False
-
-
 @pytest.mark.parametrize(
     "message",
     [
+        # Indistinguishable from an ask by shape alone, and the same shape the
+        # agent uses to narrate its own plan.
         "Next steps:\n- Confirm the metric definition before I build.",
-        "Next steps:\n  Confirm the metric definition before I build.",
-        "Next steps:\n1. Confirm the metric definition before I build.",
         "Next steps:\n  1. Confirm the metric definition.",
-        "Blueprint is ready.\n  Confirm the metric definition now.",
         "Blueprint is ready.\n- Confirm the metric definition now.",
-        "Next steps:\n* Choose the grain and I will proceed.",
+        # These are unambiguously the agent's own work, and matching a line-head
+        # imperative made all four solicit. Two then carried choice vocabulary
+        # (`pick`, `decide`) into `decision:<stance>`, so the operator handed
+        # back a decision on a turn that requested none.
+        "Here is my plan:\n1. Pick the top 10 accounts by revenue.\n2. Aggregate to month.",
+        "Plan:\n- Choose the closest matching field for each target column.",
+        "I will:\n- Confirm the row counts against the source myself.",
+        "Remaining work:\n- Decide the tie-break rule; I will default to latest.",
     ],
 )
-def test_a_bulleted_imperative_is_an_ask(message: str) -> None:
-    """A markdown bullet is the usual shape of an agent's next-steps block.
+def test_a_bulleted_imperative_is_not_read_as_an_ask(message: str) -> None:
+    """A line-head imperative carries no reliable addressee.
 
-    Anchoring inside ``SOLICITATION_PATTERN`` could not reach these: that
-    pattern wraps its alternation in ``\b(...)\b``, which pins the match to a
-    word boundary, so an anchored alternative there fires only at column 0 and
-    its own ``\s*`` is dead. Every line above then read as "asked nothing",
-    and a direct instruction was answered with room-to-work filler.
+    "Next steps:" heads both a request to the operator and the agent's own
+    plan, and `choose`, `pick` and `decide` are ordinary build-agent planning
+    vocabulary. Inferring an ask from the shape made the operator invent a
+    decision request, which is the failure this module is being changed to
+    remove; yielding on a real ask is the milder error, and the one taken here.
+
+    An ask has to name its addressee -- see
+    :func:`test_an_addressed_confirm_is_still_an_ask`.
     """
-
-    assert solicits_operator(message) is True
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "Confirmed the row counts; moving on.",
-        "Approved the blueprint. Building now.",
-        "Next steps:\n- Confirmed the grain with the source.",
-    ],
-)
-def test_a_past_tense_report_at_the_head_of_a_line_is_not_an_ask(message: str) -> None:
-    """The trailing word boundary is what separates the ask from the report."""
 
     assert solicits_operator(message) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Please confirm the metric definition before I build.",
+        "Can you confirm the grain?",
+        "Blueprint is ready.\nCould you confirm the metric definition?",
+    ],
+)
+def test_an_addressed_confirm_is_still_an_ask(message: str) -> None:
+    """What replaces the shape heuristic: the message says who is being asked."""
+
+    assert solicits_operator(message) is True
 
 
 def test_which_opens_an_ask_without_opening_a_question() -> None:

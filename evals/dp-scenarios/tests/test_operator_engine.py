@@ -1000,13 +1000,15 @@ def test_operator_script_hash_changes_for_each_script_material() -> None:
 def test_editing_a_non_substitutable_turn_changes_the_script_hash() -> None:
     """A turn that is always transmitted verbatim is part of run identity.
 
-    ``to_mapping`` deliberately nulls a *substitutable* turn's authored text,
-    because that text never goes out. A ``substitute_reply: false`` turn does
-    go out, word for word, so editing it changes what the agent was asked --
-    and the paired-comparison protection in ``grading.statistics`` refuses to
-    compare runs only when the hash says the script differs. This branch went
-    live from scenario data with the two graded asks and the operator's spec
-    approval, so nulling it too would let those be rewritten invisibly.
+    ``to_mapping`` now hashes *every* turn's text, substitutable or not, since
+    the yield rule transmits a substitutable turn whenever the agent asked for
+    nothing. This test predates that and covered the half that was always
+    transmitted verbatim; it stays because a ``substitute_reply: false`` turn
+    is where the two graded asks and the operator's spec approval live, and the
+    paired-comparison protection in ``grading.statistics`` refuses to compare
+    runs only when the hash says the script differs. See
+    ``test_editing_a_substitutable_turn_changes_the_script_hash`` for the other
+    half, which this docstring used to claim was deliberately excluded.
     """
 
     fixed = {"text": "Please continue.", "substitute_reply": False}
