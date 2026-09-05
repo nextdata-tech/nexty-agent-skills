@@ -185,6 +185,27 @@ def parse_results(text: str, filters: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
+def evaluated_count(text: str, filters: list[str]) -> int:
+    """How many mutants this run reached a verdict on, in scope, at any status.
+
+    Deliberately not derived from :func:`parse_results`: that keeps only
+    :data:`REPORTED_STATUSES`, and ``killed`` is not among them, so a run that
+    killed every mutant -- the best possible outcome -- would count as zero and
+    be failed as an aborted run.
+    """
+
+    total = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if ": " not in stripped:
+            continue
+        name, _, status = stripped.rpartition(": ")
+        if not status or not in_scope(name, filters):
+            continue
+        total += 1
+    return total
+
+
 def function_key(mutant_name: str) -> str:
     match = _MUTANT_NAME.match(mutant_name)
     if not match:
@@ -346,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     # The scope having no mutants at all is a different thing and is legitimate:
     # `scoped` mode with a diff that touches no guarded file exits before this
     # point.
-    evaluated = sum(len(names) for names in grouped.values())
+    evaluated = evaluated_count(results.stdout, filters)
     if not evaluated:
         print(
             f"\nmutmut reported no mutants for this scope (exit {completed.returncode}). "
