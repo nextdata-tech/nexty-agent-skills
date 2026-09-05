@@ -13,6 +13,8 @@ import uuid
 
 import pytest
 
+from _repo_paths import REPO_ROOT
+
 import dp_scenarios.runner.claude_adapter as adapter_module
 from dp_scenarios.runner.claude_adapter import ClaudeCodeAdapter, _update_machine_artifacts, parse_claude_events
 from dp_scenarios.operator.transport import TouchedFile, ToolCall, TurnResult
@@ -266,7 +268,7 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = REPO_ROOT
     adapter = ClaudeCodeAdapter(
         claude=fake_claude,
         model="test",
@@ -323,7 +325,7 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = REPO_ROOT
     adapter = ClaudeCodeAdapter(
         claude=fake_claude,
         model="test",
@@ -400,7 +402,7 @@ for line in sys.stdin:
         model="test",
         effort="low",
         plugin_dir=plugin_dir,
-        repo_root=Path(__file__).resolve().parents[3],
+        repo_root=REPO_ROOT,
         fixture_dir=fixture_dir,
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/usr/bin/true"),
@@ -539,7 +541,7 @@ for line in sys.stdin:
     artifact_dir = tmp_path / "artifacts"
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = REPO_ROOT
     adapter_command = [
         sys.executable,
         "-m",
@@ -638,7 +640,7 @@ def _spawned_claude_argv(
         model="test",
         effort="low",
         plugin_dir=plugin_dir,
-        repo_root=Path(__file__).resolve().parents[3],
+        repo_root=REPO_ROOT,
         fixture_dir=fixture_dir,
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/usr/bin/true"),
@@ -738,7 +740,7 @@ def _spawned_claude_environment(
         model="test",
         effort="low",
         plugin_dir=plugin_dir,
-        repo_root=Path(__file__).resolve().parents[3],
+        repo_root=REPO_ROOT,
         fixture_dir=fixture_dir,
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/usr/bin/true"),

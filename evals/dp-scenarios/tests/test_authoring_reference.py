@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from _repo_paths import REPO_ROOT
+
 from dp_scenarios.grading.gates import GATE_PHASES
 from dp_scenarios.operator.answer_sheet import ANSWER_SHEET_KEYS, OPTIONAL_ANSWER_SHEET_KEYS
 from dp_scenarios.scenario import _SCENARIO_KEYS, _SCENARIO_TIERS, load_scenarios
@@ -26,7 +28,7 @@ from dp_scenarios.scenario import _SCENARIO_KEYS, _SCENARIO_TIERS, load_scenario
 # than the working directory: CI runs pytest from evals/dp-scenarios and a
 # developer runs it from the worktree root, and a CWD-relative path has broken
 # this suite before.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = REPO_ROOT  # see _repo_paths: a fixed parent-hop breaks relocated copies
 _REFERENCE = _REPO_ROOT / ".claude/skills/dp-scenario-from-scratch/reference/scenario-anatomy.md"
 
 

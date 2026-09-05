@@ -331,10 +331,212 @@ scenarios can be authored in parallel without conflicting.
    list the new kind.
 3. `tests/test_scenario_<name>.py` — property tests. **Mutation-test them:** break
    each check and confirm a test fails. Reading a diff has never caught a real
-   defect in this suite; mutation has.
+   defect in this suite; mutation has. For the operator and grading directories
+   this is automated — see [Mutation testing](#mutation-testing) below. A
+   follow-up check lives outside those directories, so mutating it is still a
+   hand job; the section below says how to do one that cannot lie to you.
 
 The loader tests derive the expected package set from disk, so a new package
 needs no test edit either.
+
+## Mutation testing
+
+The acceptance bar for a check in this suite is not "the tests pass", it is
+"break the check and a test fails". Two failure modes make that bar hard to hold
+by hand.
+
+A hand-rolled mutation can **silently fail to apply** — a regex that misses its
+target line, a `str.replace` that no-ops — and the run that follows is green for
+the boring reason, not the interesting one. That has twice produced a confident
+wrong conclusion here, once reporting a guard as unenforced when the guard was
+fine. And nobody hand-mutates code they did not just write, so the failure this
+harness actually keeps producing goes unlooked-for: **a gate that exists but
+never fires**, and **a test that asserts the code's self-report rather than the
+property**.
+
+`scripts/mutation_test.py` drives [mutmut](https://github.com/boxed/mutmut) over
+`src/dp_scenarios/operator/` and `src/dp_scenarios/grading/`. mutmut rewrites
+each function into a numbered set of variants behind a generated trampoline and
+selects the variant by environment variable, so a mutant that did not apply
+cannot be reported as a result at all — the first failure mode is structurally
+impossible. Scope, copy rules and pytest arguments live in `[tool.mutmut]` in
+`pyproject.toml`.
+
+```bash
+cd evals/dp-scenarios
+
+# Everything in the two guarded directories. Hours -- see Runtime.
+scripts/mutation_test.py full
+
+# Only the guarded files this branch changes. Run this before merging a change
+# under the guarded directories -- CI will not do it for you until nightly.
+scripts/mutation_test.py changed --base origin/main
+
+# One mutant, or one function, reproducing a CI failure verbatim.
+scripts/mutation_test.py filter 'dp_scenarios.grading.scans.x_supported_path_scan__mutmut_31'
+```
+
+**Run it from `evals/dp-scenarios/`.** mutmut reads its config from the
+`pyproject.toml` in the working directory, copies the tree into `./mutants/` and
+runs the suite from there. The wrapper `cd`s for you, so it can be invoked from
+anywhere; bare `uv run mutmut` cannot.
+
+### Reading the result
+
+A **surviving** mutant is a change to the guarded code that the whole suite still
+passes with. That is the finding. Each one is a genuinely equivalent mutant, a
+missing test, or a bug — and calling one equivalent is a claim that needs an
+argument, not a shrug.
+
+A **no tests** mutant counts the same. It means the covering-test analysis found
+nothing that executes that function, which is what a newly added function with
+no test at all reports. Treating it as merely informational would let a change
+add a completely unexercised gate and still go green — the exact defect this
+tooling exists to catch.
+
+Runs are compared against `mutation-baseline.json`, a per-function count of
+mutants the suite does not notice, and the nightly run fails only on counts
+that go **up**. The baseline is keyed by function rather than by mutant name because
+mutmut numbers mutants positionally: editing a function renumbers all of its
+mutants, so a name-keyed baseline would go red on every edit for reasons that
+have nothing to do with test quality. Regenerate it with
+`scripts/mutation_test.py full --update-baseline`, and say in the PR why each
+added entry is acceptable.
+
+**Regenerate it on Linux, never on macOS.** A macOS run leaves a third of its
+mutants unverdicted (below), so a baseline recorded there understates the count
+for every function whose covering tests reach fixture generation — and an
+understated baseline makes the next Linux run red for work nobody did.
+
+**There is no baseline file yet**, so the nightly run reports and fails on
+nothing. Record one on `main`, not on a branch: a baseline describes the exact
+tree it was measured against, and this PR is why that matters. One was recorded
+here from a whole-scope Linux run (153 functions, 2741 unnoticed mutants), then
+invalidated when the branch was rebased onto a change that added five functions
+inside the guarded directories. A stale baseline is worse than none — it has no
+entry for new code, so every unnoticed mutant there reads as a regression
+introduced by whoever merges next.
+
+So: merge this, then run the nightly workflow on `main` by hand with its
+`update_baseline` input set. It records the file from that run and uploads it as
+the `mutation-baseline` artifact; download it, commit it, and from that commit
+the nightly is a gate rather than a report. No local three-hour run is needed,
+and the baseline describes the tree it will be compared against.
+
+With **no** baseline file at all, a run fails on nothing and says so. The first
+run on a fresh scope must not report every long-standing gap as something the
+change in front of it introduced.
+
+### Runtime, and what actually costs the time
+
+A **killed** mutant is cheap and a **surviving** one is expensive. mutmut runs a
+mutant's covering tests fastest-first and stops at the first failure, so a
+killed mutant usually costs one fast unit test; a survivor pays for every test
+that touches the function, and in this suite that includes the tier tests, which
+generate a fixture from the seeded generator on each call. The whole-scope
+runtime therefore tracks the *survivor* count, not the mutant count, and it
+falls as tests are added.
+
+| Run | Machine | Wall |
+|---|---|---|
+| suite baseline | macOS, 14 cores | 47s |
+| whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
+| suite baseline | Linux container, 14 vCPU | 77s |
+| whole scope, 7930 mutants | Linux container, 14 vCPU | **2h39m** (5189 killed, 2633 survived, 108 untested, 0 unverdicted) |
+| one module (`grading/scans.py`) | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
+
+Both whole-scope figures are from the pre-rebase tree; the current one
+generates 8077 mutants, so expect somewhat longer.
+
+That last row is why this does not run on pull requests. `grading/scans.py` is
+close to the worst case for a single-module run — a large module with a lot of
+survivors — and `grading/gates.py` is the other; a module with fewer survivors
+is minutes. Fifteen minutes on the PRs that touch the guarded code was judged
+too much to add to the critical path, so `changed` mode stays as a local and
+manual tool and the gate is nightly only.
+
+Two levers were tried and rejected:
+
+- **`max_stack_depth`**, which would associate each function only with tests
+  that call it near-directly, is broken in mutmut 3.7.0: it calls
+  `Path(filename).resolve(strict=True)` on every stack frame and raises
+  `FileNotFoundError` on the synthetic `<string>` frames that generated code
+  produces. Setting it aborts the run during stats collection.
+- **Deselecting the fixture-generating tests.** `tests/test_grading_gates.py` is
+  one of them, and it is the primary test file for the largest guarded module.
+  Dropping it would buy speed by removing exactly the coverage the tier exists
+  to measure.
+
+The lever that would actually work is in the suite rather than in mutmut:
+`populated_parent_child_recordings` and its neighbours in
+`tests/test_runner_tier.py` regenerate a fixture on every call. Caching them
+would speed up the ordinary suite as well, and — because mutmut forks each
+mutant from a warm parent — a cache populated during stats collection would be
+inherited by every mutant for free.
+
+### Where it runs
+
+| Tier | Trigger | Scope |
+|---|---|---|
+| `.github/workflows/nightly-mutation.yml` | 04:10 UTC + manual dispatch | every mutant in both guarded directories |
+
+**Nothing runs on a pull request.** A single-module run costs 15m24s on the worst of
+the guarded modules (measured, hosted runner), which is too much to add to the
+critical path of every PR that touches them. The gate is nightly instead.
+
+The cost is what it is because every run pays a fixed price first: mutmut copies
+the tree and traces the suite once to build the function-to-covering-tests map.
+After that, time tracks *survivors* rather than mutants — a killed mutant stops
+at its first failing test, while a survivor pays for every covering test — so
+the number falls as coverage improves.
+
+What this trades away is worth stating plainly: a change that adds an untested
+gate now merges green and is caught the following morning, attributed to
+whoever merged next rather than to its author. Run
+`scripts/mutation_test.py changed --base origin/main` locally before merging
+anything under the two guarded directories, and read the nightly result the day
+after a merge that touches them.
+
+### Two things that will mislead you
+
+**On macOS, roughly a third of mutants report `segfault` and get no verdict.**
+`dp_scenarios.synthgen.reference` opens an in-memory SQLite database, and
+`sqlite3.connect` crashes in a `fork()`ed child on macOS — mutmut runs each
+mutant in a forked child, so every mutant whose covering tests reach fixture
+generation dies before it is judged. Six lines reproduce it with no mutmut
+involved:
+
+```python
+import os, sqlite3
+if os.fork() == 0:
+    sqlite3.connect(":memory:")   # SIGSEGV on macOS, fine on Linux
+    os._exit(0)
+```
+
+Linux is unaffected, so **CI is the authoritative run** and a local macOS score
+is a floor, not a measurement. A local survivor is still a real survivor; a local
+`segfault` is "not measured".
+
+**A flaky test makes every mutant look killed**, which is the worst possible
+outcome: perfect coverage reported by a suite that tested nothing. Two
+back-to-back whole-scope runs on identical source disagreed on **2 of 7930**
+mutants (0.03%), both at the segfault boundary above. That is low enough to gate
+on, and it is worth re-measuring after any change that adds sleeping, real
+sockets, or wall-clock assertions to the suite: run
+`scripts/mutation_test.py full` twice and diff the two `mutation-report.txt`
+files.
+
+### When to still mutate by hand
+
+The automated scope is deliberately narrow. Everything else — `followups/`,
+`runner/`, `scenario.py`, `ledger/`, and the scenario packages themselves —
+still expects the manual discipline, and so does any check whose property is not
+expressible as a source edit at all (a fixture value, a gold row-set, a
+scenario's declared order). When you do it by hand, **confirm the mutation
+applied** before you believe the result: `git diff` the file you edited, and
+check that the test you expected to fail is the one that failed. A green run
+after a mutation that did not land is the exact mistake this tooling exists to
+remove.
 
 ## Runtime control plans
 
@@ -397,7 +599,9 @@ while hiding drift in the pack that matters.
 | `src/dp_scenarios/grading/` | Mechanical gate checks and oracles |
 | `src/dp_scenarios/canary/` | Drift-canary claims extraction and verdict matrix |
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |
+| `scripts/` | Local live runner, conversation renderer, mutation-test driver |
 | `tests/` | Unit tests for the harness itself |
+| `mutation-baseline.json` | Known surviving mutants per function. **Not yet recorded** — see Mutation testing; until it exists the nightly reports rather than gates |
 
 ## Fixture hygiene
 

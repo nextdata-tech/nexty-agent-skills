@@ -309,6 +309,11 @@ def test_driver_module_reaches_no_transport_directly() -> None:
     so a re-export (``from aiohttp import ClientSession``) is caught too. The
     autouse network guard above covers the runtime; this covers the source, so
     an accidental client import fails even on a path no test exercises.
+
+    ``mutmut`` is discounted from the exact-set half: a mutation run reads this
+    module from its instrumented copy, which imports the trampoline. Keeping it
+    in the disjoint half would be meaningless, and letting it fail the exact set
+    would make every mutant of this package look killed by a harness artifact.
     """
 
     source = pathlib.Path(driver_module.__file__ or "").read_text(encoding="utf-8")
@@ -320,7 +325,7 @@ def test_driver_module_reaches_no_transport_directly() -> None:
             imported.add(node.module.split(".")[0])
 
     assert imported.isdisjoint({"aiohttp", "socket", "http", "urllib", "requests", "ssl"})
-    assert imported == {"__future__", "collections", "dataclasses", "math", "typing"}
+    assert imported - {"mutmut"} == {"__future__", "collections", "dataclasses", "math", "typing"}
 
 
 def test_a_provider_error_records_why_it_failed_not_just_its_type() -> None:

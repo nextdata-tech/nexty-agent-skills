@@ -1,0 +1,154 @@
+name: nightly-mutation
+
+# Automated mutation testing for the dp-scenarios harness.
+#
+# `evals/dp-scenarios/README.md` has always asked a contributor to mutation-test
+# a new check by hand: break the guard, rerun, confirm red. That covers the code
+# the contributor just wrote and nothing else, and a hand-rolled mutation can
+# silently fail to apply -- which has twice produced a confident wrong answer,
+# once reporting a healthy guard as unenforced. mutmut applies every mutant
+# through a generated trampoline, so a mutant that did not apply cannot be
+# reported as a result at all.
+#
+# Scope is `src/dp_scenarios/operator/` and `src/dp_scenarios/grading/` (see
+# `[tool.mutmut]` in evals/dp-scenarios/pyproject.toml): the turn machinery and
+# the mechanical grading, where "a gate that exists but never fires" is the
+# recurring defect.
+#
+# THIS IS THE ONLY TIER. A pull-request tier was built and measured at 15m24s on
+# the worst guarded module, then dropped as too much to add to the critical path
+# of every PR touching that code; `scripts/mutation_test.py changed --base
+# origin/main` remains the local equivalent. The consequence is that an untested
+# gate merges green and is caught here the following morning, so read this the
+# day after a merge under the guarded directories.
+#
+# NO BASELINE IS RECORDED YET, so a green run here currently means only that
+# mutmut ran to completion -- `main()` returns 0 when the file is absent. Record
+# one with the `update_baseline` input below; from then on this compares against
+# evals/dp-scenarios/mutation-baseline.json and fails on *new* survivors, and a
+# green run means "nothing was added that the suite cannot see", not "there are
+# no unkilled mutants".
+
+on:
+  schedule:
+    # 04:10 UTC, before the MCP canary, so a red mutation run and a red canary
+    # do not arrive as one indistinguishable batch of morning noise.
+    - cron: '10 4 * * *'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'mutmut mutant-name filters (blank = the whole guarded scope)'
+        required: false
+        default: ''
+      update_baseline:
+        description: 'Record mutation-baseline.json from this run and upload it (whole scope)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-mutation
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: dp-scenarios mutation (full scope)
+    runs-on: ubuntu-latest
+    # Runtime is dominated by the *surviving* mutants, not the killed ones:
+    # mutmut runs a mutant's covering tests fastest-first and stops at the first
+    # failure, so a killed mutant costs milliseconds while a survivor pays for
+    # every test that touches it -- including the fixture-generating ones. See
+    # the runtime table in evals/dp-scenarios/README.md for measured figures.
+    #
+    # The cap is deliberately far above the expected run. A mutation job killed
+    # mid-run reports fewer survivors, and fewer survivors reads as an
+    # improvement.
+    #
+    # Measured whole-scope run: 2h39m on a 14-vCPU Linux container. A hosted
+    # runner has fewer cores, so this is close to GitHub's 6-hour ceiling; if it
+    # ever times out, cut the scope with a `workflow_dispatch` filter rather
+    # than lowering the cap.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # This job never diffs, so it does not need history for itself. Kept
+          # so a future step that does -- `mutation_test.py changed` resolves a
+          # merge base -- works without a checkout change. Free on a job with a
+          # 350-minute budget.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Run mutation testing over the guarded directories
+        id: mutation
+        env:
+          # Passed through the environment rather than interpolated into the
+          # command line: a workflow_dispatch input is attacker-controllable
+          # text and must never become shell.
+          MUTATION_SCOPE: ${{ github.event.inputs.scope }}
+          MUTATION_UPDATE_BASELINE: ${{ github.event.inputs.update_baseline }}
+        run: |
+          set -euo pipefail
+          if [ "${MUTATION_UPDATE_BASELINE:-false}" = "true" ]; then
+            # The baseline must describe the whole scope, and the wrapper
+            # refuses --update-baseline in any other mode. Recording it from a
+            # CI run on `main` is what makes it describe the tree it is
+            # compared against: a baseline measured on a branch is invalidated
+            # by the rebase that follows, which is how the first one was lost.
+            if [ -n "${MUTATION_SCOPE:-}" ]; then
+              echo "update_baseline cannot be combined with a scope filter" >&2
+              exit 2
+            fi
+            python3 evals/dp-scenarios/scripts/mutation_test.py full --update-baseline
+          elif [ -n "${MUTATION_SCOPE:-}" ]; then
+            # shellcheck disable=SC2086  # a filter list is intentionally split
+            python3 evals/dp-scenarios/scripts/mutation_test.py filter $MUTATION_SCOPE
+          else
+            python3 evals/dp-scenarios/scripts/mutation_test.py full
+          fi
+
+      - name: Upload the recorded baseline
+        # Only produced when update_baseline was requested. It is uploaded
+        # rather than committed: a workflow that pushes to `main` is a much
+        # larger permission than this job needs, and the file is reviewed
+        # before it becomes a gate.
+        # Not `always()`: when the run fails before writing the file,
+        # `if-no-files-found: error` would stack a second, misleading failure on
+        # top of the real one.
+        if: success() && github.event.inputs.update_baseline == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-baseline
+          path: evals/dp-scenarios/mutation-baseline.json
+          if-no-files-found: error
+
+      - name: Publish the survivor report
+        if: always()
+        run: |
+          set -euo pipefail
+          report=evals/dp-scenarios/mutation-report.txt
+          if [ -f "$report" ]; then
+            {
+              echo '### dp-scenarios mutation testing'
+              echo ''
+              echo '```'
+              tail -c 60000 "$report"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: |
+            evals/dp-scenarios/mutation-report.txt
+          if-no-files-found: warn

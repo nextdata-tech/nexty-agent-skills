@@ -20,3 +20,8 @@ scenarios/.drift-canary-*/
 # because the key lives next to the runner that reads it.
 .env
 .env.local
+
+# mutmut's instrumented copy of the tree (scripts/mutation_test.py) and the
+# report the wrapper tees for CI. Both are regenerated on every run.
+mutants/
+mutation-report.txt

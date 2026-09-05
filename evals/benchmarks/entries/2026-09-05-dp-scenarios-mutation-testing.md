@@ -1,0 +1,57 @@
+---
+id: 2026-09-05-dp-scenarios-mutation-testing
+date: 2026-09-05
+label: "automated mutation testing for the dp-scenarios harness"
+plugin_version: 0.45.0
+status: NO_EVAL
+scenarios: []
+record: null
+---
+# Benchmark — automated mutation testing for the dp-scenarios harness
+
+## Notes
+
+This change is harness tooling and harness tests. It ships a mutmut wrapper
+(`evals/dp-scenarios/scripts/mutation_test.py`), its configuration, one CI tier,
+and the property tests that the first mutation run turned up as missing. No
+skill under `src/` changes, no scenario changes, and no agent prompt changes, so
+no runnable public scenario can distinguish before from after: an agent run
+would exercise exactly the same skills against exactly the same fixtures and
+produce the same judge checks, turns and tokens either way. Manufacturing a
+scenario to attach a number here would make the evidence less trustworthy, not
+more.
+
+The measurement that *is* meaningful for this change is the mutation score
+itself, and it is recorded in the PR rather than as an eval arm. The first
+whole-scope run over `src/dp_scenarios/operator/` and `src/dp_scenarios/grading/`
+produced 7930 mutants and a large block of survivors concentrated in the scan
+decision tables — 143 in `supported_path_scan` alone, where deleting `httplib2`
+from the forbidden import roots or `bash` from the executable tool kinds changed
+no test's verdict. `tests/test_grading_scan_tables.py` closes that gap.
+
+No `mutation-baseline.json` ships here. One was recorded from a whole-scope
+Linux run and then invalidated when this branch was rebased onto a change that
+added five functions inside the guarded directories — a baseline describes the
+exact tree it was measured against, and a branch is the wrong place to record
+one. Until a baseline is recorded on `main`, the nightly job reports rather
+than gates. A stale baseline would have been worse than none: it carries no
+entry for new code, so every unnoticed mutant there reads as a regression
+introduced by whoever merged next.
+
+## Evidence
+
+- `evals/dp-scenarios/tests/test_grading_scan_tables.py` — 118 property tests
+  over the decision tables of `supported_path_scan`, `governed_path_scan`,
+  `meaning_preserving_bounding_scan` and `proxy_labelling_scan`. Every case was
+  written against a specific surviving mutant and fails if the corresponding
+  table entry is removed or renamed.
+- `evals/dp-scenarios/tests/conftest.py` and `tests/_repo_paths.py` — the root
+  resolution that fixed-parent-hop paths got wrong under a relocated tree; the
+  suite could not run at all from `mutants/` before this.
+- `evals/dp-scenarios/scripts/mutation_test.py` — the wrapper, its baseline
+  comparison, and the survivor explanation output CI publishes.
+- `.github/workflows/nightly-mutation.yml` — the nightly run: a report until a
+  baseline is recorded on `main`, a gate from then on. A pull-request tier was
+  built and measured at 15m24s on the worst guarded module, then dropped: too
+  much to add to the critical path of every PR touching that code. The scoped
+  mode remains a local and manual tool.
