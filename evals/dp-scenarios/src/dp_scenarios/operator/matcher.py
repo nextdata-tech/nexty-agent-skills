@@ -59,11 +59,39 @@ class MatchResult:
     whatever category actually resolves the reply.
     """
 
+    solicits_operator: bool = False
+    """Whether the agent asked the operator for anything at all this turn.
+
+    Distinct from ``approval_requested``, which fires on the bare approval
+    vocabulary wherever it appears. An agent that says "I'll ping you when
+    there is something to approve", or that reports "Blueprint: approved",
+    uses that vocabulary while asking the operator for nothing. Under a
+    scripted operator such a misread cost one bland line. A driver is *told*
+    to convey the selected reply, so the same misread becomes the turn's
+    mandate and the operator declines a decision nobody requested -- which is
+    how a live run spent eight of its fifteen turns refusing.
+    """
+
     @property
     def matched_rule_id(self) -> str:
         """Return the stable rule identifier used by evidence rows."""
 
         return self.rule_id
+
+    @property
+    def substantive_answer(self) -> bool:
+        """Whether this reply is a declared answer rather than a stock line.
+
+        Every rule resolving from the answer sheet or the ground-truth brief
+        sets ``answer_key`` or ``decision_id``; the persona bank, the
+        unmatched categories and the no-leading fallback set neither. That is
+        the line between "the operator knows this and should say it" and
+        "the operator has nothing, so a stock sentence was chosen to fill the
+        turn" -- a distinction the scripted path never had to make and the
+        driver path depends on.
+        """
+
+        return self.answer_key is not None or self.decision_id is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +124,120 @@ DEFAULT_OBSTACLE_TERMS = (
 # ordinary conversational filler ("the data looks good so far") and reading it
 # as a request for sign-off is a false positive far more often than not.
 APPROVAL_REQUEST_PATTERN = re.compile(r"\b(approve[sd]?|approval|sign\s*off)\b", re.IGNORECASE)
+
+# The opener that makes a leading clause a question even without a question
+# mark, as ``_classify`` has always defined it. Extracted verbatim: ``which``
+# is deliberately absent. ``is_question`` gates the obstacle branch, which
+# returns a different category, rule id, reply and ``matched`` flag, so
+# widening this moves ledger rows -- the same reason
+# ``APPROVAL_REQUEST_PATTERN`` is left alone above.
+INTERROGATIVE_OPENER_PATTERN = re.compile(
+    r"\s*(who|what|where|when|why|how|can|could|should|is|are|do|does)\b",
+    re.IGNORECASE,
+)
+
+# What *asking the operator* additionally covers. "Which grain do you want"
+# solicits an answer without being an obstacle question, so it lives here and
+# not above.
+SOLICITING_OPENER_PATTERN = re.compile(r"\s*which\b", re.IGNORECASE)
+
+# Phrases in which the agent actually puts something to the operator. This is
+# deliberately narrower than APPROVAL_REQUEST_PATTERN and does not replace it:
+# that pattern feeds ``approval_requested``, which grading reads, and widening
+# or narrowing it would move ledger rows. This one answers a different
+# question -- was the operator asked for anything at all -- and is consulted
+# only to decide whether a stock reply should be handed to a driver as its
+# mandate for the turn.
+SOLICITATION_PATTERN = re.compile(
+    r"\b(please\s+(approve|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
+    r"|can\s+you|could\s+you|would\s+you|do\s+you\s+want|what\s+would\s+you\s+like"
+    r"|let\s+me\s+know|up\s+to\s+you|sign\s*off\s+on|go-?ahead"
+    r"|waiting\s+(?:on|for)\s+you|awaiting\s+your|shall\s+i"
+    # "I need a decision", "I need you to confirm" -- but not the bare "need
+    # your", which fires on the promise of a *future* ask: the live run's
+    # "I'll surface it if something does need your call" asked for nothing and
+    # still drew a refusal.
+    # First person only. "I need a decision" is an ask; "something does need
+    # your call" is a promise of a future one, and reading it as present drew
+    # a refusal on live turn 8 for a decision nobody had requested.
+    r"|\b(?:i|we)\s+need\s+(?:a|an|your)\s+(?:decision|answer|call|steer|confirmation|sign\s*off)"
+    r"|\b(?:i|we)\s+need\s+you\s+to"
+    # "confirm" must be addressed to the operator. Bare "confirm the|that"
+    # fires on the agent's own reports -- "I can confirm that the build
+    # finished cleanly" -- and turned a finished-build report into "I don't
+    # know, look for yourself".
+    r"|(?:please|can\s+you|could\s+you|would\s+you)\s+confirm"
+    r"|i'?d\s+like\s+your\s+(?:approval|sign\s*off|go-?ahead|steer|decision|view|input)"
+    # The live turn-14 imperative: "Tell me a name, role, team, or channel."
+    # No question mark and no interrogative opener, so without this a direct
+    # instruction to the operator was silently dropped as a yield.
+    r"|tell\s+me\s+(?:which|what|whether|if|a|an|the|who|where)|point\s+me)\b",
+    re.IGNORECASE,
+)
+
+# There is deliberately no bare line-head imperative here. "Next steps:\n-
+# Confirm the metric definition" and "I will:\n- Confirm the row counts
+# myself" are the same shape, and `choose`, `pick` and `decide` heading a
+# bulleted line are how a build agent narrates its *own* plan -- "choose the
+# closest matching field" is field-mapper vocabulary. Matching them made the
+# operator hand back a decision on a turn that requested none, which is the
+# regression this whole module is being changed to remove.
+#
+# The signal is not in the text, so it is not inferred: an ask has to name its
+# addressee ("please confirm", "can you confirm"). A bulleted imperative is
+# therefore read as the agent's plan and yielded on, which is the safe error
+# of the two -- the operator says "keep going" instead of inventing a request.
+
+# A URL query string or a code span carries a "?" that is not a question. The
+# live agent pastes request paths ("/deals?limit=5") routinely.
+_NON_PROSE = re.compile(
+    # Fenced blocks first: an inner single-backtick alternative would otherwise
+    # split them. Inline spans are single-line on purpose -- ``[^`\n]`` -- so a
+    # lone stray backtick cannot swallow the rest of the message, and with it a
+    # real question mark.
+    r"```.*?```|`[^`\n]*`|https?://\S+|/\S*\?\S*",
+    re.DOTALL,
+)
+
+
+# Vocabulary that makes an ask a *choice* whatever else it mentions. The rule
+# bank is first-match-wins with ``source.question`` first, and that rule fires
+# on ``data|field|row|table|input`` -- near-universal in agent prose -- so
+# "Which option do you want? The data supports both." classifies as a source
+# question. Answering it with "I do not have that" leaves the choice unmade.
+CHOICE_PATTERN = re.compile(
+    r"\b(which|choose|choice|option|options|prefer|decide|decision|either"
+    r"|go-?ahead|approve|approval|sign\s*off|yes\s*/\s*no)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_a_choice(message: str) -> bool:
+    """Whether the agent is putting a decision to the operator."""
+
+    if not isinstance(message, str):
+        raise TypeError("agent message must be a string")
+    return bool(CHOICE_PATTERN.search(_NON_PROSE.sub(" ", message)))
+
+
+def solicits_operator(message: str) -> bool:
+    """Whether the agent asked the operator for anything on this turn.
+
+    Three independent signals, any of which is enough: an explicit question
+    mark, an interrogative opening clause, or one of the request phrases in
+    :data:`SOLICITATION_PATTERN`. A status update that merely mentions
+    approval in passing matches none of them.
+    """
+
+    if not isinstance(message, str):
+        raise TypeError("agent message must be a string")
+    prose = _NON_PROSE.sub(" ", message)
+    return bool(
+        "?" in prose
+        or INTERROGATIVE_OPENER_PATTERN.match(prose)
+        or SOLICITING_OPENER_PATTERN.match(prose)
+        or SOLICITATION_PATTERN.search(prose)
+    )
 
 _RULES = (
     # _RULES is first-match-wins and the factual rules come first on purpose.
@@ -236,11 +378,18 @@ class MatcherBank:
 
     @staticmethod
     def _with_approval_flag(result: MatchResult, message: str) -> MatchResult:
-        """Attach the orthogonal solicitation flag to an already-chosen result."""
+        """Attach both orthogonal message flags to an already-chosen result.
 
-        if result.approval_requested or not APPROVAL_REQUEST_PATTERN.search(message):
+        ``classify`` and ``reply_for`` both funnel through here, so setting
+        the flags in one place is what keeps them consistent between a
+        classification and the reply chosen from it.
+        """
+
+        approval = result.approval_requested or bool(APPROVAL_REQUEST_PATTERN.search(message))
+        asked = result.solicits_operator or solicits_operator(message)
+        if approval == result.approval_requested and asked == result.solicits_operator:
             return result
-        return replace(result, approval_requested=True)
+        return replace(result, approval_requested=approval, solicits_operator=asked)
 
     def classify(self, message: str) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
@@ -250,7 +399,7 @@ class MatcherBank:
         return self._with_approval_flag(self._classify(message), message)
 
     def _classify(self, message: str) -> MatchResult:
-        is_question = "?" in message or bool(re.match(r"\s*(who|what|where|when|why|how|can|could|should|is|are|do|does)\b", message, re.IGNORECASE))
+        is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         decision = self.answer_sheet.answer_for_decision(message)
         if decision is not None:
             return MatchResult(
@@ -381,8 +530,14 @@ __all__ = [
     "APPROVAL_REQUEST_PATTERN",
     "Category",
     "DEFAULT_OBSTACLE_TERMS",
+    "CHOICE_PATTERN",
+    "INTERROGATIVE_OPENER_PATTERN",
+    "SOLICITATION_PATTERN",
+    "SOLICITING_OPENER_PATTERN",
     "MatchResult",
     "MatcherBank",
     "MatcherError",
+    "asks_for_a_choice",
     "classify_and_reply",
+    "solicits_operator",
 ]

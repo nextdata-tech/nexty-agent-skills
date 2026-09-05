@@ -92,8 +92,8 @@ Two rules that fail at load and surprise people:
 - `turns[0]` must **equal `opening_message` exactly** — same string, not a
   paraphrase.
 
-`ground_truth` and `driver_forbidden_terms` are the **only** optional keys —
-and they are the two that carry most of the scenario's substance.
+`ground_truth`, `driver_forbidden_terms` and `gap_stance` are the **only**
+optional keys — and the first two carry most of the scenario's substance.
 
 - `opening_message` — the contributor's own vague first words, verbatim.
 - `turns` — a list. A plain string is an ordinary turn. A mapping can declare:
@@ -105,6 +105,20 @@ and they are the two that carry most of the scenario's substance.
   words in an agent's question that trigger it) and `fact` (what it then says).
 - `driver_forbidden_terms` — vocabulary the agent must discover for itself.
   Required if the scenario will ever run with a model-driven operator.
+- `gap_stance` — what it *means* here when the operator cannot answer
+  something. Two values, and the default is usually right:
+  - `operator_is_uninformed` (the default) — the data is fine and the gap is
+    only this stakeholder's own ignorance. The operator says it does not know
+    and tells the agent to look for itself.
+  - `source_is_short` — the source genuinely cannot supply what is being
+    asked, and saying so is the substance the scenario grades. Use this only
+    when the shortfall *is* the drill; otherwise the operator will keep
+    insisting the data is not there when it is.
+
+  This is the scenario half of how the operator behaves when it has no answer.
+  The other half is the persona's `stance_when_unknown`, which decides the
+  voice — the two compose, so a scenario never has to describe a personality
+  and a persona never has to know what this particular data can do.
 
 Give the agent room. A live agent needs several turns to author a spec, build,
 and self-check. A scenario that asks for results one turn after approval grades
@@ -150,6 +164,13 @@ Match the contributor's description of how the stakeholder behaves:
 | "They want it yesterday" | `impatient` |
 | "They question every column" | `micromanager` |
 | "They're relaying for someone else" | `exec-proxy` |
+
+Each persona also declares `stance_when_unknown` — how it hands back a
+decision the scenario never encoded (`defer_upward`, `ask_back`,
+`push_for_speed`, `approve_anything`, `assert_default`). You do not set it;
+it belongs to the persona. It matters to you only because it is why you never
+need to write a reply for a question you did not anticipate: the persona
+supplies the manner, your `gap_stance` supplies the substance.
 
 ## Rules that are easy to get wrong
 

@@ -39,7 +39,9 @@ def test_generated_operator_context_redacts_planted_fixture_markers() -> None:
 
     transport = InMemoryTransport(
         [
-            TurnResult(agent_message=f"The owner column holds {MARKER.decode()} values."),
+            # Must be a real question: a turn the agent asks nothing on now
+            # yields the scripted line and never consults a provider at all.
+            TurnResult(agent_message=f"What does the owner column mean? It holds {MARKER.decode()} values."),
             TurnResult(agent_message="Done."),
         ]
     )

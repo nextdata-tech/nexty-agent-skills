@@ -52,9 +52,19 @@ class DriverView(OperatorView):
     beat: DriverBeat | None
     forbidden_terms: tuple[str, ...]
     rejection_notice: str | None
+    directive: str = "answer"
+    """What the operator's job is on this turn, resolved by the engine.
+
+    One of ``answer``, ``yield``, ``unknown_fact:<gap_stance>`` or
+    ``decision:<stance_when_unknown>``. It is the composition of the scenario
+    axis (what a gap means in this drill) with the persona axis (how this
+    stakeholder handles one), so neither file has to encode the other's half.
+    ``answer`` is the default because it is the only value under which
+    ``selected_reply`` is non-empty and must be conveyed.
+    """
 
     def to_mapping(self) -> dict[str, object]:
-        """Return the provider mapping, adding only the six driver fields."""
+        """Return the provider mapping, adding only the seven driver fields."""
 
         # Explicit dispatch avoids the zero-argument ``super()``/slots class
         # replacement trap in dataclasses on supported Python versions.
@@ -71,6 +81,7 @@ class DriverView(OperatorView):
                 ),
                 "forbidden_terms": list(self.forbidden_terms),
                 "rejection_notice": self.rejection_notice,
+                "directive": self.directive,
             }
         )
         return mapping

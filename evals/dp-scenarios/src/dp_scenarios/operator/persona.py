@@ -1,9 +1,20 @@
 """Strict data-backed persona cards.
 
-Cards are validated before a run starts and unknown keys fail closed.  Persona
-behaviour, vocabulary, and patience therefore remain validated grading
-metadata; they are not engine inputs.  The engine remains the sole owner of
-deterministic state and selects only the fixed reply bank material.
+Cards are validated before a run starts and unknown keys fail closed.  The
+engine remains the sole owner of deterministic state and, on the scripted
+path, selects only the fixed reply bank material.
+
+A persona is the *voice and tactic* axis of the operator: how this particular
+stakeholder behaves, never what they know.  Facts belong on the scenario axis,
+in the answer sheet, where they can be checked against the gold the run is
+graded on.  ``confidently-wrong`` is the standing counter-example -- its bank
+holds factual claims ("The API is down") -- and it is why ``stance_when_unknown``
+exists as a tactic rather than another canned sentence.
+
+Under a driver, ``behaviors``, ``label`` and ``vocabulary`` *are* engine inputs:
+they are composed into the authoring prompt.  This docstring previously said
+they were validated grading metadata only, which stopped being true when the
+driver landed.
 """
 
 from __future__ import annotations
@@ -31,8 +42,28 @@ PERSONA_KEYS = frozenset(
         "behaviors",
         "reply_bank",
         "fallback",
+        "stance_when_unknown",
     }
 )
+# Optional because the scripted path never reads it and every pre-driver card
+# predates it.  Required keys are the rest of PERSONA_KEYS.
+OPTIONAL_PERSONA_KEYS = frozenset({"stance_when_unknown"})
+
+#: How this persona behaves when asked for a decision or preference the
+#: scenario never encoded.  This is a tactic, not a sentence: the driver
+#: renders it in the persona's own voice.  Every value must hand the floor
+#: back to the agent with a direction -- an operator that merely says "no" is
+#: what wedged a live run for eight turns.
+STANCE_WHEN_UNKNOWN = frozenset(
+    {
+        "defer_upward",      # will not decide; pushes it back citing someone else
+        "ask_back",          # turns the question around
+        "push_for_speed",    # tells the agent to pick whatever is fastest
+        "approve_anything",  # accepts whatever the agent proposes
+        "assert_default",    # states a confident opinion, right or not
+    }
+)
+DEFAULT_STANCE_WHEN_UNKNOWN = "ask_back"
 BEHAVIOR_KEYS = frozenset(
     {
         "browser_level_vocabulary",
@@ -110,6 +141,7 @@ class PersonaCard:
     behaviors: Mapping[str, object]
     reply_bank: Mapping[str, tuple[str, ...]]
     fallback: str
+    stance_when_unknown: str = DEFAULT_STANCE_WHEN_UNKNOWN
 
     @property
     def id(self) -> str:
@@ -146,6 +178,7 @@ class PersonaCard:
             "behaviors": dict(self.behaviors),
             "reply_bank": {key: list(value) for key, value in self.reply_bank.items()},
             "fallback": self.fallback,
+            "stance_when_unknown": self.stance_when_unknown,
         }
 
 
@@ -154,7 +187,7 @@ def persona_from_mapping(value: Mapping[str, object]) -> PersonaCard:
 
     raw = _mapping(value, "persona")
     _unknown(raw, PERSONA_KEYS, "persona")
-    missing = sorted(PERSONA_KEYS - set(raw))
+    missing = sorted((PERSONA_KEYS - OPTIONAL_PERSONA_KEYS) - set(raw))
     if missing:
         raise PersonaError(f"persona is missing key(s): {', '.join(missing)}")
     version = raw["version"]
@@ -175,6 +208,11 @@ def persona_from_mapping(value: Mapping[str, object]) -> PersonaCard:
             raise PersonaError(f"persona.reply_bank is missing category {category!r}")
         replies[category] = _string_tuple(reply_raw[category], f"persona.reply_bank.{category}")
     fallback = _string(raw["fallback"], "persona.fallback")
+    stance = raw.get("stance_when_unknown", DEFAULT_STANCE_WHEN_UNKNOWN)
+    if stance not in STANCE_WHEN_UNKNOWN:
+        raise PersonaError(
+            "persona.stance_when_unknown must be one of: " + ", ".join(sorted(STANCE_WHEN_UNKNOWN))
+        )
     return PersonaCard(
         version=version,
         persona_id=_string(raw["id"], "persona.id"),
@@ -184,6 +222,7 @@ def persona_from_mapping(value: Mapping[str, object]) -> PersonaCard:
         behaviors=behaviors,
         reply_bank=MappingProxyType(replies),
         fallback=fallback,
+        stance_when_unknown=stance,
     )
 
 
@@ -203,7 +242,10 @@ load_persona_card = load_persona
 
 __all__ = [
     "BEHAVIOR_KEYS",
+    "DEFAULT_STANCE_WHEN_UNKNOWN",
+    "OPTIONAL_PERSONA_KEYS",
     "PERSONA_KEYS",
+    "STANCE_WHEN_UNKNOWN",
     "REPLY_CATEGORIES",
     "PersonaCard",
     "PersonaError",

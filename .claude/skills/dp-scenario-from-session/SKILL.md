@@ -46,6 +46,12 @@ happened**, and that is the whole test. Ask:
    the failure the test detects.
 4. **"How much of what you told them mid-way should they have worked out
    alone?"** This decides which facts are handed over and which are withheld.
+5. **"When they asked you for something you couldn't give them — was it
+   somewhere else, or did it genuinely not exist?"** This sets `gap_stance`
+   (see
+   `.claude/skills/dp-scenario-from-scratch/reference/interview-to-artifacts.md`).
+   Transcripts rarely settle it: a person saying "I don't have that" reads the
+   same either way, and only they know which they meant.
 
 Question 4 is the one people find surprising and it is the most important. A
 session transcript shows a human volunteering context. A good scenario withholds

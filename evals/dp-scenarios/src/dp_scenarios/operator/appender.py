@@ -105,6 +105,7 @@ _NON_FACT_CLAIM_KEYS = frozenset(
         "operator_answered_from_ground_truth",
         "operator_repeat_suppressed",
         "operator_mode",
+        "operator_directive",
         "operator_beat_id",
         "driver_leading_rejected",
         "driver_obstacle_rejected",
@@ -169,6 +170,8 @@ def _validate_non_fact_claim(value: object) -> None:
         raise AppenderError("operator_mode must be a string")
     if "operator_beat_id" in value and not isinstance(value["operator_beat_id"], str):
         raise AppenderError("operator_beat_id must be a string")
+    if "operator_directive" in value and not isinstance(value["operator_directive"], str):
+        raise AppenderError("operator_directive must be a string")
     if "outcome" in value and not isinstance(value["outcome"], str):
         raise AppenderError("outcome must be a string")
     if "event_outcomes" in value:

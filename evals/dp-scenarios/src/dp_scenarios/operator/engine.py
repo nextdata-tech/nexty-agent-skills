@@ -44,7 +44,7 @@ from .driver import (
     repeat_violation,
 )
 from .generated import GeneratedOperator, OperatorView
-from .matcher import Category, MatchResult, MatcherBank, MatcherError
+from .matcher import Category, MatchResult, MatcherBank, MatcherError, asks_for_a_choice
 from .text_match import term_present
 from .persona import PersonaCard
 from .transport import Attachment, OperatorMessage, Transport, TurnResult, TouchedFile, ToolCall
@@ -253,14 +253,27 @@ class OperatorScript:
             "persona": {
                 "reply_bank": {key: list(value) for key, value in self.persona.reply_bank.items()},
                 "fallback": self.persona.fallback,
+                # An engine input, so script identity -- the same argument that
+                # puts ``gap_stance`` in the answer sheet's mapping. Flipping a
+                # persona from ``ask_back`` to ``assert_default`` changes what
+                # every undeclared-answer turn says to the agent; without this
+                # the paired-comparison guard would treat the two runs as the
+                # same script. ``label``, ``vocabulary`` and ``behaviors`` stay
+                # out: they are prompt colour, not a branch the engine takes.
+                "stance_when_unknown": self.persona.stance_when_unknown,
             },
             "answer_sheet": answer_sheet,
             "events": self.events.to_mapping(),
             "turns": [
                 {
-                    # A substituting turn's authored text is never transmitted;
-                    # keep the switch itself because it changes runtime behavior.
-                    "text": turn.text if index == 0 or not turn.substitute_reply else None,
+                    # Every turn's text is hashed. It used to be elided for a
+                    # substitutable turn on the premise that such text is never
+                    # transmitted -- true until the yield rule, which sends the
+                    # scripted line whenever the agent asked for nothing. Two
+                    # scripts differing only in a room turn then hashed
+                    # identically, so the repeatability contract did not cover
+                    # bytes that actually go out.
+                    "text": turn.text,
                     "substitute_reply": turn.substitute_reply,
                     "approval": turn.approval,
                 }
@@ -344,6 +357,15 @@ class TurnRecord:
     intake_failure: bool
     operator_repeat_suppressed: bool = False
     operator_mode: str = "scripted"
+    operator_directive: str = "answer"
+    """What this turn was for; see :meth:`OperatorEngine._resolve_directive`.
+
+    Recorded because the mechanism is otherwise invisible to the one process
+    that has ever found a defect here: reading the transcript. Without it a
+    room turn sent because the agent asked nothing is byte-identical to one
+    sent because a substitutable turn had no reply, and a yield caused by a
+    missed question looks exactly like a deliberate pause.
+    """
     operator_beat_id: str | None = None
     driver_leading_rejected: bool = False
     driver_obstacle_rejected: bool = False
@@ -748,6 +770,7 @@ class OperatorEngine:
         beat: DriverBeat | None = None,
         forbidden_terms: Sequence[str] = (),
         rejection_notice: str | None = None,
+        directive: str = "answer",
     ) -> OperatorView | DriverView:
         """Build the one redacted view shared by generated and driver paths."""
 
@@ -783,22 +806,125 @@ class OperatorEngine:
             beat=beat,
             forbidden_terms=tuple(forbidden_terms),
             rejection_notice=rejection_notice,
+            directive=directive,
         )
 
-    def _driver_facts(
+    def _driver_facts(self) -> tuple[tuple[str, str], ...]:
+        """Offer the whole ground-truth brief to the driver.
+
+        This used to filter the brief by keyword-matching each fact's
+        ``terms`` against the current agent message, which starved the driver
+        precisely when a question was phrased unexpectedly: a live 15-turn run
+        was handed zero facts on four turns and a single fact -- always the
+        same one, because ``owner`` is a common word -- on four more.
+
+        Filtering here was the wrong place for two reasons. A fact's ``terms``
+        trigger the *question*, so matching them against one message asks
+        whether the agent used the author's vocabulary, not whether the fact
+        is relevant. And the brief is not secret: every entry is something
+        this operator genuinely knows and would say if asked. What must not
+        happen is the operator *volunteering* an unasked fact, and that is a
+        prompt rule, enforced by the same forbidden-term scan every authored
+        message already passes -- not a retrieval problem.
+        """
+
+        return tuple(
+            (key, fact.fact)
+            for key, fact in sorted(self.script.answer_sheet.ground_truth.items())
+        )
+
+    def _facts_triggered_by(
         self,
         agent_message: str,
         *,
         markers: Sequence[bytes],
-    ) -> tuple[tuple[str, str], ...]:
-        """Offer only relevant ground-truth facts to the driver."""
+    ) -> tuple[str, ...]:
+        """Return facts whose declared ``terms`` this message actually asks for.
+
+        This is the old ``_driver_facts`` filter, kept for the one job it was
+        always right for: deciding which forbidden terms to exempt. A fact the
+        agent asked for may be stated even when it contains graded vocabulary,
+        because the agent has already reached that vocabulary itself. A fact
+        nobody asked about may not -- stating it unprompted *is* the leading
+        the guard exists to catch.
+
+        Separating the two is what makes offering the whole brief safe.
+        Exempting from every offered fact instead would have retired
+        ``driver_forbidden_terms`` altogether the moment the brief was widened,
+        silently: the leading scan would still run, with nothing left in it.
+        """
 
         redacted = _operator_context(agent_message, markers).casefold()
         return tuple(
-            (key, fact.fact)
-            for key, fact in sorted(self.script.answer_sheet.ground_truth.items())
-            if any(term_present(term, redacted) for term in fact.terms)
+            fact.fact
+            for _, fact in sorted(self.script.answer_sheet.ground_truth.items())
+            if fact.terms and all(term_present(term, redacted) for term in fact.terms)
         )
+
+    def _resolve_directive(
+        self,
+        match: "MatchResult | None",
+        *,
+        answer_available: bool,
+        agent_message: str = "",
+    ) -> str:
+        """Compose the operator's job for this turn from scenario and persona.
+
+        The two axes are asymmetric on purpose. The scenario owns what a gap
+        *means* here -- whether the source is genuinely short or the operator
+        is merely uninformed -- because only the answer sheet can be checked
+        against the gold the run is graded on. The persona owns the *tactic*
+        for handing a decision back, because that is voice and carries no
+        factual claim. Neither file has to know the other's half.
+
+        ``answer`` is the only value under which the driver is handed
+        ``selected_reply`` as substance to convey. Everything else describes
+        a turn where the operator has nothing declared to say, and the whole
+        point is that those turns are no longer indistinguishable from one
+        another -- previously they all arrived as a persona stock sentence
+        the driver was told to paraphrase.
+        """
+
+        if match is None:
+            return "answer"
+        # ``answer_available`` is false when the reply was repeat-suppressed:
+        # the fact is declared but has already been given, so this turn has
+        # nothing to convey. Reading ``substantive_answer`` alone handed the
+        # driver ``directive="answer"`` with an empty ``selected_reply`` --
+        # substance the prompt says is there and is not -- which is an
+        # invitation to invent one.
+        if answer_available and match.substantive_answer:
+            return "answer"
+        if not match.solicits_operator:
+            return "yield"
+        # A choice is a choice whatever else the message mentions. The rule
+        # bank is first-match-wins with ``source.question`` first, and that
+        # rule fires on vocabulary too common to be evidence of anything, so
+        # "Which path should I take? Both are in the data." arrives here
+        # classified as a source question. Answering "I do not have that"
+        # leaves the choice unmade, which is the stall this whole change is
+        # about.
+        # Obstacle first, before the choice override. "Which option: request
+        # write permission, or proceed read-only?" is choice-shaped, but
+        # handing it to a persona whose stance is ``assert_default`` asks for a
+        # firm opinion about infrastructure -- the one thing the no-leading
+        # guard exists to prevent. It is also not a claim the answer sheet ever
+        # made about the source, so the scenario's gap stance does not apply
+        # here either: this operator simply does not know.
+        if match.obstacle_question:
+            return "unknown_fact:operator_is_uninformed"
+        # ``decision.request`` fires on a bare "?" (``matcher._RULES``), so the
+        # category alone is not evidence that a decision was put to the
+        # operator: "What is the status?" lands there. Require the choice
+        # vocabulary, or an explicit approval ask, whose verbs are unambiguous.
+        if asks_for_a_choice(agent_message) or match.category is Category.APPROVAL_REQUEST:
+            return f"decision:{self.script.persona.stance_when_unknown}"
+        if match.category is Category.SOURCE_QUESTION:
+            return f"unknown_fact:{self.script.answer_sheet.gap_stance}"
+        # A status question ("is it done on your side?") and a miscellaneous
+        # one are never about what the *source* can supply, so the scenario's
+        # gap stance does not apply: this operator simply does not know.
+        return "unknown_fact:operator_is_uninformed"
 
     def _driver_check(
         self,
@@ -897,6 +1023,7 @@ class OperatorEngine:
         operator_approval: bool = False,
         operator_approval_text: str | None = None,
         operator_mode: str = "scripted",
+        operator_directive: str = "answer",
         operator_beat_id: str | None = None,
         driver_leading_rejected: bool = False,
         driver_obstacle_rejected: bool = False,
@@ -949,6 +1076,9 @@ class OperatorEngine:
         if operator_mode != "scripted":
             claim = dict(claim) if isinstance(claim, Mapping) else {}
             claim["operator_mode"] = operator_mode
+        if operator_directive != "answer":
+            claim = dict(claim) if isinstance(claim, Mapping) else {}
+            claim["operator_directive"] = operator_directive
         if operator_beat_id is not None:
             claim = dict(claim) if isinstance(claim, Mapping) else {}
             claim["operator_beat_id"] = operator_beat_id
@@ -1024,6 +1154,7 @@ class OperatorEngine:
         environment_wedged = False
         turn_timed_out = False
         next_reply: str | None = None
+        next_match: MatchResult | None = None
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
         previous_agent_message = ""
@@ -1051,9 +1182,48 @@ class OperatorEngine:
             # the operator actually sent, so an approval turn transmits its
             # declared line: substituting a matcher reply there would record
             # some unrelated sentence -- or a refusal -- as the approval.
+            directive = self._resolve_directive(
+                next_match,
+                answer_available=next_reply is not None,
+                # Assigned at the foot of the previous iteration, so this is
+                # the message the pending reply was selected from.
+                agent_message=previous_agent_message,
+            )
+            # Turn one, a non-substitutable turn and an approval turn all
+            # transmit their declared line whatever the directive says, so
+            # recording one there would put a value in the ledger that governed
+            # nothing -- and it changed the ``spec_approved`` row's claim shape,
+            # which is evidence other things read.
+            #
+            # Without a driver the same is true of every value except
+            # ``yield``: the matcher's reply goes out unchanged, so a
+            # ``decision:*`` on a scripted row would tell a reader the operator
+            # handed a decision back when it did nothing of the kind. Scripted
+            # is the default mode, so that is most rows of most runs -- and the
+            # whole reason to record the field is that reading these lines is
+            # what finds defects here.
+            yielding = directive == "yield"
+            directive_governs = (
+                index > 1
+                and scripted_turn.substitute_reply
+                and not scripted_turn.approval
+                and (self.driver is not None or yielding)
+            )
+            recorded_directive = directive if directive_governs else "answer"
+            # The yield rule is not driver-specific, and applying it only
+            # there would leave the scripted operator answering a status
+            # update with a refusal. When the agent asked for nothing, the
+            # author's own script is what the turn is for: "Keep going,
+            # please." / "Take your time." were written as room to let the
+            # agent work, and until now they were unreachable text, because
+            # ``next_reply`` is falsy only after a repeat suppression and the
+            # matcher always returns something.
             base = (
                 scripted_turn.text
-                if index == 1 or not scripted_turn.substitute_reply or scripted_turn.approval
+                if index == 1
+                or not scripted_turn.substitute_reply
+                or scripted_turn.approval
+                or yielding
                 else (next_reply or scripted_turn.text)
             )
             selected_base = base
@@ -1070,6 +1240,7 @@ class OperatorEngine:
             driver_render: DriverRender | None = None
             driver_known_facts: tuple[tuple[str, str], ...] = ()
             driver_fallback_transmitted = False
+            driver_selected_reply: str | None = None
 
             authorable = (
                 self.driver is not None
@@ -1087,15 +1258,27 @@ class OperatorEngine:
                 )
             if authorable:
                 redaction_markers = self._redaction_markers((*active_sentinels, *pending_sentinels))
-                driver_known_facts = self._driver_facts(
-                    previous_agent_message,
-                    markers=redaction_markers,
-                )
+                driver_known_facts = self._driver_facts()
+                # Only a declared answer is handed over as substance to
+                # convey. A persona stock line is a placeholder the scripted
+                # operator uses to fill a turn; passing it as
+                # ``selected_reply`` made the driver paraphrase it under the
+                # prompt's "say that substance in your own words" rule, which
+                # is how "I am not deciding that." became seven distinct
+                # refusals in one run. When there is nothing declared, the
+                # directive says what kind of turn this is and the driver
+                # authors it in the persona's voice.
+                driver_selected_reply = next_reply if directive == "answer" else None
                 forbidden = tuple(dict.fromkeys(self.script.answer_sheet.driver_forbidden_terms))
                 exempt_texts = (
                     _operator_context(previous_agent_message, redaction_markers),
-                    *(_operator_context(fact, redaction_markers) for _, fact in driver_known_facts),
-                    _operator_context(next_reply or "", redaction_markers),
+                    *(
+                        _operator_context(fact, redaction_markers)
+                        for fact in self._facts_triggered_by(
+                            previous_agent_message, markers=redaction_markers
+                        )
+                    ),
+                    _operator_context(driver_selected_reply or "", redaction_markers),
                 )
                 exempted = tuple(
                     term for term in forbidden
@@ -1126,14 +1309,19 @@ class OperatorEngine:
                     previous_agent_message=previous_agent_message,
                     prior_agent_messages=prior_agent_messages,
                     prior_operator_messages=prior_operator_messages,
-                    selected_reply=next_reply or "",
+                    selected_reply=driver_selected_reply or "",
                     known_facts=driver_known_facts,
                     facts_already_stated=tuple(sorted(served_reply_keys)),
                     beat=beat,
                     forbidden_terms=effective_forbidden,
+                    directive=directive,
                 )
                 assert self.driver is not None
-                fallback = next_reply or scripted_turn.text
+                # A rejected authored turn falls back to the author's script
+                # rather than to a persona stock line, for the same reason the
+                # driver is not handed one: the scripted turn is what the
+                # scenario was written to say here.
+                fallback = driver_selected_reply or scripted_turn.text
                 driver_render = self.driver.author(
                     view,  # type: ignore[arg-type]
                     fallback=fallback,
@@ -1172,6 +1360,9 @@ class OperatorEngine:
                 # ledger row's ``artifact_ref``.
                 and not scripted_turn.approval
                 and next_reply
+                # The yield rule is path-independent: a rendered persona line
+                # is still a refusal nobody asked for.
+                and not yielding
                 and self.generated_operator is not None
             ):
                 view = self._provider_view(
@@ -1209,7 +1400,7 @@ class OperatorEngine:
                 # card whose resolved material has no declared terms.  Give
                 # the deterministic engine's delivery predicate the final
                 # word and repair from the scripted composition.
-                base = next_reply or scripted_turn.text
+                base = driver_selected_reply or scripted_turn.text
                 message = self._message_for(base, injections)
                 driver_beat_substituted = True
                 driver_fallback_transmitted = True
@@ -1275,7 +1466,9 @@ class OperatorEngine:
                 authorable
                 and driver_render is not None
                 and not driver_render.used_fallback
-                and _authored_text_conveys(next_reply or "", previous_agent_message or "", base)
+                and _authored_text_conveys(
+                    driver_selected_reply or "", previous_agent_message or "", base
+                )
             )
             if (
                 pending_sheet_key is not None
@@ -1384,6 +1577,7 @@ class OperatorEngine:
                 intake_failure=intake_failure,
                 operator_repeat_suppressed=repeat_suppressed,
                 operator_mode=operator_mode,
+                operator_directive=recorded_directive,
                 operator_beat_id=operator_beat_id,
                 driver_leading_rejected=driver_leading_rejected,
                 driver_obstacle_rejected=driver_obstacle_rejected,
@@ -1406,12 +1600,18 @@ class OperatorEngine:
                 operator_approval=scripted_turn.approval,
                 operator_approval_text=message.text if scripted_turn.approval else None,
                 operator_mode=operator_mode,
+                operator_directive=recorded_directive,
                 operator_beat_id=operator_beat_id,
                 driver_leading_rejected=driver_leading_rejected,
                 driver_obstacle_rejected=driver_obstacle_rejected,
                 driver_repeat_rejected=driver_repeat_rejected,
                 driver_beat_substituted=driver_beat_substituted,
             )
+            # The match is kept even when suppressed; only the *reply* is
+            # withdrawn. The directive is resolved from the match, and
+            # discarding it here made a suppressed turn indistinguishable from
+            # turn one.
+            next_match = match
             if repeat_suppressed:
                 next_reply = None
                 pending_sheet_key = None

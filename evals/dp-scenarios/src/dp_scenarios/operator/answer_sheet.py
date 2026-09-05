@@ -41,7 +41,19 @@ ANSWER_SHEET_KEYS = frozenset(
 # brief and must keep validating and matching exactly as before.  Only a
 # package that declares one opts into brief-backed answers for otherwise
 # unmatched questions (see MatcherBank._unmatched).
-OPTIONAL_ANSWER_SHEET_KEYS = frozenset({"driver_forbidden_terms", "ground_truth"})
+OPTIONAL_ANSWER_SHEET_KEYS = frozenset({"driver_forbidden_terms", "ground_truth", "gap_stance"})
+
+#: What it *means* in this drill that the operator cannot answer something.
+#: The scenario axis of the operator's behaviour: the persona supplies the
+#: voice, the scenario supplies the stance toward the gap.
+#:
+#: ``source_is_short`` -- the source genuinely cannot supply what is being
+#: asked, so "I do not have that" is the substance under test and the operator
+#: must not paper over it.  ``operator_is_uninformed`` -- the data is adequate
+#: and the gap is only this stakeholder's own ignorance, so the operator should
+#: push the agent to use its judgement and proceed.
+GAP_STANCES = frozenset({"source_is_short", "operator_is_uninformed"})
+DEFAULT_GAP_STANCE = "operator_is_uninformed"
 
 
 def _mapping(value: object, location: str) -> dict[str, Any]:
@@ -193,6 +205,8 @@ class AnswerSheet:
     driver_forbidden_terms: tuple[str, ...] = ()
     """Separate graded-property vocabulary a driver must never volunteer; absent means undrivable."""
     ground_truth: Mapping[str, GroundTruthFact] = field(default_factory=lambda: MappingProxyType({}))
+    gap_stance: str = DEFAULT_GAP_STANCE
+    """What an unanswerable question means here; see :data:`GAP_STANCES`."""
 
     @property
     def turn_one(self) -> str:
@@ -293,6 +307,8 @@ class AnswerSheet:
         # non-empty vocabulary into the script hash.
         if self.driver_forbidden_terms:
             mapping["driver_forbidden_terms"] = list(self.driver_forbidden_terms)
+        if self.gap_stance != DEFAULT_GAP_STANCE:
+            mapping["gap_stance"] = self.gap_stance
         return mapping
 
 
@@ -376,6 +392,11 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         if "driver_forbidden_terms" in raw
         else ()
     )
+    gap_stance = raw.get("gap_stance", DEFAULT_GAP_STANCE)
+    if gap_stance not in GAP_STANCES:
+        raise AnswerSheetError(
+            "answer_sheet.gap_stance must be one of: " + ", ".join(sorted(GAP_STANCES))
+        )
     return AnswerSheet(
         version=version,
         scenario_id=_string(raw["scenario_id"], "answer_sheet.scenario_id"),
@@ -389,6 +410,7 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         obstacle_terms=_strings(raw["obstacle_terms"], "answer_sheet.obstacle_terms", allow_empty=True),
         driver_forbidden_terms=driver_forbidden_terms,
         ground_truth=MappingProxyType(ground_truth),
+        gap_stance=gap_stance,
     )
 
 
@@ -405,6 +427,8 @@ def load_answer_sheet(path: str | Path) -> AnswerSheet:
 
 __all__ = [
     "ANSWER_SHEET_KEYS",
+    "DEFAULT_GAP_STANCE",
+    "GAP_STANCES",
     "OPTIONAL_ANSWER_SHEET_KEYS",
     "AnswerSheet",
     "AnswerSheetError",

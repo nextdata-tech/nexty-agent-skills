@@ -422,6 +422,9 @@ def test_turn_three_approval_writes_through_real_store_and_lints_clean(tmp_path:
     assert result.ledger_rows[2]["claim"] == row["claim"]
     assert row["phase"] == 3
     assert row["artifact_ref"] == "artifact://spec-v1"
+    # No directive is recorded here. This is a scripted run, where every value
+    # except ``yield`` is inert -- the matcher's reply goes out unchanged -- so
+    # recording one would put a false explanation on the row.
     assert row["claim"] == {"open_decision_marker": False}
     assert row["qualification"] == "strong"
 
@@ -969,7 +972,17 @@ def test_operator_script_hash_changes_for_each_script_material() -> None:
 
     assert operator_script_hash(replace(script, persona=changed_metadata)) == operator_script_hash(script)
     assert operator_script_hash(replace(script, persona=changed_reply)) != operator_script_hash(script)
-    assert operator_script_hash(replace(script, turns=("Improve weekly visibility.", "Please continue now."))) == operator_script_hash(script)
+    # The persona's stance is an engine input -- it decides what the operator
+    # says on every turn with no declared answer -- so it belongs in this
+    # enumeration next to the reply bank, not only in the directive suite. With
+    # it absent, grading.statistics would compare an ask_back run against an
+    # assert_default run as the same script.
+    changed_stance = persona_from_mapping({**script.persona.to_mapping(), "stance_when_unknown": "assert_default"})
+    assert operator_script_hash(replace(script, persona=changed_stance)) != operator_script_hash(script)
+    # A substitutable turn's text is transmitted whenever the agent asks for
+    # nothing, so it is script identity. See
+    # test_editing_a_substitutable_turn_changes_the_script_hash.
+    assert operator_script_hash(replace(script, turns=("Improve weekly visibility.", "Please continue now."))) != operator_script_hash(script)
     assert operator_script_hash(
         replace(script, turns=("Improve weekly visibility.", {"text": "Please continue.", "substitute_reply": False}))
     ) != operator_script_hash(script)
@@ -987,13 +1000,15 @@ def test_operator_script_hash_changes_for_each_script_material() -> None:
 def test_editing_a_non_substitutable_turn_changes_the_script_hash() -> None:
     """A turn that is always transmitted verbatim is part of run identity.
 
-    ``to_mapping`` deliberately nulls a *substitutable* turn's authored text,
-    because that text never goes out. A ``substitute_reply: false`` turn does
-    go out, word for word, so editing it changes what the agent was asked --
-    and the paired-comparison protection in ``grading.statistics`` refuses to
-    compare runs only when the hash says the script differs. This branch went
-    live from scenario data with the two graded asks and the operator's spec
-    approval, so nulling it too would let those be rewritten invisibly.
+    ``to_mapping`` now hashes *every* turn's text, substitutable or not, since
+    the yield rule transmits a substitutable turn whenever the agent asked for
+    nothing. This test predates that and covered the half that was always
+    transmitted verbatim; it stays because a ``substitute_reply: false`` turn
+    is where the two graded asks and the operator's spec approval live, and the
+    paired-comparison protection in ``grading.statistics`` refuses to compare
+    runs only when the hash says the script differs. See
+    ``test_editing_a_substitutable_turn_changes_the_script_hash`` for the other
+    half, which this docstring used to claim was deliberately excluded.
     """
 
     fixed = {"text": "Please continue.", "substitute_reply": False}
@@ -1005,13 +1020,22 @@ def test_editing_a_non_substitutable_turn_changes_the_script_hash() -> None:
     assert operator_script_hash(edited) != operator_script_hash(script)
 
 
-def test_editing_a_substitutable_turn_does_not_change_the_script_hash() -> None:
-    """The other half: authored text a matcher reply always replaces is not identity."""
+def test_editing_a_substitutable_turn_changes_the_script_hash() -> None:
+    """A substitutable turn's text is identity, because it can be transmitted.
+
+    This asserted the opposite until the yield rule, on the premise that a
+    matcher reply always replaces such text. That premise is now false: when
+    the agent asks for nothing, the scripted line is exactly what goes out.
+    Two scripts differing only in a room turn -- "Take your time." against
+    "Hurry up, I need this today." -- hashed identically while transmitting
+    different bytes, so the repeatability contract did not cover the operator's
+    own words.
+    """
 
     script = make_script(turns=("Improve weekly visibility.", "Please continue."))
     edited = make_script(turns=("Improve weekly visibility.", "Please continue now."))
 
-    assert operator_script_hash(edited) == operator_script_hash(script)
+    assert operator_script_hash(edited) != operator_script_hash(script)
 
 
 def test_declaring_a_turn_an_operator_approval_changes_the_script_hash() -> None:
