@@ -419,6 +419,108 @@ def _write_json(path: Path, value: object) -> None:
     os.replace(temporary, path)
 
 
+def _rows_as_mappings(payload: Mapping[str, object]) -> list[dict[str, object]] | None:
+    """Return semantic-query rows as mappings, whatever shape the tool used.
+
+    The real supervisor answers with positional ``rows`` beside a ``columns``
+    header, not a list of objects.  Requiring mappings silently discarded every
+    row of a query that had in fact run and returned the right answer, and the
+    query gate then read not-examined on a live run regardless of what the
+    agent did.
+    """
+
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return None
+    if all(isinstance(row, Mapping) for row in rows):
+        return [dict(row) for row in rows]
+    columns = payload.get("columns")
+    if not isinstance(columns, Sequence) or isinstance(columns, (str, bytes, bytearray)):
+        return None
+    names = [name for name in columns if isinstance(name, str)]
+    if not names or len(names) != len(columns):
+        return None
+    mapped: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray)):
+            return None
+        if len(row) != len(names):
+            # A partial zip would invent a row the supervisor never returned.
+            return None
+        mapped.append(dict(zip(names, row)))
+    return mapped
+
+
+def _resource_documents(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Decode the JSON documents carried in an MCP resource-read payload."""
+
+    contents = payload.get("contents")
+    if not isinstance(contents, Sequence) or isinstance(contents, (str, bytes, bytearray)):
+        return []
+    documents: list[Mapping[str, object]] = []
+    for item in contents:
+        if not isinstance(item, Mapping):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping):
+            documents.append(value)
+    return documents
+
+
+def _verified_release_facts(document: Mapping[str, object]) -> dict[str, object] | None:
+    """Extract supervisor-owned facts from a verified release document.
+
+    This is the artifact the supervisor itself labels ``artifact_verified``,
+    and it is the only payload that carries the published identifiers and the
+    per-model row counts together.  ``list_data_products`` does not: on a live
+    run it answered ``{"products": []}`` while the release existed.
+    """
+
+    release = document.get("release")
+    if not isinstance(release, Mapping):
+        return None
+    run_id = release.get("run_id")
+    artifact_id = release.get("artifact_id")
+    publish_seq = release.get("publish_seq")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    if not isinstance(artifact_id, str) or not artifact_id:
+        return None
+    if not isinstance(publish_seq, int) or isinstance(publish_seq, bool):
+        return None
+    evidence = document.get("evidence")
+    tables = evidence.get("model_tables") if isinstance(evidence, Mapping) else None
+    if not isinstance(tables, Sequence) or isinstance(tables, (str, bytes, bytearray)):
+        return None
+    row_counts: dict[str, str] = {}
+    for table in tables:
+        if not isinstance(table, Mapping):
+            continue
+        dataset = table.get("dataset")
+        name = table.get("table")
+        count = table.get("row_count")
+        if isinstance(dataset, str) and dataset and isinstance(name, str) and name and isinstance(count, int) and not isinstance(count, bool):
+            row_counts[f"{dataset}.{name}"] = str(count)
+    if not row_counts:
+        return None
+    facts: dict[str, object] = {
+        "run_id": run_id,
+        "artifact_id": artifact_id,
+        "publish_sequence": str(publish_seq),
+        "per_model_row_counts": row_counts,
+    }
+    workflow = release.get("workflow")
+    if isinstance(workflow, str) and workflow:
+        facts["workflow"] = workflow
+    return facts
+
+
 def _update_machine_artifacts(
     observations: Sequence[Mapping[str, object]],
     *,
@@ -426,9 +528,20 @@ def _update_machine_artifacts(
     facts: dict[str, object],
     build_context: dict[str, object],
 ) -> None:
-    """Derive query/fact artifacts only from structured MCP results."""
+    """Derive query/fact artifacts only from structured MCP results.
+
+    Every fact is attributed to a run this session actually built.  A run id
+    the agent never produced -- a leftover release from an abandoned job, say
+    -- must not be able to supply the identifiers or the row counts, which is
+    why each source is checked against the set of successful builds rather
+    than merely being the most recent thing on the wire.
+    """
 
     latest_query: Mapping[str, object] | None = None
+    built_runs: set[str] = {
+        value for value in (build_context.get("run_id"),) if isinstance(value, str) and value
+    }
+    verified: dict[str, object] | None = None
     for observation in observations:
         tool = observation.get("tool")
         payload = _mapping_payload(observation.get("result"))
@@ -438,16 +551,31 @@ def _update_machine_artifacts(
             for key in ("run_id", "artifact_id", "workflow"):
                 if key in payload:
                     build_context[key] = payload[key]
+            run_id = payload.get("run_id")
+            if isinstance(run_id, str) and run_id:
+                built_runs.add(run_id)
             arguments = observation.get("arguments")
             if isinstance(arguments, Mapping) and isinstance(arguments.get("workflow"), str):
                 build_context["workflow"] = arguments["workflow"]
         elif tool == "inspect_run" and payload is not None:
             run = payload.get("run")
             if isinstance(run, Mapping):
-                if run.get("run_id") == build_context.get("run_id"):
+                if run.get("run_id") in built_runs:
                     lifecycle = run.get("lifecycle", run.get("status"))
                     if isinstance(lifecycle, str) and lifecycle:
                         facts["lifecycle_state"] = lifecycle
+        elif tool == "read_data_product_resource" and payload is not None:
+            for document in _resource_documents(payload):
+                candidate = _verified_release_facts(document)
+                if candidate is None or candidate["run_id"] not in built_runs:
+                    continue
+                workflow = build_context.get("workflow")
+                if isinstance(workflow, str) and workflow and candidate.get("workflow") not in (None, workflow):
+                    continue
+                # The highest publish sequence is the release the agent
+                # actually shipped; an earlier one is a superseded attempt.
+                if verified is None or int(candidate["publish_sequence"]) >= int(verified["publish_sequence"]):
+                    verified = candidate
         elif tool == "list_data_products" and payload is not None:
             products = payload.get("products")
             if not isinstance(products, Sequence) or isinstance(products, (str, bytes, bytearray)):
@@ -484,9 +612,13 @@ def _update_machine_artifacts(
                         }
                     )
         elif tool == "run_semantic_query" and payload is not None:
-            rows = payload.get("rows")
-            if isinstance(rows, list) and all(isinstance(row, Mapping) for row in rows):
-                latest_query = {"rows": [dict(row) for row in rows]}
+            rows = _rows_as_mappings(payload)
+            if rows is not None:
+                latest_query = {"rows": rows}
+    if verified is not None:
+        # A verified release is the supervisor's own published statement, so it
+        # supersedes anything assembled from the build call alone.
+        facts.update({key: value for key, value in verified.items() if key != "workflow"})
     if latest_query is not None:
         _write_json(artifact_dir / "query-results.json", latest_query)
     required = {"run_id", "artifact_id", "publish_sequence", "per_model_row_counts", "lifecycle_state"}

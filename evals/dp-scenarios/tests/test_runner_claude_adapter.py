@@ -962,3 +962,182 @@ for line in sys.stdin:
 
     assert result.turn_timed_out is True
     assert result.last_mcp_call == "build_data_product:error"
+
+
+# --------------------------------------------------------------------------
+# Harvesting supervisor evidence from the shapes the real supervisor sends.
+#
+# Every payload below is the shape captured from a live crm-pipeline run on
+# 2026-09-05, where the agent built, published release 6 and queried
+# successfully, and the harness still graded build and query "not examined"
+# because it could not read either answer.
+
+
+def _observation(tool: str, content: object, *, arguments: object = None, is_error: bool = False) -> dict[str, object]:
+    return {"tool": tool, "arguments": arguments or {}, "result": content, "is_error": is_error}
+
+
+def _verified_release(*, run_id: str, artifact_id: str, publish_seq: int, counts: dict[str, int]) -> dict[str, object]:
+    """The resource payload the supervisor labels ``artifact_verified``."""
+
+    document = {
+        "schema": "nxd-desktop-verified-v1",
+        "trust": "artifact_verified",
+        "release": {
+            "workflow": "crm-deals-pipeline",
+            "publish_seq": publish_seq,
+            "run_id": run_id,
+            "artifact_id": artifact_id,
+        },
+        "evidence": {
+            "model_tables": [
+                {"dataset": dataset_table.split(".")[0], "table": dataset_table.split(".")[1], "row_count": count}
+                for dataset_table, count in counts.items()
+            ]
+        },
+    }
+    return {"contents": [{"mimeType": "text", "text": json.dumps(document), "uri": "nxd://x"}]}
+
+
+def _harvest(observations: list[dict[str, object]], tmp_path: Path) -> tuple[dict[str, object], Path]:
+    facts: dict[str, object] = {}
+    _update_machine_artifacts(observations, artifact_dir=tmp_path, facts=facts, build_context={})
+    return facts, tmp_path
+
+
+def test_positional_query_rows_are_read_through_their_column_header(tmp_path: Path) -> None:
+    """The supervisor answers with positional rows, not a list of objects.
+
+    Requiring mappings discarded every row of a query that had run correctly,
+    and the query gate then read not-examined no matter what the agent did.
+    """
+
+    _harvest(
+        [
+            _observation(
+                "run_semantic_query",
+                {
+                    "columns": ["stage", "status", "deal_count", "total_amount"],
+                    "rows": [["closed_won", "active", 1, 72300.0], ["prospecting", "active", 1, 9100.0]],
+                    "row_count": 2,
+                },
+            )
+        ],
+        tmp_path,
+    )
+
+    written = json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8"))
+    assert written == {
+        "rows": [
+            {"stage": "closed_won", "status": "active", "deal_count": 1, "total_amount": 72300.0},
+            {"stage": "prospecting", "status": "active", "deal_count": 1, "total_amount": 9100.0},
+        ]
+    }
+
+
+def test_mapping_query_rows_are_still_accepted(tmp_path: Path) -> None:
+    """The replay fixtures send objects; both shapes have to keep working."""
+
+    _harvest([_observation("run_semantic_query", {"rows": [{"stage": "closed_won", "n": 1}]})], tmp_path)
+
+    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {
+        "rows": [{"stage": "closed_won", "n": 1}]
+    }
+
+
+def test_a_row_that_does_not_fit_its_header_is_dropped_rather_than_zipped(tmp_path: Path) -> None:
+    """Truncating to the shorter side would invent a row the supervisor never sent."""
+
+    _harvest(
+        [_observation("run_semantic_query", {"columns": ["a", "b", "c"], "rows": [["only", "two"]]})],
+        tmp_path,
+    )
+
+    assert not (tmp_path / "query-results.json").exists()
+
+
+def test_supervisor_facts_come_from_the_verified_release_the_agent_published(tmp_path: Path) -> None:
+    """``list_data_products`` answered ``{"products": []}`` while release 6 existed.
+
+    The verified release resource is the only payload carrying the published
+    identifiers and the per-model row counts together, so the build gate has
+    to be able to read it.
+    """
+
+    facts, _ = _harvest(
+        [
+            _observation("build_data_product", {"run_id": "run-701f", "artifact_id": "artifact-cdb6"}, arguments={"workflow": "crm-deals-pipeline"}),
+            _observation("inspect_run", {"run": {"run_id": "run-701f", "lifecycle": "terminal"}}),
+            _observation(
+                "read_data_product_resource",
+                _verified_release(run_id="run-701f", artifact_id="artifact-cdb6", publish_seq=6, counts={"main.deals": 6, "main.nxd_decisions": 2}),
+            ),
+        ],
+        tmp_path,
+    )
+
+    assert json.loads((tmp_path / "supervisor-facts.json").read_text(encoding="utf-8")) == {
+        "run_id": "run-701f",
+        "artifact_id": "artifact-cdb6",
+        "publish_sequence": "6",
+        "lifecycle_state": "terminal",
+        "per_model_row_counts": {"main.deals": "6", "main.nxd_decisions": "2"},
+    }
+    assert facts["publish_sequence"] == "6"
+
+
+def test_a_release_from_a_run_this_session_never_built_is_refused(tmp_path: Path) -> None:
+    """Attribution is the whole point: a leftover release must not supply facts.
+
+    Without this a stale artifact from an abandoned job could hand the build
+    gate identifiers and row counts the agent never produced.
+    """
+
+    _harvest(
+        [
+            _observation("build_data_product", {"run_id": "run-mine", "artifact_id": "artifact-mine"}),
+            _observation("inspect_run", {"run": {"run_id": "run-mine", "lifecycle": "terminal"}}),
+            _observation(
+                "read_data_product_resource",
+                _verified_release(run_id="run-someone-else", artifact_id="artifact-stale", publish_seq=9, counts={"main.deals": 999}),
+            ),
+        ],
+        tmp_path,
+    )
+
+    assert not (tmp_path / "supervisor-facts.json").exists()
+
+
+def test_the_highest_publish_sequence_wins_when_several_releases_are_read(tmp_path: Path) -> None:
+    """An earlier release is a superseded attempt, not the shipped product."""
+
+    facts, _ = _harvest(
+        [
+            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
+            _observation("build_data_product", {"run_id": "run-b", "artifact_id": "artifact-b"}),
+            _observation("inspect_run", {"run": {"run_id": "run-b", "lifecycle": "terminal"}}),
+            _observation("read_data_product_resource", _verified_release(run_id="run-b", artifact_id="artifact-b", publish_seq=7, counts={"main.deals": 6})),
+            _observation("read_data_product_resource", _verified_release(run_id="run-a", artifact_id="artifact-a", publish_seq=5, counts={"main.deals": 4})),
+        ],
+        tmp_path,
+    )
+
+    assert facts["publish_sequence"] == "7"
+    assert facts["per_model_row_counts"] == {"main.deals": "6"}
+
+
+def test_an_errored_resource_read_contributes_nothing(tmp_path: Path) -> None:
+    _harvest(
+        [
+            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
+            _observation("inspect_run", {"run": {"run_id": "run-a", "lifecycle": "terminal"}}),
+            _observation(
+                "read_data_product_resource",
+                _verified_release(run_id="run-a", artifact_id="artifact-a", publish_seq=6, counts={"main.deals": 6}),
+                is_error=True,
+            ),
+        ],
+        tmp_path,
+    )
+
+    assert not (tmp_path / "supervisor-facts.json").exists()
