@@ -387,18 +387,20 @@ passes with. That is the finding. Each one is a genuinely equivalent mutant, a
 missing test, or a bug — and calling one equivalent is a claim that needs an
 argument, not a shrug.
 
+A **no tests** mutant counts the same. It means the covering-test analysis found
+nothing that executes that function, which is what a newly added function with
+no test at all reports. Treating it as merely informational would let a change
+add a completely unexercised gate and still go green — the exact defect this
+tooling exists to catch.
+
 Runs are compared against `mutation-baseline.json`, a per-function count of
-known survivors, and both CI tiers fail only on counts that go **up**. The
-baseline is keyed by function rather than by mutant name because mutmut numbers
-mutants positionally: editing a function renumbers all of its mutants, so a
-name-keyed baseline would go red on every edit for reasons that have nothing to
-do with test quality. Regenerate it with
+mutants the suite does not notice, and both CI tiers fail only on counts that go
+**up**. The baseline is keyed by function rather than by mutant name because
+mutmut numbers mutants positionally: editing a function renumbers all of its
+mutants, so a name-keyed baseline would go red on every edit for reasons that
+have nothing to do with test quality. Regenerate it with
 `scripts/mutation_test.py full --update-baseline`, and say in the PR why each
 added entry is acceptable.
-
-`no tests` is reported but never failed on: it means the covering-test analysis
-found no test that touches the function at all. That is a coverage fact the
-suite already knows, not a regression.
 
 ### Where it runs
 

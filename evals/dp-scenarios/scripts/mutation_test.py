@@ -21,7 +21,8 @@ Two tiers
 ``changed``  only the modules the diff touches.  Fast enough for a PR.
 
 Both tiers compare against ``mutation-baseline.json``: a per-function count of
-surviving mutants.  The baseline is keyed by *function*, not by mutant name,
+mutants the suite did not notice -- ones that survived, and ones no test
+reaches at all.  The baseline is keyed by *function* rather than by mutant name
 because mutmut numbers mutants by position within a function -- editing a
 function renumbers all of its mutants, so a name-keyed baseline would go red on
 every edit for reasons unrelated to test quality.  A function-keyed count is
@@ -39,6 +40,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -66,11 +68,15 @@ GUARDED_DIRS = (
 # ("dp_scenarios.grading.gates", "phase_ok")
 _MUTANT_NAME = re.compile(r"^(?P<module>[\w.]+?)\.x_(?P<function>\w+?)__mutmut_\d+$")
 
-# Statuses that mean "the tests did not notice this change".  ``no tests`` is
-# reported but not failed on: it means the stats phase found no test that
-# touches the function at all, which is a coverage fact the suite already knows
-# about, not a regression signal.
 REPORTED_STATUSES = ("survived", "no tests", "timeout", "suspicious", "segfault")
+
+# Both mean "the suite did not notice this change", and both are failed on.
+# ``no tests`` deserves the same weight as ``survived``: it is what a brand-new
+# function with no test at all reports, because the covering-test analysis found
+# nothing that executes it. Treating it as merely informational would let the
+# PR tier pass a change that added an entirely unexercised gate, which is the
+# defect this tooling exists to catch.
+UNNOTICED_STATUSES = ("survived", "no tests")
 
 # No verdict was reached for these: the child died or ran out of time, so the
 # mutant was neither killed nor shown to survive.
@@ -152,8 +158,21 @@ def changed_modules(base: str) -> list[str]:
     return sorted(filters)
 
 
-def parse_results(text: str) -> dict[str, list[str]]:
-    """Group ``mutmut results`` output by status."""
+def in_scope(mutant_name: str, filters: list[str]) -> bool:
+    """Whether this mutant is one the current run actually re-checked.
+
+    ``mutmut results`` reads every ``.meta`` file under ``mutants/``, including
+    verdicts left behind by an earlier run with a different scope.  Without this
+    filter, a scoped run reports the previous run's survivors as its own -- a
+    local re-run would blame a one-line change for thirteen unrelated
+    functions.  An empty filter list means the whole scope, so everything counts.
+    """
+
+    return not filters or any(fnmatch.fnmatch(mutant_name, pattern) for pattern in filters)
+
+
+def parse_results(text: str, filters: list[str]) -> dict[str, list[str]]:
+    """Group ``mutmut results`` output by status, within the current scope."""
 
     grouped: dict[str, list[str]] = {}
     for line in text.splitlines():
@@ -161,7 +180,7 @@ def parse_results(text: str) -> dict[str, list[str]]:
         if ": " not in stripped:
             continue
         name, _, status = stripped.rpartition(": ")
-        if status not in REPORTED_STATUSES:
+        if status not in REPORTED_STATUSES or not in_scope(name, filters):
             continue
         grouped.setdefault(status, []).append(name)
     return grouped
@@ -177,8 +196,10 @@ def function_key(mutant_name: str) -> str:
     return f"{match['module']}.{match['function']}"
 
 
-def survivor_counts(survivors: list[str]) -> dict[str, int]:
-    return dict(sorted(Counter(function_key(name) for name in survivors).items()))
+def survivor_counts(mutants: list[str]) -> dict[str, int]:
+    """Count unnoticed mutants per function."""
+
+    return dict(sorted(Counter(function_key(name) for name in mutants).items()))
 
 
 def load_baseline() -> dict[str, int]:
@@ -284,9 +305,9 @@ def main(argv: list[str] | None = None) -> int:
     results = _mutmut("results", capture=True)
     if results.returncode != 0:
         raise MutationError(f"mutmut results failed:\n{results.stdout}{results.stderr}")
-    grouped = parse_results(results.stdout)
+    grouped = parse_results(results.stdout, filters)
 
-    survivors = grouped.get("survived", [])
+    unnoticed = [name for status in UNNOTICED_STATUSES for name in grouped.get(status, [])]
     for status in REPORTED_STATUSES:
         print(f"  {status:<12} {len(grouped.get(status, []))}")
 
@@ -310,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  Refusing to report a partial run as a result. Pass --allow-unverdicted to override.")
             return 3
 
-    counts = survivor_counts(survivors)
+    counts = survivor_counts(unnoticed)
 
     if args.update_baseline:
         # Only the whole-scope run may write the baseline. A scoped run sees
@@ -328,13 +349,13 @@ def main(argv: list[str] | None = None) -> int:
     # consulted.
     new = regressions(counts, load_baseline())
     if not new:
-        print("\nNo new surviving mutants against the baseline.")
+        print("\nNo mutation the suite fails to notice, beyond the recorded baseline.")
         return 0
 
-    print(f"\n{len(new)} function(s) gained surviving mutants:")
+    print(f"\n{len(new)} function(s) gained unnoticed mutants (survived or untested):")
     for key, (was, now) in sorted(new.items()):
         print(f"  {key}: {was} -> {now}")
-    explain(survivors, set(new), args.explain_limit)
+    explain(unnoticed, set(new), args.explain_limit)
     print(
         "\nEach diff above is a change to the guarded code that the whole suite "
         "still passes with. Either add a test that fails on it, or -- if it is "
