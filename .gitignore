@@ -3,7 +3,13 @@
 .agents/
 .augment/
 .bob/
-.claude/
+.claude/*
+# ...but the internal scenario-authoring skills are meant to be shared: they are
+# how a non-engineer contributes an eval scenario, so they have to be in the
+# repo. Deliberately not under src/ -- AGENTS.md requires every src/<skill> to
+# ship in current_pack and the README table, and these are internal tooling,
+# not part of the pack.
+!.claude/skills/
 .codebuddy/
 .commandcode/
 .context/
@@ -46,6 +52,11 @@
 # Skill runtime
 skills/
 skills-lock.json
+# `skills/` above is the runtime staging directory. It also matches
+# .claude/skills/, which is the opposite of what we want: those are the
+# internal scenario-authoring skills and they must be shared.
+!.claude/skills/
+!.claude/skills/**
 
 # Private eval artifacts
 evals/private/*
