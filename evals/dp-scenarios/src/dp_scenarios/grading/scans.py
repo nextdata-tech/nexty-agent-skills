@@ -74,8 +74,12 @@ def supported_path_scan(closure: str | Path, *, sanctioned_client: object = None
     forbidden_roots = {
         "aiohttp",
         "curl_cffi",
+        # Roots only: `forbidden` already matches every submodule of each
+        # entry, so listing "http.client" beside "http" decided nothing.
+        # Mutation testing found that entry unkillable and it was dead, not
+        # untested -- tests/test_grading_scan_tables.py still requires
+        # `import http.client` to be rejected, through "http".
         "http",
-        "http.client",
         "httpcore",
         "httplib2",
         "httpx",
