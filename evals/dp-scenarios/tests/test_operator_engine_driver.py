@@ -166,7 +166,7 @@ def test_driver_leading_guard_falls_back_on_every_authorable_turn_and_allows_age
     assert sanctioned.turns[1].driver_forbidden_terms_in_force == 2
 
 
-def test_driver_view_is_relevance_gated_and_redacted() -> None:
+def test_the_whole_brief_is_offered_every_turn_and_stays_redacted() -> None:
     script = make_script()
     views: list[DriverView] = []
 
@@ -188,7 +188,6 @@ def test_driver_view_is_relevance_gated_and_redacted() -> None:
     ).run()
 
     assert views
-    assert views[0].known_facts == ()
     # Four agent messages precede the second authorable turn; the view carries
     # the last two and no more.
     assert len(views) == 2
@@ -196,14 +195,48 @@ def test_driver_view_is_relevance_gated_and_redacted() -> None:
     assert views[1].prior_agent_messages == ("Done.", "")
     assert all(len(view.prior_agent_messages) <= 2 for view in views)
     assert all("FIXTURE-SECRET" not in json.dumps(view.to_mapping()) for view in views)
-    assert "FIXTURE-SECRET" not in json.dumps(views[0].to_mapping())
-    # No agent message in this run says "grain", so the grain fact's token is
-    # owed to no view at all -- not just to the first one.
-    assert all("FACT-ONLY-MARKER" not in json.dumps(view.to_mapping()) for view in views)
-    assert all(view.known_facts == () for view in views)
     assert all("ACTIVE-SENTINEL" not in json.dumps(view.to_mapping()) for view in views)
 
-    views.clear()
+    # No agent message in this run says "grain" or "join", and the whole brief
+    # is offered anyway. The offer used to be keyword-gated on the current
+    # message, which starved a live run: four turns were handed no fact at all
+    # and four more the same single fact, because one trigger term happened to
+    # be a common word. A fact's ``terms`` trigger the *question*, so gating
+    # the offer on them asked whether the agent had used the author's
+    # vocabulary, not whether the operator knows the answer.
+    expected = (
+        ("grain_fact", "The grain is one row per account; FACT-ONLY-MARKER."),
+        ("join_fact", "The join uses account_id."),
+    )
+    assert all(view.known_facts == expected for view in views)
+
+    # known_facts is ground truth only. The decision and status banks are the
+    # rubric the run is graded against and must never be offered to a driver.
+    sheet = script.answer_sheet
+    assert all(key in sheet.ground_truth for key, _ in views[0].known_facts)
+    rubric = ("The work is still in progress.", "Choose the approved option.")
+    assert all(text not in json.dumps(views[0].known_facts) for text in rubric)
+
+
+def test_offering_the_whole_brief_does_not_exempt_every_forbidden_term() -> None:
+    """The leading guard must not be retired by widening the fact offer.
+
+    A forbidden term is exempt when the agent has already reached it, or when
+    it appears in a fact the agent actually asked for -- answering a question
+    in the asker's own words is not leading. Exempting from every *offered*
+    fact instead would leave ``driver_forbidden_terms`` nominally enforced and
+    actually empty: this fixture's brief contains both "grain" and "join", so
+    every declared term would be exempt on every turn and a driver could hand
+    the agent the answer with the scan still running.
+    """
+
+    script = make_script()
+    views: list[DriverView] = []
+
+    def provider(view: DriverView) -> str:
+        views.append(view)
+        return "Understood, carry on."
+
     OperatorEngine(
         script,
         InMemoryTransport(
@@ -215,16 +248,23 @@ def test_driver_view_is_relevance_gated_and_redacted() -> None:
         ),
         driver=driver(provider),
     ).run()
-    assert views[0].known_facts == (
-        ("grain_fact", "The grain is one row per account; FACT-ONLY-MARKER."),
-    )
-    assert "FACT-ONLY-MARKER" in json.dumps(views[0].to_mapping())
-    # known_facts is ground truth only. The decision and status banks are the
-    # rubric the run is graded against and must never be offered to a driver.
-    sheet = script.answer_sheet
-    assert all(key in sheet.ground_truth for key, _ in views[0].known_facts)
-    rubric = ("The work is still in progress.", "Choose the approved option.")
-    assert all(text not in json.dumps(views[0].known_facts) for text in rubric)
+
+    # Turn 2 is not substitutable, so the authorable turns are 3 and 5 and
+    # their preceding agent messages are "What is the grain?" and "Done.".
+    assert len(views) == 2
+    assert all(len(view.known_facts) == 2 for view in views)
+
+    # The agent asked about the grain, so the grain fact -- and only that one --
+    # becomes sayable. The join fact was offered on the very same turn and its
+    # term is still in force: this is the assertion that fails if exemption is
+    # ever computed from the offer.
+    assert "grain" not in views[0].forbidden_terms
+    assert "join" in views[0].forbidden_terms
+    assert "aggregation" in views[0].forbidden_terms
+
+    # Nothing factual was asked before the second authorable turn, so all three
+    # stand again -- an exemption is per question, never sticky.
+    assert set(views[1].forbidden_terms) == {"grain", "join", "aggregation"}
 
 
 def test_driver_fact_memory_and_beat_recomposition_are_recorded() -> None:
@@ -265,8 +305,11 @@ def test_driver_fact_memory_and_beat_recomposition_are_recorded() -> None:
     )
     result = OperatorEngine(script, transport, driver=driver(provider)).run()
 
+    # The whole brief is offered every turn; the memory below is what
+    # decides whether a fact is *restated*, not the offer.
     assert views[0].known_facts == (
         ("grain_fact", "The grain is one row per account; FACT-ONLY-MARKER."),
+        ("join_fact", "The join uses account_id."),
     )
     # The fact is remembered as stated because it was *transmitted* on the
     # fallback -- not because a scan found the question's own trigger word in
@@ -330,7 +373,7 @@ def test_a_driver_echoing_a_question_term_does_not_mark_the_fact_served() -> Non
     assert "operator_repeat_suppressed" not in (result.ledger_rows[1]["claim"] or {})
     # The agent asked twice; the answer is still selected and still offered.
     assert views[1].facts_already_stated == ()
-    assert views[1].known_facts == (("grain_fact", fact),)
+    assert views[1].known_facts == (("grain_fact", fact), ("join_fact", "The join uses account_id."))
     assert views[1].selected_reply == fact
 
 
@@ -584,7 +627,7 @@ def test_offered_fact_text_is_redacted_before_it_reaches_the_driver() -> None:
         extra_sentinels=[b"FACT-ONLY-MARKER"],
     ).run()
 
-    assert [key for key, _ in views[0].known_facts] == ["grain_fact"]
+    assert [key for key, _ in views[0].known_facts] == ["grain_fact", "join_fact"]
     assert "FACT-ONLY-MARKER" not in json.dumps(views[0].to_mapping())
     assert all("FACT-ONLY-MARKER" not in fact for _, fact in views[0].known_facts)
 
@@ -847,8 +890,9 @@ def test_a_reply_that_adds_nothing_to_the_question_does_not_divide_by_zero() -> 
     Every content word of the reply also appears in the question, so
     ``distinctive`` is empty and the ratio would divide by zero. Nothing but
     the ``and`` short-circuiting on the minimum prevents it, and no other test
-    reaches a set smaller than two -- so this pins the ordering rather than
-    trusting it.
+    reaches an *empty* set -- ``test_conveyance_ignores_words_the_agent_supplied_itself``
+    gets to one, because "belongs" and "belong" are distinct tokens without
+    stemming -- so this pins the ordering rather than trusting it.
     """
 
     from dp_scenarios.operator.engine import _authored_text_conveys, _content_words

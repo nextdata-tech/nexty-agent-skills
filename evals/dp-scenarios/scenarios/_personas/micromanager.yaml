@@ -40,3 +40,5 @@ reply_bank:
   status_query: ["Which intermediate number changed?"]
   other: ["I don't know, you tell me."]
 fallback: "I don't know, you tell me."
+# How this stakeholder hands back a decision the scenario never encoded.
+stance_when_unknown: ask_back

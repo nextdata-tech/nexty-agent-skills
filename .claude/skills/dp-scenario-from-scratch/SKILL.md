@@ -31,7 +31,12 @@ Specifically five things:
    hand back, and why it is wrong. This is the heart of the test. A scenario
    without a specific wrong answer grades nothing.
 4. **The right answer**, or the right *refusal*. Sometimes the correct outcome
-   is "you cannot answer that from this source, and here is why."
+   is "you cannot answer that from this source, and here is why." Ask which
+   one it is, plainly: *"if they came back and asked you for that number, would
+   you have it somewhere else, or does it simply not exist?"* Their answer sets
+   `gap_stance` — see `reference/interview-to-artifacts.md`. It is the
+   difference between an operator who sends the agent looking and one who tells
+   it to stop looking, and getting it backwards wastes the whole run.
 5. **How they behave mid-stream.** Do they approve without reading? Change the
    definition halfway? Push back on a correct answer? Go quiet?
 

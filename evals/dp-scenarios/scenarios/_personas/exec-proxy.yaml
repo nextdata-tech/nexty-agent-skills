@@ -40,3 +40,5 @@ reply_bank:
   status_query: ["Fine, just export it to Excel and I'll do it myself."]
   other: ["I don't know, you tell me."]
 fallback: "I don't know, you tell me."
+# How this stakeholder hands back a decision the scenario never encoded.
+stance_when_unknown: defer_upward

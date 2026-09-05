@@ -40,3 +40,5 @@ reply_bank:
   status_query: ["The API is down."]
   other: ["I don't know, you tell me."]
 fallback: "I don't know, you tell me."
+# How this stakeholder hands back a decision the scenario never encoded.
+stance_when_unknown: assert_default

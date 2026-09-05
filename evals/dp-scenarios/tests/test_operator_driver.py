@@ -257,7 +257,7 @@ def test_non_string_provider_output_is_empty_failure() -> None:
     assert provider.calls == 1
 
 
-def test_driver_view_is_an_operator_view_and_has_exactly_six_extra_mapping_keys() -> None:
+def test_driver_view_is_an_operator_view_and_has_exactly_seven_extra_mapping_keys() -> None:
     view = _view(beat=DriverBeat("approval", ("approved",)))
     base_keys = set(OperatorView.to_mapping(view))
     mapping = view.to_mapping()
@@ -270,9 +270,13 @@ def test_driver_view_is_an_operator_view_and_has_exactly_six_extra_mapping_keys(
         "beat",
         "forbidden_terms",
         "rejection_notice",
+        "directive",
     }
     assert mapping["beat"] == {"id": "approval", "required_terms": ["approved"]}
     assert mapping["selected_reply"] == ""
+    # The provider decides the shape of its message from ``directive``, so an
+    # absent one would silently return every turn to "convey selected_reply".
+    assert mapping["directive"] == "answer"
 
 
 def test_generated_operator_accepts_a_driver_view_unchanged() -> None:

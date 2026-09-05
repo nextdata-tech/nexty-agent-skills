@@ -422,7 +422,14 @@ def test_turn_three_approval_writes_through_real_store_and_lints_clean(tmp_path:
     assert result.ledger_rows[2]["claim"] == row["claim"]
     assert row["phase"] == 3
     assert row["artifact_ref"] == "artifact://spec-v1"
-    assert row["claim"] == {"open_decision_marker": False}
+    # The directive is recorded on any turn it actually governed, so the
+    # approval row now says why the operator's line was chosen. "What is the
+    # status?" classifies as decision.request on the bare "?" alone, which is
+    # why this is a factual gap rather than a decision.
+    assert row["claim"] == {
+        "open_decision_marker": False,
+        "operator_directive": "unknown_fact:operator_is_uninformed",
+    }
     assert row["qualification"] == "strong"
 
 
@@ -969,7 +976,10 @@ def test_operator_script_hash_changes_for_each_script_material() -> None:
 
     assert operator_script_hash(replace(script, persona=changed_metadata)) == operator_script_hash(script)
     assert operator_script_hash(replace(script, persona=changed_reply)) != operator_script_hash(script)
-    assert operator_script_hash(replace(script, turns=("Improve weekly visibility.", "Please continue now."))) == operator_script_hash(script)
+    # A substitutable turn's text is transmitted whenever the agent asks for
+    # nothing, so it is script identity. See
+    # test_editing_a_substitutable_turn_changes_the_script_hash.
+    assert operator_script_hash(replace(script, turns=("Improve weekly visibility.", "Please continue now."))) != operator_script_hash(script)
     assert operator_script_hash(
         replace(script, turns=("Improve weekly visibility.", {"text": "Please continue.", "substitute_reply": False}))
     ) != operator_script_hash(script)
@@ -1005,13 +1015,22 @@ def test_editing_a_non_substitutable_turn_changes_the_script_hash() -> None:
     assert operator_script_hash(edited) != operator_script_hash(script)
 
 
-def test_editing_a_substitutable_turn_does_not_change_the_script_hash() -> None:
-    """The other half: authored text a matcher reply always replaces is not identity."""
+def test_editing_a_substitutable_turn_changes_the_script_hash() -> None:
+    """A substitutable turn's text is identity, because it can be transmitted.
+
+    This asserted the opposite until the yield rule, on the premise that a
+    matcher reply always replaces such text. That premise is now false: when
+    the agent asks for nothing, the scripted line is exactly what goes out.
+    Two scripts differing only in a room turn -- "Take your time." against
+    "Hurry up, I need this today." -- hashed identically while transmitting
+    different bytes, so the repeatability contract did not cover the operator's
+    own words.
+    """
 
     script = make_script(turns=("Improve weekly visibility.", "Please continue."))
     edited = make_script(turns=("Improve weekly visibility.", "Please continue now."))
 
-    assert operator_script_hash(edited) == operator_script_hash(script)
+    assert operator_script_hash(edited) != operator_script_hash(script)
 
 
 def test_declaring_a_turn_an_operator_approval_changes_the_script_hash() -> None:

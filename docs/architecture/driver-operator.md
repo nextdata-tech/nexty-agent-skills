@@ -50,12 +50,99 @@ The request always sends `max_completion_tokens`; GPT-5-class models reject
 serves both. `temperature` is omitted when it is the API default (1.0), which
 those models require, and sent otherwise.
 
+## What the operator's turn is for
+
+Most turns have no declared answer behind them. The engine resolves what such
+a turn is *for* into one `directive`, and that value -- not a stock sentence --
+is what the driver is given.
+
+| directive | when | what the operator does |
+|---|---|---|
+| `answer` | the matcher resolved a declared answer | say that substance in its own words |
+| `yield` | the agent asked for nothing | acknowledge and hand the floor back |
+| `unknown_fact:<gap_stance>` | a source question with no declared answer | scenario decides: the source is short, or the operator is merely uninformed |
+| `unknown_fact:operator_is_uninformed` | a status or miscellaneous ask | fixed: "is it done on your side?" is not a claim about what the source holds, so the scenario's stance does not apply |
+| `decision:<stance_when_unknown>` | a decision, an approval, or any message using choice vocabulary | persona decides the tactic |
+
+A choice outranks the classification. The rule bank is first-match-wins with
+`source.question` first, and that rule fires on `data|field|row|table|input` --
+vocabulary too common to be evidence of anything -- so "Which path should I
+take? Both are in the data." arrives classified as a source question.
+Answering it with "I do not have that" leaves the choice unmade, which is the
+stall the whole change exists to remove.
+
+A **repeat-suppressed** turn resolves as though nothing were declared. The
+fact exists but has already been given, so the turn has no substance to
+convey; treating it as `answer` handed the driver an empty `selected_reply`
+the prompt promises is full, which is an invitation to invent one.
+
+It is a cross product on purpose, and the axes are **not** symmetric. The
+scenario owns what a gap *means* here, because only the answer sheet can be
+checked against the gold the run is graded on. The persona owns the tactic for
+handing a decision back, because that is voice and carries no factual claim.
+`confidently-wrong` is the standing counter-example: its reply bank holds
+factual claims ("The API is down"), which is why a stance is a tactic rather
+than another canned sentence.
+
+`answer` is the only directive under which `selected_reply` is non-empty.
+Passing a persona bank line there is what produced the failure this replaces:
+the prompt says a non-empty `selected_reply` is the substance the turn
+expects, so the driver faithfully paraphrased "I am not deciding that." A live
+15-turn run refused on eight turns, four of them turns where the agent had
+asked for nothing at all, and the run made a third of the tool calls of
+comparable runs and never built the product. Nothing tripped, because the
+driver was doing exactly what it was told.
+
+**The yield rule is not driver-specific.** `base` fell through to the scripted
+turn only when the matcher returned nothing, and the matcher always returns
+something, so an author's room turns -- `Keep going, please.` / `Take your
+time.` -- were unreachable text on the scripted, generated-surface and driven
+paths alike. The scripted operator answered a status update with a refusal
+too.
+
+That also means a substitutable turn's text is now script identity, and
+`operator_script_hash` covers it. It used to be elided on the premise that
+such text is never transmitted; two scripts differing only in a room turn
+therefore hashed identically while sending different bytes, so the change
+described above as "a benchmark-pairing break" would not have broken any
+pairing at all.
+
 ## What the driver may see
 
 `DriverView` extends the deliberately narrow `OperatorView` with the
-ground-truth brief and the turn's beat. It never receives gold row-sets or
-oracle files, ledger bytes, tool results, touched-file contents, or fixture
-data.
+ground-truth brief, the turn's beat and its directive. It never receives gold
+row-sets or oracle files, ledger bytes, tool results, touched-file contents, or
+fixture data.
+
+The brief is offered **whole**, every turn. It was previously filtered by
+keyword-matching each fact's `terms` against the current agent message, which
+starved the driver exactly when a question was phrased unexpectedly: one live
+run was handed no fact at all on four turns and the same single fact on four
+more, because one trigger term happened to be a common word. A fact's `terms`
+trigger the *question*, so gating the offer on them asked whether the agent had
+used the author's vocabulary, not whether the operator knows the answer. What
+must not happen is the operator *volunteering* an unasked fact, and that is a
+prompt rule.
+
+Relevance still gates one thing: **which forbidden terms are exempt.** A term
+is exempt when the agent has already used it, or when it appears in a fact the
+agent actually asked for -- answering in the asker's own words is not leading.
+"Asked for" means the fact's *whole* declared term set is present, mirroring
+`answer_for_ground_truth`: a fact keyed on ("exact", "sitting", "stage") is not
+the answer to a message that merely says "stage". Exempting from every
+*offered* fact instead would retire `driver_forbidden_terms` the moment the
+brief widened, silently: the scan would still run with nothing left in it.
+
+In practice that relevance test contributes little on its own, because a fact
+whose whole term set is present has usually already been *selected*, and the
+selected reply is exempt anyway. It earns its place on the two paths where it
+has not: a repeat-suppressed re-ask, where there is no selected reply, and a
+turn where a decision rule or a sort-earlier fact won.
+
+This puts a requirement on the scenario. A fact that resolves the drill must
+have its vocabulary declared in `driver_forbidden_terms`, or the widened offer
+leaves nothing guarding it -- `capability-shortfall` declares `updatedat` for
+exactly this reason.
 
 The agent message is sentinel-redacted before it leaves the process. The
 redaction set is the union of the operator script's own sentinel, the sentinels

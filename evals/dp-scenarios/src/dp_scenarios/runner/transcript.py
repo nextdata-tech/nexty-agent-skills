@@ -311,6 +311,10 @@ class _Turn:
         return self.observation.get("operator_repeat_suppressed")
 
     @property
+    def directive(self) -> Any:
+        return self.observation.get("operator_directive")
+
+    @property
     def has_classification(self) -> bool:
         return bool(self.observation)
 
@@ -348,6 +352,15 @@ def _classification_note(turn: _Turn | None) -> str:
     # had already sent. Runs with no re-serve render exactly as before.
     if turn.repeat_suppressed:
         note += " | repeat-suppressed=yes"
+    # Recorded only when it is not ``answer``, so this renders on exactly the
+    # turns where the operator had nothing declared to say. Without it a room
+    # turn sent because the agent asked nothing reads identically to one sent
+    # for any other reason -- and a yield caused by a *missed* question reads
+    # as a deliberate pause. Reading these lines is how the refusal collapse
+    # was found; the mechanism that fixes it has to be legible the same way.
+    directive = turn.directive
+    if isinstance(directive, str) and directive:
+        note += f" | directive={directive}"
     return note
 
 
