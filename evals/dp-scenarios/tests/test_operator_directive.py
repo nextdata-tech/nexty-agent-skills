@@ -719,3 +719,93 @@ def test_the_conversation_file_names_the_directive() -> None:
         },
     )
     assert "directive=" not in _classification_note(plain)
+
+
+def test_the_persona_stance_is_script_identity() -> None:
+    """An engine input must be hashed, exactly like its scenario-axis twin.
+
+    ``gap_stance`` reaches the hash through the answer sheet's mapping. The
+    persona's half did not, so flipping a persona from ``ask_back`` to
+    ``assert_default`` -- which changes what the operator says on every turn it
+    has no declared answer for -- left ``operator_script_hash`` byte-identical,
+    and the paired-comparison guard would have read two different operators as
+    the same script.
+
+    ``label``, ``vocabulary`` and ``behaviors`` stay out on purpose: they are
+    prompt colour, not a branch the engine takes.
+    """
+
+    from dataclasses import replace as dc_replace
+
+    from dp_scenarios.operator.engine import operator_script_hash
+    from dp_scenarios.operator.persona import persona_from_mapping
+
+    script = make_script()
+    raw = dict(script.persona.to_mapping())
+    assert raw["stance_when_unknown"] != "assert_default"
+    flipped = persona_from_mapping({**raw, "stance_when_unknown": "assert_default"})
+
+    assert operator_script_hash(
+        dc_replace(script, persona=flipped)
+    ) != operator_script_hash(script)
+
+    # Prompt colour is still excluded, so this test cannot pass for the wrong
+    # reason -- it is the stance that moved the hash, not any persona edit.
+    recoloured = persona_from_mapping({**raw, "label": "A different label"})
+    assert operator_script_hash(
+        dc_replace(script, persona=recoloured)
+    ) == operator_script_hash(script)
+
+
+def test_a_bare_confirm_is_an_ask_on_any_line() -> None:
+    """The one anchored alternative needs MULTILINE; agent messages wrap.
+
+    Without it "Blueprint is ready.\\nConfirm the metric definition" matched
+    nothing at all -- the anchor only reaches offset 0 of the whole message --
+    so a direct instruction on the second line was dropped as a yield.
+    """
+
+    message = "Blueprint is ready.\nConfirm the metric definition and I will build."
+    assert "\n" in message, "the fixture must span lines or it tests nothing"
+    assert solicits_operator(message) is True
+    # The single-line form must keep working, so this is a widening only.
+    assert solicits_operator("Confirm the metric definition and I will build.") is True
+    # Still not the agent's own report.
+    assert solicits_operator("I can confirm that the build finished cleanly.") is False
+
+
+def test_which_opens_an_ask_without_opening_a_question() -> None:
+    """``which`` solicits an answer but must not widen the classifier.
+
+    ``_classify``'s ``is_question`` gates the obstacle branch, which returns a
+    different category, rule id, reply and ``matched`` flag -- so adding a word
+    there moves ledger rows. It belongs to the solicitation test alone, which
+    is why the two openers are separate constants.
+    """
+
+    from dp_scenarios.operator.matcher import MatcherBank
+
+    # No question mark, and deliberately no request phrase either: "do you
+    # want" would match SOLICITATION_PATTERN on its own and leave the opener
+    # untested. Only the ``which`` opener can see this as an ask.
+    from dp_scenarios.operator.matcher import (
+        INTERROGATIVE_OPENER_PATTERN,
+        SOLICITATION_PATTERN,
+    )
+
+    bare = "Which grain, account or deal."
+    assert not SOLICITATION_PATTERN.search(bare), "fixture must not match another alternative"
+    assert not INTERROGATIVE_OPENER_PATTERN.match(bare)
+    assert solicits_operator(bare) is True
+
+    bank = MatcherBank(
+        load_persona(ROOT / "scenarios/_personas/smoke.yaml"),
+        make_script().answer_sheet,
+    )
+    # An obstacle term, no question mark, opening with "Which". Treating it as
+    # a question would divert it to the no-leading fallback and mark the turn
+    # unmatched.
+    result = bank.reply_for("Which table should I use for the proxy join")
+    assert result.rule_id != "fallback.no-leading"
+    assert result.obstacle_question is False
+    assert result.matched is True
