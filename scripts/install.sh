@@ -14,6 +14,7 @@ DESKTOP_SUPPORT="$HOME/Library/Application Support/Claude"
 PLUGIN_NAME="nexty-agent-skills"
 MP_NAME="nexty"
 PLUGIN_SET="all"
+CODE_INSTALL_MARKER=".nexty-plugin-install.json"
 
 SUBCMD="install"
 declare -a TARGETS=()
@@ -297,15 +298,259 @@ with open(dst, "w", encoding="utf-8") as fh:
 PY
 }
 
+read_managed_code_skills() {
+  local marker="$1"
+  python3 - "$marker" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        marker = json.load(fh)
+except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"cannot read managed skill marker {path}: {exc}")
+
+if not isinstance(marker, dict):
+    raise SystemExit("managed skill marker is not a JSON object")
+if marker.get("name") != "nexty-agent-skills":
+    raise SystemExit(f"managed skill marker has unexpected name: {marker.get('name')!r}")
+skills = marker.get("skills")
+if not isinstance(skills, list) or not skills:
+    raise SystemExit("managed skill marker has no skills list")
+pattern = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+for field in ("skills", "projection_skills", "extra_skills"):
+    values = marker.get(field)
+    if values is None:
+        continue
+    if not isinstance(values, list):
+        raise SystemExit(f"managed skill marker field {field!r} is not a list")
+    seen = set()
+    for skill in values:
+        if not isinstance(skill, str) or not pattern.fullmatch(skill) or skill in seen:
+            raise SystemExit(f"managed skill marker has an invalid skill: {skill!r}")
+        seen.add(skill)
+plugin_set = marker.get("plugin_set", "all")
+if plugin_set not in {"all", "desktop", "datamesh", "custom"}:
+    raise SystemExit(f"managed skill marker has an invalid plugin set: {plugin_set!r}")
+for skill in skills:
+    print(skill)
+PY
+}
+
+migrate_legacy_code_skills() {
+  local destination="$1" marker="$1/$CODE_INSTALL_MARKER"
+  [[ -f "$marker" ]] && return 0
+  # Releases before the managed marker stamped only the job-loop skill. Use
+  # that sentinel to identify an installer-owned tree, while leaving arbitrary
+  # user-authored directories alone.
+  local legacy_stamp="$destination/nxd-run-job-loop/.nexty-plugin-version.json"
+  [[ -f "$legacy_stamp" ]] || return 0
+  [[ "$SKILLS_REQUESTED" -eq 0 ]] || return 0
+  [[ "$PLUGIN_SET" == "desktop" || "$PLUGIN_SET" == "datamesh" ]] || return 0
+  local skill_dir skill
+  for skill_dir in "$SRC_DIR"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    skill="$(basename "$skill_dir")"
+    if [[ -d "$destination/$skill" ]]; then
+      run "rm -rf '$destination/$skill'"
+      ok "migrated legacy managed skill: $skill"
+    fi
+  done
+}
+
+remove_previous_managed_code_skills() {
+  local destination="$1" marker="$1/$CODE_INSTALL_MARKER" managed
+  [[ -f "$marker" ]] || return 0
+  if ! managed="$(python3 - "$marker" "$SKILL_LIST_FILE" <<'PY'
+import json
+import re
+import sys
+
+marker_path, selected_path = sys.argv[1:]
+pattern = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+with open(marker_path, encoding="utf-8") as fh:
+    marker = json.load(fh)
+if not isinstance(marker, dict) or marker.get("name") != "nexty-agent-skills":
+    raise SystemExit("invalid managed skill marker")
+
+def checked(field, required=False):
+    values = marker.get(field)
+    if values is None and not required:
+        return []
+    if not isinstance(values, list) or (required and not values):
+        raise SystemExit(f"invalid managed skill marker field: {field}")
+    if any(not isinstance(value, str) or not pattern.fullmatch(value) for value in values):
+        raise SystemExit(f"invalid managed skill marker field: {field}")
+    if len(values) != len(set(values)):
+        raise SystemExit(f"duplicate managed skill marker field: {field}")
+    return values
+
+managed = checked("skills", required=True)
+with open(selected_path, encoding="utf-8") as fh:
+    selected = [line.strip() for line in fh if line.strip()]
+if any(not pattern.fullmatch(skill) for skill in selected):
+    raise SystemExit("invalid selected skill")
+
+if "projection_skills" in marker or "extra_skills" in marker:
+    extras = checked("extra_skills")
+else:
+    extras = managed if marker.get("plugin_set", "all") == "custom" else []
+desired = set(selected) | set(extras)
+for skill in managed:
+    if skill not in desired:
+        print(skill)
+PY
+)"; then
+    die "refusing to replace skills: managed marker is invalid: $marker"
+  fi
+  while IFS= read -r skill; do
+    [[ -n "$skill" ]] || continue
+    if [[ -d "$destination/$skill" ]]; then
+      run "rm -rf '$destination/$skill'"
+      ok "removed managed skill: $skill"
+    fi
+  done <<<"$managed"
+}
+
+write_code_install_marker() {
+  local destination="$1" marker="$destination/$CODE_INSTALL_MARKER"
+  [[ "$DRY_RUN" -eq 1 ]] && {
+    printf '\033[35m[dry-run]\033[0m write %s for %s\n' "$marker" "$PLUGIN_SET" >&2
+    return 0
+  }
+  python3 - "$PLUGIN_JSON" "$SKILL_LIST_FILE" "$marker" "$PLUGIN_SET" "$SKILLS_REQUESTED" <<'PY'
+import json
+import os
+import sys
+
+plugin_path, skill_list_path, marker_path, plugin_set, requested = sys.argv[1:]
+with open(plugin_path, encoding="utf-8") as fh:
+    plugin = json.load(fh)
+with open(skill_list_path, encoding="utf-8") as fh:
+    selected = [line.strip() for line in fh if line.strip()]
+
+previous = {}
+if os.path.isfile(marker_path):
+    with open(marker_path, encoding="utf-8") as fh:
+        previous = json.load(fh)
+
+previous_skills = previous.get("skills", [])
+if "projection_skills" in previous or "extra_skills" in previous:
+    projection = list(previous.get("projection_skills", []))
+    extras = list(previous.get("extra_skills", []))
+elif previous.get("plugin_set", "all") == "custom":
+    projection = []
+    extras = list(previous_skills)
+else:
+    projection = list(previous_skills)
+    extras = []
+
+if requested == "1":
+    for skill in selected:
+        if skill not in projection and skill not in extras:
+            extras.append(skill)
+else:
+    projection = selected
+
+skills = []
+for skill in projection + extras:
+    if skill not in skills:
+        skills.append(skill)
+
+with open(marker_path, "w", encoding="utf-8") as fh:
+    json.dump(
+        {
+            "name": "nexty-agent-skills",
+            "version": plugin.get("version"),
+            "plugin_set": "custom" if requested == "1" else plugin_set,
+            "skills": skills,
+            "projection_skills": projection,
+            "extra_skills": extras,
+        },
+        fh,
+        indent=2,
+    )
+    fh.write("\n")
+PY
+}
+
+use_managed_code_marker_if_present() {
+  local destination="$1" marker="$1/$CODE_INSTALL_MARKER"
+  [[ -f "$marker" ]] || return 0
+  [[ -n "${SKILL_LIST_FILE:-}" ]] || die "internal error: no skill list file for managed marker"
+  if ! read_managed_code_skills "$marker" >"$SKILL_LIST_FILE"; then
+    die "refusing to act on skills: managed marker is invalid: $marker"
+  fi
+}
+
+update_code_install_marker_after_explicit_uninstall() {
+  local destination="$1" marker="$destination/$CODE_INSTALL_MARKER"
+  [[ -f "$marker" ]] || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m update %s after explicit uninstall\n' "$marker" >&2
+    return 0
+  fi
+  if ! read_managed_code_skills "$marker" >/dev/null; then
+    die "refusing to update skills: managed marker is invalid: $marker"
+  fi
+  python3 - "$marker" "$SKILL_LIST_FILE" <<'PY'
+import json
+import os
+import sys
+
+marker_path, skill_list_path = sys.argv[1:]
+with open(marker_path, encoding="utf-8") as fh:
+    marker = json.load(fh)
+with open(skill_list_path, encoding="utf-8") as fh:
+    removed = {line.strip() for line in fh if line.strip()}
+
+if "projection_skills" in marker or "extra_skills" in marker:
+    projection = [skill for skill in marker.get("projection_skills", []) if skill not in removed]
+    extras = [skill for skill in marker.get("extra_skills", []) if skill not in removed]
+elif marker.get("plugin_set", "all") == "custom":
+    projection = []
+    extras = [skill for skill in marker["skills"] if skill not in removed]
+else:
+    projection = [skill for skill in marker["skills"] if skill not in removed]
+    extras = []
+remaining = []
+for skill in projection + extras:
+    if skill not in remaining:
+        remaining.append(skill)
+if remaining:
+    marker["skills"] = remaining
+    marker["projection_skills"] = projection
+    marker["extra_skills"] = extras
+    marker["plugin_set"] = "custom"
+    with open(marker_path, "w", encoding="utf-8") as fh:
+        json.dump(marker, fh, indent=2)
+        fh.write("\n")
+else:
+    os.unlink(marker_path)
+PY
+}
+
 install_code() {
   local destination; destination="$(cc_dest)"
   info "installing skills -> $destination ($SCOPE)"
   run "mkdir -p '$destination'"
+  if [[ "$SKILLS_REQUESTED" -eq 1 && -f "$destination/$CODE_INSTALL_MARKER" ]]; then
+    if ! read_managed_code_skills "$destination/$CODE_INSTALL_MARKER" >/dev/null; then
+      die "refusing to extend skills: managed marker is invalid: $destination/$CODE_INSTALL_MARKER"
+    fi
+  fi
+  if [[ "$SKILLS_REQUESTED" -eq 0 ]]; then
+    migrate_legacy_code_skills "$destination"
+    remove_previous_managed_code_skills "$destination"
+  fi
   while IFS= read -r skill; do
     copy_skill_tree "$SRC_DIR/$skill" "$destination/$skill"
     [[ "$skill" == "nxd-run-job-loop" ]] && write_code_version_stamp "$destination/$skill"
     ok "code: $skill"
   done < "$SKILL_LIST_FILE"
+  write_code_install_marker "$destination"
   info "Claude Code: skills installed. Restart Claude Code or start it in a project to use them."
 }
 
@@ -318,11 +563,19 @@ uninstall_code() {
       ok "removed: $skill"
     fi
   done < "$SKILL_LIST_FILE"
+  if [[ "$SKILLS_REQUESTED" -eq 1 ]]; then
+    update_code_install_marker_after_explicit_uninstall "$destination"
+  elif [[ -f "$destination/$CODE_INSTALL_MARKER" ]]; then
+    run "rm -f '$destination/$CODE_INSTALL_MARKER'"
+  fi
   [[ -d "$destination" ]] && run "rmdir '$destination' 2>/dev/null || true"
 }
 
 status_code() {
   local destination; destination="$(cc_dest)"
+  if [[ "$SKILLS_REQUESTED" -eq 0 ]]; then
+    use_managed_code_marker_if_present "$destination"
+  fi
   echo "Claude Code ($SCOPE): $destination"
   while IFS= read -r skill; do
     if [[ -d "$destination/$skill" ]]; then
@@ -561,6 +814,9 @@ main() {
   validate_skill_names
   if [[ "$has_code" -eq 1 ]]; then
     prepare_selected_skills
+    if [[ "$SUBCMD" != "install" && "$SKILLS_REQUESTED" -eq 0 ]]; then
+      use_managed_code_marker_if_present "$(cc_dest)"
+    fi
   fi
 
   case "$SUBCMD" in

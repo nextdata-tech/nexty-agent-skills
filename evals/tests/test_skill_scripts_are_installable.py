@@ -326,6 +326,222 @@ def test_code_install_includes_and_invokes_desktop_helpers(tmp_path: Path):
     assert _lock_plugin_version(skill_dir) == version
 
 
+def test_switching_named_code_projections_replaces_only_managed_skills(tmp_path: Path):
+    """A projection switch removes the prior managed set, not user skills."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "datamesh",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    skills_root = tmp_path / ".claude" / "skills"
+    assert (skills_root / "nxd-analyze-mesh").is_dir()
+
+    user_skill = skills_root / "user-authored-skill"
+    user_skill.mkdir()
+    (user_skill / "SKILL.md").write_text("user", encoding="utf-8")
+
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "desktop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+
+    managed = {
+        path.name for path in skills_root.iterdir() if path.is_dir()
+    }
+    assert managed == {
+        "nxd-build-semantic-data-product",
+        "nxd-generate-data-product",
+        "nxd-render-static-artifact",
+        "nxd-review-closure",
+        "nxd-run-job-loop",
+        "user-authored-skill",
+    }
+    marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
+    assert marker["plugin_set"] == "desktop"
+    assert set(marker["skills"]) == managed - {"user-authored-skill"}
+
+    _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--plugin",
+        "datamesh",
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert user_skill.is_dir()
+    assert not (skills_root / "nxd-run-job-loop").exists()
+    assert not (skills_root / ".nexty-plugin-install.json").exists()
+
+
+def test_explicit_code_skill_operations_preserve_and_update_managed_subset(tmp_path: Path):
+    """Explicit --skills remains additive/removal-scoped, unlike projections."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "desktop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    skills_root = tmp_path / ".claude" / "skills"
+
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-analyze-mesh",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    assert (skills_root / "nxd-run-job-loop").is_dir()
+    assert (skills_root / "nxd-analyze-mesh").is_dir()
+    marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
+    assert marker["plugin_set"] == "custom"
+    assert "nxd-analyze-mesh" in marker["skills"]
+
+    _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert not (skills_root / "nxd-run-job-loop").exists()
+    assert (skills_root / "nxd-analyze-mesh").is_dir()
+    marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
+    assert marker["skills"] == [
+        "nxd-build-semantic-data-product",
+        "nxd-generate-data-product",
+        "nxd-render-static-artifact",
+        "nxd-review-closure",
+        "nxd-analyze-mesh",
+    ]
+
+    _run_installer(
+        tmp_path,
+        "install",
+        "--code",
+        "--plugin",
+        "desktop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    assert (skills_root / "nxd-analyze-mesh").is_dir()
+    marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
+    assert marker["plugin_set"] == "desktop"
+    assert set(marker["projection_skills"]) == {
+        "nxd-build-semantic-data-product",
+        "nxd-generate-data-product",
+        "nxd-render-static-artifact",
+        "nxd-review-closure",
+        "nxd-run-job-loop",
+    }
+    assert marker["extra_skills"] == ["nxd-analyze-mesh"]
+
+
+def test_named_projection_migrates_legacy_installer_tree_but_preserves_user_skill(
+    tmp_path: Path,
+):
+    skills_root = tmp_path / ".claude" / "skills"
+    for name in ("nxd-run-job-loop", "nxd-analyze-mesh"):
+        (skills_root / name).mkdir(parents=True)
+        (skills_root / name / "legacy.txt").write_text("legacy", encoding="utf-8")
+    (skills_root / "nxd-run-job-loop" / VERSION_STAMP).write_text(
+        json.dumps({"name": "nexty-agent-skills", "version": "0.36.4"}),
+        encoding="utf-8",
+    )
+    user_skill = skills_root / "user-authored-skill"
+    user_skill.mkdir()
+    (user_skill / "SKILL.md").write_text("user", encoding="utf-8")
+
+    result = _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "desktop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert user_skill.is_dir()
+    assert (skills_root / "nxd-build-semantic-data-product").is_dir()
+    assert not (skills_root / "nxd-analyze-mesh" / "legacy.txt").exists()
+
+
+def test_named_projection_dry_run_reports_pruning_without_mutation(tmp_path: Path):
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "datamesh",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    skills_root = tmp_path / ".claude" / "skills"
+    before = _snapshot_tree(skills_root)
+
+    result = _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "desktop",
+        "--dry-run",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "rm -rf" in result.stderr and "dry-run" in result.stderr
+    assert _snapshot_tree(skills_root) == before
+
+
+def test_malformed_managed_marker_fails_closed_before_uninstall(tmp_path: Path):
+    skills_root = tmp_path / ".claude" / "skills"
+    skill = skills_root / "nxd-run-job-loop"
+    skill.mkdir(parents=True)
+    (skill / "keep.txt").write_text("keep", encoding="utf-8")
+    outside = tmp_path / "outside-code"
+    outside.mkdir()
+    marker = skills_root / ".nexty-plugin-install.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "name": "nexty-agent-skills",
+                "version": "0.45.0",
+                "plugin_set": "desktop",
+                "skills": ["../outside-code"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_installer(tmp_path, "uninstall", "--code")
+
+    assert result.returncode != 0
+    assert "managed marker is invalid" in result.stderr
+    assert (skill / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert outside.is_dir()
+
+
 @pytest.mark.parametrize("layout", ("src/nxd-run-job-loop", "skills/nxd-run-job-loop"))
 def test_claude_code_plugin_install_layout_resolves_desktop_helpers(
     tmp_path: Path, layout: str

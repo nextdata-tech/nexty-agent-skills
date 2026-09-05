@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.44.0
+  version: 0.45.0
 ---
 
 # nxd-build-semantic-data-product skill
@@ -91,13 +91,13 @@ user's natural-language questions — derive the Step-1 vocabulary yourself. Ste
 2–4 (models.py / transform.py / spec.py) are then **unchanged**.
 
 **1. Profile the materialized tables → `schema.json`.** A sample load (e.g. dlt)
-lands each source table as `main.<name>` in a local DuckDB file. Introspect ALL of
-them in one pass with the nxd-analyze-mesh skill's profiler (DuckDB mode — needs
-the `duckdb` package, e.g. `uv run --with duckdb`) and **save the combined document
-as `schema.json`**:
+lands each source table as `main.<name>` in a local DuckDB file. Read
+[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md) first, then introspect ALL of them with this skill's profiler
+(DuckDB mode — needs `duckdb`, e.g. `uv run --with duckdb`) and **save the combined document as `schema.json`**:
 
 ```bash
-python <nxd-analyze-mesh>/scripts/profile_tabular.py sample.duckdb <table1> <table2> ... > schema.json
+PROFILE_SKILL_DIR="<nxd-build-semantic-data-product>"
+python "$PROFILE_SKILL_DIR/scripts/profile_tabular.py" sample.duckdb <table1> <table2> ... > schema.json
 ```
 
 With two or more tables the profiler emits ONE combined document —

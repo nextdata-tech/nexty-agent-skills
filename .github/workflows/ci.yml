@@ -169,8 +169,9 @@ jobs:
           token: ${{ env.NXD_REPO_TOKEN }}
           token_missing_message: 'NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot resolve the NXD artifact.'
           artifact_prefix: nxd-py-linux-x86_64-${{ steps.nxd-source.outputs.field_mapper_tree_sha }}-
-          selector_label: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          selector_label: field-mapper tree ${{ steps.nxd-source.outputs.field_mapper_tree_sha }} at source ${{ env.NXD_PINNED_SHA }}
           expect_field_mapper_tree_sha: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          expect_source_sha: ${{ env.NXD_PINNED_SHA }}
           install_project_dir: evals/dp-scenarios
       - name: Run field-mapper grant tests
         working-directory: evals/dp-scenarios

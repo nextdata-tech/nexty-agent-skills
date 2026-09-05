@@ -74,16 +74,18 @@ dependencies.
 
 ## Local Data Samples
 
-Profile CSV, JSON, JSONL, and Parquet files with the local profiler that ships
-with this skill:
+Profile CSV, JSON, JSONL, Parquet, or materialized DuckDB tables with the local
+profiler that ships with `nxd-build-semantic-data-product`:
 
 ```bash
-python3 scripts/profile_tabular.py <path>
+python3 <nxd-build-semantic-data-product>/scripts/profile_tabular.py <path>
 ```
 
 Use the output to infer semantic models, data types, nullability, sample values,
 and partition/freshness hints. This is the offline equivalent of the schema
-fingerprint the live `inspect_service.py` derives.
+fingerprint the live `inspect_service.py` derives. If the semantic-builder skill
+is not installed, stop and ask for it to be enabled; do not duplicate this
+script inside the analyzer installation.
 
 ## Documents, Diagrams, and Images
 
