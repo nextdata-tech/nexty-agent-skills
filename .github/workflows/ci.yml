@@ -171,6 +171,7 @@ jobs:
           artifact_prefix: nxd-py-linux-x86_64-${{ steps.nxd-source.outputs.field_mapper_tree_sha }}-
           selector_label: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
           expect_field_mapper_tree_sha: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+          expect_source_sha: ${{ env.NXD_PINNED_SHA }}
           install_project_dir: evals/dp-scenarios
       - name: Run field-mapper grant tests
         working-directory: evals/dp-scenarios
