@@ -668,3 +668,78 @@ def test_a_driver_that_echoes_a_planted_marker_is_rejected_and_never_transmits_i
     # not quote the marker it is rejecting.
     assert views[1].rejection_notice is not None
     assert marker not in json.dumps(views[1].to_mapping())
+
+
+def test_a_driver_that_conveys_a_fact_stops_being_handed_it_again() -> None:
+    """The live failure: the operator restating what it already said.
+
+    A 15-turn driven run re-selected one ground-truth fact ten times and
+    another six, with zero suppressions, while the agent replied "already
+    done" four turns running -- the operator-repeats-itself failure the driver
+    exists to remove, reproduced by the driver. The cause was that
+    ``served_reply_keys`` only filled when the *scripted* sentence went out,
+    which under a driver means only on a fallback, so the memory stayed empty
+    for the whole run.
+
+    A driver that restates the fact in its own words has transmitted it, so it
+    must be recorded as served and not offered again.
+    """
+
+    fact = "The grain is one row per account; FACT-ONLY-MARKER."
+    script = make_script(
+        turns=("Improve weekly visibility.", "Please continue.", "Please continue again."),
+    )
+    views: list[DriverView] = []
+
+    def provider(view: DriverView) -> str:
+        views.append(view)
+        # Carries the substance in the driver's own words, not the scripted line.
+        return "Each row stands for a single account, so the grain is one account per row."
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the grain?"),
+            TurnResult(agent_message="I still need the grain, what is it?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport, driver=driver(provider)).run()
+
+    assert views[0].selected_reply == fact
+    assert views[0].facts_already_stated == ()
+    # Turn 2 conveyed it, so the re-ask on turn 2 is suppressed rather than
+    # answered again, and the next authored turn is handed no fact at all.
+    assert result.turns[1].operator_repeat_suppressed is True, (
+        "the driver restated the fact and the memory still did not record it"
+    )
+    assert "ground_truth.grain_fact" in views[1].facts_already_stated
+    assert views[1].selected_reply == "", "the same fact was offered to the driver again"
+
+
+def test_conveyance_ignores_words_the_agent_supplied_itself() -> None:
+    """Echoing the question back is not conveying the answer.
+
+    The distinctive words are the reply's own *minus* the agent's message, and
+    this is the case where that subtraction is the only thing standing between
+    a pure echo and a consumed fact: every content word of the reply also
+    appears in the question, so without the subtraction the echo scores a
+    perfect 1.0 and the agent is stonewalled on a question it never got an
+    answer to.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    reply = "The owner object belongs to sales."
+    question = "Does the owner object belong to sales?"
+
+    assert _authored_text_conveys(reply, question, "The owner object belongs to sales?") is False
+
+    # The same reply *does* count when the driver adds the substance the
+    # question did not contain.
+    informative = "Yes -- each owner object is the individual sales rep who holds that deal."
+    assert _authored_text_conveys(
+        "The owner object is the individual sales rep who holds that deal.",
+        "Who does the owner object belong to?",
+        informative,
+    ) is True

@@ -12,6 +12,7 @@ when a run repeats a gate or asks for approval after the opening phase.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -584,6 +585,54 @@ def _qualification_for(
     if claim:
         return "strong-for-this-attempt"
     return None
+
+
+#: Words too common to be evidence that a fact was conveyed.
+_CONVEYANCE_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "in", "on", "of", "to", "that", "this",
+    "it", "its", "and", "or", "not", "for", "you", "your", "i", "my", "me", "do",
+    "have", "any", "there", "those", "their", "them", "they", "as", "at", "by",
+    "with", "from", "be", "has", "had", "one", "no", "if", "so", "but", "we",
+    "us", "our", "can", "will", "would", "should", "must", "may", "when",
+    "where", "what", "which", "who", "how",
+})
+
+#: A fact counts as conveyed when the authored turn carries at least this
+#: fraction of its distinctive words, and at least two of them. Calibrated
+#: against real driven turns: messages that genuinely restated a fact scored
+#: 0.45-0.89, while deflections ("I am not sure about the grain, ask me later")
+#: and bare echoes scored 0.00. The gap is wide, so the threshold sits well
+#: clear of both -- a driver has to say something substantive from the reply,
+#: not merely mention its subject.
+_CONVEYANCE_RATIO = 0.34
+_CONVEYANCE_MINIMUM = 2
+
+
+def _content_words(text: str) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", (text or "").casefold())
+        if len(word) > 2 and word not in _CONVEYANCE_STOPWORDS
+    }
+
+
+def _authored_text_conveys(reply: str, agent_message: str, authored: str) -> bool:
+    """Whether an authored turn actually carried the selected reply's substance.
+
+    The distinctive words are the reply's own, *minus* everything already in
+    the agent's message. That subtraction is what makes this safe: a fact's
+    trigger terms come from the question, so a driver that merely echoes the
+    agent -- "the owner field? you tell me" -- shares nothing with what is left
+    and scores zero, which is exactly the deflection case that must not consume
+    the fact.
+    """
+
+    distinctive = _content_words(reply) - _content_words(agent_message)
+    if not distinctive:
+        return False
+    carried = distinctive & _content_words(authored)
+    return len(carried) >= _CONVEYANCE_MINIMUM and len(carried) / len(distinctive) >= _CONVEYANCE_RATIO
+
 
 class OperatorEngine:
     """Run one resolved script against an injected offline transport."""
@@ -1187,8 +1236,16 @@ class OperatorEngine:
             # test for that on every path: a reply selected on the turn before
             # a ``substitute_reply: false`` ask, or before an approval turn,
             # is never sent, and marking it here would suppress an answer the
-            # agent has still never been given. On the driver path the reply
-            # only goes out as the fallback composition.
+            # agent has still never been given.
+            #
+            # On the driver path the scripted sentence never goes out, so
+            # transmission is decided by whether the authored turn carried the
+            # reply's substance. Leaving that unmeasured -- the previous
+            # behaviour -- kept the memory empty for a whole driven run: a live
+            # 15-turn run re-selected one fact ten times and another six, with
+            # zero suppressions, while the agent answered "already done" four
+            # turns running. That is the operator-repeats-itself failure the
+            # driver exists to remove, reproduced by the driver.
             #
             # KNOWN LIMITATION (driver path): a driver that authors the turn
             # successfully is handed ``selected_reply`` and told to convey it,
@@ -1206,10 +1263,16 @@ class OperatorEngine:
             # sheet does not currently support -- a fact's ``terms`` trigger
             # the *question*, not the answer.  Recorded in the design doc's
             # named follow-ups; do not "fix" this by dropping the guard.
+            driver_conveyed = (
+                authorable
+                and driver_render is not None
+                and not driver_render.used_fallback
+                and _authored_text_conveys(next_reply or "", previous_agent_message or "", base)
+            )
             if (
                 pending_sheet_key is not None
                 and selected_base is next_reply
-                and (not authorable or driver_fallback_transmitted)
+                and (not authorable or driver_fallback_transmitted or driver_conveyed)
             ):
                 served_reply_keys.add(pending_sheet_key)
             for injection in delivered:
