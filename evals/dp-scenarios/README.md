@@ -446,7 +446,7 @@ falls as tests are added.
 | whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
 | whole scope, 7930 mutants | Linux container, 14 vCPU | **2h39m** (5189 killed, 2633 survived, 108 untested, 0 unverdicted) |
-| whole scope, 8077 mutants | GitHub hosted runner | **3h59m** (2652 survived, 108 untested, 0 unverdicted) |
+| whole scope, 8077 mutants | GitHub hosted runner | **3h59m** (5317 killed, 2652 survived, 108 untested, 0 unverdicted) |
 | one module (`grading/scans.py`) | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
 
 The 8077-mutant row is the authoritative one — current tree, and the same class
@@ -514,11 +514,18 @@ exists but never fires" defect in its most deniable form: it fires once, then
 un-fires. Flooring at the last green run means an uncovered night widens the next
 night's scope, and a red night stays red until someone acts on it.
 
-`--status success` is a conclusion filter, so a red or cancelled run does not
-advance the floor. A weekly or manual whole-scope run does, correctly — it
-covered everything. If the `gh` lookup fails for any reason (no `actions: read`,
-a force-push having orphaned the recorded SHA, or a floor somehow *newer* than
-the clock window), the clock window stands rather than the scope narrowing.
+Two filters make that work. `--status success` is a conclusion filter, so a red
+or cancelled run does not advance the floor. `--event schedule` is what makes
+"successful" mean "covered": a green run is not evidence of coverage on its own,
+because a `scope` dispatch gates only the functions its filter names, and an
+`update_baseline` dispatch returns 0 *before* the comparison runs, so it gates on
+nothing and can never be red. Both tiers are schedule events and each covers the
+range it claims, so **only they advance the floor — a manual dispatch never
+does**, and firing one during triage cannot narrow a later nightly.
+
+If the `gh` lookup fails for any reason (no `actions: read`, a force-push having
+orphaned the recorded SHA, or a floor somehow *newer* than the clock window), the
+clock window stands rather than the scope narrowing.
 
 **Why a weekly whole-scope run still earns its four hours.** The nightly tier only
 sees modules the diff names, so it cannot see a survivor created from a distance:

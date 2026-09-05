@@ -166,12 +166,25 @@ jobs:
             # comes back green the next morning with nothing fixed, because the
             # offending module has aged out of the window.
             #
+            # Two filters, and both are load-bearing.
+            #
             # `--status success` is a conclusion filter, so a red or cancelled
-            # run does not advance the floor -- which is the point. A weekly or
-            # manual whole-scope run does advance it, correctly: it covered
-            # everything.
+            # run does not advance the floor -- which is the point.
+            #
+            # `--event schedule` is what makes "successful" mean "covered". A
+            # green run is not evidence of coverage on its own: a `scope`
+            # dispatch gates only the functions its filter names, and an
+            # `update_baseline` dispatch writes the file and returns 0 before
+            # the comparison runs, so it gates on nothing at all and can never
+            # be red. Either would advance the floor past merges it never
+            # looked at -- and the realistic trigger is triage itself, where a
+            # maintainer dispatches a scoped run to check a fix for the very
+            # regression the red nightly found, and thereby retires it. Both
+            # tiers are schedule events under the single cron, and each covers
+            # the range it claims. Manual runs deliberately do not move the
+            # floor, which errs toward a wider scope.
             last="$(gh run list --workflow nightly-mutation.yml --branch main \
-                      --status success --limit 1 --json headSha \
+                      --event schedule --status success --limit 1 --json headSha \
                       --jq '.[0].headSha // empty' 2>/dev/null || true)"
             # `cat-file -e` guards a force-push having orphaned the recorded SHA,
             # and `--is-ancestor` guards it being *newer* than the clock window
