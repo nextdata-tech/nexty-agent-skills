@@ -780,6 +780,9 @@ def test_a_bare_confirm_is_an_ask_on_any_line() -> None:
         "Next steps:\n- Confirm the metric definition before I build.",
         "Next steps:\n  Confirm the metric definition before I build.",
         "Next steps:\n1. Confirm the metric definition before I build.",
+        "Next steps:\n  1. Confirm the metric definition.",
+        "Blueprint is ready.\n  Confirm the metric definition now.",
+        "Blueprint is ready.\n- Confirm the metric definition now.",
         "Next steps:\n* Choose the grain and I will proceed.",
     ],
 )
@@ -819,16 +822,15 @@ def test_which_opens_an_ask_without_opening_a_question() -> None:
     is why the two openers are separate constants.
     """
 
-    from dp_scenarios.operator.matcher import MatcherBank
+    from dp_scenarios.operator.matcher import (
+        INTERROGATIVE_OPENER_PATTERN,
+        SOLICITATION_PATTERN,
+        MatcherBank,
+    )
 
     # No question mark, and deliberately no request phrase either: "do you
     # want" would match SOLICITATION_PATTERN on its own and leave the opener
     # untested. Only the ``which`` opener can see this as an ask.
-    from dp_scenarios.operator.matcher import (
-        INTERROGATIVE_OPENER_PATTERN,
-        SOLICITATION_PATTERN,
-    )
-
     bare = "Which grain, account or deal."
     assert not SOLICITATION_PATTERN.search(bare), "fixture must not match another alternative"
     assert not INTERROGATIVE_OPENER_PATTERN.match(bare)
