@@ -12,8 +12,8 @@ when a run repeats a gate or asks for approval after the opening phase.
 from __future__ import annotations
 
 import hashlib
-import re
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -598,14 +598,21 @@ _CONVEYANCE_STOPWORDS = frozenset({
 })
 
 #: A fact counts as conveyed when the authored turn carries at least this
-#: fraction of its distinctive words, and at least two of them. Calibrated
-#: against real driven turns: messages that genuinely restated a fact scored
-#: 0.45-0.89, while deflections ("I am not sure about the grain, ask me later")
-#: and bare echoes scored 0.00. The gap is wide, so the threshold sits well
-#: clear of both -- a driver has to say something substantive from the reply,
-#: not merely mention its subject.
+#: fraction of the reply's distinctive words, and at least two of them.
+#: Calibrated against real driven turns: genuine restatements scored 0.45-0.89
+#: while deflections and bare echoes scored 0.00.
 _CONVEYANCE_RATIO = 0.34
 _CONVEYANCE_MINIMUM = 2
+
+#: Below this many distinctive words the ratio stops discriminating -- with
+#: three, any two shared words clear both floors (2/3 = 0.67), so a deflection
+#: that merely names them ("not sure about row or account, honestly") would
+#: consume the fact permanently. Short replies therefore require *every*
+#: distinctive word. The asymmetry is deliberate: failing to record a conveyed
+#: fact costs a repeated sentence, while recording an unconveyed one stonewalls
+#: the agent for the rest of the run, since only a ``fresh_session`` card clears
+#: the set.
+_CONVEYANCE_SHORT_REPLY = 4
 
 
 def _content_words(text: str) -> set[str]:
@@ -628,9 +635,15 @@ def _authored_text_conveys(reply: str, agent_message: str, authored: str) -> boo
     """
 
     distinctive = _content_words(reply) - _content_words(agent_message)
-    if not distinctive:
+    if len(distinctive) < _CONVEYANCE_MINIMUM:
+        # The reply adds almost nothing the question did not already contain,
+        # so there is no evidence either way and conveyance cannot be
+        # established. Returning True here would let a pure echo clear the
+        # short-reply rule by "covering" its one distinctive word.
         return False
     carried = distinctive & _content_words(authored)
+    if len(distinctive) < _CONVEYANCE_SHORT_REPLY:
+        return carried == distinctive
     return len(carried) >= _CONVEYANCE_MINIMUM and len(carried) / len(distinctive) >= _CONVEYANCE_RATIO
 
 
@@ -1247,22 +1260,16 @@ class OperatorEngine:
             # turns running. That is the operator-repeats-itself failure the
             # driver exists to remove, reproduced by the driver.
             #
-            # KNOWN LIMITATION (driver path): a driver that authors the turn
-            # successfully is handed ``selected_reply`` and told to convey it,
-            # but nothing here verifies that it did.  Consuming the key on
-            # driver success alone is wrong -- a driver is free to deflect
-            # ("I am not sure about the grain, ask me later"), and since only a
-            # ``fresh_session`` card clears ``served_reply_keys``, marking the
-            # fact there would stonewall the agent on that question for the
-            # rest of the run.  The cost of the safe choice is that the memory
-            # stays empty under a driver: ``facts_already_stated`` is always
-            # ``()`` and the suppression below never fires on the driver path,
-            # so the driver may restate a fact the agent already has.  Closing
-            # that needs a deterministic test for whether the authored text
-            # actually carried the selection's substance, which the answer
-            # sheet does not currently support -- a fact's ``terms`` trigger
-            # the *question*, not the answer.  Recorded in the design doc's
-            # named follow-ups; do not "fix" this by dropping the guard.
+            # A driver that authors the turn is handed ``selected_reply`` and
+            # told to convey it, and ``_authored_text_conveys`` is what checks
+            # that it did.  Consuming the key on driver success *alone* would
+            # be wrong -- a driver is free to deflect ("I am not sure about the
+            # grain, ask me later"), and since only a ``fresh_session`` card
+            # clears ``served_reply_keys``, marking the fact there would
+            # stonewall the agent on that question for the rest of the run.
+            # That is why the check subtracts the agent's own message: a fact's
+            # terms trigger the *question*, so an echo carries none of what is
+            # left.  Do not replace it with a bare ``not used_fallback``.
             driver_conveyed = (
                 authorable
                 and driver_render is not None

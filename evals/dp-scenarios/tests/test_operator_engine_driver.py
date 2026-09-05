@@ -743,3 +743,34 @@ def test_conveyance_ignores_words_the_agent_supplied_itself() -> None:
         "Who does the owner object belong to?",
         informative,
     ) is True
+
+
+def test_a_short_fact_needs_every_distinctive_word_not_just_two() -> None:
+    """On a short reply the two-word floor stops discriminating.
+
+    With three distinctive words any two clear both floors (2/3 = 0.67), so a
+    deflection that merely names them would consume the fact permanently --
+    only a ``fresh_session`` card clears the set, so the agent would be
+    stonewalled on that question for the rest of the run. Short replies
+    therefore require every distinctive word.
+
+    The cost is deliberate and asymmetric: a genuine short restatement that
+    drops a word is re-offered, which repeats a sentence, while the failure it
+    prevents silently withholds an answer.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys
+
+    fact = "The grain is one row per account."
+    question = "What grain should I use?"
+
+    # Names two of the three distinctive words while stating nothing.
+    assert _authored_text_conveys(fact, question, "Not sure about row or account, honestly.") is False
+    # The repo's own short fixture fact, deflected.
+    assert _authored_text_conveys(
+        "The join uses account_id.",
+        "What is the join key?",
+        "I am not sure - something about account_id, you tell me.",
+    ) is False
+    # Full coverage still counts.
+    assert _authored_text_conveys(fact, question, "One row per account is the level.") is True
