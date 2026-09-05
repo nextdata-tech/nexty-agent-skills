@@ -776,6 +776,12 @@ def test_the_persona_stance_is_script_identity() -> None:
         "Plan:\n- Choose the closest matching field for each target column.",
         "I will:\n- Confirm the row counts against the source myself.",
         "Remaining work:\n- Decide the tie-break rule; I will default to latest.",
+        # Column 0, unbulleted. Every other fixture opens with a heading, so
+        # without this one an `^\s*confirm\b` alternative could be re-added
+        # inside SOLICITATION_PATTERN's `\b(...)\b` wrapper -- where it matches
+        # at offset 0 and nowhere else -- and the whole list would still pass.
+        "Decide the tie-break rule; I will default to latest.",
+        "Confirm the metric definition.",
     ],
 )
 def test_a_bulleted_imperative_is_not_read_as_an_ask(message: str) -> None:
@@ -798,13 +804,35 @@ def test_a_bulleted_imperative_is_not_read_as_an_ask(message: str) -> None:
     "message",
     [
         "Please confirm the metric definition before I build.",
-        "Can you confirm the grain?",
-        "Blueprint is ready.\nCould you confirm the metric definition?",
+        # Not "Can you confirm ..." -- `can` is an interrogative opener, which
+        # short-circuits ahead of the pattern, so a fixture starting with it
+        # would pass with `can\s+you` deleted outright.
+        "Before I build, can you confirm the grain.",
+        # Not on the first line, and no question mark: this is the fixture that
+        # carries the claim the deleted line-head test used to make.
+        "Blueprint is ready.\nPlease confirm the metric definition before I build.",
     ],
 )
 def test_an_addressed_confirm_is_still_an_ask(message: str) -> None:
-    """What replaces the shape heuristic: the message says who is being asked."""
+    """What replaces the shape heuristic: the message says who is being asked.
 
+    ``solicits_operator`` has three cheaper signals than
+    ``SOLICITATION_PATTERN`` and short-circuits on any of them, so a fixture
+    tripping one asserts nothing about the pattern it is named for. All three
+    are guarded below rather than argued: a question mark, an interrogative
+    opening clause, and a bare ``which`` opener. The first was fixed by
+    dropping the "?"; the second still carried "Can you confirm the grain."
+    on its leading ``Can``.
+    """
+
+    from dp_scenarios.operator.matcher import (
+        INTERROGATIVE_OPENER_PATTERN,
+        SOLICITING_OPENER_PATTERN,
+    )
+
+    assert "?" not in message, "a question mark would short-circuit the pattern under test"
+    assert not INTERROGATIVE_OPENER_PATTERN.match(message), "an opener would short-circuit it too"
+    assert not SOLICITING_OPENER_PATTERN.match(message), "a bare 'which' opener would too"
     assert solicits_operator(message) is True
 
 

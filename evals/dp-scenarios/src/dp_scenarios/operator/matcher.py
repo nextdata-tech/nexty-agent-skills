@@ -153,20 +153,19 @@ SOLICITATION_PATTERN = re.compile(
     r"|can\s+you|could\s+you|would\s+you|do\s+you\s+want|what\s+would\s+you\s+like"
     r"|let\s+me\s+know|up\s+to\s+you|sign\s*off\s+on|go-?ahead"
     r"|waiting\s+(?:on|for)\s+you|awaiting\s+your|shall\s+i"
-    # "I need a decision", "I need you to confirm" -- but not the bare "need
-    # your", which fires on the promise of a *future* ask: the live run's
-    # "I'll surface it if something does need your call" asked for nothing and
-    # still drew a refusal.
     # First person only. "I need a decision" is an ask; "something does need
     # your call" is a promise of a future one, and reading it as present drew
     # a refusal on live turn 8 for a decision nobody had requested.
     r"|\b(?:i|we)\s+need\s+(?:a|an|your)\s+(?:decision|answer|call|steer|confirmation|sign\s*off)"
     r"|\b(?:i|we)\s+need\s+you\s+to"
-    # "confirm" must be addressed to the operator. Bare "confirm the|that"
-    # fires on the agent's own reports -- "I can confirm that the build
-    # finished cleanly" -- and turned a finished-build report into "I don't
-    # know, look for yourself".
-    r"|(?:please|can\s+you|could\s+you|would\s+you)\s+confirm"
+    # There is no "confirm" alternative of its own. An addressed confirm is
+    # already covered -- "please confirm" by the first alternative, "can you
+    # confirm" by the bare "can you" -- and a *bare* "confirm the|that" fires
+    # on the agent's own report ("I can confirm that the build finished
+    # cleanly"), which turned a finished-build report into "I don't know, look
+    # for yourself". Removing that bare form was the fix; adding an addressed
+    # one alongside it was redundant, and deleting the redundant alternative
+    # changes no behaviour.
     r"|i'?d\s+like\s+your\s+(?:approval|sign\s*off|go-?ahead|steer|decision|view|input)"
     # The live turn-14 imperative: "Tell me a name, role, team, or channel."
     # No question mark and no interrogative opener, so without this a direct
@@ -223,10 +222,12 @@ def asks_for_a_choice(message: str) -> bool:
 def solicits_operator(message: str) -> bool:
     """Whether the agent asked the operator for anything on this turn.
 
-    Three independent signals, any of which is enough: an explicit question
-    mark, an interrogative opening clause, or one of the request phrases in
-    :data:`SOLICITATION_PATTERN`. A status update that merely mentions
-    approval in passing matches none of them.
+    Four independent signals, any of which is enough: an explicit question
+    mark, an interrogative opening clause, a bare ``which`` opener, or one of
+    the request phrases in :data:`SOLICITATION_PATTERN`. A status update that
+    merely mentions approval in passing matches none of them, and neither does
+    a line-head imperative -- see the note below :data:`SOLICITATION_PATTERN`
+    for why that shape is not inferred.
     """
 
     if not isinstance(message, str):
