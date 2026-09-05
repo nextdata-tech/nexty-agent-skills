@@ -839,3 +839,22 @@ def test_a_genuine_restatement_still_counts_at_the_lengths_that_matter() -> None
         "Understood: updatedAt shows the latest change to any field on the deal"
         " record, not when it entered its current stage.",
     ) is True
+
+
+def test_a_reply_that_adds_nothing_to_the_question_does_not_divide_by_zero() -> None:
+    """The empty distinctive set is guarded by evaluation order alone.
+
+    Every content word of the reply also appears in the question, so
+    ``distinctive`` is empty and the ratio would divide by zero. Nothing but
+    the ``and`` short-circuiting on the minimum prevents it, and no other test
+    reaches a set smaller than two -- so this pins the ordering rather than
+    trusting it.
+    """
+
+    from dp_scenarios.operator.engine import _authored_text_conveys, _content_words
+
+    reply = "The owner belongs to sales."
+    question = "Is it true that the owner belongs to sales?"
+    assert _content_words(reply) - _content_words(question) == set(), "fixture no longer empties the set"
+
+    assert _authored_text_conveys(reply, question, "The owner belongs to sales.") is False

@@ -636,12 +636,11 @@ def _authored_text_conveys(reply: str, agent_message: str, authored: str) -> boo
     the fact.
     """
 
-    # A reply with fewer than three distinctive words needs no guard of its own:
-    # ``carried`` is a subset of ``distinctive``, so the minimum below already
-    # refuses it, and the ``and`` short-circuits before the ratio divides. The
-    # guard that used to sit here became unreachable when the short-reply branch
-    # was removed, and an unreachable guard reads as protection that is not
-    # there.
+    # A short reply needs no guard of its own: ``carried`` is a subset of
+    # ``distinctive``, so the minimum below already refuses anything smaller
+    # than it. That includes the empty set, where the ``and`` short-circuits
+    # before the ratio would divide by zero -- keep the minimum as the first
+    # operand.
     distinctive = _content_words(reply) - _content_words(agent_message)
     carried = distinctive & _content_words(authored)
     return len(carried) >= _CONVEYANCE_MINIMUM and len(carried) / len(distinctive) >= _CONVEYANCE_RATIO
