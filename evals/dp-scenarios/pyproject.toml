@@ -53,7 +53,7 @@ markers = [
 
 [tool.mutmut]
 # Automated mutation testing — see "Mutation testing" in README.md, and
-# scripts/mutation_test.sh for the wrapper that drives it.  mutmut copies the
+# scripts/mutation_test.py for the wrapper that drives it.  mutmut copies the
 # tree into ./mutants and runs the suite from there, so `source_paths` is the
 # whole package (imports must resolve) while `only_mutate` narrows the actual
 # mutation to the two directories where a gate that never fires is the

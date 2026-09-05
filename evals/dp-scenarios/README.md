@@ -368,7 +368,8 @@ cd evals/dp-scenarios
 # Everything in the two guarded directories. Tens of minutes -- see Runtime.
 scripts/mutation_test.py full
 
-# Only the guarded files this branch changes. What CI runs on a pull request.
+# Only the guarded files this branch changes. Run this before merging a change
+# under the guarded directories -- CI will not do it for you until nightly.
 scripts/mutation_test.py changed --base origin/main
 
 # One mutant, or one function, reproducing a CI failure verbatim.
@@ -430,12 +431,14 @@ falls as tests are added.
 | whole scope, 7930 mutants | macOS, 14 cores | 2m25s — but see the macOS caveat below; a third of those mutants crashed instead of running their tests, so this figure is not comparable |
 | suite baseline | Linux container, 14 vCPU | 77s |
 | whole scope, 7930 mutants | Linux container, 14 vCPU | **2h39m** (5189 killed, 2633 survived, 108 untested, 0 unverdicted) |
-| **PR tier, no guarded file changed** | GitHub hosted runner | **7s** |
-| **PR tier, `grading/scans.py` changed** | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
+| scoped to `grading/scans.py` | GitHub hosted runner | **15m24s** (1.42 mutants/s, 0 unverdicted) |
 
-`grading/scans.py` is close to the worst case for the PR tier — a large module
-with a lot of survivors — and `grading/gates.py` is the other. A change to a
-module with fewer survivors is minutes.
+That last row is why this does not run on pull requests. `grading/scans.py` is
+close to the worst case for a scoped run — a large module with a lot of
+survivors — and `grading/gates.py` is the other; a module with fewer survivors
+is minutes. Fifteen minutes on the PRs that touch the guarded code was judged
+too much to add to the critical path, so the scoped mode stays as a local and
+manual tool and the gate is nightly only.
 
 Two levers were tried and rejected:
 
@@ -460,23 +463,23 @@ inherited by every mutant for free.
 
 | Tier | Trigger | Scope |
 |---|---|---|
-| `.github/workflows/nightly-mutation.yml` | 04:10 UTC + manual | every mutant in both guarded directories |
-| `dp-scenarios-mutation` in `ci.yml` | every PR | only the guarded files the diff touches |
+| `.github/workflows/nightly-mutation.yml` | 04:10 UTC + manual dispatch | every mutant in both guarded directories |
 
-The PR tier is scoped to the diff rather than capped at a mutant budget. A
-budget has to choose which mutants to skip, and any deterministic choice is one
-an author can learn to write around; scoping to the diff skips nothing inside
-what changed. Most pull requests touch neither directory, and the job decides
-that from a `git diff` before it installs anything.
+**Nothing runs on a pull request.** A scoped run costs 15m24s on the worst of
+the guarded modules (measured, hosted runner), which is too much to add to the
+critical path of every PR that touches them. The gate is nightly instead.
 
-Every run — scoped or not — pays a fixed cost first: mutmut copies the tree and
-traces the suite once to build the function-to-covering-tests map. **A pull
-request that changes nothing under the two guarded directories costs 7 seconds**
-(measured): the job decides that from a `git diff` and skips every install. A
-pull request that changes `grading/scans.py` costs **15m24s** (measured, on a
-hosted runner). That is the honest number, not a few minutes — it is a large
-module with many survivors, and survivors are what cost time. The 45-minute cap
-is sized for the other big one, `grading/gates.py`.
+The cost is what it is because every run pays a fixed price first: mutmut copies
+the tree and traces the suite once to build the function-to-covering-tests map.
+After that, time tracks *survivors* rather than mutants — a killed mutant stops
+at its first failing test, while a survivor pays for every covering test — so
+the number falls as coverage improves.
+
+What this trades away is worth stating plainly: a change that adds an untested
+gate now merges green and is caught the following morning, attributed to
+whoever merged next rather than to its author. Run `scripts/mutation_test.py
+scoped` locally before merging anything under the two guarded directories, and
+read the nightly result the day after a merge that touches them.
 
 ### Two things that will mislead you
 

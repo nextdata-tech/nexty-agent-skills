@@ -72,9 +72,9 @@ REPORTED_STATUSES = ("survived", "no tests", "timeout", "suspicious", "segfault"
 # Both mean "the suite did not notice this change", and both are failed on.
 # ``no tests`` deserves the same weight as ``survived``: it is what a brand-new
 # function with no test at all reports, because the covering-test analysis found
-# nothing that executes it. Treating it as merely informational would let the
-# PR tier pass a change that added an entirely unexercised gate, which is the
-# defect this tooling exists to catch.
+# nothing that executes it. Treating it as merely informational would let a run
+# pass a change that added an entirely unexercised gate, which is the defect
+# this tooling exists to catch.
 UNNOTICED_STATUSES = ("survived", "no tests")
 
 # No verdict was reached for these: the child died or ran out of time, so the
@@ -301,7 +301,8 @@ def main(argv: list[str] | None = None) -> int:
     completed = _mutmut(*run_args)
     elapsed = time.monotonic() - started
     # mutmut exits non-zero when mutants survive, which is the normal state
-    # here; a genuine tool failure shows up as an empty result set below.
+    # here. A genuine tool failure is caught by the empty-result check below,
+    # not by this exit code.
     print(f"\nmutmut run finished in {elapsed / 60:.1f} min (exit {completed.returncode})")
 
     results = _mutmut("results", capture=True)
@@ -332,6 +333,27 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.allow_unverdicted:
             print("  Refusing to report a partial run as a result. Pass --allow-unverdicted to override.")
             return 3
+
+    # A run that evaluated nothing must not read as a run that evaluated
+    # everything and found nothing wrong. `regressions()` iterates *observed*
+    # counts, so an empty result set compares nothing against the baseline,
+    # finds no regression and exits 0 -- the report says "no mutation the suite
+    # fails to notice" when the truth is that no mutation was tried. mutmut
+    # aborting (a bad filter, a collection error, a killed process) lands
+    # exactly here, and it is the one remaining way for either tier to be
+    # structurally green.
+    #
+    # The scope having no mutants at all is a different thing and is legitimate:
+    # `scoped` mode with a diff that touches no guarded file exits before this
+    # point.
+    evaluated = sum(len(names) for names in grouped.values())
+    if not evaluated:
+        print(
+            f"\nmutmut reported no mutants for this scope (exit {completed.returncode}). "
+            "That is a failed run, not a clean one -- nothing was measured. "
+            f"Reproduce with: cd evals/dp-scenarios && uv run mutmut run {quoted}".rstrip()
+        )
+        return 4
 
     counts = survivor_counts(unnoticed)
 

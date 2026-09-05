@@ -2,7 +2,7 @@
 
 A fixed ``Path(__file__).parents[3]`` hop to the repository root is correct for
 the checked-out tree and wrong for every relocated copy of it.  The mutation
-run (``scripts/mutation_test.sh``) executes the suite from
+run (``scripts/mutation_test.py``) executes the suite from
 ``evals/dp-scenarios/mutants/``, one level deeper, where the same hop silently
 resolves to ``evals/`` and every repo-root path it builds points at a file that
 does not exist.  Walking up for a marker that only the real root carries gives

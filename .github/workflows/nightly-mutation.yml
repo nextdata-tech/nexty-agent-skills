@@ -15,11 +15,16 @@ name: nightly-mutation
 # the mechanical grading, where "a gate that exists but never fires" is the
 # recurring defect.
 #
-# THIS IS THE WHOLE-SCOPE TIER. The PR-time tier lives in ci.yml and mutates
-# only the guarded files a pull request actually changed. Both compare against
-# evals/dp-scenarios/mutation-baseline.json and fail on *new* survivors, so a
-# green run means "this change did not add a gate the suite cannot see", not
-# "there are no unkilled mutants".
+# THIS IS THE ONLY TIER. A pull-request tier was built and measured at 15m24s on
+# the worst guarded module, then dropped as too much to add to the critical path
+# of every PR touching that code; `scripts/mutation_test.py scoped` remains the
+# local equivalent. The consequence is that an untested gate merges green and is
+# caught here the following morning, so read this the day after a merge under
+# the guarded directories.
+#
+# It compares against evals/dp-scenarios/mutation-baseline.json and fails on
+# *new* survivors, so a green run means "nothing was added that the suite cannot
+# see", not "there are no unkilled mutants".
 
 on:
   schedule:

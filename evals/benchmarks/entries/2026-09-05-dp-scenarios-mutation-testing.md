@@ -43,5 +43,7 @@ cannot silently grow again.
   suite could not run at all from `mutants/` before this.
 - `evals/dp-scenarios/scripts/mutation_test.py` — the wrapper, its baseline
   comparison, and the survivor explanation output CI publishes.
-- `.github/workflows/nightly-mutation.yml` and the `dp-scenarios-mutation` job
-  in `.github/workflows/ci.yml` — the two tiers.
+- `.github/workflows/nightly-mutation.yml` — the gate. A pull-request tier was
+  built and measured at 15m24s on the worst guarded module, then dropped: too
+  much to add to the critical path of every PR touching that code. The scoped
+  mode remains a local and manual tool.
