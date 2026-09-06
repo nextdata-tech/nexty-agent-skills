@@ -689,6 +689,35 @@ def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
     assert any("explicit approval" in rule for rule in SCENARIO_CONDUCT_RULES)
 
 
+def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> None:
+    """"Author the closure with the available file tools" read as "skip the skill".
+
+    A live crm-pipeline run said so in its own words -- "without using the
+    nxd-generate-data-product skill's automated flow (I'm told to author
+    directly)" -- and never invoked the generator, so it never reached the step
+    that dispatches the closure reviewer, which ``construction`` then graded as
+    an agent failure. The blanket "do not launch a background Agent" had the
+    same effect on the dispatch itself.
+
+    The replacement constrains the mechanism (no shell helpers; file tools and
+    MCP verification instead) without displacing the workflow, and without
+    naming any gate.
+    """
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT
+
+    # The prompt hard-wraps, so compare on normalised whitespace.
+    flowed = " ".join(DEFAULT_SYSTEM_PROMPT.split())
+
+    assert "author the closure with the available file tools" not in flowed
+    assert "do not launch a background Agent for shell-only" not in flowed
+    assert "follow the installed Nexty skills' normal flow" in flowed
+    assert "including any step that dispatches a subagent" in flowed
+    # Still mechanics, not conduct: it must not name the skill whose dispatch
+    # the construction gate observes, or the guidance becomes a gate hint.
+    assert "nxd-review-closure" not in flowed.lower()
+
+
 def test_the_prompt_no_longer_both_requires_and_forbids_calling_the_source() -> None:
     """One sentence said "call the source yourself", another switched it off.
 

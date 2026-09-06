@@ -75,10 +75,12 @@ in the evidence object.
 
 For an authenticated mock source, the infra profile names the credential_env
 variable for the generated connector runtime; never print or echo its value.
-When Bash is unavailable, do not launch a background Agent for shell-only
-validation or helper-script discovery; author the closure with the available
-file tools and use the nxd-desktop check/build/query MCP tools for runtime
-verification.
+When Bash is unavailable, the shell-only helper scripts some skill steps
+mention cannot run: write closure files with the file tools and use the
+nxd-desktop check/build/query MCP tools for runtime verification instead. That
+substitutes a mechanism, not a workflow -- follow the installed Nexty skills'
+normal flow, including any step that dispatches a subagent. Do not launch a
+subagent merely to find or run a shell-only helper.
 """
 
 
