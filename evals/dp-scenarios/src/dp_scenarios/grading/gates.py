@@ -835,14 +835,36 @@ def gate_construction(
         for kind, outcome in attested.items():
             if kind not in observed and outcome is not None:
                 observed[kind] = outcome
-    findings = [Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome") for kind in ("self_check", "adversarial_review") if kind not in observed or observed[kind] is None]
+    observed_calls = (
+        _construction_call_kinds(observations, desktop_server_name=desktop_server_name)
+        if require_observed
+        else set()
+    )
+    # A check the harness *watched* succeed needs no agent testimony about it.
+    # ``_construction_call_kinds`` records ``self_check`` only for a
+    # non-error ``check_data_product`` call at the structured session
+    # boundary, which is harness-owned evidence of the same event the
+    # attestation would describe.  Demanding both failed a live run for not
+    # re-telling the harness what it had just seen -- the pattern already
+    # removed from the build gate, where whether a gate could be examined
+    # depended on which artifacts the agent volunteered.
+    #
+    # This is not a gate that cannot fail: an agent that never calls the tool
+    # still gets ``not_observed``, and the kinds with no observable call --
+    # ``adversarial_review``, whose outcome is a set of claims and
+    # adjudications that no tool call reveals -- still require an outcome and
+    # an attestation.
+    findings = [
+        Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome")
+        for kind in ("self_check", "adversarial_review")
+        if kind not in observed_calls and (kind not in observed or observed[kind] is None)
+    ]
     if require_observed:
-        observed_calls = _construction_call_kinds(observations, desktop_server_name=desktop_server_name)
         for kind in ("self_check", "adversarial_review"):
             if kind not in observed_calls:
                 findings.append(Finding(f"construction_{kind}_not_observed", f"{kind} was not observed as a successful structured tool call"))
         for kind in ("self_check", "adversarial_review"):
-            if kind not in attested:
+            if kind not in attested and kind not in observed_calls:
                 findings.append(Finding(f"construction_{kind}_attestation_missing", f"{kind} has no agent attestation"))
     return _result("construction", not findings, findings)
 

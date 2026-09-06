@@ -796,12 +796,15 @@ def _append_artifact_rows(artifact_root: Path) -> None:
     raise TierError("agent-owned ledger artifact is forbidden; evidence rows are harness-owned")
 
 
-def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
-    """Read the narrow, non-authoritative attestation channel from the agent."""
+def _agent_attestations(root: Path) -> _AttestationRead:
+    """Read the narrow, non-authoritative attestation channel from the agent.
+
+    One location only. The former ``fallback_root`` pointed at ``artifacts/``,
+    which the system prompt forbids the agent to write, so it could be
+    satisfied only by a harness-planted file.
+    """
 
     path = root / "agent-attestations.json"
-    if not path.is_file() and fallback_root is not None:
-        path = fallback_root / "agent-attestations.json"
     if not path.is_file():
         return _AttestationRead()
     try:
@@ -1778,10 +1781,11 @@ class TierRunner:
         observations = _load_json(artifact_root / "operator-observations.json")
         if not isinstance(observations, Mapping):
             raise TierError("operator observations were not persisted before grading")
-        attestation_read = _agent_attestations(
-            environment.base_dir / "agent",
-            fallback_root=artifact_root,
-        )
+        # No fallback root: the only other candidate was ``artifact_root``,
+        # and the system prompt forbids the agent to create files under
+        # ``artifacts/``, so that path could only ever be satisfied by a
+        # harness-planted file.
+        attestation_read = _agent_attestations(environment.base_dir / "agent")
         attestations = attestation_read.values
         gold_access = gold_access_scan(observations, environment.oracle_dir)
 

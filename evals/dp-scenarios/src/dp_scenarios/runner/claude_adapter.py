@@ -59,7 +59,9 @@ each turn. The runner owns machine evidence; do not create or edit artifacts/
 files or ledger-extra.json.
 
 If you perform the self-check and adversarial review, write only their short
-outcomes to the JSON list at NXD_EVAL_ATTESTATIONS_PATH; this is an attestation
+outcomes to agent-attestations.json at your workspace root -- the same file
+NXD_EVAL_ATTESTATIONS_PATH names, given here by name because a run without Bash
+has no way to expand that variable; this is an attestation
 channel, not a ledger and not proof by itself. The only accepted attestation
 shape is a JSON array of objects with exactly these keys: action_kind
 (self_check or adversarial_review), turn (positive integer), outcome (non-empty

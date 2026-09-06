@@ -11,6 +11,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | 2026-09-06 | read build evidence from the runner's own data directory | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |
 | 2026-09-06 | scope the source contract and conduct rules to the scenarios that ask for them | NO_EVAL | — | [`2026-09-06-handover-and-prompt-scoping`](entries/2026-09-06-handover-and-prompt-scoping.md) |
 | 2026-09-06 | dp-scenarios declaration-based gate requiredness and waived coverage | NO_EVAL | — | [`2026-09-06-dp-scenarios-declaration-requiredness`](entries/2026-09-06-dp-scenarios-declaration-requiredness.md) |
+| 2026-09-06 | stop asking the agent to re-tell the harness a check it watched succeed | NO_EVAL | — | [`2026-09-06-construction-observed-self-check`](entries/2026-09-06-construction-observed-self-check.md) |
 | 2026-09-06 | drop a build row-count comparison whose two sides were never the same thing | NO_EVAL | — | [`2026-09-06-build-gate-row-count-oracle`](entries/2026-09-06-build-gate-row-count-oracle.md) |
 | 2026-09-06 | correct abstention passes capability, and a waiver says so | NO_EVAL | — | [`2026-09-06-abstention-and-waiver-categories`](entries/2026-09-06-abstention-and-waiver-categories.md) |
 | 2026-09-05 | read the supervisor's real query and release payloads | NO_EVAL | — | [`2026-09-05-supervisor-evidence-harvesting`](entries/2026-09-05-supervisor-evidence-harvesting.md) |

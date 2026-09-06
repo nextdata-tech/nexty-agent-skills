@@ -367,6 +367,66 @@ def test_strict_construction_does_not_count_free_text_tool_arguments() -> None:
     assert "construction_adversarial_review_not_observed" in result.codes
 
 
+def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> None:
+    """A self-check the harness observed needs no agent testimony about it.
+
+    A live crm-pipeline run called ``check_data_product`` successfully before
+    every build and still failed on ``self_check_outcome_missing`` and
+    ``self_check_attestation_missing`` -- the harness failing an agent for not
+    re-telling it what it had just seen. Same pattern as the build gate, where
+    examinability depended on which artifacts the agent volunteered.
+    """
+
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {"name": "crm-deals"},
+                        "result": {"is_error": False},
+                    },
+                    {
+                        "name": "Task",
+                        "arguments": {"subagent_type": "nxd-review-closure"},
+                        "result": {"is_error": False},
+                    },
+                ]
+            }
+        ]
+    }
+    # No ledger row and no attestation for self_check; the reviewer half still
+    # supplies both, because no tool call reveals what a review concluded.
+    ledger = _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "two claims, both rejected"}})
+
+    result = gate_construction(
+        ledger,
+        observations=observations,
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "two claims, both rejected"},),
+        require_observed=True,
+    )
+
+    assert result.passed is True, "an observed check must not need an attestation as well"
+    assert result.codes == ()
+
+
+def test_construction_still_fails_when_the_check_was_never_called() -> None:
+    """Owning the self-check evidence must not make the gate unfailable."""
+
+    ledger = _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "clean"}})
+    quiet = gate_construction(
+        ledger,
+        observations={"turns": [{"tool_calls": []}]},
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},),
+        require_observed=True,
+    )
+
+    assert quiet.passed is False
+    assert "construction_self_check_not_observed" in quiet.codes
+    assert "construction_self_check_outcome_missing" in quiet.codes
+    assert "construction_self_check_attestation_missing" in quiet.codes
+
+
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:
     path = tmp_path / "honesty.jsonl"
     with LedgerStore.open(path, _manifest()):

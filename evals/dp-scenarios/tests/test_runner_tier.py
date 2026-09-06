@@ -569,7 +569,7 @@ def test_malformed_agent_attestation_is_a_grade_finding_not_a_tier_abort(tmp_pat
         '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass","evidence_ref":"tool:self-check"}]}\n',
         encoding="utf-8",
     )
-    from_agent_workspace = tier_module._agent_attestations(agent_root, fallback_root=artifact_root)
+    from_agent_workspace = tier_module._agent_attestations(agent_root)
     assert len(from_agent_workspace.values) == 1
 
     (artifact_root / "agent-attestations.json").write_text(
