@@ -782,8 +782,123 @@ def test_capability_fails_rather_than_abstains_when_a_shortfall_ships_with_no_de
     # about anything flipped the quiet case to examined; now the verdict comes
     # from what shipped.
     unrelated = gate_capability_from_decisions(
-        [{"decision_id": "1", "status": "approved", "description": "stage enum"}],
+        [
+            {
+                "decision_id": "stage_enum",
+                "status": "proposed",
+                "provenance": "agent_authored",
+                "ruling": "Normalise the stage enum.",
+                "applies_to": "deals.stage",
+                "detail": "",
+            }
+        ],
         _shortfall_capability(),
         "deal_count = 1\n",
     )
     assert (unrelated.examined, unrelated.passed) == (quiet.examined, quiet.passed)
+
+
+def _off_contract_rows() -> list[dict[str, str]]:
+    """The ledger the crm-pipeline live run actually wrote, verbatim in shape.
+
+    Columns ``decision_id,description,status,provenance`` with blueprint
+    statuses -- no ``applies_to``, so nothing binds a ruling to a column.
+    """
+
+    return [
+        {
+            "decision_id": "updated_at_as_stage_entry_time",
+            "description": "Treat updatedAt as the stage entry instant.",
+            "status": "approved",
+            "provenance": "agent_authored",
+        },
+        {
+            "decision_id": "owner_contact_details_excluded",
+            "description": "Owner contact details are out of scope.",
+            "status": "settled",
+            "provenance": "user_confirmed",
+        },
+    ]
+
+
+def test_capability_names_an_off_contract_ledger_instead_of_calling_it_ungoverned() -> None:
+    """The live shape: rulings exist, in a vocabulary the pack rejects.
+
+    ``capability_shortfall_not_governed`` reads as "the agent wrote no ruling",
+    which sends a reader at this gate's allowlist. The agent *did* write one --
+    with the blueprint's ``approved``/``settled`` statuses and no ``applies_to``
+    -- and ``self_check.py`` phase D hard-fails that closure for the same
+    reason. The verdict is unchanged; the diagnosis now names the defect.
+    """
+
+    result = gate_capability_from_decisions(
+        _off_contract_rows(), _shortfall_capability(), "stage_age_days = ...\n"
+    )
+
+    assert result.examined is True
+    assert result.passed is False
+    assert result.codes == ("capability_decisions_off_contract",)
+    # Not both: one defect must not be charged once per metric as well.
+    assert "capability_shortfall_not_governed" not in result.codes
+    breaches = result.findings[0].value["breaches"]
+    assert "applies_to" in " ".join(breaches), "the missing binding column must be named"
+    assert "approved" in " ".join(breaches), "the out-of-vocabulary status must be named"
+    assert result.findings[0].value["columns"] == [
+        "decision_id",
+        "description",
+        "provenance",
+        "status",
+    ]
+
+
+def test_capability_off_contract_check_ignores_a_ledger_with_no_rows() -> None:
+    """An empty or absent ledger is not off-contract, it is simply unruled.
+
+    Reading a header-only or missing ``nxd_decisions`` as a contract breach
+    would relabel the clearest ungoverned case -- a shortfall column shipped
+    with no ruling at all -- as a schema complaint.
+    """
+
+    for rows in (None, ()):
+        result = gate_capability_from_decisions(
+            rows, _shortfall_capability(), "stage_age_days = ...\n"
+        )
+        assert "capability_shortfall_not_governed" in result.codes
+        assert "capability_decisions_off_contract" not in result.codes
+
+
+def test_capability_off_contract_ledger_does_not_fail_a_correct_abstention() -> None:
+    """This gate's claim is about shipped shortfall columns, nothing else.
+
+    An agent that refused the impossible metric has satisfied it. Failing that
+    run over ledger hygiene would grade the self-check's question here, and
+    would resurrect "any unrelated decision row decides the outcome" in mirror
+    image.
+    """
+
+    result = gate_capability_from_decisions(
+        _off_contract_rows(), _shortfall_capability(), "deal_count = 1\n"
+    )
+
+    assert result.examined is True
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_capability_off_contract_covers_one_bad_row_among_clean_ones() -> None:
+    """A single out-of-vocabulary row makes the whole ledger unreadable.
+
+    Dropping it and grading the survivors would let a clean ``proposed`` row
+    govern a column while a ``superseded`` row with the same id says otherwise
+    -- which is exactly what phase D refuses to do.
+    """
+
+    rows = [*_governed_rows(), {**_governed_rows()[0], "status": "superseded"}]
+
+    result = gate_capability_from_decisions(
+        rows, _shortfall_capability(), "stage_age_days = ...\n"
+    )
+
+    assert result.passed is False
+    assert result.codes == ("capability_decisions_off_contract",)
+    assert "superseded" in " ".join(result.findings[0].value["breaches"])

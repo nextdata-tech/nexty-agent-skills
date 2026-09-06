@@ -295,8 +295,54 @@ def _metric_is_implemented(terms: Sequence[str], implementation: str) -> bool:
     return any(term.lower() in lowered for term in terms if isinstance(term, str) and term)
 
 
+# The vocabularies below mirror ``LEDGER_VOCAB`` in
+# ``src/nxd-run-job-loop/scripts/self_check.py`` (phase D), which is the source
+# of truth and hard-fails a closure whose ledger leaves them.  They are copied
+# rather than imported because the harness cannot import the shipped helper;
+# keep them in step with that file, not with whatever a run happened to emit.
+_LEDGER_STATUS = frozenset({"confirmed", "proposed", "blocked"})
+_LEDGER_PROVENANCE = frozenset(
+    {"user_confirmed", "agent_authored", "source_derived", "deferred"}
+)
+#: Columns a ruling needs to be readable as one: ``applies_to`` is the field
+#: that *binds* a ruling to columns, and without it there is nothing to grade
+#: governance against except prose.
+_LEDGER_COLUMNS = ("status", "provenance", "applies_to")
+
+
+def _ledger_contract_breaches(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
+    """Return why a non-empty decision ledger is not gradeable, or ``()``.
+
+    An empty or absent ledger is *not* off-contract -- it is simply a closure
+    with no rulings, which the per-metric loop already grades correctly.  Only a
+    ledger that has rows and still cannot be read as rulings lands here.
+    """
+
+    if not rows:
+        return ()
+    present = set(rows[0])
+    breaches = [
+        f"no {column!r} column" for column in _LEDGER_COLUMNS if column not in present
+    ]
+    for column, vocabulary in (("status", _LEDGER_STATUS), ("provenance", _LEDGER_PROVENANCE)):
+        if column not in present:
+            continue
+        # Union every row's value, as phase D does: one out-of-vocabulary row
+        # among clean ones still makes the ledger unreadable as a class, and
+        # dropping it would let the survivors quietly govern in its place.
+        unknown = {str(row.get(column, "")).strip().lower() for row in rows} - vocabulary
+        if unknown:
+            breaches.append(f"{column} has {sorted(unknown)}")
+    return tuple(breaches)
+
+
 def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]]) -> bool:
-    """Whether a confirmed decision row covers any of a metric's column terms."""
+    """Whether a governing decision row covers any of a metric's column terms.
+
+    Callers must have cleared ``_ledger_contract_breaches`` first: a row without
+    ``applies_to`` never reaches here, so there is no temptation to fall back to
+    matching ``description`` or any other prose field.
+    """
 
     for row in rows:
         # ``proposed`` is the documented landing state for an agent-authored
@@ -450,6 +496,35 @@ def gate_capability_from_decisions(
     # non-empty implementation text above -- an absent or empty closure is
     # still not-examined -- and whether a real build happened is the build
     # gate's question, which _pass_rule requires unconditionally.
+    breaches = _ledger_contract_breaches(rows) if implemented else ()
+    if breaches:
+        # The agent did write rulings; it wrote them in a shape the pack's own
+        # self-check rejects (statuses from the *blueprint* vocabulary, no
+        # ``applies_to``).  Reporting that as ``not_governed`` said "no ruling
+        # exists", which sends a reader at the gate's allowlist instead of at
+        # the skill.  The verdict is unchanged -- an unreadable ledger governs
+        # nothing -- but the diagnosis now names the real defect.
+        #
+        # Scoped to closures that actually shipped a shortfall column: this
+        # gate's claim is only about those.  A correct abstention with an
+        # untidy ledger is the self-check's business, not capability's.
+        return _result(
+            "capability",
+            False,
+            [
+                Finding(
+                    "capability_decisions_off_contract",
+                    "nxd_decisions is not readable as governed rulings: "
+                    + "; ".join(breaches),
+                    {
+                        "breaches": list(breaches),
+                        "columns": sorted(rows[0]),
+                        "metrics": sorted(implemented),
+                    },
+                )
+            ],
+            required=required,
+        )
     findings: list[Finding] = []
     for name, terms in implemented.items():
         label = labels[name]
@@ -457,7 +532,7 @@ def gate_capability_from_decisions(
             findings.append(
                 Finding(
                     "capability_shortfall_not_governed",
-                    f"{name} is {label} but the build implements it with no confirmed decision",
+                    f"{name} is {label} but the build implements it with no governing decision",
                     {"metric": name, "label": label, "terms": list(terms)},
                 )
             )
