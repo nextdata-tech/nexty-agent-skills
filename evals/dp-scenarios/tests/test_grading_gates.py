@@ -762,7 +762,28 @@ def test_capability_fails_rather_than_abstains_when_a_shortfall_ships_with_no_de
     assert shipped.passed is False
     assert "capability_shortfall_not_governed" in shipped.codes
 
-    # No rulings and nothing implemented: nothing needed governing.
+    # Correct abstention: the impossible metric was refused, so no column
+    # shipped and there was nothing to govern. That is the gate's claim
+    # satisfied, not an absence of evidence -- and once a scenario declares a
+    # manifest the gate is required, so not-examined here failed the run for
+    # doing the right thing.
     quiet = gate_capability_from_decisions(None, _shortfall_capability(), "deal_count = 1\n")
-    assert quiet.examined is False
-    assert "capability_decisions_not_examined" in quiet.codes
+    assert quiet.examined is True
+    assert quiet.passed is True
+    assert quiet.codes == ()
+
+    # The guard that keeps this from being a gate that cannot fail: nothing to
+    # read is still not-examined, so an absent or empty closure cannot pass.
+    empty = gate_capability_from_decisions(None, _shortfall_capability(), "")
+    assert empty.examined is False
+    assert "capability_implementation_not_examined" in empty.codes
+
+    # And an unrelated ruling no longer decides the outcome. Before, any row
+    # about anything flipped the quiet case to examined; now the verdict comes
+    # from what shipped.
+    unrelated = gate_capability_from_decisions(
+        [{"decision_id": "1", "status": "approved", "description": "stage enum"}],
+        _shortfall_capability(),
+        "deal_count = 1\n",
+    )
+    assert (unrelated.examined, unrelated.passed) == (quiet.examined, quiet.passed)

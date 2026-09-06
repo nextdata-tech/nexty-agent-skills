@@ -52,10 +52,14 @@ EXPECTED_TIERS = {
     "inventory-position": "core",
 }
 
-_BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing"}
+_BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
+# query is required only where an `answer` gold row-set is declared, which the
+# tier decides from `has_scoreable_answer_gold`. Leaving it in the base set
+# made this table disagree with the tier for eight of the nine packages.
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
     | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
+    | ({"query"} if scenario_id == "parent-child-grain-trap" else set())
     for scenario_id in EXPECTED_TIERS
 }
 GATES_WITHOUT_A_STAGING_SCENARIO = {"narrowing"}
@@ -149,6 +153,8 @@ def test_public_scenarios_declare_the_expected_required_gate_set() -> None:
             declared.remove("capability")
         if not scenario.stages_definition_change:
             declared.remove("narrowing")
+        if not scenario.has_scoreable_answer_gold:
+            declared.remove("query")
         assert declared == expected
         assert scenario.stages_definition_change is False
 
@@ -169,6 +175,8 @@ def test_every_gate_has_a_public_staging_scenario_or_an_explicit_follow_up_allow
             required_by_public_scenario.add("capability")
         if scenario.stages_definition_change:
             required_by_public_scenario.add("narrowing")
+        if scenario.has_scoreable_answer_gold:
+            required_by_public_scenario.add("query")
     missing = set(GATE_PHASES) - required_by_public_scenario
     # No public scenario declares a mid-run definition change yet. Keep this
     # named until the future narrowing-staging follow-up adds one.
@@ -681,3 +689,20 @@ def test_capability_shortfall_is_the_first_package_to_declare_the_live_tier() ->
     assert live_ids == {"capability-shortfall"}
     selected = select_tier(load_scenarios(ROOT / "scenarios"), "live")
     assert {scenario.id for scenario in selected} == live_ids
+
+
+def test_only_the_scenario_declaring_answer_gold_has_a_scoreable_query_gate() -> None:
+    """The other eight grade their rows through the follow-up kind instead.
+
+    Their gold is declared under the follow-up kind's own key
+    (`pipeline`, `reconciliation`), is an object rather than the row list the
+    query oracle requires, and is already compared against the agent's
+    evidence artifact there. Renaming it to `answer` would fail at load --
+    `_parse_gold` requires the key set to equal the kind's `gold_keys` -- and
+    would then double-grade the same rows over a channel nobody pins.
+    """
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    scoreable = {scenario.id for scenario in scenarios if scenario.has_scoreable_answer_gold}
+
+    assert scoreable == {"parent-child-grain-trap"}

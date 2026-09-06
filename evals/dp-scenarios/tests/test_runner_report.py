@@ -357,3 +357,29 @@ def test_an_unclassified_interruption_still_names_itself_and_prints_its_detail()
     text = human_summary(result)
     assert "interrupted: interrupted_unclassified" in text
     assert "detail: API Error: 529 overloaded_error" in text
+
+
+def test_a_scenario_without_answer_gold_reports_query_as_not_staged() -> None:
+    """"UNEXAMINED" said the harness could not look.
+
+    The truth is that the scenario declares no scoreable answer gold, which is
+    decided at load time from its own declaration -- the same category as the
+    capability and narrowing waivers.
+    """
+
+    from dp_scenarios.grading.gates import NOT_STAGED_CODES
+
+    assert "query_answer_gold_not_declared" in NOT_STAGED_CODES
+
+    scenario = make_scenario("no-answer-gold", turns=3)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario))},
+    ).run()
+
+    run = result.scenarios[0].runs[0]
+    query = run.score.gates["query"]
+    if not query.required:
+        assert "query" in run.as_dict()["waived_gates"] or query.examined

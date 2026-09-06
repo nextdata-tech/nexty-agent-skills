@@ -45,6 +45,11 @@ gates:
     kind: crm_pipeline
     pii_sentinel: crm-pii-sentinel-4e2b7f9c
     stage_enum: [prospecting, qualification, negotiation, closed_won, closed_lost]
+# Graded by the follow-up kind, which reads this key by name and compares
+# these rows against the agent's evidence artifact. It is not query gold:
+# the query oracle wants a bare row list, and `_parse_gold` requires the
+# key set to equal the kind's gold_keys, so renaming it to `answer` would
+# fail at load. The query gate is waived by declaration, not by accident.
 gold:
   pipeline: gold/crm_pipeline_output.json
 follow_up_artifact: evidence/crm_pipeline.json

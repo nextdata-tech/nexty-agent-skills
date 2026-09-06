@@ -47,6 +47,11 @@ gates:
       missing_fx_policy: exclude_and_warn
       output_total: eur
       rounding: cents
+# Graded by the follow-up kind, which reads this key by name and compares
+# these rows against the agent's evidence artifact. It is not query gold:
+# the query oracle wants a bare row list, and `_parse_gold` requires the
+# key set to equal the kind's gold_keys, so renaming it to `answer` would
+# fail at load. The query gate is waived by declaration, not by accident.
 gold:
   reconciliation: gold/finance_close_reconciliation.json
   diagnostics: gold/finance_close_diagnostics.json
