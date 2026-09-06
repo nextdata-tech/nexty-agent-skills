@@ -122,10 +122,13 @@ files without a shell".
 The narrow intent remains: shell-only helpers cannot run, so substitute file
 tools and MCP verification. The replacement says that and adds that it
 substitutes *a mechanism, not a workflow*, directing the agent to follow the
-skills' normal flow including any step that dispatches a subagent. It names no
-gate and no observed skill, so it stays harness mechanics rather than a hint —
-the property `test_the_default_prompt_does_not_restate_what_the_gates_grade`
-protects.
+installed Nexty skills' normal flow — and stops there. An earlier draft added
+"including any step that dispatches a subagent"; that named, suite-wide, the
+exact dispatch shape `construction` grades, which would have made the prompt a
+gate hint. Undoing the diversion needs the two bad sentences gone and nothing
+affirmative in their place. The shipped text names no gate, no observed skill
+and no dispatch shape — the property
+`test_the_default_prompt_does_not_restate_what_the_gates_grade` protects.
 
 ### 6. The gate's success token could not be emitted at all
 
@@ -152,9 +155,11 @@ pairing is what keeps it honest — a research subagent records no round, and a
 fabricated round dispatched nothing. Run 3's four `Agent` calls (documentation
 hunting and a file deletion) are correctly credited with no review.
 
-The round also carries the outcome, so `adversarial_review` becomes
-harness-owned rather than agent-attested — the same move made for the
-self-check in (1). `skipped` is not accepted: the contract is explicit that a
+The round carries the outcome, so *that* is harness-owned. It does **not**
+replace the attestation: unlike (1), where the harness watched the exact event,
+a delegation call shows only that some subagent ran and the round entry is
+agent-written, so `adversarial_review` still requires an agent attestation.
+`skipped` is not accepted: the contract is explicit that a
 non-eligible review produces no entry, so an entry claiming `skipped` is not a
 round.
 
@@ -203,8 +208,16 @@ are not comparable with later ones on this gate.
   sentences are gone, the mechanism-not-workflow wording is present, and the
   guidance names neither the observed skill nor the dispatch shape the gate
   looks for. Fails against the previous prompt.
-- `evals/dp-scenarios/tests/test_runner_tier.py` — `_agent_attestations` reads
-  the agent workspace only.
+- `evals/dp-scenarios/tests/test_runner_tier.py` —
+  `test_real_grain_trap_populated_replay_has_clean_examined_gates` carries the
+  restored `fallback_root`: the populated replay recordings write
+  `agent-attestations.json` into the artifacts dict and a replayed run has no
+  agent workspace, so with the exemption scoped to `self_check` the run fails
+  `construction_adversarial_review_attestation_missing` without it. It fails
+  against an implementation with the fallback removed.
+  `test_malformed_agent_attestation_is_a_grade_finding_not_a_tier_abort` pins
+  only precedence — the workspace winning over the fallback — and passes either
+  way, so it is not the carrying test.
 - `evals/dp-scenarios/tests/test_grading_gates.py` — a delegation call paired
   with a recorded `review_rounds[]` entry passes; neither half alone counts,
   and a `skipped` status is not a round.
