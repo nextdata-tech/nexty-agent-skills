@@ -23,6 +23,11 @@ import subprocess
 from typing import Any, Protocol
 
 from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
+from dp_scenarios.failure_reasons import (
+    CHILD_EXITED_EARLY,
+    CHILD_NO_TERMINAL_RESULT,
+    classify_failure_reason,
+)
 from dp_scenarios.operator.transport import (
     Attachment,
     OperatorMessage,
@@ -31,6 +36,12 @@ from dp_scenarios.operator.transport import (
     TouchedFile,
     TurnResult,
 )
+
+
+#: Cap on one stderr drain.  Ample for the tail both callers keep, and small
+#: enough that a child writing faster than the parent reads cannot hold the
+#: drain open past the turn deadline it is being asked to explain.
+_STDERR_DRAIN_BYTES = 64 * 1024
 
 
 class SessionError(RuntimeError):
@@ -135,6 +146,8 @@ def turn_result_to_dict(result: TurnResult) -> dict[str, object]:
         "environment_wedged": result.environment_wedged,
         "turn_timed_out": result.turn_timed_out,
         "environment_detail": result.environment_detail,
+        "failure_reason": result.failure_reason,
+        "last_mcp_call": result.last_mcp_call,
         "session_id": result.session_id,
     }
 
@@ -181,6 +194,8 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
         environment_wedged=bool(value.get("environment_wedged", False)),
         turn_timed_out=bool(value.get("turn_timed_out", False)),
         environment_detail=value.get("environment_detail") if isinstance(value.get("environment_detail"), str) else None,
+        failure_reason=value.get("failure_reason") if isinstance(value.get("failure_reason"), str) else None,
+        last_mcp_call=value.get("last_mcp_call") if isinstance(value.get("last_mcp_call"), str) else None,
         session_id=value.get("session_id") if isinstance(value.get("session_id"), str) else None,
     )
 
@@ -572,16 +587,25 @@ class LiveSession:
             # persist the partial replay, ledger, and final report. Raising
             # here loses the completed earlier turns and makes a live timeout
             # look like a graded failure instead of an infrastructure crash.
+            # Read whatever the child already wrote to stderr without
+            # blocking on EOF: a provider limit is usually announced there,
+            # and it is the difference between "the scenario stalled" and
+            # "the account cannot start another turn".
+            stderr_tail = self._drain_stderr_nonblocking()
+            reason = classify_failure_reason(stderr_tail) or CHILD_NO_TERMINAL_RESULT
+            if stderr_tail:
+                detail += f": {stderr_tail[-500:]}"
             self.close(wait_timeout=min(self.timeout, 5.0))
             return TurnResult(
                 turn_timed_out=True,
                 environment_wedged=False,
                 environment_detail=detail,
+                failure_reason=reason,
                 session_id=f"live-session-{self._session_counter}",
             )
         line = self._process.stdout.readline()
         if not line:
-            stderr = self._process.stderr.read() if self._process.stderr is not None else ""
+            stderr = self._drain_stderr_nonblocking()
             detail = "live session ended without a structured turn result"
             if stderr:
                 detail += f": {stderr[-500:]}"
@@ -589,6 +613,7 @@ class LiveSession:
             return TurnResult(
                 environment_wedged=True,
                 environment_detail=detail,
+                failure_reason=classify_failure_reason(stderr) or CHILD_EXITED_EARLY,
                 session_id=f"live-session-{self._session_counter}",
             )
         try:
@@ -603,6 +628,45 @@ class LiveSession:
         return turn_result_from_dict(nested)
 
     send = send_message
+
+    def _drain_stderr_nonblocking(self) -> str:
+        """Return whatever the child has already written to stderr.
+
+        ``stderr.read()`` blocks until EOF, and a wedged child keeps the pipe
+        open -- on the timeout path that turned a bounded turn deadline into
+        an unbounded parent hang.
+
+        The drain is capped rather than run to exhaustion.  Reading unblocks a
+        child stalled on a full pipe, which lets it write more, so a child
+        logging retries faster than the parent drains would keep this loop
+        alive past the very deadline it is reporting.  Both callers keep only
+        the last 500 characters, so the cap costs no diagnostic.
+        """
+
+        budget = _STDERR_DRAIN_BYTES
+
+        process = self._process
+        if process is None or process.stderr is None:
+            return ""
+        chunks: list[str] = []
+        stream = process.stderr
+        try:
+            descriptor = stream.fileno()
+        except (OSError, ValueError):
+            return ""
+        while budget > 0:
+            ready, _, _ = select.select([descriptor], [], [], 0)
+            if not ready:
+                break
+            try:
+                chunk = os.read(descriptor, min(65536, budget))
+            except OSError:
+                break
+            if not chunk:
+                break
+            budget -= len(chunk)
+            chunks.append(chunk.decode("utf-8", errors="replace"))
+        return "".join(chunks)
 
     def _stop_process(self, *, wait_timeout: float) -> None:
         """Stop this session's process group without closing shared Desktop."""

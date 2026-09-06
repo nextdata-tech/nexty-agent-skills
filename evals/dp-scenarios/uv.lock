@@ -623,6 +623,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "nxd-eval" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
@@ -639,6 +640,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.0" },
     { name = "nxd-eval", editable = "../nxd_eval" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
+    { name = "python-dotenv", specifier = ">=1.2" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 

@@ -7,7 +7,15 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-06 | own the build evidence, and stop comparing source tables with built models | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |
+| 2026-09-06 | scope the source contract and conduct rules to the scenarios that ask for them | NO_EVAL | — | [`2026-09-06-handover-and-prompt-scoping`](entries/2026-09-06-handover-and-prompt-scoping.md) |
+| 2026-09-06 | dp-scenarios declaration-based gate requiredness and waived coverage | NO_EVAL | — | [`2026-09-06-dp-scenarios-declaration-requiredness`](entries/2026-09-06-dp-scenarios-declaration-requiredness.md) |
+| 2026-09-06 | stop the harness preventing, mislabelling and diverting the behaviour construction grades | NO_EVAL | — | [`2026-09-06-construction-gate-unpassable`](entries/2026-09-06-construction-gate-unpassable.md) |
+| 2026-09-06 | stop a database's timestamp rendering reading as a wrong pipeline | NO_EVAL | — | [`2026-09-06-compliant-path-timestamp-rendering`](entries/2026-09-06-compliant-path-timestamp-rendering.md) |
+| 2026-09-06 | grade capability from what a live closure emits, and name the waivers | NO_EVAL | — | [`2026-09-06-abstention-and-waiver-categories`](entries/2026-09-06-abstention-and-waiver-categories.md) |
+| 2026-09-05 | read the supervisor's real query and release payloads | NO_EVAL | — | [`2026-09-05-supervisor-evidence-harvesting`](entries/2026-09-05-supervisor-evidence-harvesting.md) |
 | 2026-09-05 | evals: the operator's turn has a directive composed from persona and scenario | NO_EVAL | — | [`2026-09-05-operator-directive-composition`](entries/2026-09-05-operator-directive-composition.md) |
+| 2026-09-05 | structured terminal reasons for an interrupted live scenario run | NO_EVAL | — | [`2026-09-05-live-run-interruption-reasons`](entries/2026-09-05-live-run-interruption-reasons.md) |
 | 2026-09-05 | automated mutation testing for the dp-scenarios harness | NO_EVAL | — | [`2026-09-05-dp-scenarios-mutation-testing`](entries/2026-09-05-dp-scenarios-mutation-testing.md) |
 | 2026-09-04 | nxd-run-job-loop: incremental transform state persistence checks | NO_EVAL | — | [`2026-09-04-nxd-run-job-loop-incremental-state`](entries/2026-09-04-nxd-run-job-loop-incremental-state.md) |
 | 2026-09-04 | nexty plugin projections and local profiler ownership | NO_EVAL | — | [`2026-09-04-nexty-plugin-projections`](entries/2026-09-04-nexty-plugin-projections.md) |

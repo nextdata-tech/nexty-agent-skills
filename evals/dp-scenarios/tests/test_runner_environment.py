@@ -588,3 +588,215 @@ def test_pins_from_a_mapping_carry_declared_driver_fields() -> None:
 
     assert values.driver_model_id == "gpt-x"
     assert dict(values.driver_sampling_params) == {"temperature": 0.4, "prompt_hash": "abc"}
+
+
+# --------------------------------------------------------------------------
+# Handover scoping (PR #237 review): the response contract is opt-in.
+
+
+def test_a_route_publishes_its_contract_only_when_it_opts_in() -> None:
+    """`capability-shortfall` grades discovery-by-probing of what /deals lacks.
+
+    Enumerating the available fields in the handover file answers that for
+    free, so the extra keys have to be per-route rather than suite-wide.
+    """
+
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner.environment import advertised_endpoints, render_source_profile
+
+    table = {
+        "version": 1,
+        "routes": [{"path": "/deals", "method": "GET", "response": {"json": [{"id": "D1", "owner": {"name": "n"}}]}}],
+    }
+    silent = load_config(table)
+    opted = load_config({**table, "routes": [{**table["routes"][0], "publish_contract": True}]})
+
+    def profile(config: object) -> str:
+        return render_source_profile("http://127.0.0.1:1/data", advertised_endpoints(config.routes), routes=config.routes)
+
+    assert "endpoint_deals_fields" not in profile(silent)
+    assert "endpoint_deals" in profile(silent), "the endpoint itself is still handed over"
+    assert "endpoint_deals_fields" in profile(opted)
+
+
+def test_the_published_contract_describes_the_state_the_endpoint_serves_first() -> None:
+    """`next(iter(states.values()))` took whichever state sorted first.
+
+    That need not be the one a caller gets. `initial_state` is what the
+    endpoint serves until something advances it, so its shape is the contract
+    an operator would document.
+    """
+
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner.environment import advertised_endpoints, render_source_profile
+
+    config = load_config(
+        {
+            "version": 1,
+            "routes": [
+                {
+                    "path": "/deals",
+                    "method": "GET",
+                    "publish_contract": True,
+                    "state_family": "deals",
+                    "initial_state": "v1",
+                    "states": {
+                        "aaa_later": {"json": [{"renamed_field": "x"}]},
+                        "v1": {"json": [{"deal_id": "D1"}]},
+                    },
+                }
+            ],
+        }
+    )
+    text = render_source_profile("http://127.0.0.1:1/data", advertised_endpoints(config.routes), routes=config.routes)
+
+    assert "deal_id" in text
+    assert "renamed_field" not in text
+
+
+def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifact() -> None:
+    """Applying them suite-wide would void the pre-existing packages' baselines."""
+
+    from dp_scenarios.runner.environment import _evidence_contract
+    from dp_scenarios.scenario import load_scenarios
+
+    from _repo_paths import REPO_ROOT
+
+    contracts = {
+        scenario.id: _evidence_contract(scenario)
+        for scenario in load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
+    }
+    with_conduct = {name for name, value in contracts.items() if value is not None}
+
+    assert with_conduct == {"crm-pipeline", "finance-close", "inventory-position"}
+    for name in with_conduct:
+        assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"
+
+
+def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
+    """The prompt is harness mechanics; conduct travels with the scenario."""
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT, SCENARIO_CONDUCT_RULES
+
+    lowered = DEFAULT_SYSTEM_PROMPT.lower()
+    for phrase in (
+        "ask the operator for explicit approval",
+        "do not report numeric or status results",
+        "prompt-injection bait",
+        "hidden gold",
+    ):
+        assert phrase not in lowered, f"gate-restating phrase left in the default prompt: {phrase}"
+    assert any("explicit approval" in rule for rule in SCENARIO_CONDUCT_RULES)
+
+
+def test_no_conduct_rule_countermands_the_skills_under_test() -> None:
+    """Conduct governs the operator relationship, never the skill flow.
+
+    Rule 7 read "do not ask for another confirmation, load a planning skill, or
+    delegate a helper; author the closure and call check_data_product
+    directly." It is delivered in scenario-evidence-contract.json, the agent
+    reads it in its first turn, and it instructed exactly the two behaviours
+    ``construction`` then failed the run for missing: routing through the
+    generator skill, and dispatching the step 6b reviewer subagent. The
+    system-prompt half of that diversion was already removed; this is the other
+    half, and while it stood the two contradicted each other in one context.
+    """
+
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    rules = " ".join(SCENARIO_CONDUCT_RULES).lower()
+    for phrase in ("load a planning skill", "delegate a helper", "call check_data_product directly"):
+        assert phrase not in rules, f"conduct rule countermands the skills under test: {phrase}"
+    # The anti-stall purpose it was written for survives.
+    assert "do not ask for another confirmation" in rules
+
+
+def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> None:
+    """"Author the closure with the available file tools" read as "skip the skill".
+
+    A live crm-pipeline run said so in its own words -- "without using the
+    nxd-generate-data-product skill's automated flow (I'm told to author
+    directly)" -- and never invoked the generator, so it never reached the step
+    that dispatches the closure reviewer, which ``construction`` then graded as
+    an agent failure. The blanket "do not launch a background Agent" had the
+    same effect on the dispatch itself.
+
+    The replacement constrains the mechanism (no shell helpers; file tools and
+    MCP verification instead) without displacing the workflow, and without
+    naming any gate.
+    """
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT
+
+    # The prompt hard-wraps, so compare on normalised whitespace.
+    flowed = " ".join(DEFAULT_SYSTEM_PROMPT.split())
+
+    assert "author the closure with the available file tools" not in flowed
+    assert "do not launch a background Agent for shell-only" not in flowed
+    assert "follow the installed Nexty skills' normal flow" in flowed
+    # Still mechanics, not conduct. Naming the dispatch shape the construction
+    # gate looks for ("including any step that dispatches a subagent") would
+    # make this a gate hint suite-wide, which is what the block it sits in
+    # promises not to be. Undoing the diversion needs the two bad sentences
+    # gone; it does not need an affirmative instruction to delegate.
+    assert "dispatches a subagent" not in flowed
+    assert "nxd-review-closure" not in flowed.lower()
+
+
+def test_the_prompt_no_longer_both_requires_and_forbids_calling_the_source() -> None:
+    """One sentence said "call the source yourself", another switched it off.
+
+    The remaining restriction names the mechanism rather than the act, and it
+    lives with the scenarios that opt in -- leaving it in the default prompt
+    would have been new relative to the baselines the pre-existing mock-source
+    packages were measured on.
+    """
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT, SCENARIO_CONDUCT_RULES
+
+    assert "call the source yourself" in DEFAULT_SYSTEM_PROMPT
+    assert "WebFetch" not in DEFAULT_SYSTEM_PROMPT
+    connector = [rule for rule in SCENARIO_CONDUCT_RULES if "WebFetch" in rule]
+    assert len(connector) == 1
+    assert "Probing the source is expected and is not restricted." in connector[0]
+
+
+def test_the_live_adapter_is_told_where_the_supervisor_keeps_its_state() -> None:
+    """The build reader is inert unless the adapter knows the data directory.
+
+    On the live path the environment starts the supervisor and hands the
+    adapter a ``--mcp-config``, so the adapter never allocates the state
+    directory itself and cannot infer it. Without this argument
+    ``_update_from_state_dir`` is gated off on every production run while
+    every unit test that calls it directly still passes -- which is exactly
+    how it shipped inert.
+    """
+
+    from pathlib import Path
+
+    from dp_scenarios.runner.environment import _desktop_command_builder, _supervisor_data_dir
+
+    supervisor_args = ("--data-dir", "/tmp/run/desktop-state", "mcp", "serve")
+    assert _supervisor_data_dir(supervisor_args) == Path("/tmp/run/desktop-state")
+    assert _supervisor_data_dir(("--data-dir=/tmp/eq/state", "mcp")) == Path("/tmp/eq/state")
+    assert _supervisor_data_dir(("mcp", "serve")) is None
+
+    build = _desktop_command_builder(
+        ["python", "-m", "adapter"], _supervisor_data_dir(supervisor_args)
+    )
+    argv = list(build(Path("/tmp/mcp-config.json"), True, "a,b"))
+
+    assert "--supervisor-data-dir" in argv
+    assert argv[argv.index("--supervisor-data-dir") + 1] == "/tmp/run/desktop-state"
+    # And the adapter parses it into the attribute the reader is gated on.
+    from dp_scenarios.runner.claude_adapter import build_parser
+
+    parsed = build_parser().parse_args(
+        [
+            "--claude", "/bin/true", "--plugin-dir", ".", "--repo-root", ".",
+            "--fixture-dir", ".", "--artifact-dir", ".",
+            "--desktop-supervisor", "/bin/true", "--desktop-python", "/bin/true",
+            "--supervisor-data-dir", "/tmp/run/desktop-state",
+        ]
+    )
+    assert parsed.supervisor_data_dir == Path("/tmp/run/desktop-state")

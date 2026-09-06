@@ -1,0 +1,14 @@
+{
+  "input_position_count": 8,
+  "negative_position_ids": [
+    "POS-29-005"
+  ],
+  "negative_quantity_count": 1,
+  "orphan_warehouse_count": 2,
+  "orphan_warehouse_ids": [
+    "WH-1103",
+    "WH-1957"
+  ],
+  "quality_policy": "warn_and_preserve",
+  "warehouse_count": 3
+}

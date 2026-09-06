@@ -245,7 +245,14 @@ def orphan_foreign_keys(
             return frame, InjectionRecord("orphan_foreign_keys", params, 0, (), ())
         key_column = _candidate_column(
             frame,
-            ("parent_id", "order_id", "customer_id", "account_id", "foreign_key"),
+            (
+                "parent_id",
+                "order_id",
+                "warehouse_id",
+                "customer_id",
+                "account_id",
+                "foreign_key",
+            ),
             purpose="foreign key",
         )
         selected = rng.sample(range(len(frame)), count)

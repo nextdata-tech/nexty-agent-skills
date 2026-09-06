@@ -51,6 +51,10 @@ class FollowUpKind:
     name: str
     gold_keys: frozenset[str]
     handler: Handler
+    # Agent-authored evidence is optional for older kinds. New kinds that
+    # grade a multi-step result declare the fields they require here so the
+    # runner can hand the agent a shape without exposing hidden gold.
+    evidence_contract: Mapping[str, str] = field(default_factory=dict)
     certification_gold: Mapping[str, str] = field(default_factory=dict)
     validate_settings: SettingsValidator | None = None
     # Loader-time cross-checks. ``None`` means this kind declares no such

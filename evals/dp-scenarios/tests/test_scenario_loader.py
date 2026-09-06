@@ -47,7 +47,22 @@ EXPECTED_TIERS = {
     "sigterm-diagnosis": "core",
     "restart-and-switch": "core",
     "capability-shortfall": "live",
+    "crm-pipeline": "core",
+    "finance-close": "core",
+    "inventory-position": "core",
 }
+
+_BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
+# query is required only where an `answer` gold row-set is declared, which the
+# tier decides from `has_scoreable_answer_gold`. Leaving it in the base set
+# made this table disagree with the tier for eight of the nine packages.
+EXPECTED_REQUIRED_GATES = {
+    scenario_id: _BASE_REQUIRED_GATES
+    | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
+    | ({"query"} if scenario_id == "parent-child-grain-trap" else set())
+    for scenario_id in EXPECTED_TIERS
+}
+GATES_WITHOUT_A_STAGING_SCENARIO = {"narrowing"}
 
 
 def _packages_on_disk() -> set[str]:
@@ -126,6 +141,64 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
     }
     assert set(compared) == expected_comparisons
     assert expected_comparisons, "no scenario's gold was compared against a regenerated fixture"
+
+
+def test_public_scenarios_declare_the_expected_required_gate_set() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+
+    for scenario in scenarios:
+        expected = EXPECTED_REQUIRED_GATES[scenario.id]
+        declared = set(GATE_PHASES)
+        if not scenario.stages_capability_shortfall:
+            declared.remove("capability")
+        if not scenario.stages_definition_change:
+            declared.remove("narrowing")
+        if not scenario.has_scoreable_answer_gold:
+            declared.remove("query")
+        assert declared == expected
+        assert scenario.stages_definition_change is False
+
+    staged_capability = {
+        scenario.id for scenario in scenarios if scenario.stages_capability_shortfall
+    }
+    assert staged_capability == {"capability-shortfall", "crm-pipeline"}
+
+
+def test_every_gate_has_a_public_staging_scenario_or_an_explicit_follow_up_allowlist() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    # Read the predicates the tier actually consults, not the expectation
+    # table above: deriving both sides from the same constant made this pass
+    # against an implementation that had no predicates at all.
+    required_by_public_scenario = set(_BASE_REQUIRED_GATES)
+    for scenario in scenarios:
+        if scenario.stages_capability_shortfall:
+            required_by_public_scenario.add("capability")
+        if scenario.stages_definition_change:
+            required_by_public_scenario.add("narrowing")
+        if scenario.has_scoreable_answer_gold:
+            required_by_public_scenario.add("query")
+    missing = set(GATE_PHASES) - required_by_public_scenario
+    # No public scenario declares a mid-run definition change yet. Keep this
+    # named until the future narrowing-staging follow-up adds one.
+    assert missing == GATES_WITHOUT_A_STAGING_SCENARIO
+
+
+def test_definition_change_gate_setting_is_a_declaration_seam(tmp_path: Path) -> None:
+    package = _copy_parent_child_package(tmp_path)
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["gates"]["narrowing"] = {
+        "kind": "narrowing",
+        "definition_change": {
+            "trigger_turn": 3,
+            "changed_metrics": ["regional_revenue"],
+        },
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    scenario = load_scenario(package)
+
+    assert scenario.stages_definition_change
 
 
 @pytest.mark.parametrize("missing", sorted({
@@ -394,6 +467,9 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "sigterm-diagnosis")
     shutil.rmtree(root / "restart-and-switch")
     shutil.rmtree(root / "capability-shortfall")
+    shutil.rmtree(root / "crm-pipeline")
+    shutil.rmtree(root / "finance-close")
+    shutil.rmtree(root / "inventory-position")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -419,6 +495,9 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.rmtree(root / "sigterm-diagnosis")
     shutil.rmtree(root / "restart-and-switch")
     shutil.rmtree(root / "capability-shortfall")
+    shutil.rmtree(root / "crm-pipeline")
+    shutil.rmtree(root / "finance-close")
+    shutil.rmtree(root / "inventory-position")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -610,3 +689,20 @@ def test_capability_shortfall_is_the_first_package_to_declare_the_live_tier() ->
     assert live_ids == {"capability-shortfall"}
     selected = select_tier(load_scenarios(ROOT / "scenarios"), "live")
     assert {scenario.id for scenario in selected} == live_ids
+
+
+def test_only_the_scenario_declaring_answer_gold_has_a_scoreable_query_gate() -> None:
+    """The other eight grade their rows through the follow-up kind instead.
+
+    Their gold is declared under the follow-up kind's own key
+    (`pipeline`, `reconciliation`), is an object rather than the row list the
+    query oracle requires, and is already compared against the agent's
+    evidence artifact there. Renaming it to `answer` would fail at load --
+    `_parse_gold` requires the key set to equal the kind's `gold_keys` -- and
+    would then double-grade the same rows over a channel nobody pins.
+    """
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    scoreable = {scenario.id for scenario in scenarios if scenario.has_scoreable_answer_gold}
+
+    assert scoreable == {"parent-child-grain-trap"}

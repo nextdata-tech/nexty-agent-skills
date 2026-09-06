@@ -1,0 +1,76 @@
+version: 1
+id: finance-close
+tier: core
+run_order: 8
+fixture:
+  dataset: finance_close
+  seed: 29
+  variant: hostile-decimal-weekend-fx
+  plant: finance_close_reconciliation
+coverage:
+  variant: hostile-decimal-weekend-fx
+  untested: This package grades deterministic close reconciliation and decision evidence through a local mock source; it does not claim a live finance system or authenticated agent run.
+turn_budget: 8
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/micromanager.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+  8: 7
+required_plants:
+  - finance_close_reconciliation
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: finance_close
+    decision_id: b2-weekend-fx
+    superseding_decision_id: b2-weekend-fx-reversal
+    promise_fields:
+      amount_parser: comma_and_parentheses
+      missing_fx_policy: exclude_and_warn
+      output_total: eur
+      rounding: cents
+# Graded by the follow-up kind, which reads this key by name and compares
+# these rows against the agent's evidence artifact. It is not query gold:
+# the query oracle wants a bare row list, and `_parse_gold` requires the
+# key set to equal the kind's gold_keys, so renaming it to `answer` would
+# fail at load. The query gate is waived by declaration, not by accident.
+gold:
+  reconciliation: gold/finance_close_reconciliation.json
+  diagnostics: gold/finance_close_diagnostics.json
+follow_up_artifact: evidence/finance_close.json
+operator:
+  sentinel: null
+  obstacle_terms: []
+route_table:
+  version: 1
+  routes:
+    - path: /close_entries
+      publish_contract: true
+      method: GET
+      response:
+        json:
+          - {close_id: CLOSE-29-001, account_id: ACCT-001, close_date: "2024-01-31", currency: EUR, amount: "1234.50", fx_rate: "1.00", status: posted, notes: standard euro close}
+          - {close_id: CLOSE-29-002, account_id: ACCT-002, close_date: "2024-01-30", currency: USD, amount: "1,250.00", fx_rate: "0.92", status: posted, notes: comma-formatted amount}
+          - {close_id: CLOSE-29-003, account_id: ACCT-003, close_date: "2024-01-29", currency: GBP, amount: "(200.00)", fx_rate: "1.17", status: posted, notes: parenthesized credit}
+          - {close_id: CLOSE-29-004, account_id: ACCT-004, close_date: "2024-01-28", currency: USD, amount: "300.00", fx_rate: "0.92", status: posted, notes: standard dollar close}
+          - {close_id: CLOSE-29-005, account_id: ACCT-005, close_date: "2024-01-27", currency: JPY, amount: "15000.00", fx_rate: "0.0062", status: posted, notes: small-unit currency}
+          - {close_id: CLOSE-29-006, account_id: ACCT-006, close_date: "2024-01-06", currency: USD, amount: "(250.00)", fx_rate: "", status: posted, notes: weekend rate unavailable}
+          - {close_id: CLOSE-29-007, account_id: ACCT-007, close_date: "2024-01-26", currency: EUR, amount: "85.00", fx_rate: "1.00", status: posted, notes: small euro close}

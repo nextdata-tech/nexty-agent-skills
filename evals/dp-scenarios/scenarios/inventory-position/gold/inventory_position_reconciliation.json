@@ -1,0 +1,68 @@
+{
+  "rows": [
+    {
+      "position_id": "POS-29-001",
+      "quality": "valid",
+      "quantity": 12,
+      "region": "north",
+      "sku": "SKU-001",
+      "warehouse_id": "WH-01"
+    },
+    {
+      "position_id": "POS-29-002",
+      "quality": "orphan_warehouse",
+      "quantity": 7,
+      "region": null,
+      "sku": "SKU-002",
+      "warehouse_id": "WH-1957"
+    },
+    {
+      "position_id": "POS-29-003",
+      "quality": "orphan_warehouse",
+      "quantity": 4,
+      "region": null,
+      "sku": "SKU-003",
+      "warehouse_id": "WH-1103"
+    },
+    {
+      "position_id": "POS-29-004",
+      "quality": "valid",
+      "quantity": 8,
+      "region": "north",
+      "sku": "SKU-004",
+      "warehouse_id": "WH-01"
+    },
+    {
+      "position_id": "POS-29-005",
+      "quality": "negative_stock",
+      "quantity": -15,
+      "region": "south",
+      "sku": "SKU-005",
+      "warehouse_id": "WH-02"
+    },
+    {
+      "position_id": "POS-29-006",
+      "quality": "valid",
+      "quantity": 3,
+      "region": "east",
+      "sku": "SKU-006",
+      "warehouse_id": "WH-03"
+    },
+    {
+      "position_id": "POS-29-007",
+      "quality": "valid",
+      "quantity": 11,
+      "region": "north",
+      "sku": "SKU-007",
+      "warehouse_id": "WH-01"
+    },
+    {
+      "position_id": "POS-29-008",
+      "quality": "valid",
+      "quantity": 6,
+      "region": "south",
+      "sku": "SKU-008",
+      "warehouse_id": "WH-02"
+    }
+  ]
+}

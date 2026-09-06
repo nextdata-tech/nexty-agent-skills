@@ -197,6 +197,7 @@ def _applied_injectors(
                     for candidate in (
                         "parent_id",
                         "order_id",
+                        "warehouse_id",
                         "customer_id",
                         "account_id",
                         "foreign_key",

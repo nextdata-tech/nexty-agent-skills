@@ -38,7 +38,7 @@ def test_demonstrated_once_is_not_rendered_as_a_rate() -> None:
     assert "no rate is rendered" in summary
 
 
-def test_clean_tier_definition_and_unexamined_gate_status_are_pinned() -> None:
+def test_clean_tier_definition_and_not_staged_gate_status_are_pinned() -> None:
     scenario = make_scenario("report-honesty")
     recording = recording_for(scenario, responses_for(scenario))
     result = TierRunner([scenario], pins=pins(), canary=clean_canary(), replay_recordings={scenario.id: recording}).run()
@@ -51,8 +51,18 @@ def test_clean_tier_definition_and_unexamined_gate_status_are_pinned() -> None:
     )
     assert "clean_tier_means" in document
     assert "unkeyed" in document["clean_tier_means"]
-    assert "capability=UNEXAMINED" in summary
-    assert "UNEXAMINED" in summary
+    assert "capability=NOT-STAGED" in summary
+    assert "narrowing=NOT-STAGED" in summary
+    assert "scoreable gates:" in summary
+    assert "waived: capability(capability_shortfall_not_staged),narrowing(narrowing_change_not_staged)" in summary
+
+    score = document["scenarios"][0]["runs"][0]["score"]
+    assert score["waived_gates"] == {
+        "capability": "capability_shortfall_not_staged",
+        "narrowing": "narrowing_change_not_staged",
+    }
+    assert score["scoreable_max"] == 75
+    assert score["threshold"] == 52
 
 
 def test_efficiency_is_sibling_to_scored_fields_and_never_inside_score(tmp_path: Path) -> None:
@@ -296,3 +306,80 @@ def test_a_failed_render_warns_and_still_returns_the_finished_run(
     warning = capsys.readouterr().err
     assert "could not render conversation" in warning
     assert "RuntimeError" in warning, "the operator cannot tell what failed"
+
+
+def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> None:
+    """An operator reads stdout first; a provider ceiling has to appear there."""
+
+    scenario = make_scenario("interrupted", turns=3)
+    interrupted = TurnResult(
+        turn_timed_out=True,
+        environment_detail="Claude did not complete the turn within 324.0s",
+        failure_reason="provider_session_limit",
+        last_mcp_call="build_data_product:error",
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario, first=interrupted))},
+    ).run()
+    text = human_summary(result)
+
+    assert "interrupted: provider_session_limit" in text
+    assert "last MCP call: build_data_product:error" in text
+    assert "detail: Claude did not complete the turn within 324.0s" in text
+
+
+def test_an_unclassified_interruption_still_names_itself_and_prints_its_detail() -> None:
+    """A null reason reads, on that key, exactly like a run never interrupted.
+
+    An unrecognised provider error is precisely where an operator most needs
+    the distinction, so the vocabulary has to be exhaustive and the detail has
+    to reach stdout even when no pattern matched.
+    """
+
+    scenario = make_scenario("unclassified", turns=3)
+    wedged = TurnResult(
+        environment_wedged=True,
+        environment_detail="API Error: 529 overloaded_error",
+        failure_reason=None,
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario, first=wedged))},
+    ).run()
+
+    run = result.scenarios[0].runs[0]
+    assert run.as_dict()["interruption"]["failure_reason"] == "interrupted_unclassified"
+    text = human_summary(result)
+    assert "interrupted: interrupted_unclassified" in text
+    assert "detail: API Error: 529 overloaded_error" in text
+
+
+def test_a_scenario_without_answer_gold_reports_query_as_not_staged() -> None:
+    """"UNEXAMINED" said the harness could not look.
+
+    The truth is that the scenario declares no scoreable answer gold, which is
+    decided at load time from its own declaration -- the same category as the
+    capability and narrowing waivers.
+    """
+
+    from dp_scenarios.grading.gates import NOT_STAGED_CODES
+
+    assert "query_answer_gold_not_declared" in NOT_STAGED_CODES
+
+    scenario = make_scenario("no-answer-gold", turns=3)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario))},
+    ).run()
+
+    run = result.scenarios[0].runs[0]
+    query = run.score.gates["query"]
+    if not query.required:
+        assert "query" in run.as_dict()["waived_gates"] or query.examined

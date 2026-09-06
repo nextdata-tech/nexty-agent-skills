@@ -230,6 +230,13 @@ class RouteConfig:
     latency_ms: int = 0
     status: int = 200
     write_forbidden: bool = False
+    #: Opt in to publishing this route's response contract -- field names,
+    #: nesting, pagination and rate-limit pacing -- in the agent's infra
+    #: profile.  Off by default: a scenario whose whole drill is discovering
+    #: what the source can answer must not have that answer enumerated in its
+    #: handover file.  A scenario that hands the agent a documented API
+    #: contract turns it on per route.
+    publish_contract: bool = False
 
     @classmethod
     def from_mapping(
@@ -254,6 +261,7 @@ class RouteConfig:
             "latency_ms",
             "status",
             "write_forbidden",
+            "publish_contract",
         }
         _keys(raw, allowed, location)
         path = _nonempty_string(raw.get("path"), f"{location}.path")
@@ -366,6 +374,7 @@ class RouteConfig:
             latency_ms=latency_ms,
             status=status,
             write_forbidden=write_forbidden,
+            publish_contract=bool(raw.get("publish_contract", False)),
         )
 
 

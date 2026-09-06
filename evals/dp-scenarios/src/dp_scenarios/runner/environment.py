@@ -26,6 +26,7 @@ from dp_scenarios.ledger import LedgerRow, LedgerStore, Manifest, fixture_dir_ha
 from dp_scenarios.ledger.manifest import NOT_APPLICABLE, REPLAY_SESSION_PATH_FIELDS
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_transform_latency
 from dp_scenarios.mockrest import MockRestServer
+from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
 
 
@@ -64,6 +65,30 @@ def _agent_fixture_manifest(manifest: Mapping[str, object], oracle_path: Path) -
     return safe
 
 
+def _evidence_contract(scenario: Scenario) -> dict[str, object] | None:
+    """Describe agent evidence without exposing hidden reference values."""
+
+    path = getattr(scenario, "follow_up_artifact", None)
+    if path is None:
+        return None
+    kind = followups.get(scenario.gates["follow-up"].kind)
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    return {
+        "format_version": 1,
+        "artifact_path": path,
+        "required_fields": dict(kind.evidence_contract),
+        "instruction": (
+            "Write only the required JSON object at artifact_path; do not include "
+            "secrets or hidden reference values."
+        ),
+        # Conduct rules ride with the scenario that asked for them rather than
+        # with the harness, so a package that does not declare an evidence
+        # artifact keeps the prompt -- and the baseline -- it was measured on.
+        "conduct": list(SCENARIO_CONDUCT_RULES),
+    }
+
+
 _SESSION_ENVIRONMENT_ALLOWLIST = frozenset(
     {
         "COLORTERM",
@@ -97,6 +122,7 @@ LiveCommandBuilder = Callable[[Path, bool, str], Sequence[str]]
 
 def _desktop_command_builder(
     command: Sequence[str] | LiveCommandBuilder,
+    supervisor_data_dir: Path | None = None,
 ) -> LiveCommandBuilder:
     """Adapt the legacy base argv to the shared substrate's command seam."""
 
@@ -108,12 +134,30 @@ def _desktop_command_builder(
 
     def build(config_path: Path, strict_mcp_config: bool, allowed_tools_csv: str) -> Sequence[str]:
         result = [*base, "--mcp-config", str(config_path)]
+        if supervisor_data_dir is not None:
+            # The adapter reads the supervisor's own release records to grade
+            # the build, and on this path it does not start the server, so it
+            # cannot infer where that state lives. Without this the reader is
+            # silently inert on every live run.
+            result.extend(("--supervisor-data-dir", str(supervisor_data_dir)))
         if strict_mcp_config:
             result.append("--strict-mcp-config")
         result.extend(("--allowedTools", allowed_tools_csv))
         return result
 
     return build
+
+
+def _supervisor_data_dir(supervisor_args: Sequence[str]) -> Path | None:
+    """Return the ``--data-dir`` the supervisor was started with, if any."""
+
+    arguments = list(supervisor_args)
+    for index, argument in enumerate(arguments):
+        if argument == "--data-dir" and index + 1 < len(arguments):
+            return Path(arguments[index + 1])
+        if argument.startswith("--data-dir="):
+            return Path(argument.split("=", 1)[1])
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,7 +367,100 @@ def advertised_endpoints(routes: Sequence[Any]) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def render_source_profile(base_url: str, endpoints: Sequence[str]) -> str:
+def _publishes_contract(routes: Sequence[Any], path: str) -> bool:
+    """Return whether this endpoint opted in to publishing its contract.
+
+    Default-off is the point.  ``capability-shortfall`` grades whether an
+    agent discovers by probing that ``/deals`` carries no stage history;
+    listing the available fields in the handover answers that for free.
+    """
+
+    for route in routes:
+        if getattr(route, "path", None) == path and getattr(route, "method", "").upper() == "GET":
+            return bool(getattr(route, "publish_contract", False))
+    return False
+
+
+def _successful_response(route: Any) -> Any:
+    """Return the response spec this endpoint actually serves first.
+
+    A ``ResponseSpec`` carries no status of its own -- the status lives on the
+    route, and ``advertised_endpoints`` has already restricted this to 200 --
+    so "successful" cannot be decided per state.  What can be decided is
+    *which* state: ``next(iter(states.values()))`` returned whichever one the
+    mapping happened to order first, which need not be the one a caller gets.
+    ``initial_state`` is the state served until something advances it, so its
+    shape is the contract an operator would document.
+    """
+
+    response = getattr(route, "response", None)
+    if response is not None:
+        return response
+    states = getattr(route, "states", {})
+    if not states:
+        return None
+    initial = getattr(route, "initial_state", None)
+    if isinstance(initial, str) and initial in states:
+        return states[initial]
+    return next(iter(states.values()), None)
+
+
+def _response_shape(route: Any) -> dict[str, object] | None:
+    """Return non-secret field metadata for one successful response."""
+
+    response = _successful_response(route)
+    data = getattr(response, "data", None)
+    if isinstance(data, Mapping):
+        rows: list[Mapping[str, object]] = [data]
+    elif isinstance(data, list) and all(isinstance(row, Mapping) for row in data):
+        rows = [row for row in data if isinstance(row, Mapping)]
+    else:
+        return None
+    fields: list[str] = []
+    nested: dict[str, list[str]] = {}
+    for row in rows:
+        for key, value in row.items():
+            name = str(key)
+            if name not in fields:
+                fields.append(name)
+            if isinstance(value, Mapping):
+                nested_fields = nested.setdefault(name, [])
+                for child in value:
+                    child_name = str(child)
+                    if child_name not in nested_fields:
+                        nested_fields.append(child_name)
+    return {"fields": fields, "nested_fields": nested}
+
+
+def _profile_metadata(routes: Sequence[Any], path: str) -> dict[str, object]:
+    """Describe the public request/response contract without row values."""
+
+    route = next((item for item in routes if getattr(item, "path", None) == path), None)
+    if route is None:
+        return {}
+    metadata = _response_shape(route) or {}
+    pagination = getattr(route, "pagination", None)
+    if pagination is not None:
+        metadata["pagination"] = {
+            "page_size": pagination.page_size,
+            "cursor_param": pagination.cursor_param,
+            "items_field": pagination.items_field,
+            "cursor_field": pagination.cursor_field,
+        }
+        metadata["data_selector"] = pagination.items_field
+    rate_limit_every = getattr(route, "rate_limit_every", None)
+    if rate_limit_every is not None:
+        metadata["rate_limit_every"] = rate_limit_every
+    return metadata
+
+
+def render_source_profile(
+    base_url: str,
+    endpoints: Sequence[str],
+    *,
+    auth: object | None = None,
+    routes: Sequence[Any] = (),
+) -> str:
     """Render the agent-visible infra profile for a run-local API source."""
 
     lines = [
@@ -340,6 +477,23 @@ def render_source_profile(base_url: str, endpoints: Sequence[str]) -> str:
         f"          value: {json.dumps(base_url)}",
         "          public: true",
     ]
+    if auth is not None:
+        lines.extend(
+            [
+                "        - key: auth_header",
+                f"          value: {json.dumps(str(getattr(auth, 'header', 'Authorization')))}",
+                "          public: true",
+                "        - key: auth_scheme",
+                f"          value: {json.dumps(str(getattr(auth, 'scheme', 'Bearer')))}",
+                "          public: true",
+                "        - key: credential_env",
+                '          value: "NXD_EVAL_SOURCE_TOKEN"',
+                "          public: true",
+                "        - key: auth_refresh_path",
+                f"          value: {json.dumps(str(getattr(auth, 'refresh_path', '')))}",
+                "          public: true",
+            ]
+        )
     for path in endpoints:
         lines.extend(
             [
@@ -348,6 +502,14 @@ def render_source_profile(base_url: str, endpoints: Sequence[str]) -> str:
                 "          public: true",
             ]
         )
+        for suffix, value in _profile_metadata(routes, path).items() if _publishes_contract(routes, path) else ():
+            lines.extend(
+                [
+                    f"        - key: {_endpoint_key(path)}_{suffix}",
+                    f"          value: {json.dumps(value, ensure_ascii=False)}",
+                    "          public: true",
+                ]
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -374,6 +536,7 @@ class RunEnvironment:
     control_secret: str | None = None
     manifest_override: Manifest | Mapping[str, object] | None = None
     live_command: Sequence[str] | LiveCommandBuilder | None = None
+    live_environment: Mapping[str, str] | None = None
     supervisor_command: str | Path | Sequence[str] | None = None
     supervisor_args: Sequence[str] = ()
     supervisor_environment: Mapping[str, str] | None = None
@@ -437,6 +600,14 @@ class RunEnvironment:
                 json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            contract = _evidence_contract(self.scenario)
+            if contract is not None:
+                workspace = self.workspace_dir
+                workspace.mkdir(parents=True, exist_ok=True)
+                (workspace / "scenario-evidence-contract.json").write_text(
+                    json.dumps(contract, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
         except Exception as error:
             try:
                 self.close()
@@ -476,6 +647,9 @@ class RunEnvironment:
                         "mcp",
                         "serve",
                     )
+                # Whatever --data-dir the supervisor was actually given is the
+                # directory whose release records describe this run's builds.
+                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
                 # Host-home access is an explicit allowance for the agent
                 # process (typically to read a configured Claude profile),
                 # not an implicit allowance for the supervisor or its
@@ -485,6 +659,12 @@ class RunEnvironment:
                 supervisor_environment.update(
                     {"HOME": str(self.home), "USERPROFILE": str(self.home)}
                 )
+                if self._mock_source is not None:
+                    auth = self._mock_source.server.config.auth
+                    if auth is not None:
+                        # The source token belongs to the trusted supervisor
+                        # and its transform children, never to the agent shell.
+                        supervisor_environment["NXD_EVAL_SOURCE_TOKEN"] = auth.token
                 if self.knobs.broker_fault is not None:
                     supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
                         self.attempt,
@@ -495,8 +675,11 @@ class RunEnvironment:
                     )
 
                 transport = DesktopStdioTransport.create(
-                    _desktop_command_builder(self.live_command),
-                    environment=self.agent_environment,
+                    _desktop_command_builder(self.live_command, supervisor_data_dir),
+                    environment={
+                        **self.agent_environment,
+                        **dict(self.live_environment or {}),
+                    },
                     cwd=self.live_cwd or (base / "agent"),
                     server_command=self.supervisor_command,
                     server_args=supervisor_args,
@@ -705,7 +888,9 @@ class RunEnvironment:
         it is the artifact the scenarios' operators already refer to, it is
         found by the ordinary Read/Glob tools, and it survives a run with no
         shell.  It carries only what a real handover carries -- the base URL
-        and the endpoints the source is documented to serve.
+        and the endpoints the source is documented to serve, plus, for the
+        routes that set ``publish_contract``, the documented response contract
+        for those routes alone.
         """
 
         source = self._mock_source
@@ -718,6 +903,8 @@ class RunEnvironment:
             render_source_profile(
                 source.server.data_url,
                 advertised_endpoints(source.server.config.routes),
+                auth=source.server.config.auth,
+                routes=source.server.config.routes,
             ),
             encoding="utf-8",
         )

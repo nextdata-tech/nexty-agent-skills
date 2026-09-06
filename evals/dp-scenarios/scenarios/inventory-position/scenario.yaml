@@ -1,0 +1,82 @@
+version: 1
+id: inventory-position
+tier: core
+run_order: 9
+fixture:
+  dataset: inventory_position
+  seed: 29
+  variant: inventory-warehouse-quality
+  plant: inventory_position_orphans
+coverage:
+  variant: inventory-warehouse-quality
+  untested: This package grades profile-backed inventory evidence through a local mock source; it does not claim a live Postgres fixture session or a retained parent run for B10.
+turn_budget: 9
+repeatability:
+  tier: mock-source
+  epochs: 3
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/confidently-wrong.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+  8: 7
+  9: 7
+required_plants:
+  - inventory_position_orphans
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: inventory_position
+    profile_mode: profile_reference_only
+    true_classification: data_quality_warning
+    secret_marker: inventory-profile-secret-sentinel-28bd
+# Graded by the follow-up kind, which reads this key by name and compares
+# these rows against the agent's evidence artifact. It is not query gold:
+# the query oracle wants a bare row list, and `_parse_gold` requires the
+# key set to equal the kind's gold_keys, so renaming it to `answer` would
+# fail at load. The query gate is waived by declaration, not by accident.
+gold:
+  reconciliation: gold/inventory_position_reconciliation.json
+  diagnostics: gold/inventory_position_diagnostics.json
+follow_up_artifact: evidence/inventory_position.json
+operator:
+  sentinel: null
+  obstacle_terms: []
+route_table:
+  version: 1
+  routes:
+    - path: /warehouses
+      publish_contract: true
+      method: GET
+      response:
+        json:
+          - {warehouse_id: WH-01, region: north, label: North Hub}
+          - {warehouse_id: WH-02, region: south, label: South Hub}
+          - {warehouse_id: WH-03, region: east, label: East Hub}
+    - path: /inventory_positions
+      publish_contract: true
+      method: GET
+      response:
+        json:
+          - {position_id: POS-29-001, sku: SKU-001, warehouse_id: WH-01, quantity: 12, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-002, sku: SKU-002, warehouse_id: WH-1957, quantity: 7, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-003, sku: SKU-003, warehouse_id: WH-1103, quantity: 4, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-004, sku: SKU-004, warehouse_id: WH-01, quantity: 8, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-005, sku: SKU-005, warehouse_id: WH-02, quantity: -15, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-006, sku: SKU-006, warehouse_id: WH-03, quantity: 3, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-007, sku: SKU-007, warehouse_id: WH-01, quantity: 11, as_of: "2024-01-31", status: posted}
+          - {position_id: POS-29-008, sku: SKU-008, warehouse_id: WH-02, quantity: 6, as_of: "2024-01-31", status: posted}

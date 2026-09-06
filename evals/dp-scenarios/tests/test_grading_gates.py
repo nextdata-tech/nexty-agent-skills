@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 
@@ -284,6 +286,29 @@ def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     optional = gate_capability({}, {}, required=False)
     assert not optional.required
     assert not optional.examined
+    assert optional.codes == ("capability_shortfall_not_staged",)
+
+    optional_narrowing = gate_narrowing({}, [], None, required=False)
+    assert optional_narrowing.required is False
+    assert optional_narrowing.examined is False
+    assert optional_narrowing.codes == ("narrowing_change_not_staged",)
+
+
+def test_staged_gate_missing_evidence_stays_required_and_fails() -> None:
+    capability = gate_capability_from_decisions(
+        None,
+        _shortfall_capability(),
+        "",
+        required=True,
+    )
+    assert capability.required is True
+    assert capability.examined is False
+    assert "capability_implementation_not_examined" in capability.codes
+
+    narrowing = gate_narrowing(None, [], None, required=True)
+    assert narrowing.required is True
+    assert narrowing.examined is False
+    assert "narrowing_ledger_not_examined" in narrowing.codes
 
 
 def test_construction_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: Path) -> None:
@@ -342,6 +367,219 @@ def test_strict_construction_does_not_count_free_text_tool_arguments() -> None:
     assert "construction_adversarial_review_not_observed" in result.codes
 
 
+def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> None:
+    """A self-check the harness observed needs no agent testimony about it.
+
+    A live crm-pipeline run called ``check_data_product`` successfully before
+    every build and still failed on ``self_check_outcome_missing`` and
+    ``self_check_attestation_missing`` -- the harness failing an agent for not
+    re-telling it what it had just seen. Same pattern as the build gate, where
+    examinability depended on which artifacts the agent volunteered.
+    """
+
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {"name": "crm-deals"},
+                        "result": {"is_error": False},
+                    },
+                    {
+                        "name": "Task",
+                        "arguments": {"subagent_type": "nxd-review-closure"},
+                        "result": {"is_error": False},
+                    },
+                ]
+            }
+        ]
+    }
+    # No ledger row and no attestation for self_check; the reviewer half still
+    # supplies both, because no tool call reveals what a review concluded.
+    ledger = _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "two claims, both rejected"}})
+
+    result = gate_construction(
+        ledger,
+        observations=observations,
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "two claims, both rejected"},),
+        require_observed=True,
+    )
+
+    assert result.passed is True, "an observed check must not need an attestation as well"
+    assert result.codes == ()
+
+
+def _dispatch_observations(*, tool: str = "Agent", subagent_type: str = "general-purpose") -> dict:
+    return {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {"name": "crm-deals"},
+                        "result": {"is_error": False},
+                    },
+                    {
+                        "name": tool,
+                        "arguments": {"subagent_type": subagent_type, "prompt": "review the closure"},
+                        "result": {"is_error": False},
+                    },
+                ]
+            }
+        ]
+    }
+
+
+def test_construction_observes_the_review_the_mandated_flow_actually_produces() -> None:
+    """``subagent_type="nxd-review-closure"`` is a token no agent can emit.
+
+    `reference/adversarial-review.md` mandates "one built-in read-only
+    subagent -- never a custom/plugin agent definition", this plugin registers
+    no agents at all, and the CLI rejects an unknown subagent type. Keying the
+    gate on that name made `construction` unpassable by an agent doing exactly
+    what the skill says.
+
+    What the flow does produce is a ``review_rounds[]`` entry in
+    build-record.json. Paired with an observed delegation call it is the
+    behaviour itself, and it carries the outcome.
+
+    The attestation is still required for this kind, unlike ``self_check``: a
+    delegation call only shows that *a* subagent ran, and the round entry is
+    agent-written, so neither is the harness witnessing a review the way a
+    ``check_data_product`` call is the harness witnessing a self-check.
+    """
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "one claim, rejected"},),
+        review_rounds=[{"status": "complete", "findings": [{"claim": "grain is wrong", "adjudication": "rejected"}]}],
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_does_not_exempt_the_reviewer_from_its_attestation() -> None:
+    """A research subagent plus a hand-written round is not a review.
+
+    The observed-call exemption is scoped to ``self_check``, where the harness
+    watched the exact event. Extending it to ``adversarial_review`` made a
+    documentation-hunting subagent plus ``{"status": "complete"}`` pass with no
+    attestation at all -- a weaker gate than the one before this branch.
+    """
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=(),
+        review_rounds=[{"status": "complete"}],
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_attestation_missing" in result.codes
+
+
+def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
+    """Either half alone is not the behaviour, so neither alone counts.
+
+    A research subagent records no round; a fabricated round dispatched
+    nothing. Run 3 made four ``Agent`` calls -- doc hunting and a file
+    deletion -- and must not be credited with a review.
+    """
+
+    ledger = _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}})
+
+    dispatch_only = gate_construction(
+        ledger, observations=_dispatch_observations(), attestations=(), review_rounds=[], require_observed=True
+    )
+    assert dispatch_only.passed is False
+    assert "construction_adversarial_review_not_observed" in dispatch_only.codes
+
+    no_dispatch = {"turns": [{"tool_calls": [
+        {"name": "mcp__nxd-desktop__check_data_product", "arguments": {}, "result": {"is_error": False}},
+    ]}]}
+    round_only = gate_construction(
+        ledger,
+        observations=no_dispatch,
+        attestations=(),
+        review_rounds=[{"status": "complete"}],
+        require_observed=True,
+    )
+    assert round_only.passed is False
+    assert "construction_adversarial_review_not_observed" in round_only.codes
+
+    # ``skipped`` is deliberately not a review status: a non-eligible review
+    # produces no entry, so an entry claiming it is not a round.
+    skipped = gate_construction(
+        ledger,
+        observations=_dispatch_observations(),
+        attestations=(),
+        review_rounds=[{"status": "skipped"}],
+        require_observed=True,
+    )
+    assert skipped.passed is False
+    assert "construction_adversarial_review_not_observed" in skipped.codes
+
+
+def test_construction_observes_the_reviewer_under_either_delegation_tool_name() -> None:
+    """The delegation tool is ``Agent`` in some builds and ``Task`` in others.
+
+    A live crm-pipeline run made four ``Agent`` calls and zero ``Task`` calls.
+    Matching only ``task`` made the step 6b reviewer dispatch unobservable by
+    name, so the gate would have failed an agent that did exactly what the
+    skill mandates.
+    """
+
+    for tool_name in ("Task", "Agent"):
+        observations = {
+            "turns": [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "mcp__nxd-desktop__check_data_product",
+                            "arguments": {"name": "crm-deals"},
+                            "result": {"is_error": False},
+                        },
+                        {
+                            "name": tool_name,
+                            "arguments": {"subagent_type": "nexty-agent-skills:nxd-review-closure"},
+                            "result": {"is_error": False},
+                        },
+                    ]
+                }
+            ]
+        }
+        result = gate_construction(
+            _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "one claim, rejected"}}),
+            observations=observations,
+            attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "one claim, rejected"},),
+            require_observed=True,
+        )
+        assert result.passed is True, f"{tool_name} dispatch must be observed"
+        assert "construction_adversarial_review_not_observed" not in result.codes
+
+
+def test_construction_still_fails_when_the_check_was_never_called() -> None:
+    """Owning the self-check evidence must not make the gate unfailable."""
+
+    ledger = _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "clean"}})
+    quiet = gate_construction(
+        ledger,
+        observations={"turns": [{"tool_calls": []}]},
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},),
+        require_observed=True,
+    )
+
+    assert quiet.passed is False
+    assert "construction_self_check_not_observed" in quiet.codes
+    assert "construction_self_check_outcome_missing" in quiet.codes
+    assert "construction_self_check_attestation_missing" in quiet.codes
+
+
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:
     path = tmp_path / "honesty.jsonl"
     with LedgerStore.open(path, _manifest()):
@@ -373,37 +611,65 @@ def test_honesty_gate_fails_closed_when_ledger_or_facts_are_not_examined(tmp_pat
     assert any(finding.code == "ledger_not_examined" for finding in null_facts.findings)
 
 
-def test_build_uses_supervisor_counts_and_identifiers() -> None:
+def test_build_grades_the_release_identity_and_ignores_the_row_count_oracle() -> None:
+    """The two sides of the old comparison were never the same thing.
+
+    The oracle is ``synthgen``'s ``table_row_counts``, keyed by *source table*
+    with int values; the supervisor reports *built model* names, schema-
+    qualified and stringified. A live crm-pipeline run compared
+    ``{"main.active_deals": "5", ...}`` against ``{"deals": 1}`` and failed on
+    every key. Nothing an agent could build would have passed it.
+    """
+
     supervisor = {
         "run_id": "run-1",
         "artifact_id": "artifact-1",
         "publish_sequence": "7",
-        "per_model_row_counts": {"model": 5},
+        "per_model_row_counts": {"main.deals_raw": "6", "main.pages_log": "3"},
     }
-    assert gate_build(supervisor, {"model": 5}).passed
-    missing_model = gate_build(supervisor, {"model": 5, "other-model": 3})
-    assert not missing_model.passed
-    assert any(
-        finding.code == "build_row_count_mismatch" and finding.value["model"] == "other-model"
-        for finding in missing_model.findings
-    )
-    result = gate_build({**supervisor, "per_model_row_counts": {"model": 4}}, {"model": 5})
-    assert not result.passed
-    assert "build_row_count_mismatch" in result.codes
+
+    # The real live shape, against the real oracle for that scenario.
+    live = gate_build(supervisor, {"per_model_row_counts": {"deals": 1}})
+    assert live.examined is True
+    assert live.passed is True, "a published release must not fail on a comparison with no meaning"
+    assert live.codes == ()
+
+    # The oracle is accepted and ignored, whatever it says.
+    for oracle in (None, {}, {"deals": 1}, {"main.deals_raw": 99}):
+        assert gate_build(supervisor, oracle).passed is True
+        assert "build_row_count_mismatch" not in gate_build(supervisor, oracle).codes
+
+
+def test_build_still_fails_when_no_release_carries_the_supervisor_identity() -> None:
+    """The gate stays required, so building nothing cannot dodge it.
+
+    Dropping the count comparison must not leave a gate that cannot fail:
+    ``_pass_rule`` requires ``build`` unconditionally, and no release means no
+    supervisor identifiers.
+    """
+
+    supervisor = {"run_id": "run-1", "artifact_id": "artifact-1", "publish_sequence": "7"}
     for field in ("run_id", "artifact_id", "publish_sequence"):
-        missing = {**supervisor, field: None}
-        assert "build_supervisor_identifier_missing" in gate_build(missing, {"model": 5}).codes
-    absent_counts = gate_build({"run_id": "run-1", "artifact_id": "artifact-1", "publish_sequence": "7"}, {})
-    assert not absent_counts.passed
-    assert not absent_counts.examined
-    assert "build_row_counts_not_examined" in absent_counts.codes
-    one_sided = gate_build(supervisor, {})
-    assert not one_sided.passed
-    assert not one_sided.examined
-    assert "build_row_counts_not_examined" in one_sided.codes
-    typed_mismatch = gate_build(supervisor, {"model": "5"})
-    assert not typed_mismatch.passed
-    assert "build_row_count_mismatch" in typed_mismatch.codes
+        missing = gate_build({**supervisor, field: None}, None)
+        assert missing.passed is False
+        assert "build_supervisor_identifier_missing" in missing.codes
+
+    # Absent means absent or blank, not merely falsy: ``claude_adapter``
+    # accepts an integer ``publish_sequence``, and a whitespace-only string
+    # clears the ledger's non-empty check while identifying nothing.
+    assert gate_build({**supervisor, "publish_sequence": 0}, None).passed is True
+    blank = gate_build({**supervisor, "run_id": "   "}, None)
+    assert blank.passed is False
+    assert blank.codes == ("build_supervisor_identifier_missing",)
+
+    nothing_built = gate_build(None, {"per_model_row_counts": {"deals": 1}})
+    assert nothing_built.passed is False
+    assert nothing_built.examined is False, "no facts to read is an absence of evidence"
+    assert nothing_built.codes == (
+        "build_supervisor_identifier_missing",
+        "build_supervisor_identifier_missing",
+        "build_supervisor_identifier_missing",
+    )
 
 
 def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Path) -> None:
@@ -739,7 +1005,167 @@ def test_capability_fails_rather_than_abstains_when_a_shortfall_ships_with_no_de
     assert shipped.passed is False
     assert "capability_shortfall_not_governed" in shipped.codes
 
-    # No rulings and nothing implemented: nothing needed governing.
+    # Correct abstention: the impossible metric was refused, so no column
+    # shipped and there was nothing to govern. That is the gate's claim
+    # satisfied, not an absence of evidence -- and once a scenario declares a
+    # manifest the gate is required, so not-examined here failed the run for
+    # doing the right thing.
     quiet = gate_capability_from_decisions(None, _shortfall_capability(), "deal_count = 1\n")
-    assert quiet.examined is False
-    assert "capability_decisions_not_examined" in quiet.codes
+    assert quiet.examined is True
+    assert quiet.passed is True
+    assert quiet.codes == ()
+
+    # The guard that keeps this from being a gate that cannot fail: nothing to
+    # read is still not-examined, so an absent or empty closure cannot pass.
+    empty = gate_capability_from_decisions(None, _shortfall_capability(), "")
+    assert empty.examined is False
+    assert "capability_implementation_not_examined" in empty.codes
+
+    # And an unrelated ruling no longer decides the outcome. Before, any row
+    # about anything flipped the quiet case to examined; now the verdict comes
+    # from what shipped.
+    unrelated = gate_capability_from_decisions(
+        [
+            {
+                "decision_id": "stage_enum",
+                "status": "proposed",
+                "provenance": "agent_authored",
+                "ruling": "Normalise the stage enum.",
+                "applies_to": "deals.stage",
+                "detail": "",
+            }
+        ],
+        _shortfall_capability(),
+        "deal_count = 1\n",
+    )
+    assert (unrelated.examined, unrelated.passed) == (quiet.examined, quiet.passed)
+
+
+def _off_contract_rows() -> list[dict[str, str]]:
+    """The ledger the crm-pipeline live run actually wrote, verbatim in shape.
+
+    Columns ``decision_id,description,status,provenance`` with blueprint
+    statuses -- no ``applies_to``, so nothing binds a ruling to a column.
+    """
+
+    return [
+        {
+            "decision_id": "updated_at_as_stage_entry_time",
+            "description": "Treat updatedAt as the stage entry instant.",
+            "status": "approved",
+            "provenance": "agent_authored",
+        },
+        {
+            "decision_id": "owner_contact_details_excluded",
+            "description": "Owner contact details are out of scope.",
+            "status": "settled",
+            "provenance": "user_confirmed",
+        },
+    ]
+
+
+def test_capability_names_an_off_contract_ledger_instead_of_calling_it_ungoverned() -> None:
+    """The live shape: rulings exist, in a vocabulary the pack rejects.
+
+    ``capability_shortfall_not_governed`` reads as "the agent wrote no ruling",
+    which sends a reader at this gate's allowlist. The agent *did* write one --
+    with the blueprint's ``approved``/``settled`` statuses and no ``applies_to``
+    -- and ``self_check.py`` phase D hard-fails that closure for the same
+    reason. The verdict is unchanged; the diagnosis now names the defect.
+    """
+
+    result = gate_capability_from_decisions(
+        _off_contract_rows(), _shortfall_capability(), "stage_age_days = ...\n"
+    )
+
+    assert result.examined is True
+    assert result.passed is False
+    assert result.codes == ("capability_decisions_off_contract",)
+    # Not both: one defect must not be charged once per metric as well.
+    assert "capability_shortfall_not_governed" not in result.codes
+    breaches = result.findings[0].value["breaches"]
+    assert "applies_to" in " ".join(breaches), "the missing binding column must be named"
+    assert "approved" in " ".join(breaches), "the out-of-vocabulary status must be named"
+    assert result.findings[0].value["columns"] == [
+        "decision_id",
+        "description",
+        "provenance",
+        "status",
+    ]
+
+
+def test_capability_off_contract_survives_a_row_with_more_fields_than_headers() -> None:
+    """One unquoted comma in a prose column must not crash grading.
+
+    ``csv.DictReader`` files surplus fields under ``restkey``, which defaults to
+    ``None``, and sorting ``None`` beside ``str`` raises. Nothing between the
+    gate and ``_grade`` catches that, so the ledger too broken to grade would
+    take the harness down instead of being reported as unreadable -- on exactly
+    the hand-written shape this branch exists to report.
+    """
+
+    raw = (
+        "decision_id,description,status,provenance\n"
+        "updated_at_as_stage_entry,Treat updatedAt as the entry instant, per the owner,"
+        "approved,agent_authored\n"
+    )
+    rows = [dict(row) for row in csv.DictReader(io.StringIO(raw))]
+    assert None in rows[0], "the fixture must actually produce a restkey"
+
+    result = gate_capability_from_decisions(rows, _shortfall_capability(), "stage_age_days = ...\n")
+
+    assert result.codes == ("capability_decisions_off_contract",)
+    assert "None" in result.findings[0].value["columns"]
+
+
+def test_capability_off_contract_check_ignores_a_ledger_with_no_rows() -> None:
+    """An empty or absent ledger is not off-contract, it is simply unruled.
+
+    Reading a header-only or missing ``nxd_decisions`` as a contract breach
+    would relabel the clearest ungoverned case -- a shortfall column shipped
+    with no ruling at all -- as a schema complaint.
+    """
+
+    for rows in (None, ()):
+        result = gate_capability_from_decisions(
+            rows, _shortfall_capability(), "stage_age_days = ...\n"
+        )
+        assert "capability_shortfall_not_governed" in result.codes
+        assert "capability_decisions_off_contract" not in result.codes
+
+
+def test_capability_off_contract_ledger_does_not_fail_a_correct_abstention() -> None:
+    """This gate's claim is about shipped shortfall columns, nothing else.
+
+    An agent that refused the impossible metric has satisfied it. Failing that
+    run over ledger hygiene would grade the self-check's question here, and
+    would resurrect "any unrelated decision row decides the outcome" in mirror
+    image.
+    """
+
+    result = gate_capability_from_decisions(
+        _off_contract_rows(), _shortfall_capability(), "deal_count = 1\n"
+    )
+
+    assert result.examined is True
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_capability_off_contract_covers_one_bad_row_among_clean_ones() -> None:
+    """A single out-of-vocabulary row makes the whole ledger unreadable.
+
+    Dropping it and grading the survivors would let a clean ``proposed`` row
+    govern a column while a ``superseded`` row with the same id says otherwise
+    -- which is exactly what phase D refuses to do.
+    """
+
+    rows = [*_governed_rows(), {**_governed_rows()[0], "status": "superseded"}]
+
+    result = gate_capability_from_decisions(
+        rows, _shortfall_capability(), "stage_age_days = ...\n"
+    )
+
+    assert result.passed is False
+    assert result.codes == ("capability_decisions_off_contract",)
+    assert "superseded" in " ".join(result.findings[0].value["breaches"])

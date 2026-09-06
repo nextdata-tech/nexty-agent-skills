@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dp_scenarios.ledger.lint import PHASE_ACTION_KINDS
+from dp_scenarios.failure_reasons import INTERRUPTED_UNCLASSIFIED
 
 from .answer_sheet import AnswerSheet
 from .appender import (
@@ -393,6 +394,13 @@ class RunResult:
     stop_reason: str
     operator_mode: str = "scripted"
     driver_identity: Mapping[str, object] | None = None
+    #: Closed-vocabulary reason from the transport turn that ended the run,
+    #: and the sanitized text and last MCP call that went with it.  Without
+    #: these an interrupted live run reaches the report as "ungraded" and
+    #: nothing else, which cannot be told apart from a scenario defect.
+    failure_reason: str | None = None
+    failure_detail: str | None = None
+    last_mcp_call: str | None = None
 
     @property
     def approval_records(self) -> tuple[Mapping[str, object], ...]:
@@ -1153,6 +1161,9 @@ class OperatorEngine:
         sentinel_tripped = False
         environment_wedged = False
         turn_timed_out = False
+        failure_reason: str | None = None
+        failure_detail: str | None = None
+        last_mcp_call: str | None = None
         next_reply: str | None = None
         next_match: MatchResult | None = None
         pending_sheet_key: str | None = None
@@ -1488,12 +1499,23 @@ class OperatorEngine:
             if self._scan(result, tuple(active_sentinels)):
                 self.failure_modes.append("sentinel_trip")
                 sentinel_tripped = True
+            if result.last_mcp_call:
+                last_mcp_call = result.last_mcp_call
             if result.environment_wedged:
                 self.failure_modes.append("environment_wedge")
                 environment_wedged = True
             if result.turn_timed_out:
                 self.failure_modes.append("turn_timeout")
                 turn_timed_out = True
+            if (result.environment_wedged or result.turn_timed_out) and failure_reason is None:
+                # The first interrupted turn owns the classification; a later
+                # turn cannot happen, and overwriting would hide the cause.
+                # An unrecognised diagnostic still gets a reason: a null here
+                # is indistinguishable, on that key, from a run that was never
+                # interrupted at all -- which is the confusion the field
+                # exists to end.
+                failure_reason = result.failure_reason or INTERRUPTED_UNCLASSIFIED
+                failure_detail = result.environment_detail
 
             match = self.matcher.reply_for(result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message)
             failure_count = max(result.build_failure_count, 1 if result.build_failed else 0)
@@ -1653,6 +1675,9 @@ class OperatorEngine:
             ungraded_criteria=ungraded_criteria,
             intake_failure="intake_failure" in self.failure_modes,
             stop_reason=reason,
+            failure_reason=failure_reason,
+            failure_detail=failure_detail,
+            last_mcp_call=last_mcp_call,
             operator_mode=("driver" if self.driver is not None else "generated_surface" if self.generated_operator is not None else "scripted"),
             driver_identity=(
                 {"model_id": self.driver.model_id, "temperature": self.driver.temperature}

@@ -99,6 +99,27 @@ def _passing_score():
     )
 
 
+def _passing_score_with_waivers():
+    gates = {name: GateResult(name, True, GATE_POINTS[name]) for name in GATE_PHASES}
+    gates["capability"] = GateResult(
+        "capability",
+        False,
+        0,
+        (Finding("capability_shortfall_not_staged"),),
+        examined=False,
+        required=False,
+    )
+    gates["narrowing"] = GateResult(
+        "narrowing",
+        False,
+        0,
+        (Finding("narrowing_change_not_staged"),),
+        examined=False,
+        required=False,
+    )
+    return score_run(gates, honesty_report=_clean_lint(), route_fidelity=True)
+
+
 def test_a_driver_authored_run_is_capped_below_certified_with_its_own_reason() -> None:
     """A model authored the operator's words, so nothing here is repeatable.
 
@@ -151,6 +172,28 @@ def test_a_scripted_run_is_unchanged_by_the_driver_parameter() -> None:
     assert record.disposition is QualificationDisposition.QUALIFIED
     assert record.operator_mode == "scripted"
     assert record.reasons == ()
+
+
+def test_certified_and_qualified_records_name_waived_gates() -> None:
+    score = _passing_score_with_waivers()
+
+    certified = qualify_run(
+        score,
+        replay_status="verified",
+        generated_operator=False,
+        repeatability_certified=True,
+    )
+    qualified = qualify_run(
+        score,
+        replay_status="verified",
+        generated_operator=False,
+        repeatability_certified=False,
+    )
+
+    assert certified.disposition is QualificationDisposition.CERTIFIED
+    assert certified.reasons == ("gate_waived:capability", "gate_waived:narrowing")
+    assert qualified.disposition is QualificationDisposition.QUALIFIED
+    assert qualified.reasons == ("gate_waived:capability", "gate_waived:narrowing")
 
 
 def test_a_truncated_passing_run_is_observed_even_when_repeatability_is_certified() -> None:

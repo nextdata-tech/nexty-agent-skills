@@ -75,6 +75,22 @@ def _relative_reference(root: Path, value: object, location: str, *, must_exist:
     return resolved
 
 
+def _agent_artifact_reference(value: object, location: str) -> str | None:
+    """Validate an agent-written artifact path without resolving it on disk."""
+
+    if value is None:
+        return None
+    reference = _string(value, location)
+    path = Path(reference)
+    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+        raise ScenarioError(f"{location} must be a contained relative path")
+    if path.suffix.casefold() != ".json":
+        raise ScenarioError(f"{location} must name a JSON artifact")
+    if "artifacts" in path.parts:
+        raise ScenarioError(f"{location} may not target the runner evidence directory")
+    return path.as_posix()
+
+
 @dataclass(frozen=True, slots=True)
 class FixtureSpec:
     """The named, seeded fixture generated at scenario-run start."""
@@ -137,6 +153,20 @@ class QueryAssessment:
     actual_rows: tuple[dict[str, object], ...]
 
 
+class AgentEvidence(dict):
+    """An agent-authored evidence artifact, tagged so the shim skips it.
+
+    ``follow_up_check`` accepts a mapping carrying ``closure``/``query_rows``/
+    ``fixture_dir``/``row_count_oracle``/``row_counts`` as the legacy
+    positional calling convention and unwraps it.  A declared evidence
+    artifact is not that -- it is the agent's own JSON object, and an agent
+    that happens to add a ``closure`` field for context would have had its
+    target silently replaced by ``None`` and zeroed the whole follow-up gate.
+    Refusing those key names would only move the trap; the artifact simply
+    must not be routed through the shim at all.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class Scenario:
     """One fully resolved, data-backed evaluation scenario."""
@@ -168,6 +198,10 @@ class Scenario:
     # it "not-applicable". ``None`` means this scenario names no source, the
     # same as every scenario before this field existed.
     route_table: MockRouteTable | None = None
+    # Optional JSON evidence authored during a run and consumed by the
+    # scenario-specific follow-up. It is always relative to the runner's
+    # artifact root; hidden gold is never inferred from this path.
+    follow_up_artifact: str | None = None
 
     @property
     def id(self) -> str:
@@ -240,6 +274,29 @@ class Scenario:
         """Whether this scenario declares the answer artifact needed by query grading."""
 
         return "answer" in self.gold
+
+    @property
+    def stages_capability_shortfall(self) -> bool:
+        """Whether the declared source exposes a gradeable capability shortfall."""
+
+        if self.route_table is None:
+            return False
+        capability = self.route_table.capability
+        metrics = capability.get("metrics") if isinstance(capability, Mapping) else None
+        metric_terms = capability.get("metric_terms") if isinstance(capability, Mapping) else None
+        if not isinstance(metrics, Mapping) or not isinstance(metric_terms, Mapping):
+            return False
+        return any(
+            label in {"impossible", "proxy"} and name in metric_terms
+            for name, label in metrics.items()
+        )
+
+    @property
+    def stages_definition_change(self) -> bool:
+        """Whether the scenario declares a mid-run narrowing definition change."""
+
+        setting = self.gates["narrowing"].settings.get("definition_change")
+        return isinstance(setting, Mapping)
 
     def generate_fixture(self, out_dir: str | Path) -> GenerationResult:
         """Generate the pinned source and gold fixture for one run."""
@@ -360,7 +417,7 @@ class Scenario:
 
         binding = self.gates["follow-up"]
         target = closure
-        if isinstance(closure, Mapping) and (
+        if isinstance(closure, Mapping) and not isinstance(closure, AgentEvidence) and (
             "closure" in closure
             or "query_rows" in closure
             or "fixture_dir" in closure
@@ -621,12 +678,13 @@ _SCENARIO_KEYS = {
 # package, so they live outside ``_SCENARIO_KEYS`` rather than being added to
 # it, which would make every existing scenario.yaml fail the "missing key(s)"
 # check the moment this key exists at all.
-_OPTIONAL_SCENARIO_KEYS = {"route_table"}
+_OPTIONAL_SCENARIO_KEYS = {"route_table", "follow_up_artifact"}
 _FIXTURE_KEYS = {"dataset", "seed", "variant", "plant"}
 _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
+_DEFINITION_CHANGE_KEYS = {"trigger_turn", "changed_metrics"}
 _SCENARIO_TIERS = frozenset({"smoke", "T0", "core", "live"})
 # The tiers whose scenarios cannot be graded from a recording. A live-tier
 # scenario's pass criteria are what an agent *did* across turns, so replaying
@@ -653,12 +711,6 @@ def requires_live_session(tier: str) -> bool:
     """
 
     return _TIER_ALIASES.get(tier, tier) in _LIVE_ONLY_TIERS
-
-
-_DATASET_PLANT_DECLARATIONS = {
-    "grain_trap": "grain_trap_fanout",
-    "zero_row_optional": "optional_zero_row",
-}
 
 
 def _canonical_hash(value: object) -> str:
@@ -726,8 +778,8 @@ def _plant_vocabulary(dataset: str, explicit_plant: str | None = None) -> frozen
 
     definition = get_dataset(dataset)
     result = {injector.name for injector in definition.injectors}
-    declared_plant = _DATASET_PLANT_DECLARATIONS.get(dataset)
-    if declared_plant is None:
+    declared_plant = getattr(definition, "plant", None)
+    if not isinstance(declared_plant, str) or not declared_plant:
         raise ScenarioError(f"dataset {dataset!r} has no explicit planted-difficulty declaration")
     if explicit_plant is not None and explicit_plant != declared_plant:
         raise ScenarioError(
@@ -863,6 +915,31 @@ def _parse_gates(value: object) -> Mapping[str, GateSpec]:
     return MappingProxyType(parsed)
 
 
+def _validate_definition_change(gate: GateSpec, turn_count: int) -> None:
+    """Validate the optional declaration that makes narrowing scoreable."""
+
+    value = gate.settings.get("definition_change")
+    if value is None:
+        return
+    raw = _mapping(value, "gates.narrowing.definition_change")
+    _unknown(raw, _DEFINITION_CHANGE_KEYS, "gates.narrowing.definition_change")
+    if set(raw) != _DEFINITION_CHANGE_KEYS:
+        raise ScenarioError(
+            "gates.narrowing.definition_change requires trigger_turn and changed_metrics"
+        )
+    trigger_turn = _positive_int(
+        raw["trigger_turn"], "gates.narrowing.definition_change.trigger_turn"
+    )
+    if trigger_turn > turn_count:
+        raise ScenarioError(
+            "gates.narrowing.definition_change.trigger_turn must be within the operator turns"
+        )
+    _strings(
+        raw["changed_metrics"],
+        "gates.narrowing.definition_change.changed_metrics",
+    )
+
+
 def _parse_gold(
     root: Path,
     value: object,
@@ -955,9 +1032,9 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("fixture.seed must be a non-negative integer")
     explicit_plant = fixture_raw.get("plant")
     if explicit_plant is None:
-        if dataset == "zero_row_optional":
+        if getattr(get_dataset(dataset), "requires_explicit_plant", False):
             raise ScenarioError("fixture requires dataset, seed, variant, and plant")
-        explicit_plant = _DATASET_PLANT_DECLARATIONS.get(dataset)
+        explicit_plant = getattr(get_dataset(dataset), "plant", None)
     fixture = FixtureSpec(
         dataset,
         seed,
@@ -990,10 +1067,20 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("operator.sentinel must be text or null")
     obstacle_terms = _strings(operator_raw["obstacle_terms"], "operator.obstacle_terms", allow_empty=True)
     gates = _parse_gates(raw["gates"])
+    _validate_definition_change(gates["narrowing"], len(answer_sheet.turns))
     _run_kind_hook(gates, "validate_plant_evidence", required_plants, gates["follow-up"].settings)
     gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
     _run_kind_hook(gates, "validate_fixture_gold", gates["follow-up"].settings, gold)
     _validate_certification_gold(repeatability, gates["follow-up"].kind, gold)
+    follow_up_artifact = _agent_artifact_reference(
+        raw.get("follow_up_artifact"), "follow_up_artifact"
+    )
+    evidence_contract = followups.get(gates["follow-up"].kind).evidence_contract
+    if evidence_contract and follow_up_artifact is None:
+        raise ScenarioError(
+            "follow_up_artifact is required for follow-up kind "
+            f"{gates['follow-up'].kind!r}"
+        )
     route_table = _parse_route_table(raw.get("route_table"))
     script = OperatorScript.from_components(
         persona,
@@ -1028,6 +1115,7 @@ def load_scenario(path: str | Path) -> Scenario:
         gold_refs=gold_refs,
         operator_script=script,
         route_table=route_table,
+        follow_up_artifact=follow_up_artifact,
     )
 
 

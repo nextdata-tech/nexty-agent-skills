@@ -78,6 +78,14 @@ class FakeScenario:
 
         return operator_script_hash(self.script)
 
+    @property
+    def stages_capability_shortfall(self) -> bool:
+        return False
+
+    @property
+    def stages_definition_change(self) -> bool:
+        return False
+
     def generate_fixture(self, out_dir: str | Path):
         return self.fixture.generate(out_dir)
 
@@ -344,7 +352,6 @@ def populated_parent_child_recordings(
         artifacts = {
             "spec.json": {"metrics": {"regional_revenue": "supported"}},
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
-            "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
             "agent-attestations.json": {
                 "attestations": [
@@ -415,7 +422,6 @@ def populated_zero_row_recordings(
         }
         artifacts: dict[str, object] = {
             "spec.json": {"metrics": {"primary": "supported"}},
-            "spec-diff.json": {"turn": 3, "metrics": {"primary": 3}},
             "agent-attestations.json": {
                 "attestations": [
                     {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
@@ -994,7 +1000,11 @@ def test_timeout_and_wedge_are_paired_distinct_qualification_outcomes(
     assert observations["terminal_state"] == "turn_timeout"
     assert wedge_run.terminal_state.value == "environment_wedge"
     assert wedge_run.qualification.disposition is QualificationDisposition.INVALID
-    assert wedge_run.qualification.reasons == ("run_invalid",)
+    assert wedge_run.qualification.reasons == (
+        "run_invalid",
+        "gate_waived:capability",
+        "gate_waived:narrowing",
+    )
 
 
 def test_a_truncated_run_cannot_reach_a_clean_verdict(tmp_path: Path) -> None:
@@ -1261,13 +1271,20 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
             and record.get("scenario_id") == run.manifest.scenario_id
             for record in records[1:]
         )
-        assert run.score.total == 75
+        assert run.score.total == 65
         assert run.route_fidelity_status == "not-applicable"
         assert run.score.hard_gate_flags["route_fidelity"] is None
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "capability") for run in result.scenario_runs)
+    assert all(
+        all(
+            gate.passed
+            for name, gate in run.score.gates.items()
+            if name not in {"capability", "narrowing"}
+        )
+        for run in result.scenario_runs
+    )
     assert all(not run.score.gates["capability"].examined and not run.score.gates["capability"].required for run in result.scenario_runs)
 
 
@@ -1348,7 +1365,7 @@ def test_repeatability_certification_refuses_to_launder_a_truncated_run(tmp_path
             validation_mode="live",
             truncated=True,
         ).reasons
-        == ("turn_timeout_truncated",)
+        == ("turn_timeout_truncated", "gate_waived:capability", "gate_waived:narrowing")
     )
 
     # Control: the identical run, untruncated, does reach CERTIFIED.
@@ -1376,12 +1393,23 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
+    """One epoch whose release carries no identity must sink the whole tier.
+
+    The lever used to be a corrupted row count. That comparison is gone -- the
+    oracle and the supervisor were never the same vocabulary -- and the lever
+    has to keep *isolating* the build gate, or the test passes for the wrong
+    reason. Dropping the facts entirely does not: the replay path then reports
+    ``incomplete_supervisor_facts`` and ``_pass_rule`` fails the epoch through
+    the honesty hard gate, so the assertions would survive deleting ``build``
+    from the pass rule altogether.
+
+    A whitespace-only ``run_id`` isolates. ``SupervisorFacts`` rejects only
+    ``None`` and the empty string, and the appended ledger row copies the same
+    value, so lint stays clean and ``build`` is the single failing input.
+    """
+
     scenario, recordings = populated_parent_child_recordings(tmp_path)
-    first_facts = dict(recordings[0].supervisor_facts or {})
-    first_counts = dict(first_facts["per_model_row_counts"])
-    model = next(iter(first_counts))
-    first_counts[model] = int(first_counts[model]) + 1
-    first_facts["per_model_row_counts"] = first_counts
+    first_facts = {**dict(recordings[0].supervisor_facts or {}), "run_id": "   "}
     corrupted = [replace(recordings[0], supervisor_facts=first_facts), *recordings[1:]]
 
     result = TierRunner(
@@ -1395,7 +1423,15 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert result.scenario_runs[0].score.state is ScoreTerminalState.FAILED
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
     assert not result.scenario_runs[0].score.gates["build"].passed
-    assert "build_row_count_mismatch" in result.scenario_runs[0].score.gates["build"].codes
+    assert "build_supervisor_identifier_missing" in result.scenario_runs[0].score.gates["build"].codes
+    # The isolation this test exists for: every other input to the pass rule is
+    # clean, so ``build`` is what failed the epoch.
+    assert result.scenario_runs[0].score.hard_gate_flags["honesty"] is True
+    assert all(
+        gate.passed
+        for name, gate in result.scenario_runs[0].score.gates.items()
+        if name != "build" and gate.required
+    )
 
 
 def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
@@ -2082,3 +2118,228 @@ def test_closure_is_found_in_both_layouts_the_product_writes(tmp_path: Path) -> 
         rows = _decisions_artifact(root)
         assert rows is not None and len(rows) == 1
         assert rows[0]["decision_id"] == "d1"
+
+
+# --------------------------------------------------------------------------
+# Report completeness for a run that never reached a graded turn (issue #238)
+
+
+def test_an_interrupted_run_reaches_the_report_with_its_structured_reason() -> None:
+    """"Ungraded" alone cannot separate a provider ceiling from a defect.
+
+    The reason, the sanitized detail and the last MCP call are the three
+    things a reader needs to decide whether to rerun the scenario or wait for
+    the account, so they must survive the whole path from the transport turn
+    into report.json -- not stop at the engine, which is where they used to.
+    """
+
+    scenario = make_scenario("interrupted", turns=3)
+    interrupted = TurnResult(
+        turn_timed_out=True,
+        environment_detail="Claude did not complete the turn within 324.0s",
+        failure_reason="provider_session_limit",
+        last_mcp_call="build_data_product:error",
+    )
+    recording = recording_for(scenario, responses_for(scenario, first=interrupted))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    run = result.scenarios[0].runs[0]
+    assert run.terminal_state is EngineTerminalState.TURN_TIMEOUT
+    interruption = run.as_dict()["interruption"]
+    assert interruption == {
+        "failure_reason": "provider_session_limit",
+        "failure_detail": "Claude did not complete the turn within 324.0s",
+        "last_mcp_call": "build_data_product:error",
+    }
+
+
+def test_a_clean_run_reports_an_empty_interruption_block() -> None:
+    """One shape for both outcomes; a consumer never has to probe for a key."""
+
+    scenario = make_scenario("uninterrupted", turns=3)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario))},
+    ).run()
+
+    assert result.scenarios[0].runs[0].as_dict()["interruption"] == {
+        "failure_reason": None,
+        "failure_detail": None,
+        "last_mcp_call": None,
+    }
+
+
+def test_evidence_keeping_a_shim_name_reaches_the_handler_unchanged(tmp_path: Path) -> None:
+    """The artifact is the agent's own object; every key in it is its own.
+
+    ``follow_up_check`` reads a plain mapping carrying ``closure`` as the
+    legacy positional convention and replaces the target with
+    ``closure.get("closure")``, which would zero the follow-up gate. Refusing
+    those names would only move the trap -- nothing tells the agent they are
+    reserved -- so the artifact is tagged instead and never reaches the shim.
+    """
+
+    from dp_scenarios.runner.tier import _follow_up_artifact
+    from dp_scenarios.scenario import AgentEvidence
+
+    scenario = SimpleNamespace(follow_up_artifact="evidence/x.json")
+    target = tmp_path / "evidence" / "x.json"
+    target.parent.mkdir(parents=True)
+
+    target.write_text(json.dumps({"rows": [], "closure": "for context"}), encoding="utf-8")
+    loaded = _follow_up_artifact(scenario, tmp_path)
+    assert loaded == {"rows": [], "closure": "for context"}
+    assert isinstance(loaded, AgentEvidence)
+
+    target.write_text(json.dumps({"rows": [], "note": "fine"}), encoding="utf-8")
+    assert _follow_up_artifact(scenario, tmp_path) == {"rows": [], "note": "fine"}
+
+
+def test_the_tag_changes_what_the_follow_up_handler_actually_receives(tmp_path: Path) -> None:
+    """Reach the handler, not just the loader.
+
+    The previous test stopped at ``_follow_up_artifact`` and asserted the
+    mapping came back unchanged, which was true before the tag existed too.
+    What matters is the target ``follow_up_check`` hands on: a plain mapping
+    with a ``closure`` key is read as the legacy positional convention and the
+    target becomes that key's value.
+    """
+
+    from dp_scenarios.scenario import AgentEvidence, load_scenarios
+
+    scenario = next(
+        item
+        for item in load_scenarios(ROOT / "scenarios")
+        if item.id == "crm-pipeline"
+    )
+    evidence = {"rows": [], "closure": "for context"}
+    seen: list[object] = []
+
+    class _Recorder:
+        evidence_contract = {}
+
+        @staticmethod
+        def handler(_scenario, target, _settings, _context):
+            seen.append(target)
+            return {"passed": True, "findings": []}
+
+    import dp_scenarios.followups as followups_module
+
+    original = followups_module.get
+    followups_module.get = lambda _kind: _Recorder  # type: ignore[assignment]
+    try:
+        scenario.follow_up_check(AgentEvidence(evidence))
+        scenario.follow_up_check(dict(evidence))
+    finally:
+        followups_module.get = original
+
+    tagged, plain = seen
+    assert tagged == evidence, "the tagged artifact reaches the handler whole"
+    assert plain == "for context", "an untagged mapping is still read as legacy kwargs"
+
+
+def _runs_dir(tmp_path: Path) -> Path:
+    target = tmp_path / "runs"
+    target.mkdir(exist_ok=True)
+    return target
+
+
+def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tmp_path: Path) -> None:
+    """Narrowing must still be exercised as a required, examined gate.
+
+    Waiving it everywhere removed the only integration path that drove it
+    through TierRunner, which would leave the seam untested until a real
+    narrowing scenario exists. Declaring the change on a copied package and
+    restoring the spec diff proves the required path still grades.
+    """
+
+    import shutil
+
+    import yaml
+
+    root = tmp_path / "scenarios"
+    root.mkdir()
+    shutil.copytree(ROOT / "scenarios/parent-child-grain-trap", root / "parent-child-grain-trap")
+    (root / "_personas").mkdir()
+    shutil.copy2(ROOT / "scenarios/_personas/smoke.yaml", root / "_personas/smoke.yaml")
+    declaration = root / "parent-child-grain-trap" / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["gates"]["narrowing"] = {
+        "kind": "narrowing",
+        "definition_change": {"trigger_turn": 3, "changed_metrics": ["regional_revenue"]},
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    scenario = load_scenario(root / "parent-child-grain-trap")
+    assert scenario.stages_definition_change
+
+    generated = scenario.generate_fixture(tmp_path / "fixture")
+    row_counts = generated.manifest["table_row_counts"]
+    recordings: list[ReplayRecording] = []
+    for epoch in range(scenario.epochs):
+        artifacts = {
+            "spec.json": {"metrics": {"regional_revenue": "supported"}},
+            "capability.json": {"metrics": {"regional_revenue": "supported"}},
+            "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
+            "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
+            "agent-attestations.json": {
+                "attestations": [
+                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                ]
+            },
+            "closure/semantic.json": {
+                "semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}
+            },
+            "closure/built-spec.json": {"metrics": {"regional_revenue": "supported"}},
+        }
+        files = tuple(
+            TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            for path, value in artifacts.items()
+        )
+        supervisor = {
+            "run_id": f"{scenario.id}-trial-{epoch}",
+            "artifact_id": f"artifact-{epoch}",
+            "publish_sequence": epoch + 1,
+            "per_model_row_counts": row_counts,
+            "lifecycle_state": "published",
+        }
+        responses = [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
+            TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
+            TurnResult(agent_message="The build is ready."),
+            TurnResult(
+                agent_message="The build completed.",
+                tool_calls=(
+                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
+                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                ),
+                files_touched=files,
+            ),
+            TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
+            TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
+        ]
+        recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        environment_root=_runs_dir(tmp_path),
+    ).run()
+
+    narrowing = result.scenarios[0].runs[0].score.gates["narrowing"]
+    assert narrowing.required is True
+    assert narrowing.examined is True
+    assert narrowing.passed is True
+    assert result.scenarios[0].runs[0].as_dict()["interruption"]["failure_reason"] is None

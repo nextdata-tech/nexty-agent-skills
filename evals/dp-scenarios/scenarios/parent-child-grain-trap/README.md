@@ -46,8 +46,12 @@ run a governed semantic query.
   expected numbers.
 - The built semantic artifact declares grain `order`.
 - `regional_revenue` uses `sum` at that grain.
-- Supervisor-owned build facts and row counts are present and match the
-  fixture oracle.
+- Supervisor-owned build facts identify a published release. Row counts are
+  not compared against the fixture: the fixture counts source *tables* and the
+  supervisor counts built *models*, and this scenario's point is that the built
+  model must not preserve the child grain, so no such equality could hold.
+  Whether the agent's own ledger claims match the supervisor's counts is
+  checked by ledger lint.
 - Governed query rows match the committed gold row set using the deterministic
   EX scorer.
 - The regional result reconciles to the independent control total.

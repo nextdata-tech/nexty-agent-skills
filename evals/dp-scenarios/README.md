@@ -42,7 +42,7 @@ evidence:
 | `capability` | Did it govern what the source cannot actually answer? |
 | `narrowing` | Did the definition change when the operator changed it? |
 | `construction` | Did it self-check and adversarially review its own work? |
-| `build` | Did the product build, with the row counts the fixture implies? |
+| `build` | Did a release publish, carrying the supervisor's own `run_id`, `artifact_id` and `publish_sequence`? Row counts are not compared here — the fixture oracle counts source tables and the supervisor counts built models, which no modelling choice makes equal; ledger lint checks the agent's claimed counts against the supervisor's. |
 | `query` | Do the answers match the fixture's ground truth? |
 | `follow-up` | The scenario's own specific drill. |
 
@@ -149,6 +149,18 @@ never pulled into a smoke run:
 - **restart-and-switch** — an attempt-keyed, no-stderr bind fault paired with a
   scripted restart and workflow switch. The agent must distinguish serving-down
   from build-broken and change the plan rather than retry until lucky.
+- **crm-pipeline** — B1's paginated CRM-shaped source with bearer expiry,
+  rate limiting, nested owner PII, tombstone-safe current records, and a closed
+  stage enum. The package has local mock-source E2E coverage; it does not claim
+  a real CRM credential or authenticated agent run.
+- **finance-close** — B2's deterministic close reconciliation with hostile
+  decimal formats, parenthesized negatives, missing weekend FX, and a later
+  decision supersession. It exposes a local mock close source and reconciles
+  exact cents against an independent reference model.
+- **inventory-position** — B5's profile-only inventory join with orphan
+  warehouse identifiers and negative stock. The local mock profile preserves
+  these as data-quality warnings and documents the retained-run boundary for
+  B10.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -282,28 +294,68 @@ four counters at zero.
 
 #### Keeping the key around between runs
 
-`evals/dp-scenarios/.env` is gitignored for this. Create it once, `chmod 600`,
-and source it into the run:
+`evals/dp-scenarios/.env` is gitignored for local credentials. Create it once,
+`chmod 600`, and pass it explicitly to the live runner:
 
 ```bash
 umask 077
-printf 'OPENAI_API_KEY=%s\n' 'sk-...' > evals/dp-scenarios/.env
-
-set -a; . evals/dp-scenarios/.env; set +a    # value never reaches stdout
+cat > evals/dp-scenarios/.env <<'EOF'
+OPENAI_API_KEY=sk-...
+CLAUDE_CODE_OAUTH_TOKEN=...
+EOF
+chmod 600 evals/dp-scenarios/.env
 ```
 
-`set -a` exports the assignment into the runner's environment without echoing it.
 Confirm the ignore works before pasting a real key:
 `git check-ignore -v evals/dp-scenarios/.env` must print a matching rule.
 
-**The key comes from the environment and nowhere else** — there is no file
-fallback and no flag that takes a key; sourcing a `.env` puts the value in the
-environment before the process starts, and the runner has no notion of that file.
-It is missing from the agent session's environment allowlist and is popped from
-the Claude adapter's child environment, so the agent under test cannot read it.
-The provider's `repr` and every provider error are scrubbed of both the key and
-the `Authorization` header. A missing key is refused before the drift canary runs
-and before any fixture is generated, so it costs nothing.
+The runner reads only `OPENAI_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from the
+file. `--driver-model` uses the OpenAI key in the harness; the Claude OAuth
+token is passed only across the trusted adapter-to-Claude boundary. It is not
+added to the agent session allowlist, the Desktop supervisor environment, the
+manifest, or retained artifacts. OAuth-token runs also deny Bash so the agent
+cannot inherit the token through a shell. Environment variables with the same
+names override the file values.
+
+For a live run, pass the file explicitly:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --env-file evals/dp-scenarios/.env \
+  --scenario crm-pipeline
+```
+
+### When a live run stops without being graded
+
+A live run can end for reasons that say nothing about the agent: the provider
+declines another turn, the Claude child stops producing terminal stream
+results, or two runs contend on the same runtime state. Those used to reach
+the report as `ungraded` and nothing else, which reads exactly like a scenario
+defect.
+
+Each interrupted run now carries a closed-vocabulary reason, and every run
+carries the block whether or not it was interrupted:
+
+```json
+"interruption": {
+  "failure_reason": "provider_session_limit",
+  "failure_detail": "Claude did not complete the turn within 324.0s",
+  "last_mcp_call": "build_data_product:error"
+}
+```
+
+| `failure_reason` | What happened | What to do |
+| --- | --- | --- |
+| `provider_session_limit` | The provider refused another turn (usage, rate, or credit ceiling). | Wait for the reset; the scenario is untested, not failed. |
+| `child_no_terminal_result` | The child stayed alive past the turn deadline without emitting a `result`. | Reruns are worth trying; check `last_mcp_call` for where it stalled. |
+| `child_exited_early` | The child exited before emitting a `result`. | Read `failure_detail`; usually a startup or config fault. |
+| `shared_runtime_contention` | Two runs contended on shared runtime state (locked store, busy port). | Rerun; live canary closures are already copied per run. |
+
+`summary.txt` prints the same three lines, because stdout is where the
+decision to rerun or to wait actually gets made.
+
+None of these is a pass. A green live run is one whose required gates passed,
+not one that stopped politely.
 
 ### How a mock source reaches the agent
 

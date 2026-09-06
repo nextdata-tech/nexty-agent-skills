@@ -34,6 +34,9 @@ EXPECTED_CROSS_CHECKS = {
     "restart_and_switch": (False, False),
     "optional_required_outputs": (True, True),
     "capability_shortfall": (False, False),
+    "crm_pipeline": (False, False),
+    "finance_close": (False, False),
+    "inventory_position": (False, False),
 }
 
 # Whether each kind's gold is byte-reproducible by regenerating the CSV
@@ -46,6 +49,9 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "sigterm_diagnosis": False,
     "restart_and_switch": False,
     "capability_shortfall": False,
+    "crm_pipeline": False,
+    "finance_close": True,
+    "inventory_position": True,
 }
 
 

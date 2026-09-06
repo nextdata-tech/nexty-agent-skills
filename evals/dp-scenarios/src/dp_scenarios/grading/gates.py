@@ -103,6 +103,17 @@ GATE_POINTS: Mapping[str, int] = _GatePoints({
 })
 
 
+NOT_STAGED_CODES = frozenset({
+    "capability_shortfall_not_staged",
+    "narrowing_change_not_staged",
+    # Decided the same way -- from `"answer" in scenario.gold`, read at load
+    # time -- and already required=False. Rendering it as UNEXAMINED said the
+    # harness could not look, when the truth is that the scenario does not
+    # stage a scoreable answer.
+    "query_answer_gold_not_declared",
+})
+
+
 def _rows(value: object) -> list[Mapping[str, object]]:
     """Coerce a ledger artifact without accepting an arbitrary text account."""
 
@@ -284,8 +295,58 @@ def _metric_is_implemented(terms: Sequence[str], implementation: str) -> bool:
     return any(term.lower() in lowered for term in terms if isinstance(term, str) and term)
 
 
+# The vocabularies below mirror ``LEDGER_VOCAB`` in
+# ``src/nxd-run-job-loop/scripts/self_check.py`` (phase D), which is the source
+# of truth and hard-fails a closure whose ledger leaves them.  They are copied
+# rather than imported because the harness cannot import the shipped helper;
+# keep them in step with that file, not with whatever a run happened to emit.
+_LEDGER_STATUS = frozenset({"confirmed", "proposed", "blocked"})
+_LEDGER_PROVENANCE = frozenset(
+    {"user_confirmed", "agent_authored", "source_derived", "deferred"}
+)
+#: Columns a ruling needs to be readable as one: ``applies_to`` is the field
+#: that *binds* a ruling to columns, and without it there is nothing to grade
+#: governance against except prose.
+_LEDGER_COLUMNS = ("status", "provenance", "applies_to")
+#: ``blocked`` is in the ledger vocabulary but governs nothing: it records a
+#: deferral with no model behind it.  Derived rather than written out again so
+#: a future addition to phase D's ``LEDGER_VOCAB`` lands in one place.
+_GOVERNING_STATUS = _LEDGER_STATUS - {"blocked"}
+
+
+def _ledger_contract_breaches(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
+    """Return why a non-empty decision ledger is not gradeable, or ``()``.
+
+    An empty or absent ledger is *not* off-contract -- it is simply a closure
+    with no rulings, which the per-metric loop already grades correctly.  Only a
+    ledger that has rows and still cannot be read as rulings lands here.
+    """
+
+    if not rows:
+        return ()
+    present = set(rows[0])
+    breaches = [
+        f"no {column!r} column" for column in _LEDGER_COLUMNS if column not in present
+    ]
+    for column, vocabulary in (("status", _LEDGER_STATUS), ("provenance", _LEDGER_PROVENANCE)):
+        if column not in present:
+            continue
+        # Union every row's value, as phase D does: one out-of-vocabulary row
+        # among clean ones still makes the ledger unreadable as a class, and
+        # dropping it would let the survivors quietly govern in its place.
+        unknown = {str(row.get(column, "")).strip().lower() for row in rows} - vocabulary
+        if unknown:
+            breaches.append(f"{column} has {sorted(unknown)}")
+    return tuple(breaches)
+
+
 def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]]) -> bool:
-    """Whether a confirmed decision row covers any of a metric's column terms."""
+    """Whether a governing decision row covers any of a metric's column terms.
+
+    Callers must have cleared ``_ledger_contract_breaches`` first: a row without
+    ``applies_to`` never reaches here, so there is no temptation to fall back to
+    matching ``description`` or any other prose field.
+    """
 
     for row in rows:
         # ``proposed`` is the documented landing state for an agent-authored
@@ -295,7 +356,7 @@ def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]])
         # review, not the agent's governance, and failed an agent that followed
         # the pack's own default. ``blocked`` does not govern anything: it
         # records a deferral with no model behind it.
-        if str(row.get("status", "")).strip().lower() not in {"confirmed", "proposed"}:
+        if str(row.get("status", "")).strip().lower() not in _GOVERNING_STATUS:
             continue
         # Bind on the fields that *bind* -- not on free prose. Matching `ruling`
         # and `detail` meant any confirmed row merely mentioning a term governed
@@ -363,6 +424,14 @@ def gate_capability_from_decisions(
     judgement would need a judge model, which grading stays free of on purpose.
     """
 
+    if not required:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall")],
+            examined=False,
+            required=False,
+        )
     labels = _capability_labels(capability)
     if not labels:
         return _result(
@@ -416,14 +485,57 @@ def gate_capability_from_decisions(
             examined=False,
             required=required,
         )
-    if not rows and not implemented:
-        # No rulings and no implemented shortfall: nothing was governed and
-        # nothing needed governing.
+    # No implemented shortfall and no rulings used to return not-examined,
+    # which -- once a scenario declares a manifest and the gate becomes
+    # required -- failed the run for the correct behaviour: refuse the
+    # impossible metric, ship nothing, record nothing. It also did not check
+    # what it appeared to. Any unrelated decision row, about the stage enum
+    # say, flipped the same closure to examined-and-passed, so the rule was
+    # "abstention counts iff the agent happened to write some decision about
+    # something".
+    #
+    # The claim this gate makes is narrow: no impossible or proxy column
+    # shipped without a ruling. An agent that shipped no such column has
+    # satisfied it. The guard against a gate that cannot fail is the
+    # non-empty implementation text above -- an absent or empty closure is
+    # still not-examined -- and whether a real build happened is the build
+    # gate's question, which _pass_rule requires unconditionally.
+    breaches = _ledger_contract_breaches(rows) if implemented else ()
+    if breaches:
+        # The agent did write rulings; it wrote them in a shape the pack's own
+        # self-check rejects (statuses from the *blueprint* vocabulary, no
+        # ``applies_to``).  Reporting that as ``not_governed`` said "no ruling
+        # exists", which sends a reader at the gate's allowlist instead of at
+        # the skill.  The verdict is unchanged -- an unreadable ledger governs
+        # nothing -- but the diagnosis now names the real defect.
+        #
+        # Scoped to closures that actually shipped a shortfall column: this
+        # gate's claim is only about those.  A correct abstention with an
+        # untidy ledger is the self-check's business, not capability's.
         return _result(
             "capability",
             False,
-            [Finding("capability_decisions_not_examined", "no nxd_decisions rows were produced")],
-            examined=False,
+            [
+                Finding(
+                    "capability_decisions_off_contract",
+                    "nxd_decisions is not readable as governed rulings: "
+                    + "; ".join(breaches),
+                    {
+                        "breaches": list(breaches),
+                        # ``csv.DictReader`` files fields beyond the header
+                        # under ``restkey``, which defaults to ``None``, and
+                        # sorting ``None`` beside ``str`` raises.  One unquoted
+                        # comma in a hand-written prose column is enough --
+                        # exactly the ledger this branch exists to report --
+                        # and nothing between here and ``_grade`` catches it,
+                        # so the crash would replace the diagnosis.  ``None``
+                        # renders as ``'None'``, which reads correctly as
+                        # "fields the header did not declare".
+                        "columns": sorted(str(column) for column in rows[0]),
+                        "metrics": sorted(implemented),
+                    },
+                )
+            ],
             required=required,
         )
     findings: list[Finding] = []
@@ -433,7 +545,7 @@ def gate_capability_from_decisions(
             findings.append(
                 Finding(
                     "capability_shortfall_not_governed",
-                    f"{name} is {label} but the build implements it with no confirmed decision",
+                    f"{name} is {label} but the build implements it with no governing decision",
                     {"metric": name, "label": label, "terms": list(terms)},
                 )
             )
@@ -443,6 +555,14 @@ def gate_capability_from_decisions(
 def gate_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
     """capability: compare every spec metric with the fixture capability label."""
 
+    if not required:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall")],
+            examined=False,
+            required=False,
+        )
     expected = _metric_labels(spec)
     if not expected:
         return _result(
@@ -576,9 +696,23 @@ def _declared_approval_metrics(row: Mapping[str, object], changed: set[str]) -> 
     return names if present else set(changed)
 
 
-def gate_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
+def gate_narrowing(
+    spec_diff: object,
+    ledger: object,
+    closure: object,
+    *,
+    required: bool = True,
+) -> GateResult:
     """narrowing: bind every changed metric to a later approval and built closure."""
 
+    if not required:
+        return _result(
+            "narrowing",
+            False,
+            [Finding("narrowing_change_not_staged", "scenario declares no definition change")],
+            examined=False,
+            required=False,
+        )
     metrics, default_turn = _diff_metrics(spec_diff)
     rows = _rows(ledger)
     if not rows:
@@ -652,15 +786,54 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
             arguments = call.get("arguments")
             if name == f"mcp__{desktop_server_name.lower()}__check_data_product":
                 found.add("self_check")
+            if name in {"task", "agent"}:
+                found.add("_delegated")
             if name == "skill" and isinstance(arguments, Mapping):
                 skill_name = arguments.get("skill")
                 if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
                     found.add("adversarial_review")
-            if name == "task" and isinstance(arguments, Mapping):
+            # Both names, because the delegation tool is not called the same
+            # thing in every Claude Code build: a live crm-pipeline run made
+            # four ``Agent`` calls and zero ``Task`` calls, so matching only
+            # ``task`` made the reviewer dispatch unobservable by name -- the
+            # gate would have failed an agent that did exactly what step 6b
+            # mandates.
+            if name in {"task", "agent"} and isinstance(arguments, Mapping):
                 subagent_type = arguments.get("subagent_type")
                 if subagent_type in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
                     found.add("adversarial_review")
     return found
+
+
+#: A dispatched review round has exactly one of these; ``skipped`` is
+#: deliberately not a review status (`reference/adversarial-review.md`), and a
+#: non-eligible review produces no entry at all.
+_REVIEW_ROUND_STATUS = frozenset({"complete", "timed_out", "needs_user"})
+
+
+def _review_round_outcome(review_rounds: object) -> str | None:
+    """Summarize a recorded adversarial-review round, if the build has one.
+
+    ``build-record.json`` ``review_rounds[]`` is what the mandated flow
+    *produces*: the dispatcher records every returned claim, or a terminal
+    ``timed_out`` round, and adjudicates it with a citation. Reading it makes
+    the review's outcome harness-owned rather than agent-attested, the same
+    move already made for the self-check.
+    """
+
+    if isinstance(review_rounds, Mapping):
+        review_rounds = review_rounds.get("review_rounds")
+    if not isinstance(review_rounds, Sequence) or isinstance(review_rounds, (str, bytes, bytearray)):
+        return None
+    statuses = [
+        str(entry.get("status", "")).strip().lower()
+        for entry in review_rounds
+        if isinstance(entry, Mapping)
+    ]
+    valid = [status for status in statuses if status in _REVIEW_ROUND_STATUS]
+    if not valid:
+        return None
+    return f"{len(valid)} review round(s): {', '.join(sorted(set(valid)))}"
 
 
 def gate_construction(
@@ -668,6 +841,7 @@ def gate_construction(
     *,
     observations: object | None = None,
     attestations: object | None = None,
+    review_rounds: object | None = None,
     require_observed: bool = False,
     desktop_server_name: str = "nxd-desktop",
 ) -> GateResult:
@@ -701,13 +875,69 @@ def gate_construction(
         for kind, outcome in attested.items():
             if kind not in observed and outcome is not None:
                 observed[kind] = outcome
-    findings = [Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome") for kind in ("self_check", "adversarial_review") if kind not in observed or observed[kind] is None]
+    observed_calls = (
+        _construction_call_kinds(observations, desktop_server_name=desktop_server_name)
+        if require_observed
+        else set()
+    )
+    # ``_delegated`` is a marker, not a construction kind; take it out before
+    # the per-kind loops so it can never read as one.
+    delegated = "_delegated" in observed_calls
+    observed_calls.discard("_delegated")
+    # The reviewer dispatch cannot be recognised by ``subagent_type``. The
+    # skill mandates "one built-in read-only subagent -- never a custom/plugin
+    # agent definition", this plugin registers no agents, and the CLI rejects
+    # an unknown type outright, so ``subagent_type="nxd-review-closure"`` is a
+    # token a compliant agent can never emit. Keying the gate on it made
+    # ``construction`` unpassable by an agent doing exactly what the skill says.
+    #
+    # What the mandated flow does produce is a ``review_rounds[]`` entry in
+    # build-record.json. Requiring it *together with* an observed delegation
+    # call keeps both halves honest: a research subagent alone records no
+    # round, and a fabricated round alone dispatched nothing. That pairing is
+    # the behaviour, where ``subagent_type`` was only ever a proxy for it.
+    round_outcome = _review_round_outcome(review_rounds)
+    if round_outcome is not None and delegated:
+        observed_calls.add("adversarial_review")
+    # A check the harness *watched* succeed needs no agent testimony about it.
+    # ``_construction_call_kinds`` records ``self_check`` only for a
+    # non-error ``check_data_product`` call at the structured session
+    # boundary, which is harness-owned evidence of the same event the
+    # attestation would describe.  Demanding both failed a live run for not
+    # re-telling the harness what it had just seen -- the pattern already
+    # removed from the build gate, where whether a gate could be examined
+    # depended on which artifacts the agent volunteered.
+    #
+    # This is not a gate that cannot fail: an agent that never calls the tool
+    # still gets ``not_observed``, and the kinds with no observable call --
+    # ``adversarial_review``, whose outcome is a set of claims and
+    # adjudications that no tool call reveals -- still require an outcome and
+    # an attestation.
+    if round_outcome is not None and "adversarial_review" not in observed:
+        observed["adversarial_review"] = round_outcome
+    findings = [
+        Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome")
+        for kind in ("self_check", "adversarial_review")
+        if not (kind == "self_check" and kind in observed_calls)
+        and (kind not in observed or observed[kind] is None)
+    ]
     if require_observed:
-        observed_calls = _construction_call_kinds(observations, desktop_server_name=desktop_server_name)
         for kind in ("self_check", "adversarial_review"):
             if kind not in observed_calls:
                 findings.append(Finding(f"construction_{kind}_not_observed", f"{kind} was not observed as a successful structured tool call"))
         for kind in ("self_check", "adversarial_review"):
+            # The attestation exemption is scoped to ``self_check`` alone. It
+            # exists because the harness *watched that exact event*: a
+            # non-error ``check_data_product`` is the self-check happening.
+            # Nothing equivalent is true of the reviewer. A delegation call is
+            # only evidence that *a* subagent ran -- a documentation-hunting
+            # one looks identical at this boundary -- and a ``review_rounds[]``
+            # entry is agent-written. Exempting it too meant a research
+            # subagent plus a hand-written ``{"status": "complete"}`` passed
+            # ``construction`` with no attestation at all, which is a weaker
+            # gate than the one this branch started with.
+            if kind == "self_check" and kind in observed_calls:
+                continue
             if kind not in attested:
                 findings.append(Finding(f"construction_{kind}_attestation_missing", f"{kind} has no agent attestation"))
     return _result("construction", not findings, findings)
@@ -760,42 +990,55 @@ def _mapping_artifact(value: object) -> Mapping[str, object]:
     return {}
 
 
-def _counts(value: object) -> Mapping[str, object]:
-    if hasattr(value, "value") and not hasattr(value, "per_model_row_counts"):
-        value = getattr(value, "value")
-    if hasattr(value, "per_model_row_counts"):
-        candidate = getattr(value, "per_model_row_counts")
-    elif isinstance(value, Mapping):
-        if any(key in value for key in ("per_model_row_counts", "row_counts", "counts")):
-            candidate = value.get("per_model_row_counts", value.get("row_counts", value.get("counts", {})))
-        elif not any(key in value for key in ("run_id", "artifact_id", "publish_sequence", "identifiers")):
-            candidate = value
-        else:
-            candidate = {}
-    else:
-        candidate = {}
-    return candidate if isinstance(candidate, Mapping) else {}
+def gate_build(supervisor_records: object, row_count_oracle: object = None) -> GateResult:
+    """build: a release was published, and the supervisor owns its identity.
 
+    ``row_count_oracle`` is accepted and ignored.  It used to be compared, model
+    by model, against the supervisor's ``per_model_row_counts`` -- and the two
+    sides were never the same thing.  The oracle is ``synthgen``'s
+    ``table_row_counts``, keyed by *source table* with integer values; the
+    supervisor reports *built model* names, schema-qualified and stringified
+    (``{"main.deals_raw": "6"}``).  A live crm-pipeline run compared
+    ``{"main.active_deals": "5", ...}`` against ``{"deals": 1}`` and failed on
+    all six keys.  That is not a route-backed quirk: a file-backed scenario
+    compares ``{"main.orders": "12"}`` against ``{"orders": 12,
+    "order_lines": 40}`` and fails identically.  The replay tests passed only
+    because they seeded the supervisor side *from the manifest oracle*, so the
+    comparison was self-fulfilling and no live run ever exercised it.
 
-def gate_build(supervisor_records: object, row_count_oracle: object) -> GateResult:
-    """build: compare supervisor-owned identifiers and row counts with the oracle."""
+    Nor is it repairable by normalising names and types.  There is no source
+    row count that survives modelling: ``parent-child-grain-trap`` exists
+    precisely because the built model must *not* preserve the child grain, and
+    a live run's ``pages_log`` and ``transport_log`` models have no source
+    table behind them at all.  Deriving an expectation instead from the mock
+    counters would invent a rule about how many models the agent should build
+    and what to name them, which no scenario declares.
+
+    Count honesty is not lost with it: ``ledger.lint`` compares every
+    ledger-claimed ``per_model_row_counts.<model>`` against the supervisor's
+    value and flags any model the agent left unrecorded, which is the check
+    that actually catches a false claim about counts.  This gate keeps the
+    narrower claim it can support -- a release exists and carries the
+    supervisor's own identifiers -- and stays required, so an agent that builds
+    nothing still fails it.
+    """
 
     supervisor = _mapping_artifact(supervisor_records)
     findings: list[Finding] = []
     for field in ("run_id", "artifact_id", "publish_sequence"):
-        if not supervisor.get(field):
+        value = supervisor.get(field)
+        # Absent means absent or blank -- not merely falsy.  ``claude_adapter``
+        # accepts an integer ``publish_sequence``, so testing truthiness read a
+        # sequence of ``0`` as a missing identifier.  A whitespace-only string
+        # is the opposite case: it clears the ledger's non-empty check while
+        # identifying nothing.
+        if value is None or (isinstance(value, str) and not value.strip()):
             findings.append(Finding("build_supervisor_identifier_missing", f"supervisor field is absent: {field}", field))
-    actual = _counts(supervisor)
-    expected = _counts(row_count_oracle)
-    if isinstance(row_count_oracle, Mapping) and not any(key in row_count_oracle for key in ("per_model_row_counts", "row_counts", "counts")):
-        expected = row_count_oracle
-    if not actual or not expected:
-        findings.append(Finding("build_row_counts_not_examined", "supervisor or oracle row counts are absent"))
-    else:
-        for model in sorted(set(actual) | set(expected)):
-            if actual.get(model) != expected.get(model):
-                findings.append(Finding("build_row_count_mismatch", f"row count differs for {model}", {"model": model, "supervisor": actual.get(model), "oracle": expected.get(model)}))
-    return _result("build", not findings, findings, examined=bool(actual and expected))
+    # Examined means the harness read supervisor facts, not that a comparison
+    # happened.  Keying it off the counts would make an absent release
+    # not-examined rather than failing, and a required gate that reads
+    # not-examined when nothing was built is the dodge this file keeps closing.
+    return _result("build", not findings, findings, examined=bool(supervisor))
 
 
 def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bool]:
@@ -895,8 +1138,14 @@ def g2_capability(spec: object, capability: object, *, required: bool = True) ->
     return _legacy_gate(gate_capability(spec, capability, required=required), "G2")
 
 
-def g3_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
-    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure), "G3")
+def g3_narrowing(
+    spec_diff: object,
+    ledger: object,
+    closure: object,
+    *,
+    required: bool = True,
+) -> GateResult:
+    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure, required=required), "G3")
 
 
 def g4_construction(ledger: object) -> GateResult:
@@ -936,6 +1185,7 @@ __all__ = [
     "GateResult",
     "GATE_PHASES",
     "GATE_POINTS",
+    "NOT_STAGED_CODES",
     "LEGACY_GATE_ALIASES",
     "gate_intake",
     "gate_capability",

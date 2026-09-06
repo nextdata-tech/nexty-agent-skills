@@ -158,6 +158,24 @@ def _canonicalize_gates(raw: Mapping[object, object]) -> dict[str, object]:
     return normalized
 
 
+def scoreable_max(vector: ScoreVector) -> int:
+    """Return the maximum score after declaration-based gate waivers."""
+
+    return sum(
+        GATE_POINTS[name]
+        for name, result in vector.gates.items()
+        if result.required
+    )
+
+
+def pass_threshold(vector: ScoreVector) -> int:
+    """Return the threshold used by the centralized pass rule."""
+
+    maximum = scoreable_max(vector)
+    route_adjusted_max = maximum - (10 if vector.hard_gate_flags["route_fidelity"] is None else 0)
+    return min(80, max(1, int(route_adjusted_max * 0.8 + 0.999999)))
+
+
 def _pass_rule(vector: ScoreVector) -> bool:
     """The one scenario pass rule used by scoring and callers."""
 
@@ -166,16 +184,9 @@ def _pass_rule(vector: ScoreVector) -> bool:
         for result in vector.gates.values()
         if result.required
     )
-    scoreable_max = sum(
-        GATE_POINTS[name]
-        for name, result in vector.gates.items()
-        if result.required
-    )
-    route_adjusted_max = scoreable_max - (10 if vector.hard_gate_flags["route_fidelity"] is None else 0)
-    threshold = min(80, max(1, int(route_adjusted_max * 0.8 + 0.999999)))
     return (
         vector.total is not None
-        and vector.total >= threshold
+        and vector.total >= pass_threshold(vector)
         and required_gates_pass
         and vector.gates["build"].passed
         and (not vector.gates["query"].required or vector.gates["query"].passed)
@@ -289,6 +300,8 @@ __all__ = [
     "EfficiencyReport",
     "ScoreVector",
     "score_run",
+    "scoreable_max",
+    "pass_threshold",
     "scenario_passes",
     "terminal_state",
     "RunState",

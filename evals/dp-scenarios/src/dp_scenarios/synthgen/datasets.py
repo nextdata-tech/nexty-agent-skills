@@ -1,4 +1,4 @@
-"""Seeded source definitions for the two smoke-tier scenario datasets.
+"""Seeded source definitions for generated scenario datasets.
 
 The definitions own the fixed epoch-relative base instants, source schemas,
 and declarative defect plans.  Builders receive the one seeded RNG created by
@@ -10,10 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+import importlib
 import random
-from typing import Any, Callable, Mapping
+import pkgutil
+from typing import Any, Callable, Mapping, cast
 
 from .defects import Frame
+from .registry import RegistryError, dataset_definitions, get_registered_dataset, register_dataset
 
 BASE_INSTANT = "2024-01-01T00:00:00+00:00"
 _BASE_DATETIME = datetime.fromisoformat(BASE_INSTANT)
@@ -41,6 +44,8 @@ class DatasetDefinition:
     injectors: tuple[InjectorSpec, ...]
     builder: Callable[[int, random.Random], Mapping[str, Frame]]
     description: str
+    plant: str = ""
+    requires_explicit_plant: bool = False
 
 
 def _timestamp(base: datetime, *, days: int, hours: int) -> str:
@@ -133,8 +138,8 @@ def _build_zero_row_optional(seed: int, rng: random.Random) -> Mapping[str, Fram
     return {"primary": primary, "optional_events": optional}
 
 
-DATASET_DEFINITIONS: Mapping[str, DatasetDefinition] = {
-    "grain_trap": DatasetDefinition(
+_BUILTIN_DATASET_DEFINITIONS: tuple[DatasetDefinition, ...] = (
+    DatasetDefinition(
         name="grain_trap",
         base_instant=BASE_INSTANT,
         table_columns={
@@ -169,8 +174,9 @@ DATASET_DEFINITIONS: Mapping[str, DatasetDefinition] = {
             "only; the exact inner join excludes tombstoned orders and orphan line "
             "items. The control total is the active-order revenue sum."
         ),
+        plant="grain_trap_fanout",
     ),
-    "zero_row_optional": DatasetDefinition(
+    DatasetDefinition(
         name="zero_row_optional",
         base_instant=BASE_INSTANT,
         table_columns={
@@ -200,8 +206,29 @@ DATASET_DEFINITIONS: Mapping[str, DatasetDefinition] = {
             "to the mock REST scenario. Gold therefore requires exactly zero "
             "optional rows."
         ),
+        plant="optional_zero_row",
+        requires_explicit_plant=True,
     ),
-}
+)
+
+
+def _discover_dataset_plugins() -> None:
+    """Import every additive dataset provider exactly once."""
+
+    from . import dataset_plugins
+
+    for module in pkgutil.iter_modules(dataset_plugins.__path__):
+        if module.name.startswith("_"):
+            continue
+        importlib.import_module(f"{dataset_plugins.__name__}.{module.name}")
+
+
+for _definition in _BUILTIN_DATASET_DEFINITIONS:
+    register_dataset(_definition)
+_discover_dataset_plugins()
+DATASET_DEFINITIONS: Mapping[str, DatasetDefinition] = cast(
+    Mapping[str, DatasetDefinition], dataset_definitions()
+)
 
 # Short plural alias for callers that treat the definitions as a registry.
 DATASETS = DATASET_DEFINITIONS
@@ -211,10 +238,9 @@ def get_dataset(name: str) -> DatasetDefinition:
     """Return a named dataset definition or raise a useful error."""
 
     try:
-        return DATASET_DEFINITIONS[name]
-    except KeyError as exc:
-        available = ", ".join(sorted(DATASET_DEFINITIONS))
-        raise ValueError(f"unknown dataset {name!r}; choose one of: {available}") from exc
+        return get_registered_dataset(name)
+    except RegistryError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def build_tables(name: str, seed: int, rng: random.Random) -> Mapping[str, Frame]:
@@ -231,7 +257,10 @@ __all__ = [
     "DATASETS",
     "DATASET_DEFINITIONS",
     "DatasetDefinition",
+    "RegistryError",
     "InjectorSpec",
     "build_tables",
+    "dataset_definitions",
     "get_dataset",
+    "register_dataset",
 ]

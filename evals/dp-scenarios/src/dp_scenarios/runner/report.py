@@ -14,6 +14,8 @@ from pathlib import Path
 
 from typing import Any
 
+from dp_scenarios.grading import NOT_STAGED_CODES
+
 from .tier import ScenarioRun, TierResult
 from .transcript import render_epoch_conversation
 
@@ -65,6 +67,10 @@ def _gate_text(run: ScenarioRun) -> str:
     parts: list[str] = []
     for name in ("intake", "capability", "narrowing", "construction", "build", "query", "follow-up"):
         gate = run.score.gates[name]
+        not_staged = next((code for code in gate.codes if code in NOT_STAGED_CODES), None)
+        if not_staged is not None:
+            parts.append(f"{name}=NOT-STAGED")
+            continue
         status = (
             "PASS"
             if gate.passed
@@ -77,6 +83,19 @@ def _gate_text(run: ScenarioRun) -> str:
         codes = ",".join(gate.codes) if gate.codes else "-"
         parts.append(f"{name}={status}[{codes}]")
     return " ".join(parts)
+
+
+def _coverage_text(run: ScenarioRun) -> str:
+    scoreable = [name for name, gate in run.score.gates.items() if gate.required]
+    waived = [
+        f"{name}({code})"
+        for name, gate in run.score.gates.items()
+        for code in gate.codes
+        if code in NOT_STAGED_CODES
+    ]
+    scoreable_text = ",".join(scoreable) if scoreable else "none"
+    waived_text = ",".join(waived) if waived else "none"
+    return f"  scoreable gates: {scoreable_text}; waived: {waived_text}"
 
 
 def human_summary(result: TierResult) -> str:
@@ -111,6 +130,7 @@ def human_summary(result: TierResult) -> str:
                 f"- epoch {run.epoch}: state={run.score.state.value}, stop={run.stop_condition}, "
                 f"total={run.score.total}, {_gate_text(run)}"
             )
+            lines.append(_coverage_text(run))
             lines.append(
                 "  hard gates: "
                 + ", ".join(f"{name}={value}" for name, value in run.score.hard_gate_flags.items())
@@ -118,6 +138,20 @@ def human_summary(result: TierResult) -> str:
             lines.append(
                 f"  route fidelity: {run.route_fidelity_status} ({run.route_fidelity_reason})"
             )
+            if run.failure_reason is not None or run.failure_detail is not None:
+                # stdout is where an operator decides whether to rerun the
+                # scenario or wait for the account.  A run that stopped on a
+                # provider ceiling must say so here, not only in report.json.
+                # Print only what the record holds.  Inventing a reason here
+                # when report.json says null would make the two surfaces
+                # disagree about the same run; normalization belongs to the
+                # producer, which the engine now does.
+                if run.failure_reason is not None:
+                    lines.append(f"  interrupted: {run.failure_reason}")
+                if run.last_mcp_call is not None:
+                    lines.append(f"  last MCP call: {run.last_mcp_call}")
+                if run.failure_detail is not None:
+                    lines.append(f"  detail: {run.failure_detail}")
             if run.qualification.operator_mode == "driver":
                 # Without this a driven run whose every authored turn fell back
                 # to the scripted line is indistinguishable from a scripted run

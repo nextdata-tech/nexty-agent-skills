@@ -1,0 +1,42 @@
+{
+  "excluded_missing_fx": 1,
+  "rows": [
+    {
+      "account_id": "ACCT-001",
+      "amount_eur": "1234.50",
+      "close_id": "CLOSE-29-001",
+      "currency": "EUR"
+    },
+    {
+      "account_id": "ACCT-002",
+      "amount_eur": "1150.00",
+      "close_id": "CLOSE-29-002",
+      "currency": "USD"
+    },
+    {
+      "account_id": "ACCT-003",
+      "amount_eur": "-234.00",
+      "close_id": "CLOSE-29-003",
+      "currency": "GBP"
+    },
+    {
+      "account_id": "ACCT-004",
+      "amount_eur": "276.00",
+      "close_id": "CLOSE-29-004",
+      "currency": "USD"
+    },
+    {
+      "account_id": "ACCT-005",
+      "amount_eur": "93.00",
+      "close_id": "CLOSE-29-005",
+      "currency": "JPY"
+    },
+    {
+      "account_id": "ACCT-007",
+      "amount_eur": "85.00",
+      "close_id": "CLOSE-29-007",
+      "currency": "EUR"
+    }
+  ],
+  "total_eur": "2604.50"
+}

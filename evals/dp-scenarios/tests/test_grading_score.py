@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 
 from dp_scenarios.grading.gates import GATE_PHASES, GATE_POINTS, Finding, GateResult, gate_follow_up
-from dp_scenarios.grading.score import EfficiencyReport, TerminalState, scenario_passes, score_run
+from dp_scenarios.grading.score import (
+    EfficiencyReport,
+    TerminalState,
+    pass_threshold,
+    scenario_passes,
+    score_run,
+    scoreable_max,
+)
 from dp_scenarios.ledger.lint import LintReport
 
 
@@ -175,3 +182,30 @@ def test_route_fidelity_penalty_and_hard_gate_are_both_live() -> None:
     failed = score_run(_all_pass(), honesty_report=_lint(), route_fidelity=False)
     assert failed.total == 100
     assert failed.state is TerminalState.FAILED
+
+
+def test_declaration_waivers_reduce_the_scoreable_max_and_threshold() -> None:
+    gates = _all_pass()
+    gates["capability"] = GateResult(
+        "capability",
+        False,
+        0,
+        (Finding("capability_shortfall_not_staged"),),
+        examined=False,
+        required=False,
+    )
+    gates["narrowing"] = GateResult(
+        "narrowing",
+        False,
+        0,
+        (Finding("narrowing_change_not_staged"),),
+        examined=False,
+        required=False,
+    )
+
+    result = score_run(gates, honesty_report=_lint(), route_fidelity=True)
+
+    assert scoreable_max(result) == 75
+    assert pass_threshold(result) == 60
+    assert result.total == 75
+    assert scenario_passes(result)

@@ -14,7 +14,7 @@ import inspect
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 import tempfile
 import time
@@ -29,6 +29,7 @@ from dp_scenarios.grading import (
     Finding,
     GATE_POINTS,
     GateResult,
+    NOT_STAGED_CODES,
     ScoreVector,
     gate_build,
     gate_capability,
@@ -43,7 +44,12 @@ from dp_scenarios.grading import (
 )
 from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
-from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
+from dp_scenarios.grading.score import (
+    EfficiencyReport,
+    TerminalState as ScoreTerminalState,
+    pass_threshold,
+    scoreable_max,
+)
 from dp_scenarios.grading.statistics import RepeatabilityReport
 from dp_scenarios.ledger import LedgerRow, Manifest, NOT_APPLICABLE, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
@@ -56,7 +62,7 @@ from dp_scenarios.operator import (
 )
 from dp_scenarios.operator.appender import SupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.transport import Transport
-from dp_scenarios.scenario import Scenario, declared_sentinels, load_scenarios
+from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
@@ -104,6 +110,11 @@ class CanaryResult:
     probe: ProbeResult | Mapping[str, object] | None = None
     build: BuildResult | Mapping[str, object] | None = None
     wall_clock_seconds: float = 0.0
+    #: The checked-in package this canary stands for.  ``probe``/``build``
+    #: report the per-run copy they actually ran against, which is gone by the
+    #: time anyone reads the report; this is the identifier that is stable
+    #: across runs and reconcilable with the repo.
+    package: str | None = None
 
     @property
     def blocking(self) -> bool:
@@ -123,6 +134,7 @@ class CanaryResult:
             "probe": serial(self.probe),
             "build": serial(self.build),
             "wall_clock_seconds": self.wall_clock_seconds,
+            "package": self.package,
         }
 
 
@@ -153,6 +165,9 @@ class ScenarioRun:
     replay_verification_status: str
     replay_verification_reason: str
     qualification: QualificationRecord
+    failure_reason: str | None = None
+    failure_detail: str | None = None
+    last_mcp_call: str | None = None
 
     @property
     def invalid(self) -> bool:
@@ -183,6 +198,14 @@ class ScenarioRun:
                     for name, result in self.score.gates.items()
                 },
                 "total": self.score.total,
+                "scoreable_max": scoreable_max(self.score),
+                "threshold": pass_threshold(self.score),
+                "waived_gates": {
+                    name: code
+                    for name, result in self.score.gates.items()
+                    for code in result.codes
+                    if code in NOT_STAGED_CODES
+                },
                 "hard_gate_flags": dict(self.score.hard_gate_flags),
                 "state": self.score.state.value,
                 "findings": [finding.code for finding in self.score.findings],
@@ -220,6 +243,13 @@ class ScenarioRun:
             "reason": self.replay_verification_reason,
         }
         result["qualification"] = self.qualification.to_dict()
+        # Always present, so a consumer reads one shape whether the run was
+        # graded or interrupted.  A clean run leaves every member null.
+        result["interruption"] = {
+            "failure_reason": self.failure_reason,
+            "failure_detail": self.failure_detail,
+            "last_mcp_call": self.last_mcp_call,
+        }
         return result
 
 
@@ -325,6 +355,20 @@ def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: Cla
     return Verdict(outcome, tuple(deduped), verdict.observed_codes, verdict.advisories)
 
 
+def _canary_package(root: Path) -> dict[str, str]:
+    """Return the stable identity of the canary package that was probed.
+
+    Isolation hands the supervisor a per-run copy, so ``closure`` and
+    ``command`` name a temp directory that is gone by the time anyone reads
+    report.json.  Overwriting them would make the record disagree with what
+    actually ran -- ``command`` still carries the copy's path, and a reader
+    could not reconcile the two.  The invocation facts stay faithful and the
+    stable identifier is reported alongside them.
+    """
+
+    return {"package": str(root)}
+
+
 def run_drift_canary(
     canary_dir: str | Path,
     *,
@@ -342,13 +386,28 @@ def run_drift_canary(
     claims = load_claims(claims_file)
     extraction = extract_claims(skills_root, existing=claims, fail_on_drift=False)
     temporary_data: tempfile.TemporaryDirectory[str] | None = None
+    temporary_closure: tempfile.TemporaryDirectory[str] | None = None
+    closure = root
     try:
         if probe is None:
             # Supervisor create/build paths may materialize content-addressed
             # state.  Keep that state outside the checked-in canary package.
             temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
             data_dir = Path(temporary_data.name)
-            probed = run_preflight(root, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary")
+            # The supervisor runs with the closure as its working directory
+            # and writes run state beside it.  Two live runs sharing the
+            # checked-in package therefore share one store, which surfaces as
+            # "database is locked" in whichever run loses the race -- a
+            # contention failure wearing the costume of a canary defect.
+            # Each live run gets its own copy instead.
+            temporary_closure = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-closure-")
+            closure = Path(temporary_closure.name) / root.name
+            shutil.copytree(root, closure)
+            # The copy is an implementation detail of isolation.  Reporting
+            # its path would replace a stable repo-relative fact with a temp
+            # directory that no longer exists when anyone reads the report,
+            # and that differs on every run.
+            probed = run_preflight(closure, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary")
         else:
             probed = probe
         if isinstance(probed, ProbeResult):
@@ -392,7 +451,7 @@ def run_drift_canary(
                 if temporary_data is None:
                     temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
                 built = run_build(
-                    root,
+                    closure,
                     supervisor=probed.supervisor,
                     data_dir=Path(temporary_data.name),
                     workflow="drift-canary",
@@ -420,10 +479,13 @@ def run_drift_canary(
             probe=probed,
             build=built,
             wall_clock_seconds=time.monotonic() - started,
+            package=str(root),
         )
     finally:
         if temporary_data is not None:
             temporary_data.cleanup()
+        if temporary_closure is not None:
+            temporary_closure.cleanup()
 
 
 def _load_json(path: Path) -> object | None:
@@ -734,8 +796,37 @@ def _append_artifact_rows(artifact_root: Path) -> None:
     raise TierError("agent-owned ledger artifact is forbidden; evidence rows are harness-owned")
 
 
+def _review_rounds(artifact_root: Path) -> tuple[Mapping[str, object], ...]:
+    """Return the adversarial-review rounds the build recorded, across closures.
+
+    ``build-record.json`` ``review_rounds[]`` is the durable product of the
+    dispatch that ``nxd-generate-data-product`` step 6b mandates. It exists
+    only on the generator path, which is the point: a hand-authored closure
+    records none.
+    """
+
+    rounds: list[Mapping[str, object]] = []
+    for closure in _closure_dirs(artifact_root):
+        record = _load_json(closure / "build-record.json")
+        if not isinstance(record, Mapping):
+            continue
+        entries = record.get("review_rounds")
+        if isinstance(entries, (list, tuple)):
+            rounds.extend(entry for entry in entries if isinstance(entry, Mapping))
+    return tuple(rounds)
+
+
 def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
-    """Read the narrow, non-authoritative attestation channel from the agent."""
+    """Read the narrow, non-authoritative attestation channel from the agent.
+
+    ``root`` is the live agent's workspace. ``fallback_root`` is the artifact
+    root, which is *not* a second address for a live agent -- the system prompt
+    forbids it to write there -- but is how a **replay recording** carries the
+    attestations it recorded, since a replayed run has no agent workspace to
+    read. Removing it made every populated replay fixture lose its
+    attestations, which only went unnoticed while the observed-call exemption
+    was dropping the attestation requirement anyway.
+    """
 
     path = root / "agent-attestations.json"
     if not path.is_file() and fallback_root is not None:
@@ -795,7 +886,11 @@ def _supervisor_facts(reader: SupervisorRecordReader | None) -> SupervisorFacts 
 
 
 def _capability_gate_result(
-    artifact_root: Path, spec: object, capability: object, environment: object
+    artifact_root: Path,
+    spec: object,
+    capability: object,
+    environment: object,
+    scenario: Scenario,
 ) -> GateResult:
     """Grade capability from the spec when one exists, else from nxd_decisions.
 
@@ -804,7 +899,7 @@ def _capability_gate_result(
     not-examined on every live run regardless of agent behaviour.
     """
 
-    required = getattr(environment, "mock_source", None) is not None
+    required = scenario.stages_capability_shortfall
     from_spec = gate_capability(spec, capability, required=required)
     if "capability_metrics_not_examined" not in from_spec.codes:
         # A spec with metric labels exists, so grade it the strict way.
@@ -929,6 +1024,29 @@ def _closure_artifact(artifact_root: Path) -> Path | Mapping[str, object]:
         if candidate.is_file():
             return candidate
     return artifact_root
+
+
+def _follow_up_artifact(scenario: Scenario, artifact_root: Path) -> Mapping[str, object] | None:
+    """Load the scenario-declared agent evidence, failing closed on any defect."""
+
+    relative = getattr(scenario, "follow_up_artifact", None)
+    if not isinstance(relative, str) or not relative:
+        return None
+    candidate = (artifact_root / relative).resolve()
+    root = artifact_root.resolve()
+    if root not in candidate.parents or not candidate.is_file():
+        return None
+    try:
+        value = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    # Tagged rather than filtered: the artifact is the agent's own object and
+    # every key in it is the agent's to choose.  ``AgentEvidence`` tells
+    # ``follow_up_check`` not to read it as the legacy positional convention,
+    # so a field named ``closure`` is just a field.
+    return AgentEvidence(value)
 
 
 # Tool namespaces whose *results* are product surfaces rather than source
@@ -1159,6 +1277,7 @@ class TierRunner:
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
         live_command: Sequence[str] | None = None,
+        live_environment: Mapping[str, str] | None = None,
         supervisor_command: str | Path | Sequence[str] | None = None,
         supervisor_environment: Mapping[str, str] | None = None,
         knob_plan: KnobPlan | None = None,
@@ -1184,6 +1303,7 @@ class TierRunner:
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
         self.live_command = tuple(live_command) if live_command is not None else None
+        self.live_environment = dict(live_environment or {})
         self.supervisor_command = supervisor_command
         self.supervisor_environment = (
             dict(supervisor_environment) if supervisor_environment is not None else None
@@ -1434,6 +1554,7 @@ class TierRunner:
                 route_config=self.route_configs.get(scenario.id),
                 manifest_override=manifest_override,
                 live_command=self.live_command,
+                live_environment=self.live_environment,
                 supervisor_command=self.supervisor_command,
                 supervisor_environment=self.supervisor_environment,
                 allow_host_home=self.allow_host_home,
@@ -1624,6 +1745,9 @@ class TierRunner:
                         replay_verification_status=replay_status,
                         replay_verification_reason=replay_reason,
                         qualification=qualification,
+                        failure_reason=getattr(run_result, "failure_reason", None),
+                        failure_detail=getattr(run_result, "failure_detail", None),
+                        last_mcp_call=getattr(run_result, "last_mcp_call", None),
                     )
                 )
         return tuple(runs)
@@ -1694,6 +1818,7 @@ class TierRunner:
             ledger_artifact,
             observations=observations,
             attestations=attestations,
+            review_rounds=_review_rounds(artifact_root),
             require_observed=True,
             desktop_server_name=environment.desktop_server_name,
         )
@@ -1706,8 +1831,15 @@ class TierRunner:
             )
         gates: dict[str, GateResult] = {
             "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
-            "capability": _capability_gate_result(artifact_root, spec, capability, environment),
-            "narrowing": gate_narrowing(spec_diff, ledger_artifact, closure),
+            "capability": _capability_gate_result(
+                artifact_root, spec, capability, environment, scenario
+            ),
+            "narrowing": gate_narrowing(
+                spec_diff,
+                ledger_artifact,
+                closure,
+                required=scenario.stages_definition_change,
+            ),
             "construction": construction,
             "build": gate_build(facts, row_counts),
         }
@@ -1752,6 +1884,12 @@ class TierRunner:
         elif isinstance(query, list):
             query_rows = [row for row in query if isinstance(row, Mapping)]
         follow_up_method = scenario.follow_up_gate
+        follow_up_target: object = closure
+        if getattr(scenario, "follow_up_artifact", None) is not None:
+            # Scenario-specific evidence is an explicit artifact boundary. A
+            # missing or malformed artifact becomes ``not-examined`` in the
+            # follow-up handler instead of falling back to a closure path.
+            follow_up_target = _follow_up_artifact(scenario, artifact_root)
         try:
             follow_up_parameters = inspect.signature(follow_up_method).parameters
         except (TypeError, ValueError):
@@ -1764,15 +1902,15 @@ class TierRunner:
             if "row_count_oracle" in follow_up_parameters:
                 follow_up_kwargs["row_count_oracle"] = row_counts
             follow_up = follow_up_method(
-                closure,
+                follow_up_target,
                 environment.oracle_dir,
                 query_rows,
                 **follow_up_kwargs,
             )
         elif "query_rows" in follow_up_parameters:
-            follow_up = follow_up_method(closure, query_rows)
+            follow_up = follow_up_method(follow_up_target, query_rows)
         else:
-            follow_up = follow_up_method(closure)
+            follow_up = follow_up_method(follow_up_target)
         ungraded = observations.get("ungraded_criteria", ())
         if not isinstance(ungraded, Sequence) or isinstance(ungraded, (str, bytes)):
             ungraded = ()

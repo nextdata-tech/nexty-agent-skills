@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
+
+from dotenv import dotenv_values
 
 from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.probe import resolve_supervisor
@@ -41,6 +44,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCENARIO_ROOT = REPO_ROOT / "evals" / "dp-scenarios" / "scenarios"
 CANARY_ROOT = SCENARIO_ROOT / "drift-canary"
 ADAPTER_MODULE = "dp_scenarios.runner.claude_adapter"
+CLAUDE_OAUTH_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
+OPENAI_API_KEY = "OPENAI_API_KEY"
 
 
 def _sha256(path: Path) -> str:
@@ -87,6 +92,35 @@ def _adapter_timeout(turn_timeout: float) -> float:
     if turn_timeout <= 0:
         raise TierError("turn timeout must be positive")
     return turn_timeout * 0.9
+
+
+def _load_local_credentials(env_file: Path | None) -> dict[str, str]:
+    """Load only runner credentials from an explicitly selected dotenv file.
+
+    Values are kept in the trusted harness process.  The caller decides which
+    credential, if any, crosses a subprocess boundary.  Environment values
+    take precedence so a CI secret or one-shot shell override remains useful.
+    """
+
+    file_values: dict[str, str] = {}
+    if env_file is not None:
+        path = env_file.expanduser().resolve()
+        if not path.is_file():
+            raise TierError(f"credentials file does not exist: {path}")
+        if path.stat().st_mode & 0o077:
+            raise TierError(f"credentials file must be owner-readable only: {path}")
+        parsed = dotenv_values(path)
+        for name in (CLAUDE_OAUTH_TOKEN, OPENAI_API_KEY):
+            value = parsed.get(name)
+            if isinstance(value, str) and value.strip():
+                file_values[name] = value.strip()
+
+    credentials: dict[str, str] = {}
+    for name in (CLAUDE_OAUTH_TOKEN, OPENAI_API_KEY):
+        value = os.environ.get(name) or file_values.get(name)
+        if isinstance(value, str) and value.strip():
+            credentials[name] = value.strip()
+    return credentials
 
 
 def _default_desktop_python() -> Path:
@@ -174,6 +208,8 @@ DriverFactory = Callable[[Any, Any, int], DriverOperator]
 def driver_configuration(
     args: argparse.Namespace,
     pins: PinnedVersions,
+    *,
+    openai_api_key: str | None = None,
 ) -> tuple[PinnedVersions, DriverFactory | None]:
     """Return the pins and operator factory implied by the driver flags.
 
@@ -205,6 +241,7 @@ def driver_configuration(
     provider = OpenAIDriverProvider.from_environment(
         model=model,
         temperature=temperature,
+        api_key=openai_api_key,
         timeout_seconds=timeout,
         max_tokens=max_tokens,
     )
@@ -236,10 +273,26 @@ def driver_configuration(
     return driver_pins, factory
 
 
-def _tool_grant_arguments(args: argparse.Namespace) -> list[str]:
-    """Return the adapter flags that decide the agent's tool grants."""
+def _tool_grant_arguments(args: argparse.Namespace, *, oauth_token_present: bool = False) -> list[str]:
+    """Return the adapter flags that decide the agent's tool grants.
 
-    if args.allow_host_home and not args.allow_host_home_bash:
+    A token and ``--allow-host-home-bash`` are a genuine conflict: the token
+    must not reach a shell, and the flag exists to open one.  Resolving it
+    silently in either direction is the wrong answer -- withholding Bash makes
+    every shell-dependent scenario fail for a reason that appears nowhere in
+    the report, and ``CLAUDE_CODE_OAUTH_TOKEN`` is commonly exported, so the
+    operator need not have opted into anything to hit it.
+    """
+
+    if oauth_token_present and args.allow_host_home_bash:
+        raise TierError(
+            "--allow-host-home-bash cannot be combined with a Claude OAuth token: "
+            "the token is withheld from the agent shell, so Bash would be denied "
+            "and every shell-dependent scenario would fail invisibly. Unset "
+            "CLAUDE_CODE_OAUTH_TOKEN (and omit --env-file) to grant Bash, or drop "
+            "--allow-host-home-bash to run token-authenticated without a shell."
+        )
+    if oauth_token_present or (args.allow_host_home and not args.allow_host_home_bash):
         return ["--no-bash"]
     return []
 
@@ -261,6 +314,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--epochs", type=int, default=1, help="epochs per selected scenario (use 5 for the declared deterministic tier)")
     parser.add_argument("--output-dir", type=Path, help="directory for report.json and summary.txt (default: a retained temp directory)")
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help=(
+            "optional owner-readable-only dotenv file; only OPENAI_API_KEY and "
+            "CLAUDE_CODE_OAUTH_TOKEN are read"
+        ),
+    )
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
     parser.add_argument("--claude-config-dir", type=Path, help="host Claude Code config directory used for local authentication")
     parser.add_argument(
@@ -322,6 +383,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     supervisor = resolve_supervisor(args.supervisor)
     desktop_python = resolve_desktop_python(args.desktop_python)
     claude = _resolve_executable(args.claude, "claude")
+    credentials = _load_local_credentials(args.env_file)
+    claude_oauth_token = credentials.get(CLAUDE_OAUTH_TOKEN)
     # Let Claude Code use its normal host-authenticated configuration unless
     # the caller explicitly selects another config directory.  Setting
     # CLAUDE_CONFIG_DIR to the default-looking ~/.claude path makes the CLI
@@ -348,7 +411,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_model_id=args.model,
         agent_sampling_params={"temperature": "provider-default", "effort": args.effort},
     )
-    pins, operator_factory = driver_configuration(args, pins)
+    pins, operator_factory = driver_configuration(
+        args,
+        pins,
+        openai_api_key=credentials.get(OPENAI_API_KEY),
+    )
 
     if args.output_dir is None:
         report_dir = Path(tempfile.mkdtemp(prefix="dp-scenarios-local-report-"))
@@ -379,7 +446,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     adapter_command = [sys.executable, "-m", ADAPTER_MODULE]
     for key, value in adapter_kwargs.items():
         adapter_command.extend((f"--{key}", value))
-    adapter_command.extend(_tool_grant_arguments(args))
+    adapter_command.extend(_tool_grant_arguments(args, oauth_token_present=claude_oauth_token is not None))
     adapter_command.extend(("--fixture-dir", "../fixture", "--artifact-dir", "../artifacts"))
 
     def session_factory(scenario: Scenario, environment: Any, epoch: int) -> LiveSession:
@@ -399,6 +466,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
             supervisor_reader=supervisor_reader,
             live_command=adapter_command,
+            live_environment=(
+                {CLAUDE_OAUTH_TOKEN: claude_oauth_token}
+                if claude_oauth_token is not None
+                else None
+            ),
             supervisor_command=supervisor,
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
             allow_host_home=args.allow_host_home,
