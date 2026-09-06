@@ -1,13 +1,13 @@
 ---
 id: 2026-09-06-abstention-and-waiver-categories
 date: 2026-09-06
-label: "correct abstention passes capability, and a waiver says so"
+label: "grade capability from what a live closure emits, and name the waivers"
 plugin_version: 0.45.0
 status: NO_EVAL
 scenarios: []
 record: null
 ---
-# Benchmark — correct abstention passes capability, and a waiver says so
+# Benchmark — grade capability from what a live closure emits, and name the waivers
 
 ## Notes
 
@@ -52,12 +52,47 @@ read the key by name and compare them against the agent's evidence artifact, so
 renaming would double-grade the same rows over a second channel. The scenario
 files now say so where a reader will look.
 
-One finding recorded and not fixed: `_metric_is_governed` binds on `applies_to`
-and accepts only `confirmed`/`proposed`, while real closures write
-`decision_id,description,status,provenance` with `approved`/`settled`. So the
-*positive* case — a shipped shortfall column with a genuine ruling — still
-reads `capability_shortfall_not_governed` on a live run. That is the next false
-negative in this family and wants its own change.
+**An off-contract ledger is not an ungoverned one.** `_metric_is_governed` binds
+on `applies_to` and accepts only `confirmed`/`proposed`, while the live closures
+wrote `decision_id,description,status,provenance` with `approved`/`settled`. The
+first reading was that this is a false negative and the allowlist should widen.
+It is not, and it should not.
+
+The pack fixes the ledger vocabulary and enforces it: `derivation-plan.md`
+declares `nxd_decisions` as `decision_id, status, provenance, ruling,
+applies_to, detail` with `status` exactly one of
+`confirmed`/`proposed`/`blocked`, and `self_check.py` phase D hard-fails a
+closure whose ledger is missing either column or carries a value outside that
+vocabulary (`policy.decisions_column_missing`,
+`policy.decisions_value_out_of_vocab`). `approved` is the *blueprint* status
+vocabulary (`dp_diagnostics.py` `STATUS_VALUES`) bleeding into the ruling
+ledger — two vocabularies the pack keeps deliberately disjoint. Widening the
+gate would make the eval pass a build the skill's own tripwire fails.
+
+The verdict was already right; only the label was wrong.
+`capability_shortfall_not_governed` reads as "the agent wrote no ruling", which
+points a reader at the gate's allowlist instead of at the skill.
+`_ledger_contract_breaches` now classifies a non-empty ledger against the same
+two vocabularies phase D uses (copied, not imported, with a comment naming that
+file as the source of truth) plus the presence of `applies_to`, the field that
+binds a ruling to columns. A breach yields one
+`capability_decisions_off_contract` finding for the closure and skips the
+per-metric loop, so one defect is not charged once per metric.
+`_metric_is_governed` is unchanged — a row without `applies_to` never reaches
+it, so there is no pull toward matching `description` and reopening the prose
+false positive.
+
+Two scoping decisions, both narrowing: an absent or header-only ledger is **not**
+off-contract (it would relabel the clearest ungoverned case as a schema
+complaint), and the check fires only for a closure that actually shipped a
+shortfall column, since that is the gate's whole claim. Statuses are unioned
+across rows as phase D does, so one `superseded` row among clean ones still
+spoils the ledger.
+
+One crash fixed with it: `csv.DictReader` files surplus fields under `restkey`,
+which defaults to `None`, and sorting `None` beside `str` raises. One unquoted
+comma in a hand-written prose column — exactly the ledger this branch reports —
+took the harness down instead of producing the finding.
 
 ## Evidence
 
@@ -70,3 +105,10 @@ negative in this family and wants its own change.
   asserting it for all nine packages while the tier waived it for eight.
 - `evals/dp-scenarios/tests/test_runner_report.py` — the query waiver is in
   `NOT_STAGED_CODES` and surfaces as a waived gate.
+- `evals/dp-scenarios/tests/test_grading_gates.py` — the crm-pipeline live
+  ledger shape reports `capability_decisions_off_contract` alone and names both
+  the missing binding column and the out-of-vocabulary status; a single
+  `superseded` row among conforming ones is enough; an absent or header-only
+  ledger still reports `capability_shortfall_not_governed`; an off-contract
+  ledger does not fail a run that shipped no shortfall column; and a row with
+  more fields than headers is reported rather than raising.

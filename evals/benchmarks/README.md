@@ -7,16 +7,11 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
-| 2026-09-06 | observe the reviewer dispatch under the name the CLI actually uses | NO_EVAL | — | [`2026-09-06-reviewer-dispatch-tool-name`](entries/2026-09-06-reviewer-dispatch-tool-name.md) |
-| 2026-09-06 | stop withholding the subagent the skill mandates and the gate grades | NO_EVAL | — | [`2026-09-06-restore-reviewer-delegation`](entries/2026-09-06-restore-reviewer-delegation.md) |
-| 2026-09-06 | name an off-contract decision ledger instead of calling it ungoverned | NO_EVAL | — | [`2026-09-06-off-contract-decision-ledger`](entries/2026-09-06-off-contract-decision-ledger.md) |
-| 2026-09-06 | stop the no-Bash guidance reading as permission to skip the generator skill | NO_EVAL | — | [`2026-09-06-no-bash-guidance-diverted-the-flow`](entries/2026-09-06-no-bash-guidance-diverted-the-flow.md) |
-| 2026-09-06 | read build evidence from the runner's own data directory | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |
+| 2026-09-06 | own the build evidence, and stop comparing source tables with built models | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |
 | 2026-09-06 | scope the source contract and conduct rules to the scenarios that ask for them | NO_EVAL | — | [`2026-09-06-handover-and-prompt-scoping`](entries/2026-09-06-handover-and-prompt-scoping.md) |
 | 2026-09-06 | dp-scenarios declaration-based gate requiredness and waived coverage | NO_EVAL | — | [`2026-09-06-dp-scenarios-declaration-requiredness`](entries/2026-09-06-dp-scenarios-declaration-requiredness.md) |
-| 2026-09-06 | stop asking the agent to re-tell the harness a check it watched succeed | NO_EVAL | — | [`2026-09-06-construction-observed-self-check`](entries/2026-09-06-construction-observed-self-check.md) |
-| 2026-09-06 | drop a build row-count comparison whose two sides were never the same thing | NO_EVAL | — | [`2026-09-06-build-gate-row-count-oracle`](entries/2026-09-06-build-gate-row-count-oracle.md) |
-| 2026-09-06 | correct abstention passes capability, and a waiver says so | NO_EVAL | — | [`2026-09-06-abstention-and-waiver-categories`](entries/2026-09-06-abstention-and-waiver-categories.md) |
+| 2026-09-06 | stop the harness preventing, mislabelling and diverting the behaviour construction grades | NO_EVAL | — | [`2026-09-06-construction-gate-unpassable`](entries/2026-09-06-construction-gate-unpassable.md) |
+| 2026-09-06 | grade capability from what a live closure emits, and name the waivers | NO_EVAL | — | [`2026-09-06-abstention-and-waiver-categories`](entries/2026-09-06-abstention-and-waiver-categories.md) |
 | 2026-09-05 | read the supervisor's real query and release payloads | NO_EVAL | — | [`2026-09-05-supervisor-evidence-harvesting`](entries/2026-09-05-supervisor-evidence-harvesting.md) |
 | 2026-09-05 | evals: the operator's turn has a directive composed from persona and scenario | NO_EVAL | — | [`2026-09-05-operator-directive-composition`](entries/2026-09-05-operator-directive-composition.md) |
 | 2026-09-05 | structured terminal reasons for an interrupted live scenario run | NO_EVAL | — | [`2026-09-05-live-run-interruption-reasons`](entries/2026-09-05-live-run-interruption-reasons.md) |

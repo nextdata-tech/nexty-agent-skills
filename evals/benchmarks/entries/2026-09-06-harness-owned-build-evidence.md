@@ -1,13 +1,13 @@
 ---
 id: 2026-09-06-harness-owned-build-evidence
 date: 2026-09-06
-label: "read build evidence from the runner's own data directory"
+label: "own the build evidence, and stop comparing source tables with built models"
 plugin_version: 0.45.0
 status: NO_EVAL
 scenarios: []
 record: null
 ---
-# Benchmark — read build evidence from the runner's own data directory
+# Benchmark — own the build evidence, and stop comparing source tables with built models
 
 ## Notes
 
@@ -65,6 +65,62 @@ a run this session built is accepted, so a leftover release from an abandoned
 job cannot supply identifiers the agent never produced. Highest publish
 sequence wins.
 
+### What owning it exposed: a comparison whose sides were never the same thing
+
+Wiring the reader for real made the next live `crm-pipeline` run grade
+`build=FAIL` with six `build_row_count_mismatch` findings. The supervisor side
+read `{"main.active_deals": "5", "main.deals_raw": "6", "main.pages_log": "3",
+...}` — built model names, schema-qualified, stringified. The oracle side was
+`synthgen`'s `table_row_counts`, which for that scenario is `{"deals": 1}` — a
+source table name with an integer value, and in fact a fixture-identity
+placeholder: the CSV holds one row (`FIXTURE-29-001`) and the manifest says the
+graded rows come from the mock source. Nothing an agent could build would have
+passed.
+
+It was not a route-backed quirk. A file-backed scenario compares
+`{"main.orders": "12"}` against `{"orders": 12, "order_lines": 40}` and fails
+identically; the comparison had never passed on a live run for any scenario. The
+replay tests passed only because they seed the supervisor side *from*
+`generated.manifest["table_row_counts"]` — evidence derived from the oracle, so
+the assertion was self-fulfilling and no test exercised the live shape.
+
+Nor is it repairable by normalising names and types. No source row count
+survives modelling: `parent-child-grain-trap` exists precisely because the built
+model must *not* preserve the child grain, and the live run's `pages_log` and
+`transport_log` models have no source table behind them at all. Deriving an
+expectation from the mock counters was rejected too — they record requests,
+methods and pages, never records served, and anything from the route config
+would be a rule about how many models the agent should build and what to name
+them, which no scenario declares.
+
+So the comparison is gone. `gate_build` keeps the three
+`build_supervisor_identifier_missing` checks and drops
+`build_row_count_mismatch`, `build_row_counts_not_examined` and the dead
+`_counts` helper. `examined` becomes `bool(supervisor)`: keying it off the
+counts would make an *absent release* read not-examined rather than failing.
+
+Deliberately **not** a waiver. `build` stays `required=True` and stays in
+`_pass_rule` unconditionally, so an agent that builds nothing still fails it. A
+not-staged code would also have listed `build` under `waived_gates` while it
+still carries 20 required points. An identifier is absent when it is `None` or a
+blank string — not merely falsy, since `claude_adapter` accepts an integer
+`publish_sequence`.
+
+Count honesty is not lost: `ledger/lint.py` compares every ledger-claimed
+`per_model_row_counts.<model>` against the supervisor's value and flags any
+model the agent left unrecorded. That is the check that actually catches a false
+count claim, and the one this gate was never doing.
+
+**What `CERTIFIED` now means.** Eight of the nine scenarios declare
+`repeatability.certification.gates: [build]`; only `parent-child-grain-trap`
+adds `query`. A certificate therefore attests that each epoch published a
+release the harness could identify — not what was built, nor that it was stable
+epoch to epoch. Nothing regresses in practice, since the comparison removed here
+could never pass live and those certificates were unreachable; but `CERTIFIED`
+is user-facing and it is now a thinner claim. Putting substance back means
+adding a content-bearing gate to `certification.gates`, a scenario-semantics
+change deliberately not made here.
+
 ## Evidence
 
 - `evals/dp-scenarios/tests/test_runner_claude_adapter.py` — build facts come
@@ -73,3 +129,10 @@ sequence wins.
   too; a missing or unreadable state directory contributes nothing; and a
   lifecycle observed on an earlier turn is not published beside a later run's
   identifiers.
+- `evals/dp-scenarios/tests/test_grading_gates.py` — the live row-count shape
+  now passes and the oracle is ignored whatever it says; a missing or blank
+  identifier fails while an integer `0` sequence does not; absent facts read
+  not-examined.
+- `evals/dp-scenarios/tests/test_runner_tier.py` — one epoch whose release
+  carries no identity sinks the tier, with honesty clean and every other
+  required gate passing, so the lever isolates `build`.
