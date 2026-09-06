@@ -8,6 +8,7 @@ redacted output contract. Missing evidence is never treated as a pass.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 
 from ..support import ScenarioError, _string
 from . import FollowUpContext, FollowUpKind, register
@@ -20,6 +21,45 @@ def _validate_settings(settings: Mapping[str, object]) -> None:
         raise ScenarioError("follow-up.stage_enum must be a non-empty list")
     if any(not isinstance(stage, str) or not stage.strip() for stage in stages):
         raise ScenarioError("follow-up.stage_enum must contain non-empty strings")
+
+
+#: Timestamp columns that a governed query renders in the database's own text
+#: form, which is not the gold's ISO spelling.
+_INSTANT_FIELDS = ("updated_at",)
+
+
+def _instant(value: object) -> object:
+    """Return a timestamp's instant, or the value unchanged if it is not one.
+
+    A governed ``run_semantic_query`` renders a timestamp as
+    ``2024-01-05 10:00:00+00``; the committed gold spells the same instant
+    ``2024-01-05T10:00:00+00:00``. Comparing the rendered strings failed a
+    pipeline whose rows were correct -- and passed only the agent that
+    hand-authored its evidence into the gold's spelling instead of copying
+    what the product returned, which is the opposite of the behaviour graded
+    here.
+
+    An unparseable value is returned unchanged, so it still compares
+    unequal rather than quietly matching.
+    """
+
+    if not isinstance(value, str):
+        return value
+    try:
+        return datetime.fromisoformat(value.strip().replace(" ", "T"))
+    except ValueError:
+        return value
+
+
+def _comparable_row(row: object) -> object:
+    """Normalize only the instant fields; everything else compares exactly."""
+
+    if not isinstance(row, Mapping):
+        return row
+    return {
+        key: _instant(value) if key in _INSTANT_FIELDS else value
+        for key, value in row.items()
+    }
 
 
 def _not_examined(*findings: str) -> dict[str, object]:
@@ -95,7 +135,9 @@ def check(
             continue
         if row.get("stage") not in stage_enum:
             findings.append("stage_enum_violation")
-    if list(result_rows) != list(expected.get("rows", [])):
+    if [_comparable_row(row) for row in result_rows] != [
+        _comparable_row(row) for row in expected.get("rows", [])
+    ]:
         findings.append("pipeline_output_disagrees_with_independent_gold")
     contract = target.get("output_contract")
     if not isinstance(contract, Mapping):

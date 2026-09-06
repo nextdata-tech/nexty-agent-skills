@@ -63,6 +63,46 @@ def test_good_pagination_retry_and_redacted_contract_pass() -> None:
     assert result["passed"]
 
 
+def test_the_governed_query_timestamp_rendering_is_not_a_disagreement() -> None:
+    """A live run returns ``2024-01-05 10:00:00+00``; the gold spells it ISO.
+
+    Those are the same instant. Comparing the rendered strings failed a
+    pipeline whose rows were correct, and passed only the agent that
+    hand-authored its evidence into the gold's spelling instead of copying what
+    ``run_semantic_query`` returned -- the opposite of what this kind grades.
+    """
+
+    target = _good_target()
+    target["result_rows"] = [  # type: ignore[index]
+        {**row, "updated_at": row["updated_at"].replace("T", " ").replace("+00:00", "+00")}
+        for row in target["result_rows"]  # type: ignore[index]
+    ]
+
+    result = SCENARIO.follow_up_check(target)
+
+    assert result["passed"], result["findings"]
+    assert "pipeline_output_disagrees_with_independent_gold" not in result["findings"]
+
+
+def test_a_different_instant_is_still_a_disagreement() -> None:
+    """Normalizing the rendering must not stop the comparison comparing."""
+
+    target = _good_target()
+    rows = [dict(row) for row in target["result_rows"]]  # type: ignore[index]
+    rows[0]["updated_at"] = "2024-02-05 10:00:00+00"
+    target["result_rows"] = rows  # type: ignore[index]
+
+    result = SCENARIO.follow_up_check(target)
+
+    assert not result["passed"]
+    assert "pipeline_output_disagrees_with_independent_gold" in result["findings"]
+
+    # And an unparseable timestamp compares unequal rather than matching.
+    rows[0]["updated_at"] = "not-a-timestamp"
+    target["result_rows"] = rows  # type: ignore[index]
+    assert "pipeline_output_disagrees_with_independent_gold" in SCENARIO.follow_up_check(target)["findings"]
+
+
 def test_missing_page_is_not_silently_accepted() -> None:
     target = _good_target()
     target["pages"] = target["pages"][:2]  # type: ignore[index]

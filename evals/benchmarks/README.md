@@ -11,6 +11,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | 2026-09-06 | scope the source contract and conduct rules to the scenarios that ask for them | NO_EVAL | — | [`2026-09-06-handover-and-prompt-scoping`](entries/2026-09-06-handover-and-prompt-scoping.md) |
 | 2026-09-06 | dp-scenarios declaration-based gate requiredness and waived coverage | NO_EVAL | — | [`2026-09-06-dp-scenarios-declaration-requiredness`](entries/2026-09-06-dp-scenarios-declaration-requiredness.md) |
 | 2026-09-06 | stop the harness preventing, mislabelling and diverting the behaviour construction grades | NO_EVAL | — | [`2026-09-06-construction-gate-unpassable`](entries/2026-09-06-construction-gate-unpassable.md) |
+| 2026-09-06 | stop a database's timestamp rendering reading as a wrong pipeline | NO_EVAL | — | [`2026-09-06-compliant-path-timestamp-rendering`](entries/2026-09-06-compliant-path-timestamp-rendering.md) |
 | 2026-09-06 | grade capability from what a live closure emits, and name the waivers | NO_EVAL | — | [`2026-09-06-abstention-and-waiver-categories`](entries/2026-09-06-abstention-and-waiver-categories.md) |
 | 2026-09-05 | read the supervisor's real query and release payloads | NO_EVAL | — | [`2026-09-05-supervisor-evidence-harvesting`](entries/2026-09-05-supervisor-evidence-harvesting.md) |
 | 2026-09-05 | evals: the operator's turn has a directive composed from persona and scenario | NO_EVAL | — | [`2026-09-05-operator-directive-composition`](entries/2026-09-05-operator-directive-composition.md) |
