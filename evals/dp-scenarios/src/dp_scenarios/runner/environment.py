@@ -72,6 +72,8 @@ def _evidence_contract(scenario: Scenario) -> dict[str, object] | None:
     if path is None:
         return None
     kind = followups.get(scenario.gates["follow-up"].kind)
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
     return {
         "format_version": 1,
         "artifact_path": path,
@@ -80,6 +82,10 @@ def _evidence_contract(scenario: Scenario) -> dict[str, object] | None:
             "Write only the required JSON object at artifact_path; do not include "
             "secrets or hidden reference values."
         ),
+        # Conduct rules ride with the scenario that asked for them rather than
+        # with the harness, so a package that does not declare an evidence
+        # artifact keeps the prompt -- and the baseline -- it was measured on.
+        "conduct": list(SCENARIO_CONDUCT_RULES),
     }
 
 
@@ -342,13 +348,48 @@ def advertised_endpoints(routes: Sequence[Any]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _publishes_contract(routes: Sequence[Any], path: str) -> bool:
+    """Return whether this endpoint opted in to publishing its contract.
+
+    Default-off is the point.  ``capability-shortfall`` grades whether an
+    agent discovers by probing that ``/deals`` carries no stage history;
+    listing the available fields in the handover answers that for free.
+    """
+
+    for route in routes:
+        if getattr(route, "path", None) == path and getattr(route, "method", "").upper() == "GET":
+            return bool(getattr(route, "publish_contract", False))
+    return False
+
+
+def _successful_response(route: Any) -> Any:
+    """Return the response spec this endpoint actually serves first.
+
+    A ``ResponseSpec`` carries no status of its own -- the status lives on the
+    route, and ``advertised_endpoints`` has already restricted this to 200 --
+    so "successful" cannot be decided per state.  What can be decided is
+    *which* state: ``next(iter(states.values()))`` returned whichever one the
+    mapping happened to order first, which need not be the one a caller gets.
+    ``initial_state`` is the state served until something advances it, so its
+    shape is the contract an operator would document.
+    """
+
+    response = getattr(route, "response", None)
+    if response is not None:
+        return response
+    states = getattr(route, "states", {})
+    if not states:
+        return None
+    initial = getattr(route, "initial_state", None)
+    if isinstance(initial, str) and initial in states:
+        return states[initial]
+    return next(iter(states.values()), None)
+
+
 def _response_shape(route: Any) -> dict[str, object] | None:
     """Return non-secret field metadata for one successful response."""
 
-    response = getattr(route, "response", None)
-    if response is None:
-        states = getattr(route, "states", {})
-        response = next(iter(states.values()), None) if states else None
+    response = _successful_response(route)
     data = getattr(response, "data", None)
     if isinstance(data, Mapping):
         rows: list[Mapping[str, object]] = [data]
@@ -442,7 +483,7 @@ def render_source_profile(
                 "          public: true",
             ]
         )
-        for suffix, value in _profile_metadata(routes, path).items():
+        for suffix, value in _profile_metadata(routes, path).items() if _publishes_contract(routes, path) else ():
             lines.extend(
                 [
                     f"        - key: {_endpoint_key(path)}_{suffix}",
@@ -825,7 +866,9 @@ class RunEnvironment:
         it is the artifact the scenarios' operators already refer to, it is
         found by the ordinary Read/Glob tools, and it survives a run with no
         shell.  It carries only what a real handover carries -- the base URL
-        and the endpoints the source is documented to serve.
+        and the endpoints the source is documented to serve, plus, for the
+        routes that set ``publish_contract``, the documented response contract
+        for those routes alone.
         """
 
         source = self._mock_source

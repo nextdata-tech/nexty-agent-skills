@@ -98,7 +98,7 @@ KIND = register(
             "landed": (
                 "object with rows (array of objects keyed position_id, quality, "
                 "quantity, region, sku, warehouse_id); quality must be one of "
-                "valid, orphan_warehouse, or negative_stock, and quantity is "
+                "valid, orphan_warehouse, negative_stock, or orphan_and_negative, and quantity is "
                 "the preserved source integer"
             ),
             "diagnostics": (

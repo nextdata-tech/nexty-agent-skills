@@ -2139,3 +2139,24 @@ def test_a_clean_run_reports_an_empty_interruption_block() -> None:
         "failure_detail": None,
         "last_mcp_call": None,
     }
+
+
+def test_evidence_using_a_reserved_shim_name_is_refused_rather_than_blanked(tmp_path: Path) -> None:
+    """`follow_up_check` unwraps a mapping carrying `closure` as legacy kwargs.
+
+    An agent adding a `closure` field for context would silently blank the
+    target and turn the whole follow-up gate into not-examined -- a false
+    negative rather than a finding.
+    """
+
+    from dp_scenarios.runner.tier import _follow_up_artifact
+
+    scenario = SimpleNamespace(follow_up_artifact="evidence/x.json")
+    target = tmp_path / "evidence" / "x.json"
+    target.parent.mkdir(parents=True)
+
+    target.write_text(json.dumps({"rows": [], "closure": "for context"}), encoding="utf-8")
+    assert _follow_up_artifact(scenario, tmp_path) is None
+
+    target.write_text(json.dumps({"rows": [], "note": "fine"}), encoding="utf-8")
+    assert _follow_up_artifact(scenario, tmp_path) == {"rows": [], "note": "fine"}

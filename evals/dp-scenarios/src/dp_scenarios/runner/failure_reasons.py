@@ -24,6 +24,11 @@ CHILD_NO_TERMINAL_RESULT = "child_no_terminal_result"
 CHILD_EXITED_EARLY = "child_exited_early"
 #: Two runs contended on shared runtime state (locked store, busy resource).
 SHARED_RUNTIME_CONTENTION = "shared_runtime_contention"
+#: The run was interrupted but the diagnostic matched no known pattern.  This
+#: member is what makes the vocabulary exhaustive: without it an unrecognised
+#: provider error (``529 overloaded_error``, say) reaches the report with a
+#: null reason, which on that key is indistinguishable from a clean run.
+INTERRUPTED_UNCLASSIFIED = "interrupted_unclassified"
 
 FAILURE_REASONS = frozenset(
     {
@@ -31,6 +36,7 @@ FAILURE_REASONS = frozenset(
         CHILD_NO_TERMINAL_RESULT,
         CHILD_EXITED_EARLY,
         SHARED_RUNTIME_CONTENTION,
+        INTERRUPTED_UNCLASSIFIED,
     }
 )
 
@@ -92,6 +98,7 @@ def first_reason(reasons: Iterable[str | None]) -> str | None:
 
 __all__ = [
     "CHILD_EXITED_EARLY",
+    "INTERRUPTED_UNCLASSIFIED",
     "CHILD_NO_TERMINAL_RESULT",
     "FAILURE_REASONS",
     "PROVIDER_SESSION_LIMIT",

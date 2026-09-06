@@ -58,6 +58,7 @@ route_table:
   version: 1
   routes:
     - path: /close_entries
+      publish_contract: true
       method: GET
       response:
         json:

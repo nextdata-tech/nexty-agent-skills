@@ -108,3 +108,18 @@ def test_a_replayed_canary_still_reads_the_checked_in_package(monkeypatch: pytes
     )
 
     assert result.verdict.outcome == "clean"
+
+
+def test_the_report_names_the_package_not_the_per_run_copy(stubbed_supervisor: list[Path]) -> None:
+    """The copy's path is gone by the time anyone reads report.json.
+
+    Recording it would also make two otherwise-identical canary blocks differ
+    on every run.
+    """
+
+    result = run_drift_canary(CANARY_ROOT, skills_root=CANARY_ROOT)
+
+    assert result.probe.closure == str(CANARY_ROOT)
+    assert result.build["closure"] == str(CANARY_ROOT)
+    # The supervisor still received the isolated copy.
+    assert all(closure != CANARY_ROOT for closure in stubbed_supervisor)

@@ -59,6 +59,7 @@ route_table:
     refresh_path: /auth/refresh
   routes:
     - path: /deals
+      publish_contract: true
       method: GET
       auth_required: true
       rate_limit_every: 3

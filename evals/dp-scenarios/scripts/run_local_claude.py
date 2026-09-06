@@ -274,8 +274,24 @@ def driver_configuration(
 
 
 def _tool_grant_arguments(args: argparse.Namespace, *, oauth_token_present: bool = False) -> list[str]:
-    """Return the adapter flags that decide the agent's tool grants."""
+    """Return the adapter flags that decide the agent's tool grants.
 
+    A token and ``--allow-host-home-bash`` are a genuine conflict: the token
+    must not reach a shell, and the flag exists to open one.  Resolving it
+    silently in either direction is the wrong answer -- withholding Bash makes
+    every shell-dependent scenario fail for a reason that appears nowhere in
+    the report, and ``CLAUDE_CODE_OAUTH_TOKEN`` is commonly exported, so the
+    operator need not have opted into anything to hit it.
+    """
+
+    if oauth_token_present and args.allow_host_home_bash:
+        raise TierError(
+            "--allow-host-home-bash cannot be combined with a Claude OAuth token: "
+            "the token is withheld from the agent shell, so Bash would be denied "
+            "and every shell-dependent scenario would fail invisibly. Unset "
+            "CLAUDE_CODE_OAUTH_TOKEN (and omit --env-file) to grant Bash, or drop "
+            "--allow-host-home-bash to run token-authenticated without a shell."
+        )
     if oauth_token_present or (args.allow_host_home and not args.allow_host_home_bash):
         return ["--no-bash"]
     return []

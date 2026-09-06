@@ -55,6 +55,7 @@ route_table:
   version: 1
   routes:
     - path: /warehouses
+      publish_contract: true
       method: GET
       response:
         json:
@@ -62,6 +63,7 @@ route_table:
           - {warehouse_id: WH-02, region: south, label: South Hub}
           - {warehouse_id: WH-03, region: east, label: East Hub}
     - path: /inventory_positions
+      publish_contract: true
       method: GET
       response:
         json:

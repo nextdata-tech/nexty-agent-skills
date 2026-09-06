@@ -1141,3 +1141,81 @@ def test_an_errored_resource_read_contributes_nothing(tmp_path: Path) -> None:
     )
 
     assert not (tmp_path / "supervisor-facts.json").exists()
+
+
+def test_a_query_that_matched_nothing_is_an_answer_not_an_unreadable_payload(tmp_path: Path) -> None:
+    """Zero rows is a documented outcome of a filtered query.
+
+    Rejecting it put the run back in the not-examined state this reader exists
+    to remove -- and for a scenario whose gold answer set is itself empty it
+    would turn a pass into an ungraded run.
+    """
+
+    _harvest([_observation("run_semantic_query", {"columns": ["stage"], "rows": [], "row_count": 0})], tmp_path)
+
+    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {"rows": []}
+
+
+def test_a_later_empty_query_still_supersedes_an_earlier_one(tmp_path: Path) -> None:
+    """Latest-wins has to survive the empty case, or stale rows outlive it."""
+
+    _harvest(
+        [
+            _observation("run_semantic_query", {"rows": [{"stage": "closed_won"}]}),
+            _observation("run_semantic_query", {"columns": ["stage"], "rows": []}),
+        ],
+        tmp_path,
+    )
+
+    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {"rows": []}
+
+
+def test_repeated_column_names_are_refused_rather_than_collapsed(tmp_path: Path) -> None:
+    """``dict(zip(...))`` would keep one value under a repeated name."""
+
+    _harvest(
+        [_observation("run_semantic_query", {"columns": ["deal_count", "deal_count"], "rows": [[1, 2]]})],
+        tmp_path,
+    )
+
+    assert not (tmp_path / "query-results.json").exists()
+
+
+def test_an_mcp_call_that_never_returned_is_not_reported_as_an_error() -> None:
+    """"Where did it get to" cannot be answered by a flattened error flag.
+
+    A stall mid-build and a build that failed are opposite answers, and an
+    operator reading ``build_data_product:error`` acts on the wrong one.
+    """
+
+    events = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "id": "b1", "name": "mcp__nxd-desktop__build_data_product", "input": {}}]},
+        }
+    ]
+    result, _ = parse_claude_events(events, redact_json_rpc=lambda v: v, redact_text=lambda v: v, session_id="s")
+
+    assert result.last_mcp_call == "build_data_product:unanswered"
+
+
+def test_lifecycle_is_paired_with_the_run_whose_identifiers_are_published(tmp_path: Path) -> None:
+    """Ledger lint compares this value against the agent's own claim.
+
+    Publishing run-b's identifiers beside run-a's lifecycle would make a
+    correct agent claim read as drift.
+    """
+
+    facts, _ = _harvest(
+        [
+            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
+            _observation("build_data_product", {"run_id": "run-b", "artifact_id": "artifact-b"}),
+            _observation("inspect_run", {"run": {"run_id": "run-a", "lifecycle": "failed"}}),
+            _observation("inspect_run", {"run": {"run_id": "run-b", "lifecycle": "terminal"}}),
+            _observation("read_data_product_resource", _verified_release(run_id="run-b", artifact_id="artifact-b", publish_seq=7, counts={"main.deals": 6})),
+        ],
+        tmp_path,
+    )
+
+    assert facts["run_id"] == "run-b"
+    assert facts["lifecycle_state"] == "terminal"

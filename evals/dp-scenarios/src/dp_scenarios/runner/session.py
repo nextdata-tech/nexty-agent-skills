@@ -38,6 +38,12 @@ from dp_scenarios.operator.transport import (
 )
 
 
+#: Cap on one stderr drain.  Ample for the tail both callers keep, and small
+#: enough that a child writing faster than the parent reads cannot hold the
+#: drain open past the turn deadline it is being asked to explain.
+_STDERR_DRAIN_BYTES = 64 * 1024
+
+
 class SessionError(RuntimeError):
     """Raised when a session cannot satisfy the structured transport contract."""
 
@@ -628,8 +634,16 @@ class LiveSession:
 
         ``stderr.read()`` blocks until EOF, and a wedged child keeps the pipe
         open -- on the timeout path that turned a bounded turn deadline into
-        an unbounded parent hang.  Only already-buffered bytes are taken.
+        an unbounded parent hang.
+
+        The drain is capped rather than run to exhaustion.  Reading unblocks a
+        child stalled on a full pipe, which lets it write more, so a child
+        logging retries faster than the parent drains would keep this loop
+        alive past the very deadline it is reporting.  Both callers keep only
+        the last 500 characters, so the cap costs no diagnostic.
         """
+
+        budget = _STDERR_DRAIN_BYTES
 
         process = self._process
         if process is None or process.stderr is None:
@@ -640,16 +654,17 @@ class LiveSession:
             descriptor = stream.fileno()
         except (OSError, ValueError):
             return ""
-        while True:
+        while budget > 0:
             ready, _, _ = select.select([descriptor], [], [], 0)
             if not ready:
                 break
             try:
-                chunk = os.read(descriptor, 65536)
+                chunk = os.read(descriptor, min(65536, budget))
             except OSError:
                 break
             if not chunk:
                 break
+            budget -= len(chunk)
             chunks.append(chunk.decode("utf-8", errors="replace"))
         return "".join(chunks)
 

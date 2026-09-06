@@ -319,3 +319,31 @@ def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> Non
     assert "interrupted: provider_session_limit" in text
     assert "last MCP call: build_data_product:error" in text
     assert "detail: Claude did not complete the turn within 324.0s" in text
+
+
+def test_an_unclassified_interruption_still_names_itself_and_prints_its_detail() -> None:
+    """A null reason reads, on that key, exactly like a run never interrupted.
+
+    An unrecognised provider error is precisely where an operator most needs
+    the distinction, so the vocabulary has to be exhaustive and the detail has
+    to reach stdout even when no pattern matched.
+    """
+
+    scenario = make_scenario("unclassified", turns=3)
+    wedged = TurnResult(
+        environment_wedged=True,
+        environment_detail="API Error: 529 overloaded_error",
+        failure_reason=None,
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario, first=wedged))},
+    ).run()
+
+    run = result.scenarios[0].runs[0]
+    assert run.as_dict()["interruption"]["failure_reason"] == "interrupted_unclassified"
+    text = human_summary(result)
+    assert "interrupted: interrupted_unclassified" in text
+    assert "detail: API Error: 529 overloaded_error" in text

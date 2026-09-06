@@ -14,7 +14,7 @@ import inspect
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 import tempfile
 import time
@@ -335,6 +335,22 @@ def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: Cla
     return Verdict(outcome, tuple(deduped), verdict.observed_codes, verdict.advisories)
 
 
+def _reported_against(result: object, root: Path) -> object:
+    """Re-label a probe or build result with the package it stands for.
+
+    Isolation hands the supervisor a per-run copy, but the copy's path is not
+    a fact worth reporting: it is gone by the time anyone reads report.json
+    and differs on every run.  Both result shapes are supported because the
+    replay path supplies plain mappings.
+    """
+
+    if is_dataclass(result) and not isinstance(result, type):
+        return replace(result, closure=str(root))  # type: ignore[type-var]
+    if isinstance(result, Mapping):
+        return {**result, "closure": str(root)}
+    return result
+
+
 def run_drift_canary(
     canary_dir: str | Path,
     *,
@@ -369,7 +385,14 @@ def run_drift_canary(
             temporary_closure = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-closure-")
             closure = Path(temporary_closure.name) / root.name
             shutil.copytree(root, closure)
-            probed = run_preflight(closure, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary")
+            # The copy is an implementation detail of isolation.  Reporting
+            # its path would replace a stable repo-relative fact with a temp
+            # directory that no longer exists when anyone reads the report,
+            # and that differs on every run.
+            probed = _reported_against(
+                run_preflight(closure, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary"),
+                root,
+            )
         else:
             probed = probe
         if isinstance(probed, ProbeResult):
@@ -412,11 +435,14 @@ def run_drift_canary(
             if isinstance(probed, ProbeResult):
                 if temporary_data is None:
                     temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
-                built = run_build(
-                    closure,
-                    supervisor=probed.supervisor,
-                    data_dir=Path(temporary_data.name),
-                    workflow="drift-canary",
+                built = _reported_against(
+                    run_build(
+                        closure,
+                        supervisor=probed.supervisor,
+                        data_dir=Path(temporary_data.name),
+                        workflow="drift-canary",
+                    ),
+                    root,
                 )
             else:
                 raise TierError("a live canary build is required when no replay build was supplied")
@@ -968,7 +994,26 @@ def _follow_up_artifact(scenario: Scenario, artifact_root: Path) -> Mapping[str,
         value = json.loads(candidate.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return dict(value) if isinstance(value, Mapping) else None
+    if not isinstance(value, Mapping):
+        return None
+    loaded = dict(value)
+    if _FOLLOW_UP_SHIM_KEYS & set(loaded):
+        # ``Scenario.follow_up_check`` unwraps a mapping carrying any of these
+        # names as the legacy ``follow_up_check(closure, query_rows)`` calling
+        # convention, replacing the target with ``closure.get("closure")``.  An
+        # agent that adds a ``closure`` field to its evidence object for
+        # context would silently blank the target and turn the whole gate into
+        # not-examined -- a false negative rather than a finding.  Refusing the
+        # artifact keeps the failure visible and attributable.
+        return None
+    return loaded
+
+
+#: Top-level names ``Scenario.follow_up_check`` reads as its legacy kwargs
+#: shim, which an agent-authored evidence object must therefore never use.
+_FOLLOW_UP_SHIM_KEYS = frozenset(
+    {"closure", "query_rows", "fixture_dir", "row_count_oracle", "row_counts"}
+)
 
 
 # Tool namespaces whose *results* are product surfaces rather than source

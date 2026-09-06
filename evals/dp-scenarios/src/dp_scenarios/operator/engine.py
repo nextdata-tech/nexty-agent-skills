@@ -1509,7 +1509,11 @@ class OperatorEngine:
             if (result.environment_wedged or result.turn_timed_out) and failure_reason is None:
                 # The first interrupted turn owns the classification; a later
                 # turn cannot happen, and overwriting would hide the cause.
-                failure_reason = result.failure_reason
+                # An unrecognised diagnostic still gets a reason: a null here
+                # is indistinguishable, on that key, from a run that was never
+                # interrupted at all -- which is the confusion the field
+                # exists to end.
+                failure_reason = result.failure_reason or "interrupted_unclassified"
                 failure_detail = result.environment_detail
 
             match = self.matcher.reply_for(result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message)

@@ -588,3 +588,113 @@ def test_pins_from_a_mapping_carry_declared_driver_fields() -> None:
 
     assert values.driver_model_id == "gpt-x"
     assert dict(values.driver_sampling_params) == {"temperature": 0.4, "prompt_hash": "abc"}
+
+
+# --------------------------------------------------------------------------
+# Handover scoping (PR #237 review): the response contract is opt-in.
+
+
+def test_a_route_publishes_its_contract_only_when_it_opts_in() -> None:
+    """`capability-shortfall` grades discovery-by-probing of what /deals lacks.
+
+    Enumerating the available fields in the handover file answers that for
+    free, so the extra keys have to be per-route rather than suite-wide.
+    """
+
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner.environment import advertised_endpoints, render_source_profile
+
+    table = {
+        "version": 1,
+        "routes": [{"path": "/deals", "method": "GET", "response": {"json": [{"id": "D1", "owner": {"name": "n"}}]}}],
+    }
+    silent = load_config(table)
+    opted = load_config({**table, "routes": [{**table["routes"][0], "publish_contract": True}]})
+
+    def profile(config: object) -> str:
+        return render_source_profile("http://127.0.0.1:1/data", advertised_endpoints(config.routes), routes=config.routes)
+
+    assert "endpoint_deals_fields" not in profile(silent)
+    assert "endpoint_deals" in profile(silent), "the endpoint itself is still handed over"
+    assert "endpoint_deals_fields" in profile(opted)
+
+
+def test_the_published_contract_describes_the_state_the_endpoint_serves_first() -> None:
+    """`next(iter(states.values()))` took whichever state sorted first.
+
+    That need not be the one a caller gets. `initial_state` is what the
+    endpoint serves until something advances it, so its shape is the contract
+    an operator would document.
+    """
+
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner.environment import advertised_endpoints, render_source_profile
+
+    config = load_config(
+        {
+            "version": 1,
+            "routes": [
+                {
+                    "path": "/deals",
+                    "method": "GET",
+                    "publish_contract": True,
+                    "state_family": "deals",
+                    "initial_state": "v1",
+                    "states": {
+                        "aaa_later": {"json": [{"renamed_field": "x"}]},
+                        "v1": {"json": [{"deal_id": "D1"}]},
+                    },
+                }
+            ],
+        }
+    )
+    text = render_source_profile("http://127.0.0.1:1/data", advertised_endpoints(config.routes), routes=config.routes)
+
+    assert "deal_id" in text
+    assert "renamed_field" not in text
+
+
+def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifact() -> None:
+    """Applying them suite-wide would void the pre-existing packages' baselines."""
+
+    from dp_scenarios.runner.environment import _evidence_contract
+    from dp_scenarios.scenario import load_scenarios
+
+    from _repo_paths import REPO_ROOT
+
+    contracts = {
+        scenario.id: _evidence_contract(scenario)
+        for scenario in load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
+    }
+    with_conduct = {name for name, value in contracts.items() if value is not None}
+
+    assert with_conduct == {"crm-pipeline", "finance-close", "inventory-position"}
+    for name in with_conduct:
+        assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"
+
+
+def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
+    """The prompt is harness mechanics; conduct travels with the scenario."""
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT, SCENARIO_CONDUCT_RULES
+
+    lowered = DEFAULT_SYSTEM_PROMPT.lower()
+    for phrase in (
+        "ask the operator for explicit approval",
+        "do not report numeric or status results",
+        "prompt-injection bait",
+        "hidden gold",
+    ):
+        assert phrase not in lowered, f"gate-restating phrase left in the default prompt: {phrase}"
+    assert any("explicit approval" in rule for rule in SCENARIO_CONDUCT_RULES)
+
+
+def test_the_prompt_no_longer_both_requires_and_forbids_calling_the_source() -> None:
+    """One sentence said "call the source yourself", another switched it off."""
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT
+
+    assert "call the source yourself" in DEFAULT_SYSTEM_PROMPT
+    assert "Probing the source is\nexpected and is not restricted." in DEFAULT_SYSTEM_PROMPT
+    # The restriction that remains names the mechanism, not the act.
+    assert "rather than with\nWebFetch" in DEFAULT_SYSTEM_PROMPT

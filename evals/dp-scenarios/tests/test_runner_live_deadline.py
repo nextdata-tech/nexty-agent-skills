@@ -142,3 +142,29 @@ def test_three_concurrent_live_starts_each_finish_bounded_and_leave_no_child() -
     # Distinct children, so the three runs really did overlap rather than
     # reusing one process group.
     assert len({pid for _result, pid in outcomes}) == 3
+
+
+def test_a_child_logging_faster_than_the_parent_drains_still_stops_bounded() -> None:
+    """Draining unblocks a child stalled on a full pipe, which lets it write more.
+
+    An uncapped drain would follow that forever -- reopening, on the timeout
+    path, the unbounded wait the blocking read() had.
+    """
+
+    command = [
+        sys.executable,
+        "-c",
+        "import sys\n"
+        "sys.stdin.readline()\n"
+        "while True:\n"
+        "    sys.stderr.write('retrying connection to the provider\\n')\n"
+        "    sys.stderr.flush()\n",
+    ]
+    started = time.monotonic()
+    result, pid = _run_once(command)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < BOUND, "the stderr drain did not terminate"
+    assert result.turn_timed_out is True
+    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    assert not _alive(pid)

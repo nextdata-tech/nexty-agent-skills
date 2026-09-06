@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-06 | scope the source contract and conduct rules to the scenarios that ask for them | NO_EVAL | — | [`2026-09-06-handover-and-prompt-scoping`](entries/2026-09-06-handover-and-prompt-scoping.md) |
 | 2026-09-05 | read the supervisor's real query and release payloads | NO_EVAL | — | [`2026-09-05-supervisor-evidence-harvesting`](entries/2026-09-05-supervisor-evidence-harvesting.md) |
 | 2026-09-05 | evals: the operator's turn has a directive composed from persona and scenario | NO_EVAL | — | [`2026-09-05-operator-directive-composition`](entries/2026-09-05-operator-directive-composition.md) |
 | 2026-09-05 | structured terminal reasons for an interrupted live scenario run | NO_EVAL | — | [`2026-09-05-live-run-interruption-reasons`](entries/2026-09-05-live-run-interruption-reasons.md) |

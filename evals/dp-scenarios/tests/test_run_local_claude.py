@@ -692,3 +692,23 @@ def test_tier_refuses_pins_whose_temperature_is_not_a_number(
             replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario), driver=driver)},
             operator_factory=driver,
         ).run()
+
+
+def test_a_token_and_host_home_bash_are_refused_rather_than_silently_resolved() -> None:
+    """`CLAUDE_CODE_OAUTH_TOKEN` is commonly exported, so this is easy to hit.
+
+    Withholding Bash silently made every shell-dependent scenario fail for a
+    reason that appeared nowhere in the report.
+    """
+
+    import argparse
+
+    module = _load_runner_module()
+    args = argparse.Namespace(allow_host_home=True, allow_host_home_bash=True)
+    with pytest.raises(TierError, match="cannot be combined with a Claude OAuth token"):
+        module._tool_grant_arguments(args, oauth_token_present=True)
+
+    # Without the flag the token still withholds Bash, which is the intent.
+    quiet = argparse.Namespace(allow_host_home=True, allow_host_home_bash=False)
+    assert module._tool_grant_arguments(quiet, oauth_token_present=True) == ["--no-bash"]
+    assert module._tool_grant_arguments(quiet, oauth_token_present=False) == ["--no-bash"]
