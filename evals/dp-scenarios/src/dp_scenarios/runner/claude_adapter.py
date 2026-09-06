@@ -102,9 +102,16 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "complete, treat it as approval for the source and decisions already "
     "discussed, finish the blueprint internally, and continue without asking "
     "for a second approval.",
+    # This rule exists to stop the agent stalling for a second approval. It
+    # used to also forbid loading a skill and delegating a helper, and to say
+    # "author the closure ... directly" -- which instructed the agent off the
+    # skill flow and away from the subagent dispatch that
+    # nxd-generate-data-product step 6b mandates, and that `construction` then
+    # graded it for missing. A conduct rule may constrain how the agent treats
+    # the *operator*; it must not countermand the skills under test.
     "After the operator approves the blueprint, do not ask for another "
-    "confirmation, load a planning skill, or delegate a helper; author the "
-    "closure and call check_data_product directly.",
+    "confirmation; proceed with the work under the installed Nexty skills' "
+    "own flow.",
     "Once check_data_product passes for the unchanged approved closure, do not "
     "repeat the check; proceed to build_data_product and then the governed "
     "query.",

@@ -689,6 +689,28 @@ def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
     assert any("explicit approval" in rule for rule in SCENARIO_CONDUCT_RULES)
 
 
+def test_no_conduct_rule_countermands_the_skills_under_test() -> None:
+    """Conduct governs the operator relationship, never the skill flow.
+
+    Rule 7 read "do not ask for another confirmation, load a planning skill, or
+    delegate a helper; author the closure and call check_data_product
+    directly." It is delivered in scenario-evidence-contract.json, the agent
+    reads it in its first turn, and it instructed exactly the two behaviours
+    ``construction`` then failed the run for missing: routing through the
+    generator skill, and dispatching the step 6b reviewer subagent. The
+    system-prompt half of that diversion was already removed; this is the other
+    half, and while it stood the two contradicted each other in one context.
+    """
+
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    rules = " ".join(SCENARIO_CONDUCT_RULES).lower()
+    for phrase in ("load a planning skill", "delegate a helper", "call check_data_product directly"):
+        assert phrase not in rules, f"conduct rule countermands the skills under test: {phrase}"
+    # The anti-stall purpose it was written for survives.
+    assert "do not ask for another confirmation" in rules
+
+
 def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> None:
     """"Author the closure with the available file tools" read as "skip the skill".
 

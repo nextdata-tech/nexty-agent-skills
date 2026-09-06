@@ -116,10 +116,58 @@ gate and no observed skill, so it stays harness mechanics rather than a hint —
 the property `test_the_default_prompt_does_not_restate_what_the_gates_grade`
 protects.
 
+### 6. The gate's success token could not be emitted at all
+
+The deepest defect, and the one that made every fix above insufficient.
+`_construction_call_kinds` credited `adversarial_review` only for a delegation
+call whose `subagent_type` was `nxd-review-closure`. But
+`reference/adversarial-review.md` mandates "one built-in read-only subagent —
+**never** add, select, or rely on a custom/plugin agent definition";
+`.claude-plugin/plugin.json` registers no agents, only skills; `stage_plugin`
+copies `src/` alone; and the CLI rejects an unknown subagent type outright. The
+value the gate required is one a *compliant* agent can never produce, and the
+only alternative the gate accepted — an inline `Skill` call — is the one the
+adapter's own comment calls not adversarial, because the same context would
+review its own closure.
+
+So the gate demanded either an impossible token or a disqualified substitute.
+The same defect class as a gate reading a spec the product never writes.
+
+What the mandated flow *does* produce is a `review_rounds[]` entry in
+`build-record.json`: the dispatcher records every returned claim, or a terminal
+`timed_out` round, and adjudicates it with a citation. The gate now reads that,
+paired with an observed delegation call. Both halves are required, and the
+pairing is what keeps it honest — a research subagent records no round, and a
+fabricated round dispatched nothing. Run 3's four `Agent` calls (documentation
+hunting and a file deletion) are correctly credited with no review.
+
+The round also carries the outcome, so `adversarial_review` becomes
+harness-owned rather than agent-attested — the same move made for the
+self-check in (1). `skipped` is not accepted: the contract is explicit that a
+non-eligible review produces no entry, so an entry claiming `skipped` is not a
+round.
+
+### 7. A conduct rule instructed the graded failure
+
+The system-prompt diversion in (5) had a twin. Conduct rule 7, delivered in
+`scenario-evidence-contract.json` and read by the agent in its first turn, said:
+"After the operator approves the blueprint, do not ask for another
+confirmation, **load a planning skill, or delegate a helper**; author the
+closure and call check_data_product directly." That is an instruction to
+hand-author and not to delegate — precisely the two behaviours `construction`
+failed the run for missing. While it stood, the reworded system prompt and the
+contract contradicted each other in the same context.
+
+The rule's anti-stall purpose survives; the clauses that countermanded the
+skills under test are gone. A conduct rule may constrain how the agent treats
+the *operator*; it must not overrule the skills being measured.
+
 ### What this does and does not establish
 
 Across three live `crm-pipeline` runs the `construction` findings fell from five
-to three, the self-check half clearing once (2) landed. **It does not establish
+to three, the self-check half clearing once (2) landed. Note that run 3 predates
+(4) and (5) — both landed after it started — so the tool-name fix, the prompt
+reword, and (6) and (7) have never been exercised live. **It does not establish
 that `construction` will now pass.** Whether an agent follows the flow through
 step 6b and dispatches the reviewer is agent behaviour; the harness no longer
 prevents it, mislabels it, or diverts the agent away from it, which is the limit
@@ -140,3 +188,9 @@ are not comparable with later ones on this gate.
   guidance still names no observed skill.
 - `evals/dp-scenarios/tests/test_runner_tier.py` — `_agent_attestations` reads
   the agent workspace only.
+- `evals/dp-scenarios/tests/test_grading_gates.py` — a delegation call paired
+  with a recorded `review_rounds[]` entry passes; neither half alone counts,
+  and a `skipped` status is not a round.
+- `evals/dp-scenarios/tests/test_runner_environment.py` — no conduct rule names
+  a planning skill, a delegated helper, or authoring the closure directly,
+  while the anti-stall clause survives.

@@ -410,6 +410,96 @@ def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> N
     assert result.codes == ()
 
 
+def _dispatch_observations(*, tool: str = "Agent", subagent_type: str = "general-purpose") -> dict:
+    return {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {"name": "crm-deals"},
+                        "result": {"is_error": False},
+                    },
+                    {
+                        "name": tool,
+                        "arguments": {"subagent_type": subagent_type, "prompt": "review the closure"},
+                        "result": {"is_error": False},
+                    },
+                ]
+            }
+        ]
+    }
+
+
+def test_construction_observes_the_review_the_mandated_flow_actually_produces() -> None:
+    """``subagent_type="nxd-review-closure"`` is a token no agent can emit.
+
+    `reference/adversarial-review.md` mandates "one built-in read-only
+    subagent -- never a custom/plugin agent definition", this plugin registers
+    no agents at all, and the CLI rejects an unknown subagent type. Keying the
+    gate on that name made `construction` unpassable by an agent doing exactly
+    what the skill says.
+
+    What the flow does produce is a ``review_rounds[]`` entry in
+    build-record.json. Paired with an observed delegation call it is the
+    behaviour itself, and it carries the outcome -- so the gate reads it rather
+    than asking the agent to attest to it.
+    """
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=(),
+        review_rounds=[{"status": "complete", "findings": [{"claim": "grain is wrong", "adjudication": "rejected"}]}],
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
+    """Either half alone is not the behaviour, so neither alone counts.
+
+    A research subagent records no round; a fabricated round dispatched
+    nothing. Run 3 made four ``Agent`` calls -- doc hunting and a file
+    deletion -- and must not be credited with a review.
+    """
+
+    ledger = _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}})
+
+    dispatch_only = gate_construction(
+        ledger, observations=_dispatch_observations(), attestations=(), review_rounds=[], require_observed=True
+    )
+    assert dispatch_only.passed is False
+    assert "construction_adversarial_review_not_observed" in dispatch_only.codes
+
+    no_dispatch = {"turns": [{"tool_calls": [
+        {"name": "mcp__nxd-desktop__check_data_product", "arguments": {}, "result": {"is_error": False}},
+    ]}]}
+    round_only = gate_construction(
+        ledger,
+        observations=no_dispatch,
+        attestations=(),
+        review_rounds=[{"status": "complete"}],
+        require_observed=True,
+    )
+    assert round_only.passed is False
+    assert "construction_adversarial_review_not_observed" in round_only.codes
+
+    # ``skipped`` is deliberately not a review status: a non-eligible review
+    # produces no entry, so an entry claiming it is not a round.
+    skipped = gate_construction(
+        ledger,
+        observations=_dispatch_observations(),
+        attestations=(),
+        review_rounds=[{"status": "skipped"}],
+        require_observed=True,
+    )
+    assert skipped.passed is False
+    assert "construction_adversarial_review_not_observed" in skipped.codes
+
+
 def test_construction_observes_the_reviewer_under_either_delegation_tool_name() -> None:
     """The delegation tool is ``Agent`` in some builds and ``Task`` in others.
 

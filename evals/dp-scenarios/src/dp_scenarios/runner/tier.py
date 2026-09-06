@@ -796,6 +796,26 @@ def _append_artifact_rows(artifact_root: Path) -> None:
     raise TierError("agent-owned ledger artifact is forbidden; evidence rows are harness-owned")
 
 
+def _review_rounds(artifact_root: Path) -> tuple[Mapping[str, object], ...]:
+    """Return the adversarial-review rounds the build recorded, across closures.
+
+    ``build-record.json`` ``review_rounds[]`` is the durable product of the
+    dispatch that ``nxd-generate-data-product`` step 6b mandates. It exists
+    only on the generator path, which is the point: a hand-authored closure
+    records none.
+    """
+
+    rounds: list[Mapping[str, object]] = []
+    for closure in _closure_dirs(artifact_root):
+        record = _load_json(closure / "build-record.json")
+        if not isinstance(record, Mapping):
+            continue
+        entries = record.get("review_rounds")
+        if isinstance(entries, (list, tuple)):
+            rounds.extend(entry for entry in entries if isinstance(entry, Mapping))
+    return tuple(rounds)
+
+
 def _agent_attestations(root: Path) -> _AttestationRead:
     """Read the narrow, non-authoritative attestation channel from the agent.
 
@@ -1793,6 +1813,7 @@ class TierRunner:
             ledger_artifact,
             observations=observations,
             attestations=attestations,
+            review_rounds=_review_rounds(artifact_root),
             require_observed=True,
             desktop_server_name=environment.desktop_server_name,
         )

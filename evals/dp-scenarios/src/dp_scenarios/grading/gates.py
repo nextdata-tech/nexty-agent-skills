@@ -786,6 +786,8 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
             arguments = call.get("arguments")
             if name == f"mcp__{desktop_server_name.lower()}__check_data_product":
                 found.add("self_check")
+            if name in {"task", "agent"}:
+                found.add("_delegated")
             if name == "skill" and isinstance(arguments, Mapping):
                 skill_name = arguments.get("skill")
                 if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
@@ -803,11 +805,43 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
     return found
 
 
+#: A dispatched review round has exactly one of these; ``skipped`` is
+#: deliberately not a review status (`reference/adversarial-review.md`), and a
+#: non-eligible review produces no entry at all.
+_REVIEW_ROUND_STATUS = frozenset({"complete", "timed_out", "needs_user"})
+
+
+def _review_round_outcome(review_rounds: object) -> str | None:
+    """Summarize a recorded adversarial-review round, if the build has one.
+
+    ``build-record.json`` ``review_rounds[]`` is what the mandated flow
+    *produces*: the dispatcher records every returned claim, or a terminal
+    ``timed_out`` round, and adjudicates it with a citation. Reading it makes
+    the review's outcome harness-owned rather than agent-attested, the same
+    move already made for the self-check.
+    """
+
+    if isinstance(review_rounds, Mapping):
+        review_rounds = review_rounds.get("review_rounds")
+    if not isinstance(review_rounds, Sequence) or isinstance(review_rounds, (str, bytes, bytearray)):
+        return None
+    statuses = [
+        str(entry.get("status", "")).strip().lower()
+        for entry in review_rounds
+        if isinstance(entry, Mapping)
+    ]
+    valid = [status for status in statuses if status in _REVIEW_ROUND_STATUS]
+    if not valid:
+        return None
+    return f"{len(valid)} review round(s): {', '.join(sorted(set(valid)))}"
+
+
 def gate_construction(
     ledger: object,
     *,
     observations: object | None = None,
     attestations: object | None = None,
+    review_rounds: object | None = None,
     require_observed: bool = False,
     desktop_server_name: str = "nxd-desktop",
 ) -> GateResult:
@@ -846,6 +880,25 @@ def gate_construction(
         if require_observed
         else set()
     )
+    # ``_delegated`` is a marker, not a construction kind; take it out before
+    # the per-kind loops so it can never read as one.
+    delegated = "_delegated" in observed_calls
+    observed_calls.discard("_delegated")
+    # The reviewer dispatch cannot be recognised by ``subagent_type``. The
+    # skill mandates "one built-in read-only subagent -- never a custom/plugin
+    # agent definition", this plugin registers no agents, and the CLI rejects
+    # an unknown type outright, so ``subagent_type="nxd-review-closure"`` is a
+    # token a compliant agent can never emit. Keying the gate on it made
+    # ``construction`` unpassable by an agent doing exactly what the skill says.
+    #
+    # What the mandated flow does produce is a ``review_rounds[]`` entry in
+    # build-record.json. Requiring it *together with* an observed delegation
+    # call keeps both halves honest: a research subagent alone records no
+    # round, and a fabricated round alone dispatched nothing. That pairing is
+    # the behaviour, where ``subagent_type`` was only ever a proxy for it.
+    round_outcome = _review_round_outcome(review_rounds)
+    if round_outcome is not None and delegated:
+        observed_calls.add("adversarial_review")
     # A check the harness *watched* succeed needs no agent testimony about it.
     # ``_construction_call_kinds`` records ``self_check`` only for a
     # non-error ``check_data_product`` call at the structured session
@@ -860,6 +913,8 @@ def gate_construction(
     # ``adversarial_review``, whose outcome is a set of claims and
     # adjudications that no tool call reveals -- still require an outcome and
     # an attestation.
+    if round_outcome is not None and "adversarial_review" not in observed:
+        observed["adversarial_review"] = round_outcome
     findings = [
         Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome")
         for kind in ("self_check", "adversarial_review")
