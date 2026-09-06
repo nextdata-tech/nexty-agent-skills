@@ -790,7 +790,13 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
                 skill_name = arguments.get("skill")
                 if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
                     found.add("adversarial_review")
-            if name == "task" and isinstance(arguments, Mapping):
+            # Both names, because the delegation tool is not called the same
+            # thing in every Claude Code build: a live crm-pipeline run made
+            # four ``Agent`` calls and zero ``Task`` calls, so matching only
+            # ``task`` made the reviewer dispatch unobservable by name -- the
+            # gate would have failed an agent that did exactly what step 6b
+            # mandates.
+            if name in {"task", "agent"} and isinstance(arguments, Mapping):
                 subagent_type = arguments.get("subagent_type")
                 if subagent_type in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
                     found.add("adversarial_review")

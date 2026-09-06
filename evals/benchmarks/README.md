@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-06 | observe the reviewer dispatch under the name the CLI actually uses | NO_EVAL | — | [`2026-09-06-reviewer-dispatch-tool-name`](entries/2026-09-06-reviewer-dispatch-tool-name.md) |
 | 2026-09-06 | stop withholding the subagent the skill mandates and the gate grades | NO_EVAL | — | [`2026-09-06-restore-reviewer-delegation`](entries/2026-09-06-restore-reviewer-delegation.md) |
 | 2026-09-06 | name an off-contract decision ledger instead of calling it ungoverned | NO_EVAL | — | [`2026-09-06-off-contract-decision-ledger`](entries/2026-09-06-off-contract-decision-ledger.md) |
 | 2026-09-06 | read build evidence from the runner's own data directory | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |

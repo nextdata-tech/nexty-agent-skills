@@ -410,6 +410,44 @@ def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> N
     assert result.codes == ()
 
 
+def test_construction_observes_the_reviewer_under_either_delegation_tool_name() -> None:
+    """The delegation tool is ``Agent`` in some builds and ``Task`` in others.
+
+    A live crm-pipeline run made four ``Agent`` calls and zero ``Task`` calls.
+    Matching only ``task`` made the step 6b reviewer dispatch unobservable by
+    name, so the gate would have failed an agent that did exactly what the
+    skill mandates.
+    """
+
+    for tool_name in ("Task", "Agent"):
+        observations = {
+            "turns": [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "mcp__nxd-desktop__check_data_product",
+                            "arguments": {"name": "crm-deals"},
+                            "result": {"is_error": False},
+                        },
+                        {
+                            "name": tool_name,
+                            "arguments": {"subagent_type": "nexty-agent-skills:nxd-review-closure"},
+                            "result": {"is_error": False},
+                        },
+                    ]
+                }
+            ]
+        }
+        result = gate_construction(
+            _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "one claim, rejected"}}),
+            observations=observations,
+            attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "one claim, rejected"},),
+            require_observed=True,
+        )
+        assert result.passed is True, f"{tool_name} dispatch must be observed"
+        assert "construction_adversarial_review_not_observed" not in result.codes
+
+
 def test_construction_still_fails_when_the_check_was_never_called() -> None:
     """Owning the self-check evidence must not make the gate unfailable."""
 

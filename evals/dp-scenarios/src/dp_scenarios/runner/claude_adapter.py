@@ -930,7 +930,7 @@ class ClaudeCodeAdapter:
         """
 
         allowed_tools = [
-            "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite", "Skill", "Task",
+            "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite", "Skill", "Task", "Agent",
             mcp_allowed_tools,
         ]
         if self.allow_bash:
