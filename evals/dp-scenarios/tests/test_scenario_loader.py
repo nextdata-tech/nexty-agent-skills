@@ -160,11 +160,15 @@ def test_public_scenarios_declare_the_expected_required_gate_set() -> None:
 
 def test_every_gate_has_a_public_staging_scenario_or_an_explicit_follow_up_allowlist() -> None:
     scenarios = load_scenarios(SCENARIO_ROOT)
-    required_by_public_scenario = {
-        gate
-        for scenario in scenarios
-        for gate in EXPECTED_REQUIRED_GATES[scenario.id]
-    }
+    # Read the predicates the tier actually consults, not the expectation
+    # table above: deriving both sides from the same constant made this pass
+    # against an implementation that had no predicates at all.
+    required_by_public_scenario = set(_BASE_REQUIRED_GATES)
+    for scenario in scenarios:
+        if scenario.stages_capability_shortfall:
+            required_by_public_scenario.add("capability")
+        if scenario.stages_definition_change:
+            required_by_public_scenario.add("narrowing")
     missing = set(GATE_PHASES) - required_by_public_scenario
     # No public scenario declares a mid-run definition change yet. Keep this
     # named until the future narrowing-staging follow-up adds one.

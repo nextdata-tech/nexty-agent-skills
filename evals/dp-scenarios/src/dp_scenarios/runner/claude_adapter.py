@@ -624,6 +624,11 @@ def _facts_from_release(record: Mapping[str, object]) -> dict[str, object] | Non
         # A release record exists only for a run that finished and published.
         # "terminal" is what the supervisor reports for such a run through
         # inspect_run, so this agrees with the value an agent would claim.
+        # A release record is written only for a run that finished and
+        # published; every release file under a real data directory belongs to
+        # a run the supervisor recorded as published.  This is the harness
+        # stating what it read, not a relay of the supervisor's own lifecycle
+        # string, which only inspect_run carries.
         "lifecycle_state": "terminal",
     }
 
@@ -642,18 +647,26 @@ def _update_from_state_dir(
     *,
     facts: dict[str, object],
     built_runs: set[str],
+    workflow: str | None = None,
 ) -> None:
     """Fill supervisor facts from the runner's own copy of the release record.
 
     Attribution is unchanged: only a release naming a run this session built
     is accepted, so a leftover release cannot supply identifiers the agent
-    never produced.  Highest publish sequence wins.
+    never produced.
+
+    ``publish_seq`` is allocated per workflow, so "highest sequence wins" is
+    only meaningful within one.  A session that builds two workflows -- what
+    the workflow-switch knob stages -- would otherwise report whichever
+    workflow happened to be further along rather than the one that shipped.
     """
 
     best: dict[str, object] | None = None
     for record in _published_releases(state_dir):
         candidate = _facts_from_release(record)
         if candidate is None or candidate["run_id"] not in built_runs:
+            continue
+        if workflow is not None and record.get("workflow_id") not in (None, workflow):
             continue
         if best is None or int(candidate["publish_sequence"]) >= int(best["publish_sequence"]):
             best = candidate
@@ -692,9 +705,12 @@ def _update_machine_artifacts(
     )
     # Keyed by run id, so the lifecycle published in the facts is always the
     # one belonging to the run whose identifiers they carry.  A flat
-    # last-writer-wins field paired run-a's lifecycle with run-b's run_id, and
-    # ledger lint compares that value against the agent's claim about the run
-    # it actually shipped -- so the mismatch would read as agent drift.
+    # last-writer-wins field paired run-a's lifecycle with run-b's run_id.
+    # Nothing grades that value today -- gate_build ignores it, and the ledger
+    # fact rows are written by the runner from this same reader rather than
+    # compared against an agent claim -- but supervisor-facts.json is the
+    # harness's statement of what the supervisor said about one run, and a
+    # record that mixes two runs is wrong on its own terms.
     #
     # Run-scoped, not per-call: ``facts`` persists across turns, so a lifecycle
     # observed on the turn that built run-a would otherwise still be sitting in
@@ -823,6 +839,7 @@ class ClaudeCodeAdapter:
         mcp_config: Path | None = None,
         strict_mcp_config: bool = False,
         allowed_tools: str | None = None,
+        supervisor_data_dir: Path | None = None,
     ) -> None:
         self.claude = claude
         self.model = model
@@ -864,7 +881,10 @@ class ClaudeCodeAdapter:
         self._built_runs: set[str] = set()
         # The supervisor's own data directory, when this adapter owns the
         # server.  It is the runner's copy of the build evidence.
-        self._state_dir: Path | None = None
+        # On the --mcp-config path this adapter does not start the supervisor,
+        # so the caller has to name the data directory whose release records
+        # describe this run's builds.
+        self._state_dir: Path | None = supervisor_data_dir
         self._build_context: dict[str, object] = {}
         self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
 
@@ -1115,10 +1135,12 @@ class ClaudeCodeAdapter:
             # having volunteered a resource read. Runs last, because the
             # runner's own copy of a published release outranks anything
             # assembled from relayed tool payloads.
+            workflow = self._build_context.get("workflow")
             _update_from_state_dir(
                 self._state_dir,
                 facts=self._facts,
                 built_runs=self._built_runs,
+                workflow=workflow if isinstance(workflow, str) and workflow else None,
             )
         _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
         with contextlib.suppress(OSError):
@@ -1266,6 +1288,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-budget-usd", type=float)
     parser.add_argument("--mcp-config", type=Path, help="use a runner-owned MCP config instead of starting a nested Desktop server")
     parser.add_argument("--strict-mcp-config", action="store_true")
+    parser.add_argument(
+        "--supervisor-data-dir",
+        type=Path,
+        help="the supervisor's --data-dir, whose release records carry the build facts",
+    )
     parser.add_argument("--allowedTools")
     parser.add_argument(
         "--no-bash",
@@ -1298,6 +1325,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         mcp_config=args.mcp_config.expanduser().resolve() if args.mcp_config is not None else None,
         strict_mcp_config=args.strict_mcp_config,
         allowed_tools=args.allowedTools,
+        supervisor_data_dir=(
+            args.supervisor_data_dir.expanduser().resolve()
+            if args.supervisor_data_dir is not None
+            else None
+        ),
     )
 
     def terminate_on_signal(signum: int, _frame: Any) -> None:

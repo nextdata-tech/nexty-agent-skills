@@ -122,6 +122,7 @@ LiveCommandBuilder = Callable[[Path, bool, str], Sequence[str]]
 
 def _desktop_command_builder(
     command: Sequence[str] | LiveCommandBuilder,
+    supervisor_data_dir: Path | None = None,
 ) -> LiveCommandBuilder:
     """Adapt the legacy base argv to the shared substrate's command seam."""
 
@@ -133,12 +134,30 @@ def _desktop_command_builder(
 
     def build(config_path: Path, strict_mcp_config: bool, allowed_tools_csv: str) -> Sequence[str]:
         result = [*base, "--mcp-config", str(config_path)]
+        if supervisor_data_dir is not None:
+            # The adapter reads the supervisor's own release records to grade
+            # the build, and on this path it does not start the server, so it
+            # cannot infer where that state lives. Without this the reader is
+            # silently inert on every live run.
+            result.extend(("--supervisor-data-dir", str(supervisor_data_dir)))
         if strict_mcp_config:
             result.append("--strict-mcp-config")
         result.extend(("--allowedTools", allowed_tools_csv))
         return result
 
     return build
+
+
+def _supervisor_data_dir(supervisor_args: Sequence[str]) -> Path | None:
+    """Return the ``--data-dir`` the supervisor was started with, if any."""
+
+    arguments = list(supervisor_args)
+    for index, argument in enumerate(arguments):
+        if argument == "--data-dir" and index + 1 < len(arguments):
+            return Path(arguments[index + 1])
+        if argument.startswith("--data-dir="):
+            return Path(argument.split("=", 1)[1])
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -628,6 +647,9 @@ class RunEnvironment:
                         "mcp",
                         "serve",
                     )
+                # Whatever --data-dir the supervisor was actually given is the
+                # directory whose release records describe this run's builds.
+                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
                 # Host-home access is an explicit allowance for the agent
                 # process (typically to read a configured Claude profile),
                 # not an implicit allowance for the supervisor or its
@@ -653,7 +675,7 @@ class RunEnvironment:
                     )
 
                 transport = DesktopStdioTransport.create(
-                    _desktop_command_builder(self.live_command),
+                    _desktop_command_builder(self.live_command, supervisor_data_dir),
                     environment={
                         **self.agent_environment,
                         **dict(self.live_environment or {}),

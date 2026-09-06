@@ -34,7 +34,17 @@ and the agent has no shell, so nothing in it is agent-influenced. The adapter
 now reads it after each turn and fills the facts from there, with the relayed
 MCP payloads kept as the earlier, weaker source.
 
-The shape was confirmed against a real supervisor, not assumed: a local
+The shape was confirmed against a real supervisor, and separately the *wiring*
+was not -- the first version of this change set `_state_dir` only when the
+adapter started its own server, while the live runner passes `--mcp-config` and
+starts the supervisor itself. The reader was therefore inert on every
+production run while every unit test that called it directly passed. Review
+caught it; the adapter now receives `--supervisor-data-dir` from the
+environment that started the supervisor, and a test asserts the argument
+reaches the attribute the reader is gated on. Confirming a parser is not
+confirming a feature.
+
+The record shape, for its part, was confirmed rather than assumed: a local
 `drift-canary` build produced
 
     "publish_seq":"1", "run_id":"run-2c1b7440-…", "artifact_id":"artifact-09a2277d-…",

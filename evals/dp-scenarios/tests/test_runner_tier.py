@@ -2184,10 +2184,143 @@ def test_evidence_keeping_a_shim_name_reaches_the_handler_unchanged(tmp_path: Pa
     assert _follow_up_artifact(scenario, tmp_path) == {"rows": [], "note": "fine"}
 
 
-def test_the_shim_still_unwraps_a_plain_legacy_mapping() -> None:
-    """Tagging must not disable the convention for its real callers."""
+def test_the_tag_changes_what_the_follow_up_handler_actually_receives(tmp_path: Path) -> None:
+    """Reach the handler, not just the loader.
 
-    from dp_scenarios.scenario import AgentEvidence
+    The previous test stopped at ``_follow_up_artifact`` and asserted the
+    mapping came back unchanged, which was true before the tag existed too.
+    What matters is the target ``follow_up_check`` hands on: a plain mapping
+    with a ``closure`` key is read as the legacy positional convention and the
+    target becomes that key's value.
+    """
 
-    assert not isinstance({"closure": "x"}, AgentEvidence)
-    assert isinstance(AgentEvidence({"closure": "x"}), dict)
+    from dp_scenarios.scenario import AgentEvidence, load_scenarios
+
+    scenario = next(
+        item
+        for item in load_scenarios(ROOT / "scenarios")
+        if item.id == "crm-pipeline"
+    )
+    evidence = {"rows": [], "closure": "for context"}
+    seen: list[object] = []
+
+    class _Recorder:
+        evidence_contract = {}
+
+        @staticmethod
+        def handler(_scenario, target, _settings, _context):
+            seen.append(target)
+            return {"passed": True, "findings": []}
+
+    import dp_scenarios.followups as followups_module
+
+    original = followups_module.get
+    followups_module.get = lambda _kind: _Recorder  # type: ignore[assignment]
+    try:
+        scenario.follow_up_check(AgentEvidence(evidence))
+        scenario.follow_up_check(dict(evidence))
+    finally:
+        followups_module.get = original
+
+    tagged, plain = seen
+    assert tagged == evidence, "the tagged artifact reaches the handler whole"
+    assert plain == "for context", "an untagged mapping is still read as legacy kwargs"
+
+
+def _runs_dir(tmp_path: Path) -> Path:
+    target = tmp_path / "runs"
+    target.mkdir(exist_ok=True)
+    return target
+
+
+def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tmp_path: Path) -> None:
+    """Narrowing must still be exercised as a required, examined gate.
+
+    Waiving it everywhere removed the only integration path that drove it
+    through TierRunner, which would leave the seam untested until a real
+    narrowing scenario exists. Declaring the change on a copied package and
+    restoring the spec diff proves the required path still grades.
+    """
+
+    import shutil
+
+    import yaml
+
+    root = tmp_path / "scenarios"
+    root.mkdir()
+    shutil.copytree(ROOT / "scenarios/parent-child-grain-trap", root / "parent-child-grain-trap")
+    (root / "_personas").mkdir()
+    shutil.copy2(ROOT / "scenarios/_personas/smoke.yaml", root / "_personas/smoke.yaml")
+    declaration = root / "parent-child-grain-trap" / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["gates"]["narrowing"] = {
+        "kind": "narrowing",
+        "definition_change": {"trigger_turn": 3, "changed_metrics": ["regional_revenue"]},
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    scenario = load_scenario(root / "parent-child-grain-trap")
+    assert scenario.stages_definition_change
+
+    generated = scenario.generate_fixture(tmp_path / "fixture")
+    row_counts = generated.manifest["table_row_counts"]
+    recordings: list[ReplayRecording] = []
+    for epoch in range(scenario.epochs):
+        artifacts = {
+            "spec.json": {"metrics": {"regional_revenue": "supported"}},
+            "capability.json": {"metrics": {"regional_revenue": "supported"}},
+            "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
+            "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
+            "agent-attestations.json": {
+                "attestations": [
+                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                ]
+            },
+            "closure/semantic.json": {
+                "semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}
+            },
+            "closure/built-spec.json": {"metrics": {"regional_revenue": "supported"}},
+        }
+        files = tuple(
+            TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            for path, value in artifacts.items()
+        )
+        supervisor = {
+            "run_id": f"{scenario.id}-trial-{epoch}",
+            "artifact_id": f"artifact-{epoch}",
+            "publish_sequence": epoch + 1,
+            "per_model_row_counts": row_counts,
+            "lifecycle_state": "published",
+        }
+        responses = [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
+            TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
+            TurnResult(agent_message="The build is ready."),
+            TurnResult(
+                agent_message="The build completed.",
+                tool_calls=(
+                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
+                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                ),
+                files_touched=files,
+            ),
+            TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
+            TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
+        ]
+        recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+        environment_root=_runs_dir(tmp_path),
+    ).run()
+
+    narrowing = result.scenarios[0].runs[0].score.gates["narrowing"]
+    assert narrowing.required is True
+    assert narrowing.examined is True
+    assert narrowing.passed is True
+    assert result.scenarios[0].runs[0].as_dict()["interruption"]["failure_reason"] is None

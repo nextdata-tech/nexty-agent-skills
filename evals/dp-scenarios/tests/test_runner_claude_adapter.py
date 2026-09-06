@@ -349,7 +349,7 @@ for line in sys.stdin:
         # first event, and the partial-retention assertion below then fails
         # for a reason that has nothing to do with retention. The child sleeps
         # far past this, so a wider budget still times the turn out.
-        timeout_s=2.0,
+        timeout_s=5.0,
         max_budget_usd=None,
         append_system_prompt="test",
     )
@@ -882,7 +882,7 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.75)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
 
     try:
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
@@ -920,7 +920,7 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.75)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
 
     try:
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
@@ -961,7 +961,7 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.75)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
 
     try:
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
@@ -1235,9 +1235,9 @@ def test_a_lifecycle_from_an_earlier_turn_is_not_published_beside_a_later_run(tm
     Failed-then-repaired is a designed sequence -- the conduct rules tell the
     agent to inspect a failed run once and retry -- so a turn that observes
     run-a's lifecycle and a later turn that publishes run-b's identifiers is
-    the ordinary path, not a contrived one. Ledger lint compares
-    lifecycle_state against the agent's claim about the run it shipped, so the
-    mispairing would read as agent drift.
+    the ordinary path, not a contrived one. No gate reads the value today, but
+    supervisor-facts.json is the harness's statement about one run, and a
+    record mixing two runs is wrong whether or not anything grades it yet.
     """
 
     facts: dict[str, object] = {}
@@ -1373,3 +1373,26 @@ def test_a_missing_or_unreadable_state_dir_contributes_nothing(tmp_path: Path) -
     (releases / "release-0001-run-a.json").write_text("{not json", encoding="utf-8")
     _update_from_state_dir(state_dir, facts=facts, built_runs={"run-a"})
     assert facts == {}
+
+
+def test_the_shipped_workflows_release_wins_not_the_furthest_along(tmp_path: Path) -> None:
+    """`publish_seq` is allocated per workflow, so cross-workflow max is wrong.
+
+    A session that switches workflows would otherwise report whichever one
+    happened to have published more often, rather than the one it shipped.
+    """
+
+    state_dir = tmp_path / "state"
+    other = _release_record(run_id="run-a", artifact_id="artifact-a", publish_seq=9, counts={"main.old": 1})
+    other["workflow_id"] = "previous-workflow"
+    _write_release(state_dir, other)
+    shipped = _release_record(run_id="run-b", artifact_id="artifact-b", publish_seq=1, counts={"main.deals": 6})
+    shipped["workflow_id"] = "crm-deals"
+    _write_release(state_dir, shipped)
+
+    facts: dict[str, object] = {}
+    _update_from_state_dir(state_dir, facts=facts, built_runs={"run-a", "run-b"}, workflow="crm-deals")
+
+    assert facts["run_id"] == "run-b"
+    assert facts["publish_sequence"] == "1"
+    assert facts["per_model_row_counts"] == {"main.deals": "6"}

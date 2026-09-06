@@ -705,3 +705,44 @@ def test_the_prompt_no_longer_both_requires_and_forbids_calling_the_source() -> 
     connector = [rule for rule in SCENARIO_CONDUCT_RULES if "WebFetch" in rule]
     assert len(connector) == 1
     assert "Probing the source is expected and is not restricted." in connector[0]
+
+
+def test_the_live_adapter_is_told_where_the_supervisor_keeps_its_state() -> None:
+    """The build reader is inert unless the adapter knows the data directory.
+
+    On the live path the environment starts the supervisor and hands the
+    adapter a ``--mcp-config``, so the adapter never allocates the state
+    directory itself and cannot infer it. Without this argument
+    ``_update_from_state_dir`` is gated off on every production run while
+    every unit test that calls it directly still passes -- which is exactly
+    how it shipped inert.
+    """
+
+    from pathlib import Path
+
+    from dp_scenarios.runner.environment import _desktop_command_builder, _supervisor_data_dir
+
+    supervisor_args = ("--data-dir", "/tmp/run/desktop-state", "mcp", "serve")
+    assert _supervisor_data_dir(supervisor_args) == Path("/tmp/run/desktop-state")
+    assert _supervisor_data_dir(("--data-dir=/tmp/eq/state", "mcp")) == Path("/tmp/eq/state")
+    assert _supervisor_data_dir(("mcp", "serve")) is None
+
+    build = _desktop_command_builder(
+        ["python", "-m", "adapter"], _supervisor_data_dir(supervisor_args)
+    )
+    argv = list(build(Path("/tmp/mcp-config.json"), True, "a,b"))
+
+    assert "--supervisor-data-dir" in argv
+    assert argv[argv.index("--supervisor-data-dir") + 1] == "/tmp/run/desktop-state"
+    # And the adapter parses it into the attribute the reader is gated on.
+    from dp_scenarios.runner.claude_adapter import build_parser
+
+    parsed = build_parser().parse_args(
+        [
+            "--claude", "/bin/true", "--plugin-dir", ".", "--repo-root", ".",
+            "--fixture-dir", ".", "--artifact-dir", ".",
+            "--desktop-supervisor", "/bin/true", "--desktop-python", "/bin/true",
+            "--supervisor-data-dir", "/tmp/run/desktop-state",
+        ]
+    )
+    assert parsed.supervisor_data_dir == Path("/tmp/run/desktop-state")
