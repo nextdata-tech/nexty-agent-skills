@@ -127,12 +127,27 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
 #: The whole shell surface.  ``Bash`` starts a shell; ``BashOutput`` and
 #: ``KillShell`` read from and signal one.  When Bash is withheld -- the
 #: ``--allow-host-home`` default, where the agent process holds the real host
-#: ``HOME`` -- all three are denied together so no part of the surface stays
-#: reachable. Background Task/Agent delegation is also withheld in this mode:
-#: delegated skill steps cannot access the shell-only validators and otherwise
-#: leave the parent turn waiting until its timeout.
+#: ``HOME``, and every OAuth-token run -- all three are denied together so no
+#: part of the surface stays reachable.
+#:
+#: ``Task``/``TaskOutput``/``Agent`` used to be denied alongside them, on the
+#: reasoning that a delegated step would stall waiting on shell-only
+#: validators.  That withheld the mechanism ``nxd-generate-data-product``
+#: step 6b *mandates*: dispatching ``nxd-review-closure`` as a read-only
+#: subagent.  ``gate_construction`` then graded its absence as an agent
+#: failure, so ``construction`` was unpassable on every OAuth live run for a
+#: reason the agent did not control -- and the only route left, an inline
+#: ``Skill`` call, is not adversarial, since the same context would review its
+#: own closure.
+#:
+#: Delegation is safe to restore because the denial is inherited: a ``Task``
+#: subagent launched under ``--disallowedTools Bash,BashOutput,KillShell``
+#: cannot use ``Bash``, verified against the CLI with a matched control that
+#: succeeded when ``Bash`` was permitted.  So the shell -- and the OAuth token
+#: in the process environment -- stays unreachable through a subagent.  The
+#: stall the original reasoning worried about is addressed where it belongs,
+#: in the prompt: do not delegate *shell-only* validation when Bash is absent.
 SHELL_TOOLS = ("Bash", "BashOutput", "KillShell")
-NO_BASH_DELEGATION_TOOLS = ("Task", "TaskOutput", "Agent")
 
 
 class ClaudeAdapterError(RuntimeError):
@@ -966,7 +981,7 @@ class ClaudeCodeAdapter:
 
         if self.allow_bash:
             return ()
-        return SHELL_TOOLS + NO_BASH_DELEGATION_TOOLS
+        return SHELL_TOOLS
 
     def start(self) -> None:
         """Start the private MCP config and Claude process."""

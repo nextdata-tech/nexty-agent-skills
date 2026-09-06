@@ -689,7 +689,14 @@ def test_withheld_bash_is_denied_on_the_spawned_argv_not_merely_left_unlisted(
     assert denied, "no --disallowedTools flag: an unlisted tool is not a denied tool"
     denied_tools = {tool for value in denied for tool in value.split(",")}
     assert {"Bash", "BashOutput", "KillShell"} <= denied_tools
-    assert {"Task", "TaskOutput", "Agent"} <= denied_tools
+    # Delegation is deliberately NOT denied with the shell. Withholding it
+    # withheld the mechanism nxd-generate-data-product step 6b mandates -- a
+    # read-only nxd-review-closure subagent -- which gate_construction then
+    # graded as an agent failure, making that gate unpassable on every
+    # OAuth run. Safe because the shell denial is inherited: a Task subagent
+    # under this argv cannot reach Bash (verified against the CLI, with a
+    # control that succeeded when Bash was permitted).
+    assert not ({"Task", "TaskOutput", "Agent"} & denied_tools)
     allowed_tools = {
         tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
     }
@@ -819,9 +826,14 @@ def test_oauth_token_reaches_claude_and_withholds_bash(
     assert environment["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-test-token"
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
 
+    # An OAuth token forces the shell off even when the caller asked for it,
+    # because the token lives in this process's environment.
     argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=True)
     denied = {tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")}
-    assert {"Bash", "BashOutput", "KillShell", "Task", "TaskOutput", "Agent"} <= denied
+    assert {"Bash", "BashOutput", "KillShell"} <= denied
+    # Delegation stays available: the deny list is inherited by subagents, so
+    # Task cannot be used to reach the shell or the token behind it.
+    assert not ({"Task", "TaskOutput", "Agent"} & denied)
 
 
 def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> ClaudeCodeAdapter:
