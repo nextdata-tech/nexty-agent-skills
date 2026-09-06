@@ -915,22 +915,37 @@ add it explicitly rather than assuming it's already covered.
   these attributes, not in a companion file. Everything the transform reads at run
   time is an attribute on the `api-source` service.
 
-  **But a `data/` tree the closure authored itself still needs
-  `csv-source-path`.** An api closure that carries landed reference data (see
-  "Landed reference data in an API closure" above) must ship a `csv-source-path`
-  file holding the relative export root, exactly as a CSV closure does.
-  Without it the supervisor refuses to stage the definition at all:
+  **Every api-source closure still needs `csv-source-path` AND a non-empty
+  `data/` tree — not only one that carries landed reference data.** The desktop
+  kernel reads one local CSV source per run, so it pins that directory whatever
+  the closure's connector type is. Two consecutive live crm-pipeline runs, one
+  hand-authored and one through this skill, each lost a check cycle to it.
+
+  Ship the `csv-source-path` file holding the relative export root, exactly as a
+  CSV closure does, and put at least one `.csv` under that root. Three findings
+  arrive in sequence if you supply less, none of them mentioning that a *file*
+  is required, and all of them before any Python runs — so they read as spec or
+  manifest problems:
 
   ```
   structure/definition_files_missing:
     stage the kernel definition files: snapshot missing csv-source-path
+  structure/pin_failed:
+    definition runtime directory missing: <closure>/data
+  publish/csv_source_empty:
+    the pinned CSV source directory contains no .csv file
   ```
 
-  That finding does NOT mention `data/`, and it arrives before any Python runs,
-  so it reads as a spec or manifest problem. `printf 'data\n' > csv-source-path`
-  clears it. The file is about staging a directory, not about declaring a CSV
-  connector — the closure still names only `api-source` in `.secrets([...])`,
-  and there is still no `csv-source` service in the profile.
+  An empty `csv-source-path` file is its own finding (`structure/csv_source_invalid`),
+  so blanking it is not a way out. For a closure with no landed reference data,
+  `printf 'data\n' > csv-source-path` plus a single placeholder row under
+  `data/_unused/_unused.csv` clears all three. None of this declares a CSV
+  connector: the closure still names only `api-source` in `.secrets([...])`, and
+  there is still no `csv-source` service in the profile.
+
+  > This documents a supervisor requirement that contradicts the api-source
+  > contract, not a design intent. If the kernel stops pinning a CSV directory
+  > for api-only closures, delete this block rather than the placeholder advice.
 
   For 2+ API sources, add one labeled service per
   instance instead (`api-source-<label>` / label-prefixed attribute keys such

@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.45.0
+  version: 0.45.1
 ---
 
 # nxd-generate-data-product skill
@@ -447,13 +447,13 @@ and never go back into the IR. Neither replaces the machine-enforced surfaces:
 rulings still land as data (`nxd_decisions`, carrying both `status` and
 `provenance`) and the Step-3b asserts still run.
 
-### Step 7 — Self-check before handing off (MANDATORY)
+### Step 7 — Adversarial review (6b), then the self-check, before handing off (MANDATORY)
 
 The closure-root self-check is the generator's record gate, distinct from the
 supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
 
-**Step 6b, only when `nxd-review-closure` is installed**: explicitly dispatch one built-in read-only reviewer — never a custom/plugin agent definition — with the closure path and verbatim request, to return claims only; it never edits, builds, serves, transforms, or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
-Then the self-check. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the naming invariant (`models.py` == required `.promise` plus optional `.model` == `PHYSICAL_MODELS` == `main.<name>`), then confirm only `BASE_MODELS` matches `data/`, allowing an absent directory only for a listed optional-empty base model; derived models and semantic views have no source directory. **When a
+**Step 6b runs FIRST, before the self-check below, whenever `nxd-review-closure` is installed** — reviewing before the self-check means a fix does not invalidate a green one, and this paragraph is a step in its own right, not background to the one that follows. Explicitly dispatch one built-in read-only reviewer — never a custom/plugin agent definition — with the closure path and verbatim request, to return claims only; it never edits, builds, serves, transforms, or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. Do not dispatch only for a closure with no derived models, no judgement calls and a single question; that produces no `review_rounds[]` entry, and `skipped` is not a review status. Every other closure gets a round. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
+**Then, and only then, the self-check.** Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the naming invariant (`models.py` == required `.promise` plus optional `.model` == `PHYSICAL_MODELS` == `main.<name>`), then confirm only `BASE_MODELS` matches `data/`, allowing an absent directory only for a listed optional-empty base model; derived models and semantic views have no source directory. **When a
 `dp-blueprint.md` governed the build, confirm shipped-matches-approved**: every
 promised model, gate, weight, band and `nxd_decisions` row traces to a spec
 section, and none carries a value the spec does not. Confirm the
