@@ -261,6 +261,29 @@ class Scenario:
 
         return "answer" in self.gold
 
+    @property
+    def stages_capability_shortfall(self) -> bool:
+        """Whether the declared source exposes a gradeable capability shortfall."""
+
+        if self.route_table is None:
+            return False
+        capability = self.route_table.capability
+        metrics = capability.get("metrics") if isinstance(capability, Mapping) else None
+        metric_terms = capability.get("metric_terms") if isinstance(capability, Mapping) else None
+        if not isinstance(metrics, Mapping) or not isinstance(metric_terms, Mapping):
+            return False
+        return any(
+            label in {"impossible", "proxy"} and name in metric_terms
+            for name, label in metrics.items()
+        )
+
+    @property
+    def stages_definition_change(self) -> bool:
+        """Whether the scenario declares a mid-run narrowing definition change."""
+
+        setting = self.gates["narrowing"].settings.get("definition_change")
+        return isinstance(setting, Mapping)
+
     def generate_fixture(self, out_dir: str | Path) -> GenerationResult:
         """Generate the pinned source and gold fixture for one run."""
 
@@ -647,6 +670,7 @@ _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
+_DEFINITION_CHANGE_KEYS = {"trigger_turn", "changed_metrics"}
 _SCENARIO_TIERS = frozenset({"smoke", "T0", "core", "live"})
 # The tiers whose scenarios cannot be graded from a recording. A live-tier
 # scenario's pass criteria are what an agent *did* across turns, so replaying
@@ -877,6 +901,31 @@ def _parse_gates(value: object) -> Mapping[str, GateSpec]:
     return MappingProxyType(parsed)
 
 
+def _validate_definition_change(gate: GateSpec, turn_count: int) -> None:
+    """Validate the optional declaration that makes narrowing scoreable."""
+
+    value = gate.settings.get("definition_change")
+    if value is None:
+        return
+    raw = _mapping(value, "gates.narrowing.definition_change")
+    _unknown(raw, _DEFINITION_CHANGE_KEYS, "gates.narrowing.definition_change")
+    if set(raw) != _DEFINITION_CHANGE_KEYS:
+        raise ScenarioError(
+            "gates.narrowing.definition_change requires trigger_turn and changed_metrics"
+        )
+    trigger_turn = _positive_int(
+        raw["trigger_turn"], "gates.narrowing.definition_change.trigger_turn"
+    )
+    if trigger_turn > turn_count:
+        raise ScenarioError(
+            "gates.narrowing.definition_change.trigger_turn must be within the operator turns"
+        )
+    _strings(
+        raw["changed_metrics"],
+        "gates.narrowing.definition_change.changed_metrics",
+    )
+
+
 def _parse_gold(
     root: Path,
     value: object,
@@ -1004,6 +1053,7 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("operator.sentinel must be text or null")
     obstacle_terms = _strings(operator_raw["obstacle_terms"], "operator.obstacle_terms", allow_empty=True)
     gates = _parse_gates(raw["gates"])
+    _validate_definition_change(gates["narrowing"], len(answer_sheet.turns))
     _run_kind_hook(gates, "validate_plant_evidence", required_plants, gates["follow-up"].settings)
     gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
     _run_kind_hook(gates, "validate_fixture_gold", gates["follow-up"].settings, gold)

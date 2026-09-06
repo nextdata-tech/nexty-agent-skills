@@ -103,6 +103,12 @@ GATE_POINTS: Mapping[str, int] = _GatePoints({
 })
 
 
+NOT_STAGED_CODES = frozenset({
+    "capability_shortfall_not_staged",
+    "narrowing_change_not_staged",
+})
+
+
 def _rows(value: object) -> list[Mapping[str, object]]:
     """Coerce a ledger artifact without accepting an arbitrary text account."""
 
@@ -363,6 +369,14 @@ def gate_capability_from_decisions(
     judgement would need a judge model, which grading stays free of on purpose.
     """
 
+    if not required:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall")],
+            examined=False,
+            required=False,
+        )
     labels = _capability_labels(capability)
     if not labels:
         return _result(
@@ -443,6 +457,14 @@ def gate_capability_from_decisions(
 def gate_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
     """capability: compare every spec metric with the fixture capability label."""
 
+    if not required:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall")],
+            examined=False,
+            required=False,
+        )
     expected = _metric_labels(spec)
     if not expected:
         return _result(
@@ -576,9 +598,23 @@ def _declared_approval_metrics(row: Mapping[str, object], changed: set[str]) -> 
     return names if present else set(changed)
 
 
-def gate_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
+def gate_narrowing(
+    spec_diff: object,
+    ledger: object,
+    closure: object,
+    *,
+    required: bool = True,
+) -> GateResult:
     """narrowing: bind every changed metric to a later approval and built closure."""
 
+    if not required:
+        return _result(
+            "narrowing",
+            False,
+            [Finding("narrowing_change_not_staged", "scenario declares no definition change")],
+            examined=False,
+            required=False,
+        )
     metrics, default_turn = _diff_metrics(spec_diff)
     rows = _rows(ledger)
     if not rows:
@@ -895,8 +931,14 @@ def g2_capability(spec: object, capability: object, *, required: bool = True) ->
     return _legacy_gate(gate_capability(spec, capability, required=required), "G2")
 
 
-def g3_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
-    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure), "G3")
+def g3_narrowing(
+    spec_diff: object,
+    ledger: object,
+    closure: object,
+    *,
+    required: bool = True,
+) -> GateResult:
+    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure, required=required), "G3")
 
 
 def g4_construction(ledger: object) -> GateResult:
@@ -936,6 +978,7 @@ __all__ = [
     "GateResult",
     "GATE_PHASES",
     "GATE_POINTS",
+    "NOT_STAGED_CODES",
     "LEGACY_GATE_ALIASES",
     "gate_intake",
     "gate_capability",

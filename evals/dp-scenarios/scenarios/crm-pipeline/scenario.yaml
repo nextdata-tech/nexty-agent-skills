@@ -131,3 +131,19 @@ route_table:
       method: PATCH
       status: 403
       write_forbidden: true
+  capability:
+    metrics:
+      current_stage_counts: supported
+      stage_entry_time: impossible
+      time_in_stage_days: impossible
+    endpoints:
+      /deals:
+        GET: [200, 401, 429]
+      /deals/history:
+        GET: [404]
+      /deals/{id}/stage:
+        PATCH: [403]
+    known_absent_dimensions: []
+    metric_terms:
+      stage_entry_time: [stage_entry, entered_stage, entry_time]
+      time_in_stage_days: [stage_age_days, stage_age_hours, time_in_stage, days_in_stage]

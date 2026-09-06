@@ -78,6 +78,14 @@ class FakeScenario:
 
         return operator_script_hash(self.script)
 
+    @property
+    def stages_capability_shortfall(self) -> bool:
+        return False
+
+    @property
+    def stages_definition_change(self) -> bool:
+        return False
+
     def generate_fixture(self, out_dir: str | Path):
         return self.fixture.generate(out_dir)
 
@@ -344,7 +352,6 @@ def populated_parent_child_recordings(
         artifacts = {
             "spec.json": {"metrics": {"regional_revenue": "supported"}},
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
-            "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
             "agent-attestations.json": {
                 "attestations": [
@@ -415,7 +422,6 @@ def populated_zero_row_recordings(
         }
         artifacts: dict[str, object] = {
             "spec.json": {"metrics": {"primary": "supported"}},
-            "spec-diff.json": {"turn": 3, "metrics": {"primary": 3}},
             "agent-attestations.json": {
                 "attestations": [
                     {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
@@ -994,7 +1000,11 @@ def test_timeout_and_wedge_are_paired_distinct_qualification_outcomes(
     assert observations["terminal_state"] == "turn_timeout"
     assert wedge_run.terminal_state.value == "environment_wedge"
     assert wedge_run.qualification.disposition is QualificationDisposition.INVALID
-    assert wedge_run.qualification.reasons == ("run_invalid",)
+    assert wedge_run.qualification.reasons == (
+        "run_invalid",
+        "gate_waived:capability",
+        "gate_waived:narrowing",
+    )
 
 
 def test_a_truncated_run_cannot_reach_a_clean_verdict(tmp_path: Path) -> None:
@@ -1261,13 +1271,20 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
             and record.get("scenario_id") == run.manifest.scenario_id
             for record in records[1:]
         )
-        assert run.score.total == 75
+        assert run.score.total == 65
         assert run.route_fidelity_status == "not-applicable"
         assert run.score.hard_gate_flags["route_fidelity"] is None
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "capability") for run in result.scenario_runs)
+    assert all(
+        all(
+            gate.passed
+            for name, gate in run.score.gates.items()
+            if name not in {"capability", "narrowing"}
+        )
+        for run in result.scenario_runs
+    )
     assert all(not run.score.gates["capability"].examined and not run.score.gates["capability"].required for run in result.scenario_runs)
 
 
@@ -1348,7 +1365,7 @@ def test_repeatability_certification_refuses_to_launder_a_truncated_run(tmp_path
             validation_mode="live",
             truncated=True,
         ).reasons
-        == ("turn_timeout_truncated",)
+        == ("turn_timeout_truncated", "gate_waived:capability", "gate_waived:narrowing")
     )
 
     # Control: the identical run, untruncated, does reach CERTIFIED.

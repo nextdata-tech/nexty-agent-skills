@@ -38,7 +38,7 @@ def test_demonstrated_once_is_not_rendered_as_a_rate() -> None:
     assert "no rate is rendered" in summary
 
 
-def test_clean_tier_definition_and_unexamined_gate_status_are_pinned() -> None:
+def test_clean_tier_definition_and_not_staged_gate_status_are_pinned() -> None:
     scenario = make_scenario("report-honesty")
     recording = recording_for(scenario, responses_for(scenario))
     result = TierRunner([scenario], pins=pins(), canary=clean_canary(), replay_recordings={scenario.id: recording}).run()
@@ -51,8 +51,18 @@ def test_clean_tier_definition_and_unexamined_gate_status_are_pinned() -> None:
     )
     assert "clean_tier_means" in document
     assert "unkeyed" in document["clean_tier_means"]
-    assert "capability=UNEXAMINED" in summary
-    assert "UNEXAMINED" in summary
+    assert "capability=NOT-STAGED" in summary
+    assert "narrowing=NOT-STAGED" in summary
+    assert "scoreable gates:" in summary
+    assert "waived: capability(capability_shortfall_not_staged),narrowing(narrowing_change_not_staged)" in summary
+
+    score = document["scenarios"][0]["runs"][0]["score"]
+    assert score["waived_gates"] == {
+        "capability": "capability_shortfall_not_staged",
+        "narrowing": "narrowing_change_not_staged",
+    }
+    assert score["scoreable_max"] == 75
+    assert score["threshold"] == 52
 
 
 def test_efficiency_is_sibling_to_scored_fields_and_never_inside_score(tmp_path: Path) -> None:

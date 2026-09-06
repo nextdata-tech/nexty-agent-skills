@@ -14,6 +14,8 @@ from pathlib import Path
 
 from typing import Any
 
+from dp_scenarios.grading import NOT_STAGED_CODES
+
 from .tier import ScenarioRun, TierResult
 from .transcript import render_epoch_conversation
 
@@ -65,6 +67,10 @@ def _gate_text(run: ScenarioRun) -> str:
     parts: list[str] = []
     for name in ("intake", "capability", "narrowing", "construction", "build", "query", "follow-up"):
         gate = run.score.gates[name]
+        not_staged = next((code for code in gate.codes if code in NOT_STAGED_CODES), None)
+        if not_staged is not None:
+            parts.append(f"{name}=NOT-STAGED")
+            continue
         status = (
             "PASS"
             if gate.passed
@@ -77,6 +83,19 @@ def _gate_text(run: ScenarioRun) -> str:
         codes = ",".join(gate.codes) if gate.codes else "-"
         parts.append(f"{name}={status}[{codes}]")
     return " ".join(parts)
+
+
+def _coverage_text(run: ScenarioRun) -> str:
+    scoreable = [name for name, gate in run.score.gates.items() if gate.required]
+    waived = [
+        f"{name}({code})"
+        for name, gate in run.score.gates.items()
+        for code in gate.codes
+        if code in NOT_STAGED_CODES
+    ]
+    scoreable_text = ",".join(scoreable) if scoreable else "none"
+    waived_text = ",".join(waived) if waived else "none"
+    return f"  scoreable gates: {scoreable_text}; waived: {waived_text}"
 
 
 def human_summary(result: TierResult) -> str:
@@ -111,6 +130,7 @@ def human_summary(result: TierResult) -> str:
                 f"- epoch {run.epoch}: state={run.score.state.value}, stop={run.stop_condition}, "
                 f"total={run.score.total}, {_gate_text(run)}"
             )
+            lines.append(_coverage_text(run))
             lines.append(
                 "  hard gates: "
                 + ", ".join(f"{name}={value}" for name, value in run.score.hard_gate_flags.items())

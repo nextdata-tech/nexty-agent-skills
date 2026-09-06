@@ -284,6 +284,29 @@ def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     optional = gate_capability({}, {}, required=False)
     assert not optional.required
     assert not optional.examined
+    assert optional.codes == ("capability_shortfall_not_staged",)
+
+    optional_narrowing = gate_narrowing({}, [], None, required=False)
+    assert optional_narrowing.required is False
+    assert optional_narrowing.examined is False
+    assert optional_narrowing.codes == ("narrowing_change_not_staged",)
+
+
+def test_staged_gate_missing_evidence_stays_required_and_fails() -> None:
+    capability = gate_capability_from_decisions(
+        None,
+        _shortfall_capability(),
+        "",
+        required=True,
+    )
+    assert capability.required is True
+    assert capability.examined is False
+    assert "capability_implementation_not_examined" in capability.codes
+
+    narrowing = gate_narrowing(None, [], None, required=True)
+    assert narrowing.required is True
+    assert narrowing.examined is False
+    assert "narrowing_ledger_not_examined" in narrowing.codes
 
 
 def test_construction_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: Path) -> None:

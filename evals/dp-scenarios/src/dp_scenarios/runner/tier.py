@@ -29,6 +29,7 @@ from dp_scenarios.grading import (
     Finding,
     GATE_POINTS,
     GateResult,
+    NOT_STAGED_CODES,
     ScoreVector,
     gate_build,
     gate_capability,
@@ -43,7 +44,12 @@ from dp_scenarios.grading import (
 )
 from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
-from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
+from dp_scenarios.grading.score import (
+    EfficiencyReport,
+    TerminalState as ScoreTerminalState,
+    pass_threshold,
+    scoreable_max,
+)
 from dp_scenarios.grading.statistics import RepeatabilityReport
 from dp_scenarios.ledger import LedgerRow, Manifest, NOT_APPLICABLE, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
@@ -186,6 +192,14 @@ class ScenarioRun:
                     for name, result in self.score.gates.items()
                 },
                 "total": self.score.total,
+                "scoreable_max": scoreable_max(self.score),
+                "threshold": pass_threshold(self.score),
+                "waived_gates": {
+                    name: code
+                    for name, result in self.score.gates.items()
+                    for code in result.codes
+                    if code in NOT_STAGED_CODES
+                },
                 "hard_gate_flags": dict(self.score.hard_gate_flags),
                 "state": self.score.state.value,
                 "findings": [finding.code for finding in self.score.findings],
@@ -844,7 +858,11 @@ def _supervisor_facts(reader: SupervisorRecordReader | None) -> SupervisorFacts 
 
 
 def _capability_gate_result(
-    artifact_root: Path, spec: object, capability: object, environment: object
+    artifact_root: Path,
+    spec: object,
+    capability: object,
+    environment: object,
+    scenario: Scenario,
 ) -> GateResult:
     """Grade capability from the spec when one exists, else from nxd_decisions.
 
@@ -853,7 +871,7 @@ def _capability_gate_result(
     not-examined on every live run regardless of agent behaviour.
     """
 
-    required = getattr(environment, "mock_source", None) is not None
+    required = scenario.stages_capability_shortfall
     from_spec = gate_capability(spec, capability, required=required)
     if "capability_metrics_not_examined" not in from_spec.codes:
         # A spec with metric labels exists, so grade it the strict way.
@@ -1797,8 +1815,15 @@ class TierRunner:
             )
         gates: dict[str, GateResult] = {
             "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
-            "capability": _capability_gate_result(artifact_root, spec, capability, environment),
-            "narrowing": gate_narrowing(spec_diff, ledger_artifact, closure),
+            "capability": _capability_gate_result(
+                artifact_root, spec, capability, environment, scenario
+            ),
+            "narrowing": gate_narrowing(
+                spec_diff,
+                ledger_artifact,
+                closure,
+                required=scenario.stages_definition_change,
+            ),
             "construction": construction,
             "build": gate_build(facts, row_counts),
         }

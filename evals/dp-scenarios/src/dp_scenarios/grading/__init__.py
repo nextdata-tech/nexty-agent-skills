@@ -12,6 +12,7 @@ from .gates import (
     GATE_POINTS,
     Finding,
     GateResult,
+    NOT_STAGED_CODES,
     gate_build,
     gate_capability,
     gate_capability_from_decisions,
@@ -42,7 +43,16 @@ from .oracles import (
     gold_rowset,
     marker_values,
 )
-from .score import EfficiencyReport, RunOutcome, ScoreVector, TerminalState, scenario_passes, score_run
+from .score import (
+    EfficiencyReport,
+    RunOutcome,
+    ScoreVector,
+    TerminalState,
+    pass_threshold,
+    scenario_passes,
+    score_run,
+    scoreable_max,
+)
 from .scans import (
     ScanFinding,
     ScanResult,
@@ -76,6 +86,7 @@ __all__ = [
     "G7",
     "Finding",
     "GateResult",
+    "NOT_STAGED_CODES",
     "gate_intake",
     "gate_capability",
     "gate_narrowing",
@@ -107,6 +118,8 @@ __all__ = [
     "EfficiencyReport",
     "ScoreVector",
     "score_run",
+    "scoreable_max",
+    "pass_threshold",
     "scenario_passes",
     "RepeatabilityTier",
     "GateRate",

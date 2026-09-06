@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from dp_scenarios.grading import NOT_STAGED_CODES
 from dp_scenarios.grading.score import ScoreVector, TerminalState
 
 
@@ -60,6 +61,17 @@ def _ungraded_reasons(score: ScoreVector) -> tuple[str, ...]:
     return codes or ("run_ungraded",)
 
 
+def _with_waived_reasons(score: ScoreVector, reasons: tuple[str, ...]) -> tuple[str, ...]:
+    """Append declaration-based gate waivers to every qualification surface."""
+
+    waived = tuple(
+        f"gate_waived:{name}"
+        for name, result in score.gates.items()
+        if any(code in NOT_STAGED_CODES for code in result.codes)
+    )
+    return tuple(dict.fromkeys((*reasons, *waived)))
+
+
 def qualify_run(
     score: ScoreVector,
     *,
@@ -83,19 +95,32 @@ def qualify_run(
 
     operator_mode = "driver" if driver else (operator_mode or ("generated_surface" if generated_operator else "scripted"))
     if score.state is TerminalState.INVALID:
-        return QualificationRecord(QualificationDisposition.INVALID, replay_status, operator_mode, ("run_invalid",))
+        return QualificationRecord(
+            QualificationDisposition.INVALID,
+            replay_status,
+            operator_mode,
+            _with_waived_reasons(score, ("run_invalid",)),
+        )
     if score.state is TerminalState.UNGRADED:
         reasons = _ungraded_reasons(score)
         if truncated:
             reasons = ("turn_timeout_truncated",) + reasons
         return QualificationRecord(
-            QualificationDisposition.OBSERVED, replay_status, operator_mode, reasons
+            QualificationDisposition.OBSERVED,
+            replay_status,
+            operator_mode,
+            _with_waived_reasons(score, reasons),
         )
     if score.state is not TerminalState.PASSED:
         reasons = (f"score_state:{score.state.value}",)
         if truncated:
             reasons = ("turn_timeout_truncated",) + reasons
-        return QualificationRecord(QualificationDisposition.REJECTED, replay_status, operator_mode, reasons)
+        return QualificationRecord(
+            QualificationDisposition.REJECTED,
+            replay_status,
+            operator_mode,
+            _with_waived_reasons(score, reasons),
+        )
     if validation_mode == "replay":
         reasons = ("replay_only_not_live",)
         if truncated:
@@ -104,7 +129,7 @@ def qualify_run(
             QualificationDisposition.OBSERVED,
             replay_status,
             operator_mode,
-            reasons,
+            _with_waived_reasons(score, reasons),
         )
     if truncated:
         # A turn that ran out of time normally leaves later plants unfired, so
@@ -114,7 +139,7 @@ def qualify_run(
             QualificationDisposition.OBSERVED,
             replay_status,
             operator_mode,
-            ("turn_timeout_truncated",),
+            _with_waived_reasons(score, ("turn_timeout_truncated",)),
         )
     if driver:
         # A model authored the operator's words.  Nothing downstream of that
@@ -124,15 +149,35 @@ def qualify_run(
             QualificationDisposition.QUALIFIED,
             replay_status,
             operator_mode,
-            ("driver_operator_is_capped_below_certified",),
+            _with_waived_reasons(score, ("driver_operator_is_capped_below_certified",)),
         )
     if generated_operator:
-        return QualificationRecord(QualificationDisposition.QUALIFIED, replay_status, operator_mode, ("generated_operator_is_capped_below_certified",))
+        return QualificationRecord(
+            QualificationDisposition.QUALIFIED,
+            replay_status,
+            operator_mode,
+            _with_waived_reasons(score, ("generated_operator_is_capped_below_certified",)),
+        )
     if replay_status != "verified":
-        return QualificationRecord(QualificationDisposition.OBSERVED, replay_status, operator_mode, ("replay_not_verified",))
+        return QualificationRecord(
+            QualificationDisposition.OBSERVED,
+            replay_status,
+            operator_mode,
+            _with_waived_reasons(score, ("replay_not_verified",)),
+        )
     if repeatability_certified:
-        return QualificationRecord(QualificationDisposition.CERTIFIED, replay_status, operator_mode)
-    return QualificationRecord(QualificationDisposition.QUALIFIED, replay_status, operator_mode)
+        return QualificationRecord(
+            QualificationDisposition.CERTIFIED,
+            replay_status,
+            operator_mode,
+            _with_waived_reasons(score, ()),
+        )
+    return QualificationRecord(
+        QualificationDisposition.QUALIFIED,
+        replay_status,
+        operator_mode,
+        _with_waived_reasons(score, ()),
+    )
 
 
 __all__ = ["QualificationDisposition", "QualificationRecord", "qualify_run"]
