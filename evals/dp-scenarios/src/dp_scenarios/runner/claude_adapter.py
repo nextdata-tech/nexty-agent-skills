@@ -79,8 +79,8 @@ When Bash is unavailable, the shell-only helper scripts some skill steps
 mention cannot run: write closure files with the file tools and use the
 nxd-desktop check/build/query MCP tools for runtime verification instead. That
 substitutes a mechanism, not a workflow -- follow the installed Nexty skills'
-normal flow, including any step that dispatches a subagent. Do not launch a
-subagent merely to find or run a shell-only helper.
+normal flow. Do not launch a subagent merely to find or run a shell-only
+helper.
 """
 
 

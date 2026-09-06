@@ -734,9 +734,12 @@ def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> 
     assert "author the closure with the available file tools" not in flowed
     assert "do not launch a background Agent for shell-only" not in flowed
     assert "follow the installed Nexty skills' normal flow" in flowed
-    assert "including any step that dispatches a subagent" in flowed
-    # Still mechanics, not conduct: it must not name the skill whose dispatch
-    # the construction gate observes, or the guidance becomes a gate hint.
+    # Still mechanics, not conduct. Naming the dispatch shape the construction
+    # gate looks for ("including any step that dispatches a subagent") would
+    # make this a gate hint suite-wide, which is what the block it sits in
+    # promises not to be. Undoing the diversion needs the two bad sentences
+    # gone; it does not need an affirmative instruction to delegate.
+    assert "dispatches a subagent" not in flowed
     assert "nxd-review-closure" not in flowed.lower()
 
 

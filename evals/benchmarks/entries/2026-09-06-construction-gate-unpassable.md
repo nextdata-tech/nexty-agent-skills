@@ -33,11 +33,18 @@ harness failing an agent for not re-telling it what it had just seen. This is
 the pattern already removed from the build gate, where examinability depended on
 which artifacts the agent volunteered.
 
-An observed call now satisfies both for that kind. Not a gate that cannot fail:
-an agent that never calls the tool still gets `not_observed`, and
-`adversarial_review` — whose outcome is a set of claims and adjudications no
-tool call reveals — still requires both, so agent testimony remains the only
-source where it is the only possible source.
+An observed call now satisfies both **for `self_check` only**. The exemption is
+deliberately not extended to `adversarial_review`: a delegation call shows that
+*a* subagent ran — a documentation-hunting one looks identical at this
+boundary — and a `review_rounds[]` entry is agent-written, so neither is the
+harness witnessing a review the way a `check_data_product` call is the harness
+witnessing a self-check. While the exemption was unscoped, a research subagent
+plus a hand-written `{"status": "complete"}` passed `construction` with no
+attestation at all, which is a weaker gate than the one this branch started
+with.
+
+Not a gate that cannot fail either way: an agent that never calls the tool still
+gets `not_observed`.
 
 ### 2. The attestation channel had no reachable address
 
@@ -54,8 +61,12 @@ prompt already named literally. It is now named — and the next live run wrote 
 correct `self_check` attestation there, which is what confirms the diagnosis.
 Still required after (1), because the reviewer half has no observable outcome.
 
-`_agent_attestations` also fell back to `artifact_root`, which the prompt
-forbids the agent to write; only a harness-planted file could satisfy it. Gone.
+`_agent_attestations` also falls back to `artifact_root`. That was removed as
+dead — the prompt forbids a live agent to write there — and restored once the
+scoping above exposed what it is actually for: a **replay** recording has no
+agent workspace, so the artifact root is how it carries the attestations it
+recorded. The removal silently emptied every populated replay fixture, and only
+the unscoped exemption kept the suite green.
 
 ### 3. The delegation tool was denied, then its absence graded
 
@@ -178,14 +189,20 @@ are not comparable with later ones on this gate.
 
 - `evals/dp-scenarios/tests/test_grading_gates.py` — an observed
   `check_data_product` with no ledger row and no attestation passes while the
-  reviewer half still requires both; a run that never calls the tool still
-  fails with all three self-check findings; and a reviewer dispatch is observed
-  under both `Task` and `Agent`.
+  reviewer half still requires an attestation; a run that never calls the tool
+  still fails with all three self-check findings; and a reviewer dispatch is
+  observed under both `Task` and `Agent`. The first and the `Agent` case both
+  fail against the previous implementation.
 - `evals/dp-scenarios/tests/test_runner_claude_adapter.py` — a Bash-denied argv
   denies the three shell tools and denies none of `Task`/`TaskOutput`/`Agent`.
+  Both assertions fail against the previous implementation. Note the safety
+  argument now rests on `--disallowedTools` being inherited by subagents, which
+  these assertions do not pin: they inspect argv composition only, so a CLI
+  change that stopped propagating the deny list would not be caught here.
 - `evals/dp-scenarios/tests/test_runner_environment.py` — the diverting
   sentences are gone, the mechanism-not-workflow wording is present, and the
-  guidance still names no observed skill.
+  guidance names neither the observed skill nor the dispatch shape the gate
+  looks for. Fails against the previous prompt.
 - `evals/dp-scenarios/tests/test_runner_tier.py` — `_agent_attestations` reads
   the agent workspace only.
 - `evals/dp-scenarios/tests/test_grading_gates.py` — a delegation call paired

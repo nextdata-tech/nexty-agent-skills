@@ -136,3 +136,4 @@ change deliberately not made here.
 - `evals/dp-scenarios/tests/test_runner_tier.py` — one epoch whose release
   carries no identity sinks the tier, with honesty clean and every other
   required gate passing, so the lever isolates `build`.
+  The first two fail against the previous implementation.

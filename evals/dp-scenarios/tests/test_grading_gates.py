@@ -442,20 +442,45 @@ def test_construction_observes_the_review_the_mandated_flow_actually_produces() 
 
     What the flow does produce is a ``review_rounds[]`` entry in
     build-record.json. Paired with an observed delegation call it is the
-    behaviour itself, and it carries the outcome -- so the gate reads it rather
-    than asking the agent to attest to it.
+    behaviour itself, and it carries the outcome.
+
+    The attestation is still required for this kind, unlike ``self_check``: a
+    delegation call only shows that *a* subagent ran, and the round entry is
+    agent-written, so neither is the harness witnessing a review the way a
+    ``check_data_product`` call is the harness witnessing a self-check.
     """
 
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=_dispatch_observations(),
-        attestations=(),
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "one claim, rejected"},),
         review_rounds=[{"status": "complete", "findings": [{"claim": "grain is wrong", "adjudication": "rejected"}]}],
         require_observed=True,
     )
 
     assert result.passed is True
     assert result.codes == ()
+
+
+def test_construction_does_not_exempt_the_reviewer_from_its_attestation() -> None:
+    """A research subagent plus a hand-written round is not a review.
+
+    The observed-call exemption is scoped to ``self_check``, where the harness
+    watched the exact event. Extending it to ``adversarial_review`` made a
+    documentation-hunting subagent plus ``{"status": "complete"}`` pass with no
+    attestation at all -- a weaker gate than the one before this branch.
+    """
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=(),
+        review_rounds=[{"status": "complete"}],
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_attestation_missing" in result.codes
 
 
 def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:

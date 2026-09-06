@@ -112,3 +112,4 @@ took the harness down instead of producing the finding.
   ledger still reports `capability_shortfall_not_governed`; an off-contract
   ledger does not fail a run that shipped no shortfall column; and a row with
   more fields than headers is reported rather than raising.
+  The first and the restkey case both fail against the previous implementation.

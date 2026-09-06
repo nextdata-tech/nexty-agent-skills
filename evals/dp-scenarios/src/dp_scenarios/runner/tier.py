@@ -816,15 +816,21 @@ def _review_rounds(artifact_root: Path) -> tuple[Mapping[str, object], ...]:
     return tuple(rounds)
 
 
-def _agent_attestations(root: Path) -> _AttestationRead:
+def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
     """Read the narrow, non-authoritative attestation channel from the agent.
 
-    One location only. The former ``fallback_root`` pointed at ``artifacts/``,
-    which the system prompt forbids the agent to write, so it could be
-    satisfied only by a harness-planted file.
+    ``root`` is the live agent's workspace. ``fallback_root`` is the artifact
+    root, which is *not* a second address for a live agent -- the system prompt
+    forbids it to write there -- but is how a **replay recording** carries the
+    attestations it recorded, since a replayed run has no agent workspace to
+    read. Removing it made every populated replay fixture lose its
+    attestations, which only went unnoticed while the observed-call exemption
+    was dropping the attestation requirement anyway.
     """
 
     path = root / "agent-attestations.json"
+    if not path.is_file() and fallback_root is not None:
+        path = fallback_root / "agent-attestations.json"
     if not path.is_file():
         return _AttestationRead()
     try:
@@ -1801,11 +1807,10 @@ class TierRunner:
         observations = _load_json(artifact_root / "operator-observations.json")
         if not isinstance(observations, Mapping):
             raise TierError("operator observations were not persisted before grading")
-        # No fallback root: the only other candidate was ``artifact_root``,
-        # and the system prompt forbids the agent to create files under
-        # ``artifacts/``, so that path could only ever be satisfied by a
-        # harness-planted file.
-        attestation_read = _agent_attestations(environment.base_dir / "agent")
+        attestation_read = _agent_attestations(
+            environment.base_dir / "agent",
+            fallback_root=artifact_root,
+        )
         attestations = attestation_read.values
         gold_access = gold_access_scan(observations, environment.oracle_dir)
 

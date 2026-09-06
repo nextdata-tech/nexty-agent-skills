@@ -918,14 +918,27 @@ def gate_construction(
     findings = [
         Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome")
         for kind in ("self_check", "adversarial_review")
-        if kind not in observed_calls and (kind not in observed or observed[kind] is None)
+        if not (kind == "self_check" and kind in observed_calls)
+        and (kind not in observed or observed[kind] is None)
     ]
     if require_observed:
         for kind in ("self_check", "adversarial_review"):
             if kind not in observed_calls:
                 findings.append(Finding(f"construction_{kind}_not_observed", f"{kind} was not observed as a successful structured tool call"))
         for kind in ("self_check", "adversarial_review"):
-            if kind not in attested and kind not in observed_calls:
+            # The attestation exemption is scoped to ``self_check`` alone. It
+            # exists because the harness *watched that exact event*: a
+            # non-error ``check_data_product`` is the self-check happening.
+            # Nothing equivalent is true of the reviewer. A delegation call is
+            # only evidence that *a* subagent ran -- a documentation-hunting
+            # one looks identical at this boundary -- and a ``review_rounds[]``
+            # entry is agent-written. Exempting it too meant a research
+            # subagent plus a hand-written ``{"status": "complete"}`` passed
+            # ``construction`` with no attestation at all, which is a weaker
+            # gate than the one this branch started with.
+            if kind == "self_check" and kind in observed_calls:
+                continue
+            if kind not in attested:
                 findings.append(Finding(f"construction_{kind}_attestation_missing", f"{kind} has no agent attestation"))
     return _result("construction", not findings, findings)
 
