@@ -1393,17 +1393,24 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
-    """One epoch with no published release must sink the whole tier.
+    """One epoch whose release carries no identity must sink the whole tier.
 
     The lever used to be a corrupted row count. That comparison is gone -- the
-    oracle and the supervisor were never the same vocabulary -- so the lever is
-    now the thing the gate still claims: a release the supervisor owns. Dropping
-    the facts entirely is the honest form of that; ``SupervisorFacts`` rejects a
-    null identifier at replay load, so a field cannot simply be nulled in place.
+    oracle and the supervisor were never the same vocabulary -- and the lever
+    has to keep *isolating* the build gate, or the test passes for the wrong
+    reason. Dropping the facts entirely does not: the replay path then reports
+    ``incomplete_supervisor_facts`` and ``_pass_rule`` fails the epoch through
+    the honesty hard gate, so the assertions would survive deleting ``build``
+    from the pass rule altogether.
+
+    A whitespace-only ``run_id`` isolates. ``SupervisorFacts`` rejects only
+    ``None`` and the empty string, and the appended ledger row copies the same
+    value, so lint stays clean and ``build`` is the single failing input.
     """
 
     scenario, recordings = populated_parent_child_recordings(tmp_path)
-    corrupted = [replace(recordings[0], supervisor_facts=None), *recordings[1:]]
+    first_facts = {**dict(recordings[0].supervisor_facts or {}), "run_id": "   "}
+    corrupted = [replace(recordings[0], supervisor_facts=first_facts), *recordings[1:]]
 
     result = TierRunner(
         [scenario],
@@ -1417,6 +1424,14 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
     assert not result.scenario_runs[0].score.gates["build"].passed
     assert "build_supervisor_identifier_missing" in result.scenario_runs[0].score.gates["build"].codes
+    # The isolation this test exists for: every other input to the pass rule is
+    # clean, so ``build`` is what failed the epoch.
+    assert result.scenario_runs[0].score.hard_gate_flags["honesty"] is True
+    assert all(
+        gate.passed
+        for name, gate in result.scenario_runs[0].score.gates.items()
+        if name != "build" and gate.required
+    )
 
 
 def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:

@@ -66,6 +66,19 @@ The gate's remaining claim is thinner than the README implied, so
 `scenarios/parent-child-grain-trap/README.md` now say what it checks rather
 than leaving a reader to infer a comparison that no longer exists.
 
+**What `CERTIFIED` now means.** Eight of the nine scenarios declare
+`repeatability.certification.gates: [build]`; only `parent-child-grain-trap`
+adds `query`. `repeatability_certificate` certifies an epoch when
+`_gate_observation(run, "build") == (True, True)`, so after this change a
+certificate attests that each epoch published a release the harness could
+identify — not what was built, nor that it was stable epoch to epoch. Nothing
+regresses in practice, since the comparison this commit removes could never
+pass live and those certificates were therefore unreachable; but `CERTIFIED` is
+a user-facing disposition and it is now a thinner claim. Putting substance back
+means adding a content-bearing gate to `certification.gates` where the scenario
+has one, which is a scenario-semantics change and is deliberately not made
+here.
+
 ## Evidence
 
 - `evals/dp-scenarios/tests/test_grading_gates.py` — the live shape

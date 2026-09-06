@@ -308,6 +308,10 @@ _LEDGER_PROVENANCE = frozenset(
 #: that *binds* a ruling to columns, and without it there is nothing to grade
 #: governance against except prose.
 _LEDGER_COLUMNS = ("status", "provenance", "applies_to")
+#: ``blocked`` is in the ledger vocabulary but governs nothing: it records a
+#: deferral with no model behind it.  Derived rather than written out again so
+#: a future addition to phase D's ``LEDGER_VOCAB`` lands in one place.
+_GOVERNING_STATUS = _LEDGER_STATUS - {"blocked"}
 
 
 def _ledger_contract_breaches(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
@@ -352,7 +356,7 @@ def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]])
         # review, not the agent's governance, and failed an agent that followed
         # the pack's own default. ``blocked`` does not govern anything: it
         # records a deferral with no model behind it.
-        if str(row.get("status", "")).strip().lower() not in {"confirmed", "proposed"}:
+        if str(row.get("status", "")).strip().lower() not in _GOVERNING_STATUS:
             continue
         # Bind on the fields that *bind* -- not on free prose. Matching `ruling`
         # and `detail` meant any confirmed row merely mentioning a term governed
@@ -518,7 +522,16 @@ def gate_capability_from_decisions(
                     + "; ".join(breaches),
                     {
                         "breaches": list(breaches),
-                        "columns": sorted(rows[0]),
+                        # ``csv.DictReader`` files fields beyond the header
+                        # under ``restkey``, which defaults to ``None``, and
+                        # sorting ``None`` beside ``str`` raises.  One unquoted
+                        # comma in a hand-written prose column is enough --
+                        # exactly the ledger this branch exists to report --
+                        # and nothing between here and ``_grade`` catches it,
+                        # so the crash would replace the diagnosis.  ``None``
+                        # renders as ``'None'``, which reads correctly as
+                        # "fields the header did not declare".
+                        "columns": sorted(str(column) for column in rows[0]),
                         "metrics": sorted(implemented),
                     },
                 )
@@ -917,7 +930,13 @@ def gate_build(supervisor_records: object, row_count_oracle: object = None) -> G
     supervisor = _mapping_artifact(supervisor_records)
     findings: list[Finding] = []
     for field in ("run_id", "artifact_id", "publish_sequence"):
-        if not supervisor.get(field):
+        value = supervisor.get(field)
+        # Absent means absent or blank -- not merely falsy.  ``claude_adapter``
+        # accepts an integer ``publish_sequence``, so testing truthiness read a
+        # sequence of ``0`` as a missing identifier.  A whitespace-only string
+        # is the opposite case: it clears the ledger's non-empty check while
+        # identifying nothing.
+        if value is None or (isinstance(value, str) and not value.strip()):
             findings.append(Finding("build_supervisor_identifier_missing", f"supervisor field is absent: {field}", field))
     # Examined means the harness read supervisor facts, not that a comparison
     # happened.  Keying it off the counts would make an absent release

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 
@@ -439,6 +441,14 @@ def test_build_still_fails_when_no_release_carries_the_supervisor_identity() -> 
         assert missing.passed is False
         assert "build_supervisor_identifier_missing" in missing.codes
 
+    # Absent means absent or blank, not merely falsy: ``claude_adapter``
+    # accepts an integer ``publish_sequence``, and a whitespace-only string
+    # clears the ledger's non-empty check while identifying nothing.
+    assert gate_build({**supervisor, "publish_sequence": 0}, None).passed is True
+    blank = gate_build({**supervisor, "run_id": "   "}, None)
+    assert blank.passed is False
+    assert blank.codes == ("build_supervisor_identifier_missing",)
+
     nothing_built = gate_build(None, {"per_model_row_counts": {"deals": 1}})
     assert nothing_built.passed is False
     assert nothing_built.examined is False, "no facts to read is an absence of evidence"
@@ -869,6 +879,30 @@ def test_capability_names_an_off_contract_ledger_instead_of_calling_it_ungoverne
         "provenance",
         "status",
     ]
+
+
+def test_capability_off_contract_survives_a_row_with_more_fields_than_headers() -> None:
+    """One unquoted comma in a prose column must not crash grading.
+
+    ``csv.DictReader`` files surplus fields under ``restkey``, which defaults to
+    ``None``, and sorting ``None`` beside ``str`` raises. Nothing between the
+    gate and ``_grade`` catches that, so the ledger too broken to grade would
+    take the harness down instead of being reported as unreadable -- on exactly
+    the hand-written shape this branch exists to report.
+    """
+
+    raw = (
+        "decision_id,description,status,provenance\n"
+        "updated_at_as_stage_entry,Treat updatedAt as the entry instant, per the owner,"
+        "approved,agent_authored\n"
+    )
+    rows = [dict(row) for row in csv.DictReader(io.StringIO(raw))]
+    assert None in rows[0], "the fixture must actually produce a restkey"
+
+    result = gate_capability_from_decisions(rows, _shortfall_capability(), "stage_age_days = ...\n")
+
+    assert result.codes == ("capability_decisions_off_contract",)
+    assert "None" in result.findings[0].value["columns"]
 
 
 def test_capability_off_contract_check_ignores_a_ledger_with_no_rows() -> None:

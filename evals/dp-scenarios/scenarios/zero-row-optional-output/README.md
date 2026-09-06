@@ -48,8 +48,9 @@ The runner supplies the fixture and owns the evidence directory.
 - The optional resource is present and valid, rather than absent or malformed.
 - A placeholder row fails the scenario-specific check.
 - The planted zero-row difficulty fires before the follow-up check is graded.
-- Supervisor-owned build identifiers, lifecycle, and row counts are available
-  for the build gate.
+- Supervisor-owned build identifiers are available for the build gate. Row
+  counts and lifecycle are not read there — they feed ledger lint, which
+  compares the agent's claims against the supervisor's own values.
 - Ledger honesty, phase accounting, sentinel scanning, and the applicable
   common gates remain clean.
 
