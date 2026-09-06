@@ -881,42 +881,49 @@ def _mapping_artifact(value: object) -> Mapping[str, object]:
     return {}
 
 
-def _counts(value: object) -> Mapping[str, object]:
-    if hasattr(value, "value") and not hasattr(value, "per_model_row_counts"):
-        value = getattr(value, "value")
-    if hasattr(value, "per_model_row_counts"):
-        candidate = getattr(value, "per_model_row_counts")
-    elif isinstance(value, Mapping):
-        if any(key in value for key in ("per_model_row_counts", "row_counts", "counts")):
-            candidate = value.get("per_model_row_counts", value.get("row_counts", value.get("counts", {})))
-        elif not any(key in value for key in ("run_id", "artifact_id", "publish_sequence", "identifiers")):
-            candidate = value
-        else:
-            candidate = {}
-    else:
-        candidate = {}
-    return candidate if isinstance(candidate, Mapping) else {}
+def gate_build(supervisor_records: object, row_count_oracle: object = None) -> GateResult:
+    """build: a release was published, and the supervisor owns its identity.
 
+    ``row_count_oracle`` is accepted and ignored.  It used to be compared, model
+    by model, against the supervisor's ``per_model_row_counts`` -- and the two
+    sides were never the same thing.  The oracle is ``synthgen``'s
+    ``table_row_counts``, keyed by *source table* with integer values; the
+    supervisor reports *built model* names, schema-qualified and stringified
+    (``{"main.deals_raw": "6"}``).  A live crm-pipeline run compared
+    ``{"main.active_deals": "5", ...}`` against ``{"deals": 1}`` and failed on
+    all six keys.  That is not a route-backed quirk: a file-backed scenario
+    compares ``{"main.orders": "12"}`` against ``{"orders": 12,
+    "order_lines": 40}`` and fails identically.  The replay tests passed only
+    because they seeded the supervisor side *from the manifest oracle*, so the
+    comparison was self-fulfilling and no live run ever exercised it.
 
-def gate_build(supervisor_records: object, row_count_oracle: object) -> GateResult:
-    """build: compare supervisor-owned identifiers and row counts with the oracle."""
+    Nor is it repairable by normalising names and types.  There is no source
+    row count that survives modelling: ``parent-child-grain-trap`` exists
+    precisely because the built model must *not* preserve the child grain, and
+    a live run's ``pages_log`` and ``transport_log`` models have no source
+    table behind them at all.  Deriving an expectation instead from the mock
+    counters would invent a rule about how many models the agent should build
+    and what to name them, which no scenario declares.
+
+    Count honesty is not lost with it: ``ledger.lint`` compares every
+    ledger-claimed ``per_model_row_counts.<model>`` against the supervisor's
+    value and flags any model the agent left unrecorded, which is the check
+    that actually catches a false claim about counts.  This gate keeps the
+    narrower claim it can support -- a release exists and carries the
+    supervisor's own identifiers -- and stays required, so an agent that builds
+    nothing still fails it.
+    """
 
     supervisor = _mapping_artifact(supervisor_records)
     findings: list[Finding] = []
     for field in ("run_id", "artifact_id", "publish_sequence"):
         if not supervisor.get(field):
             findings.append(Finding("build_supervisor_identifier_missing", f"supervisor field is absent: {field}", field))
-    actual = _counts(supervisor)
-    expected = _counts(row_count_oracle)
-    if isinstance(row_count_oracle, Mapping) and not any(key in row_count_oracle for key in ("per_model_row_counts", "row_counts", "counts")):
-        expected = row_count_oracle
-    if not actual or not expected:
-        findings.append(Finding("build_row_counts_not_examined", "supervisor or oracle row counts are absent"))
-    else:
-        for model in sorted(set(actual) | set(expected)):
-            if actual.get(model) != expected.get(model):
-                findings.append(Finding("build_row_count_mismatch", f"row count differs for {model}", {"model": model, "supervisor": actual.get(model), "oracle": expected.get(model)}))
-    return _result("build", not findings, findings, examined=bool(actual and expected))
+    # Examined means the harness read supervisor facts, not that a comparison
+    # happened.  Keying it off the counts would make an absent release
+    # not-examined rather than failing, and a required gate that reads
+    # not-examined when nothing was built is the dodge this file keeps closing.
+    return _result("build", not findings, findings, examined=bool(supervisor))
 
 
 def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bool]:

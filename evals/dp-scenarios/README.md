@@ -42,7 +42,7 @@ evidence:
 | `capability` | Did it govern what the source cannot actually answer? |
 | `narrowing` | Did the definition change when the operator changed it? |
 | `construction` | Did it self-check and adversarially review its own work? |
-| `build` | Did the product build, with the row counts the fixture implies? |
+| `build` | Did a release publish, carrying the supervisor's own `run_id`, `artifact_id` and `publish_sequence`? Row counts are not compared here — the fixture oracle counts source tables and the supervisor counts built models, which no modelling choice makes equal; ledger lint checks the agent's claimed counts against the supervisor's. |
 | `query` | Do the answers match the fixture's ground truth? |
 | `follow-up` | The scenario's own specific drill. |
 

@@ -1393,13 +1393,17 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
+    """One epoch with no published release must sink the whole tier.
+
+    The lever used to be a corrupted row count. That comparison is gone -- the
+    oracle and the supervisor were never the same vocabulary -- so the lever is
+    now the thing the gate still claims: a release the supervisor owns. Dropping
+    the facts entirely is the honest form of that; ``SupervisorFacts`` rejects a
+    null identifier at replay load, so a field cannot simply be nulled in place.
+    """
+
     scenario, recordings = populated_parent_child_recordings(tmp_path)
-    first_facts = dict(recordings[0].supervisor_facts or {})
-    first_counts = dict(first_facts["per_model_row_counts"])
-    model = next(iter(first_counts))
-    first_counts[model] = int(first_counts[model]) + 1
-    first_facts["per_model_row_counts"] = first_counts
-    corrupted = [replace(recordings[0], supervisor_facts=first_facts), *recordings[1:]]
+    corrupted = [replace(recordings[0], supervisor_facts=None), *recordings[1:]]
 
     result = TierRunner(
         [scenario],
@@ -1412,7 +1416,7 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert result.scenario_runs[0].score.state is ScoreTerminalState.FAILED
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
     assert not result.scenario_runs[0].score.gates["build"].passed
-    assert "build_row_count_mismatch" in result.scenario_runs[0].score.gates["build"].codes
+    assert "build_supervisor_identifier_missing" in result.scenario_runs[0].score.gates["build"].codes
 
 
 def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:

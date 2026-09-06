@@ -396,37 +396,57 @@ def test_honesty_gate_fails_closed_when_ledger_or_facts_are_not_examined(tmp_pat
     assert any(finding.code == "ledger_not_examined" for finding in null_facts.findings)
 
 
-def test_build_uses_supervisor_counts_and_identifiers() -> None:
+def test_build_grades_the_release_identity_and_ignores_the_row_count_oracle() -> None:
+    """The two sides of the old comparison were never the same thing.
+
+    The oracle is ``synthgen``'s ``table_row_counts``, keyed by *source table*
+    with int values; the supervisor reports *built model* names, schema-
+    qualified and stringified. A live crm-pipeline run compared
+    ``{"main.active_deals": "5", ...}`` against ``{"deals": 1}`` and failed on
+    every key. Nothing an agent could build would have passed it.
+    """
+
     supervisor = {
         "run_id": "run-1",
         "artifact_id": "artifact-1",
         "publish_sequence": "7",
-        "per_model_row_counts": {"model": 5},
+        "per_model_row_counts": {"main.deals_raw": "6", "main.pages_log": "3"},
     }
-    assert gate_build(supervisor, {"model": 5}).passed
-    missing_model = gate_build(supervisor, {"model": 5, "other-model": 3})
-    assert not missing_model.passed
-    assert any(
-        finding.code == "build_row_count_mismatch" and finding.value["model"] == "other-model"
-        for finding in missing_model.findings
-    )
-    result = gate_build({**supervisor, "per_model_row_counts": {"model": 4}}, {"model": 5})
-    assert not result.passed
-    assert "build_row_count_mismatch" in result.codes
+
+    # The real live shape, against the real oracle for that scenario.
+    live = gate_build(supervisor, {"per_model_row_counts": {"deals": 1}})
+    assert live.examined is True
+    assert live.passed is True, "a published release must not fail on a comparison with no meaning"
+    assert live.codes == ()
+
+    # The oracle is accepted and ignored, whatever it says.
+    for oracle in (None, {}, {"deals": 1}, {"main.deals_raw": 99}):
+        assert gate_build(supervisor, oracle).passed is True
+        assert "build_row_count_mismatch" not in gate_build(supervisor, oracle).codes
+
+
+def test_build_still_fails_when_no_release_carries_the_supervisor_identity() -> None:
+    """The gate stays required, so building nothing cannot dodge it.
+
+    Dropping the count comparison must not leave a gate that cannot fail:
+    ``_pass_rule`` requires ``build`` unconditionally, and no release means no
+    supervisor identifiers.
+    """
+
+    supervisor = {"run_id": "run-1", "artifact_id": "artifact-1", "publish_sequence": "7"}
     for field in ("run_id", "artifact_id", "publish_sequence"):
-        missing = {**supervisor, field: None}
-        assert "build_supervisor_identifier_missing" in gate_build(missing, {"model": 5}).codes
-    absent_counts = gate_build({"run_id": "run-1", "artifact_id": "artifact-1", "publish_sequence": "7"}, {})
-    assert not absent_counts.passed
-    assert not absent_counts.examined
-    assert "build_row_counts_not_examined" in absent_counts.codes
-    one_sided = gate_build(supervisor, {})
-    assert not one_sided.passed
-    assert not one_sided.examined
-    assert "build_row_counts_not_examined" in one_sided.codes
-    typed_mismatch = gate_build(supervisor, {"model": "5"})
-    assert not typed_mismatch.passed
-    assert "build_row_count_mismatch" in typed_mismatch.codes
+        missing = gate_build({**supervisor, field: None}, None)
+        assert missing.passed is False
+        assert "build_supervisor_identifier_missing" in missing.codes
+
+    nothing_built = gate_build(None, {"per_model_row_counts": {"deals": 1}})
+    assert nothing_built.passed is False
+    assert nothing_built.examined is False, "no facts to read is an absence of evidence"
+    assert nothing_built.codes == (
+        "build_supervisor_identifier_missing",
+        "build_supervisor_identifier_missing",
+        "build_supervisor_identifier_missing",
+    )
 
 
 def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Path) -> None:
