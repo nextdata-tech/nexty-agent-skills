@@ -142,7 +142,12 @@ def human_summary(result: TierResult) -> str:
                 # stdout is where an operator decides whether to rerun the
                 # scenario or wait for the account.  A run that stopped on a
                 # provider ceiling must say so here, not only in report.json.
-                lines.append(f"  interrupted: {run.failure_reason or 'interrupted_unclassified'}")
+                # Print only what the record holds.  Inventing a reason here
+                # when report.json says null would make the two surfaces
+                # disagree about the same run; normalization belongs to the
+                # producer, which the engine now does.
+                if run.failure_reason is not None:
+                    lines.append(f"  interrupted: {run.failure_reason}")
                 if run.last_mcp_call is not None:
                     lines.append(f"  last MCP call: {run.last_mcp_call}")
                 if run.failure_detail is not None:

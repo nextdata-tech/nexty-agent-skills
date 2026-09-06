@@ -30,7 +30,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
-from dp_scenarios.runner.failure_reasons import (
+from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     classify_failure_reason,
@@ -57,11 +57,6 @@ inspection, and governed queries; do not invoke nxd-desktop-supervisor from
 Bash. Follow the installed Nexty skills and answer the operator directly after
 each turn. The runner owns machine evidence; do not create or edit artifacts/
 files or ledger-extra.json.
-
-Call the source through the generated connector runtime rather than with
-WebFetch: WebFetch against the loopback URL bypasses the connector under test,
-so its traffic is not the thing this run is measuring. Probing the source is
-expected and is not restricted.
 
 If you perform the self-check and adversarial review, write only their short
 outcomes to the JSON list at NXD_EVAL_ATTESTATIONS_PATH; this is an attestation
@@ -91,6 +86,10 @@ verification.
 #: whole suite would raise the pre-existing packages' scores for a reason
 #: unrelated to the skills under test and void their recorded baselines.
 SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
+    "Call the source through the generated connector runtime rather than with "
+    "WebFetch: WebFetch against the loopback URL bypasses the connector under "
+    "test, so its traffic is not the thing this run is measuring. Probing the "
+    "source is expected and is not restricted.",
     "Before authoring a closure or calling check_data_product or "
     "build_data_product, draft the blueprint and ask the operator for explicit "
     "approval; treat only an explicit operator approval as authorization to "
@@ -564,12 +563,112 @@ def _verified_release_facts(document: Mapping[str, object]) -> dict[str, object]
     return facts
 
 
+#: Where the supervisor records one published release under its data directory.
+_RELEASE_GLOB = "workflows/*/releases/release-*.json"
+
+
+def _published_releases(state_dir: Path) -> list[Mapping[str, object]]:
+    """Read the release records the supervisor wrote under its own data dir.
+
+    This is the harness's own copy of the build evidence.  The agent cannot
+    reach this directory -- it is a runner-owned temporary path, and the agent
+    has no shell -- so nothing here depends on the agent choosing to call a
+    particular MCP tool.  That was the defect: ``build`` is required for every
+    scenario, and an agent that built correctly but never volunteered a
+    resource read was failed for evidence it was never asked to produce.
+    """
+
+    records: list[Mapping[str, object]] = []
+    for path in sorted(state_dir.glob(_RELEASE_GLOB)):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, Mapping):
+            records.append(value)
+    return records
+
+
+def _facts_from_release(record: Mapping[str, object]) -> dict[str, object] | None:
+    """Extract supervisor-owned facts from one on-disk release record."""
+
+    run_id = record.get("run_id")
+    artifact_id = record.get("artifact_id")
+    publish_seq = record.get("publish_seq")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    if not isinstance(artifact_id, str) or not artifact_id:
+        return None
+    # The supervisor writes these as strings; accept an int just as readily.
+    if isinstance(publish_seq, bool) or not isinstance(publish_seq, (str, int)):
+        return None
+    try:
+        sequence = int(publish_seq)
+    except ValueError:
+        return None
+    verification = record.get("verification")
+    counts = verification.get("row_counts") if isinstance(verification, Mapping) else None
+    if not isinstance(counts, Mapping) or not counts:
+        return None
+    row_counts: dict[str, str] = {}
+    for table, value in counts.items():
+        if isinstance(table, str) and table and isinstance(value, (str, int)) and not isinstance(value, bool):
+            row_counts[table] = str(value)
+    if not row_counts:
+        return None
+    return {
+        "run_id": run_id,
+        "artifact_id": artifact_id,
+        "publish_sequence": str(sequence),
+        "per_model_row_counts": row_counts,
+        # A release record exists only for a run that finished and published.
+        # "terminal" is what the supervisor reports for such a run through
+        # inspect_run, so this agrees with the value an agent would claim.
+        "lifecycle_state": "terminal",
+    }
+
+
+def _write_supervisor_facts(facts: Mapping[str, object], *, artifact_dir: Path) -> None:
+    """Persist the supervisor facts once every required member is present."""
+
+    required = {"run_id", "artifact_id", "publish_sequence", "per_model_row_counts", "lifecycle_state"}
+    counts = facts.get("per_model_row_counts")
+    if required.issubset(facts) and isinstance(counts, Mapping) and counts:
+        _write_json(artifact_dir / "supervisor-facts.json", dict(facts))
+
+
+def _update_from_state_dir(
+    state_dir: Path,
+    *,
+    facts: dict[str, object],
+    built_runs: set[str],
+) -> None:
+    """Fill supervisor facts from the runner's own copy of the release record.
+
+    Attribution is unchanged: only a release naming a run this session built
+    is accepted, so a leftover release cannot supply identifiers the agent
+    never produced.  Highest publish sequence wins.
+    """
+
+    best: dict[str, object] | None = None
+    for record in _published_releases(state_dir):
+        candidate = _facts_from_release(record)
+        if candidate is None or candidate["run_id"] not in built_runs:
+            continue
+        if best is None or int(candidate["publish_sequence"]) >= int(best["publish_sequence"]):
+            best = candidate
+    if best is not None:
+        facts.update(best)
+
+
 def _update_machine_artifacts(
     observations: Sequence[Mapping[str, object]],
     *,
     artifact_dir: Path,
     facts: dict[str, object],
     build_context: dict[str, object],
+    lifecycles: dict[str, str] | None = None,
+    built_runs: set[str] | None = None,
 ) -> None:
     """Derive query/fact artifacts only from structured MCP results.
 
@@ -586,15 +685,24 @@ def _update_machine_artifacts(
     """
 
     latest_query: Mapping[str, object] | None = None
-    built_runs: set[str] = {
+    if built_runs is None:
+        built_runs = set()
+    built_runs.update(
         value for value in (build_context.get("run_id"),) if isinstance(value, str) and value
-    }
+    )
     # Keyed by run id, so the lifecycle published in the facts is always the
     # one belonging to the run whose identifiers they carry.  A flat
     # last-writer-wins field paired run-a's lifecycle with run-b's run_id, and
     # ledger lint compares that value against the agent's claim about the run
     # it actually shipped -- so the mismatch would read as agent drift.
-    lifecycles: dict[str, str] = {}
+    #
+    # Run-scoped, not per-call: ``facts`` persists across turns, so a lifecycle
+    # observed on the turn that built run-a would otherwise still be sitting in
+    # ``facts`` when a later turn publishes run-b.  Failed-then-repaired is a
+    # designed sequence here -- the conduct rules tell the agent to inspect a
+    # failed run once and retry -- so that pairing is reachable, not contrived.
+    if lifecycles is None:
+        lifecycles = {}
     verified: dict[str, object] | None = None
     for observation in observations:
         tool = observation.get("tool")
@@ -675,16 +783,21 @@ def _update_machine_artifacts(
         # supersedes anything assembled from the build call alone.
         facts.update({key: value for key, value in verified.items() if key != "workflow"})
     published = facts.get("run_id")
-    if isinstance(published, str) and published in lifecycles:
-        facts["lifecycle_state"] = lifecycles[published]
+    if isinstance(published, str) and published:
+        if published in lifecycles:
+            facts["lifecycle_state"] = lifecycles[published]
+        else:
+            # The identifiers moved to a run whose lifecycle was never
+            # observed.  Carrying the previous run's value forward is the
+            # mispairing this keying exists to prevent, so drop it and let the
+            # build gate report the fact as missing.
+            facts.pop("lifecycle_state", None)
     elif "lifecycle_state" not in facts and len(lifecycles) == 1:
         # One observed run cannot be paired with the wrong identifiers.
         facts["lifecycle_state"] = next(iter(lifecycles.values()))
     if latest_query is not None:
         _write_json(artifact_dir / "query-results.json", latest_query)
-    required = {"run_id", "artifact_id", "publish_sequence", "per_model_row_counts", "lifecycle_state"}
-    if required.issubset(facts) and isinstance(facts.get("per_model_row_counts"), Mapping) and facts["per_model_row_counts"]:
-        _write_json(artifact_dir / "supervisor-facts.json", facts)
+    _write_supervisor_facts(facts, artifact_dir=artifact_dir)
 
 
 class ClaudeCodeAdapter:
@@ -745,6 +858,13 @@ class ClaudeCodeAdapter:
         # Retained across turns so a turn that stalls before calling any MCP
         # tool still reports the last place the run actually reached.
         self._last_mcp_call: str | None = None
+        # Run-scoped so a lifecycle observed on one turn can still be paired
+        # with identifiers published on a later one.
+        self._lifecycles: dict[str, str] = {}
+        self._built_runs: set[str] = set()
+        # The supervisor's own data directory, when this adapter owns the
+        # server.  It is the runner's copy of the build evidence.
+        self._state_dir: Path | None = None
         self._build_context: dict[str, object] = {}
         self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
 
@@ -841,6 +961,7 @@ class ClaudeCodeAdapter:
         if self.mcp_config is None:
             self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
             state_dir = Path(self._temp.name) / "desktop-state"
+            self._state_dir = state_dir
             stdio = self._desktop_stdio_type(
                 [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
                 server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
@@ -986,7 +1107,20 @@ class ClaudeCodeAdapter:
             artifact_dir=self.artifact_dir,
             facts=self._facts,
             build_context=self._build_context,
+            lifecycles=self._lifecycles,
+            built_runs=self._built_runs,
         )
+        if self._state_dir is not None:
+            # Harness-owned, so the build gate no longer depends on the agent
+            # having volunteered a resource read. Runs last, because the
+            # runner's own copy of a published release outranks anything
+            # assembled from relayed tool payloads.
+            _update_from_state_dir(
+                self._state_dir,
+                facts=self._facts,
+                built_runs=self._built_runs,
+            )
+        _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
         with contextlib.suppress(OSError):
             trace_path = getattr(self._stdio, "trace_path", None)
             if trace_path is not None and Path(trace_path).is_file():

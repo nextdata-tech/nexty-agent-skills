@@ -62,7 +62,7 @@ from dp_scenarios.operator import (
 )
 from dp_scenarios.operator.appender import SupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.transport import Transport
-from dp_scenarios.scenario import Scenario, declared_sentinels, load_scenarios
+from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
@@ -110,6 +110,11 @@ class CanaryResult:
     probe: ProbeResult | Mapping[str, object] | None = None
     build: BuildResult | Mapping[str, object] | None = None
     wall_clock_seconds: float = 0.0
+    #: The checked-in package this canary stands for.  ``probe``/``build``
+    #: report the per-run copy they actually ran against, which is gone by the
+    #: time anyone reads the report; this is the identifier that is stable
+    #: across runs and reconcilable with the repo.
+    package: str | None = None
 
     @property
     def blocking(self) -> bool:
@@ -129,6 +134,7 @@ class CanaryResult:
             "probe": serial(self.probe),
             "build": serial(self.build),
             "wall_clock_seconds": self.wall_clock_seconds,
+            "package": self.package,
         }
 
 
@@ -349,20 +355,18 @@ def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: Cla
     return Verdict(outcome, tuple(deduped), verdict.observed_codes, verdict.advisories)
 
 
-def _reported_against(result: object, root: Path) -> object:
-    """Re-label a probe or build result with the package it stands for.
+def _canary_package(root: Path) -> dict[str, str]:
+    """Return the stable identity of the canary package that was probed.
 
-    Isolation hands the supervisor a per-run copy, but the copy's path is not
-    a fact worth reporting: it is gone by the time anyone reads report.json
-    and differs on every run.  Both result shapes are supported because the
-    replay path supplies plain mappings.
+    Isolation hands the supervisor a per-run copy, so ``closure`` and
+    ``command`` name a temp directory that is gone by the time anyone reads
+    report.json.  Overwriting them would make the record disagree with what
+    actually ran -- ``command`` still carries the copy's path, and a reader
+    could not reconcile the two.  The invocation facts stay faithful and the
+    stable identifier is reported alongside them.
     """
 
-    if is_dataclass(result) and not isinstance(result, type):
-        return replace(result, closure=str(root))  # type: ignore[type-var]
-    if isinstance(result, Mapping):
-        return {**result, "closure": str(root)}
-    return result
+    return {"package": str(root)}
 
 
 def run_drift_canary(
@@ -403,10 +407,7 @@ def run_drift_canary(
             # its path would replace a stable repo-relative fact with a temp
             # directory that no longer exists when anyone reads the report,
             # and that differs on every run.
-            probed = _reported_against(
-                run_preflight(closure, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary"),
-                root,
-            )
+            probed = run_preflight(closure, supervisor=supervisor, data_dir=data_dir, workflow="drift-canary")
         else:
             probed = probe
         if isinstance(probed, ProbeResult):
@@ -449,14 +450,11 @@ def run_drift_canary(
             if isinstance(probed, ProbeResult):
                 if temporary_data is None:
                     temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
-                built = _reported_against(
-                    run_build(
-                        closure,
-                        supervisor=probed.supervisor,
-                        data_dir=Path(temporary_data.name),
-                        workflow="drift-canary",
-                    ),
-                    root,
+                built = run_build(
+                    closure,
+                    supervisor=probed.supervisor,
+                    data_dir=Path(temporary_data.name),
+                    workflow="drift-canary",
                 )
             else:
                 raise TierError("a live canary build is required when no replay build was supplied")
@@ -481,6 +479,7 @@ def run_drift_canary(
             probe=probed,
             build=built,
             wall_clock_seconds=time.monotonic() - started,
+            package=str(root),
         )
     finally:
         if temporary_data is not None:
@@ -1014,24 +1013,11 @@ def _follow_up_artifact(scenario: Scenario, artifact_root: Path) -> Mapping[str,
         return None
     if not isinstance(value, Mapping):
         return None
-    loaded = dict(value)
-    if _FOLLOW_UP_SHIM_KEYS & set(loaded):
-        # ``Scenario.follow_up_check`` unwraps a mapping carrying any of these
-        # names as the legacy ``follow_up_check(closure, query_rows)`` calling
-        # convention, replacing the target with ``closure.get("closure")``.  An
-        # agent that adds a ``closure`` field to its evidence object for
-        # context would silently blank the target and turn the whole gate into
-        # not-examined -- a false negative rather than a finding.  Refusing the
-        # artifact keeps the failure visible and attributable.
-        return None
-    return loaded
-
-
-#: Top-level names ``Scenario.follow_up_check`` reads as its legacy kwargs
-#: shim, which an agent-authored evidence object must therefore never use.
-_FOLLOW_UP_SHIM_KEYS = frozenset(
-    {"closure", "query_rows", "fixture_dir", "row_count_oracle", "row_counts"}
-)
+    # Tagged rather than filtered: the artifact is the agent's own object and
+    # every key in it is the agent's to choose.  ``AgentEvidence`` tells
+    # ``follow_up_check`` not to read it as the legacy positional convention,
+    # so a field named ``closure`` is just a field.
+    return AgentEvidence(value)
 
 
 # Tool namespaces whose *results* are product surfaces rather than source

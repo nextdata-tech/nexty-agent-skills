@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dp_scenarios.ledger.lint import PHASE_ACTION_KINDS
+from dp_scenarios.failure_reasons import INTERRUPTED_UNCLASSIFIED
 
 from .answer_sheet import AnswerSheet
 from .appender import (
@@ -1513,7 +1514,7 @@ class OperatorEngine:
                 # is indistinguishable, on that key, from a run that was never
                 # interrupted at all -- which is the confusion the field
                 # exists to end.
-                failure_reason = result.failure_reason or "interrupted_unclassified"
+                failure_reason = result.failure_reason or INTERRUPTED_UNCLASSIFIED
                 failure_detail = result.environment_detail
 
             match = self.matcher.reply_for(result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message)

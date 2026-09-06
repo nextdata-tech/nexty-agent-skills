@@ -8,6 +8,12 @@ a small closed vocabulary that the adapter, the session and the report all
 agree on.  The point is to make an incomplete run *actionable*: a reader of
 report.json must be able to tell a scenario defect from an external limit
 without reading a transcript.
+
+The module is deliberately top-level rather than under ``runner``: the operator
+engine normalizes an unclassified interruption to a reason, and
+``operator -> runner`` is a circular import (``runner/__init__`` pulls
+``environment`` which pulls ``followups`` which pulls ``operator``).  A leaf
+with no dp_scenarios imports of its own is reachable from both layers.
 """
 
 from __future__ import annotations

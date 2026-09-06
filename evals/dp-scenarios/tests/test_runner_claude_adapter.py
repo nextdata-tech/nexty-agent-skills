@@ -16,9 +16,14 @@ import pytest
 from _repo_paths import REPO_ROOT
 
 import dp_scenarios.runner.claude_adapter as adapter_module
-from dp_scenarios.runner.claude_adapter import ClaudeCodeAdapter, _update_machine_artifacts, parse_claude_events
+from dp_scenarios.runner.claude_adapter import (
+    ClaudeCodeAdapter,
+    _update_from_state_dir,
+    _update_machine_artifacts,
+    parse_claude_events,
+)
 from dp_scenarios.operator.transport import TouchedFile, ToolCall, TurnResult
-from dp_scenarios.runner.failure_reasons import CHILD_NO_TERMINAL_RESULT, PROVIDER_SESSION_LIMIT
+from dp_scenarios.failure_reasons import CHILD_NO_TERMINAL_RESULT, PROVIDER_SESSION_LIMIT
 from dp_scenarios.runner.session import turn_result_to_dict
 from dp_scenarios.runner.local import FileSupervisorRecordReader, LocalRunnerError
 
@@ -505,6 +510,9 @@ def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstructi
     adapter._facts = {}
     adapter._build_context = {}
     adapter._last_mcp_call = None
+    adapter._lifecycles = {}
+    adapter._built_runs = set()
+    adapter._state_dir = None
     adapter._session_id = "session-1"
     adapter._stdio = None
     adapter._redact_json_rpc = lambda value: value
@@ -1219,3 +1227,149 @@ def test_lifecycle_is_paired_with_the_run_whose_identifiers_are_published(tmp_pa
 
     assert facts["run_id"] == "run-b"
     assert facts["lifecycle_state"] == "terminal"
+
+
+def test_a_lifecycle_from_an_earlier_turn_is_not_published_beside_a_later_run(tmp_path: Path) -> None:
+    """Keying alone was per-call; `facts` persists for the whole run.
+
+    Failed-then-repaired is a designed sequence -- the conduct rules tell the
+    agent to inspect a failed run once and retry -- so a turn that observes
+    run-a's lifecycle and a later turn that publishes run-b's identifiers is
+    the ordinary path, not a contrived one. Ledger lint compares
+    lifecycle_state against the agent's claim about the run it shipped, so the
+    mispairing would read as agent drift.
+    """
+
+    facts: dict[str, object] = {}
+    build_context: dict[str, object] = {}
+    lifecycles: dict[str, str] = {}
+
+    # Turn n: build run-a, inspect it, no release published yet.
+    _update_machine_artifacts(
+        [
+            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
+            _observation("inspect_run", {"run": {"run_id": "run-a", "lifecycle": "failed"}}),
+        ],
+        artifact_dir=tmp_path,
+        facts=facts,
+        build_context=build_context,
+        lifecycles=lifecycles,
+    )
+    assert facts.get("lifecycle_state") == "failed"
+
+    # Turn n+1: repair, rebuild as run-b, read its verified release. No
+    # inspect_run this turn.
+    _update_machine_artifacts(
+        [
+            _observation("build_data_product", {"run_id": "run-b", "artifact_id": "artifact-b"}),
+            _observation("read_data_product_resource", _verified_release(run_id="run-b", artifact_id="artifact-b", publish_seq=7, counts={"main.deals": 6})),
+        ],
+        artifact_dir=tmp_path,
+        facts=facts,
+        build_context=build_context,
+        lifecycles=lifecycles,
+    )
+
+    assert facts["run_id"] == "run-b"
+    # run-a's "failed" must not ride along with run-b's identifiers.
+    assert "lifecycle_state" not in facts
+    assert not (tmp_path / "supervisor-facts.json").exists()
+
+    # Once run-b's own lifecycle is observed, the facts complete.
+    _update_machine_artifacts(
+        [_observation("inspect_run", {"run": {"run_id": "run-b", "lifecycle": "terminal"}})],
+        artifact_dir=tmp_path,
+        facts=facts,
+        build_context=build_context,
+        lifecycles=lifecycles,
+    )
+    assert facts["lifecycle_state"] == "terminal"
+    written = json.loads((tmp_path / "supervisor-facts.json").read_text(encoding="utf-8"))
+    assert written["run_id"] == "run-b"
+    assert written["lifecycle_state"] == "terminal"
+
+
+def _release_record(*, run_id: str, artifact_id: str, publish_seq: int, counts: dict[str, int]) -> dict[str, object]:
+    """The record the supervisor writes under its own data directory."""
+
+    return {
+        "schema": "nxd-release-v1",
+        "workflow_id": "crm-deals",
+        "publish_seq": str(publish_seq),
+        "run_id": run_id,
+        "artifact_id": artifact_id,
+        "verification": {
+            "schema": "nxd-verification-v1",
+            "outcome": "passed",
+            "row_counts": {table: str(count) for table, count in counts.items()},
+        },
+    }
+
+
+def _write_release(state_dir: Path, record: dict[str, object]) -> None:
+    releases = state_dir / "workflows" / "wf-sha256-v1-abc" / "releases"
+    releases.mkdir(parents=True, exist_ok=True)
+    (releases / f"release-{record['publish_seq']:0>20}-{record['run_id']}.json").write_text(
+        json.dumps(record), encoding="utf-8"
+    )
+
+
+def test_build_facts_come_from_the_runners_own_copy_of_the_release(tmp_path: Path) -> None:
+    """`build` is required for every scenario, so it cannot depend on tool choice.
+
+    Two identical live runs differed only in whether the agent volunteered
+    `read_data_product_resource`, and only one of them had its build examined.
+    The release record lives under the runner's data directory, which the
+    agent has no shell and no path to reach.
+    """
+
+    state_dir = tmp_path / "state"
+    _write_release(state_dir, _release_record(run_id="run-a", artifact_id="artifact-a", publish_seq=3, counts={"main.deals": 6, "main.orders": 2}))
+
+    facts: dict[str, object] = {}
+    _update_from_state_dir(state_dir, facts=facts, built_runs={"run-a"})
+
+    assert facts == {
+        "run_id": "run-a",
+        "artifact_id": "artifact-a",
+        "publish_sequence": "3",
+        "per_model_row_counts": {"main.deals": "6", "main.orders": "2"},
+        "lifecycle_state": "terminal",
+    }
+
+
+def test_a_release_for_a_run_this_session_did_not_build_is_still_refused(tmp_path: Path) -> None:
+    """Attribution does not weaken because the harness reads the record itself."""
+
+    state_dir = tmp_path / "state"
+    _write_release(state_dir, _release_record(run_id="run-someone-else", artifact_id="artifact-x", publish_seq=9, counts={"main.deals": 999}))
+
+    facts: dict[str, object] = {}
+    _update_from_state_dir(state_dir, facts=facts, built_runs={"run-mine"})
+
+    assert facts == {}
+
+
+def test_the_highest_published_release_wins_on_disk_too(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    _write_release(state_dir, _release_record(run_id="run-a", artifact_id="artifact-a", publish_seq=2, counts={"main.deals": 4}))
+    _write_release(state_dir, _release_record(run_id="run-b", artifact_id="artifact-b", publish_seq=5, counts={"main.deals": 6}))
+
+    facts: dict[str, object] = {}
+    _update_from_state_dir(state_dir, facts=facts, built_runs={"run-a", "run-b"})
+
+    assert facts["publish_sequence"] == "5"
+    assert facts["run_id"] == "run-b"
+
+
+def test_a_missing_or_unreadable_state_dir_contributes_nothing(tmp_path: Path) -> None:
+    facts: dict[str, object] = {}
+    _update_from_state_dir(tmp_path / "absent", facts=facts, built_runs={"run-a"})
+    assert facts == {}
+
+    state_dir = tmp_path / "state"
+    releases = state_dir / "workflows" / "wf-x" / "releases"
+    releases.mkdir(parents=True)
+    (releases / "release-0001-run-a.json").write_text("{not json", encoding="utf-8")
+    _update_from_state_dir(state_dir, facts=facts, built_runs={"run-a"})
+    assert facts == {}

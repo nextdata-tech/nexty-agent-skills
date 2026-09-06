@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dp_scenarios.runner.failure_reasons import (
+from dp_scenarios.failure_reasons import (
     CHILD_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
     SHARED_RUNTIME_CONTENTION,

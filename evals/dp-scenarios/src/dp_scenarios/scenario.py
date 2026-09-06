@@ -153,6 +153,20 @@ class QueryAssessment:
     actual_rows: tuple[dict[str, object], ...]
 
 
+class AgentEvidence(dict):
+    """An agent-authored evidence artifact, tagged so the shim skips it.
+
+    ``follow_up_check`` accepts a mapping carrying ``closure``/``query_rows``/
+    ``fixture_dir``/``row_count_oracle``/``row_counts`` as the legacy
+    positional calling convention and unwraps it.  A declared evidence
+    artifact is not that -- it is the agent's own JSON object, and an agent
+    that happens to add a ``closure`` field for context would have had its
+    target silently replaced by ``None`` and zeroed the whole follow-up gate.
+    Refusing those key names would only move the trap; the artifact simply
+    must not be routed through the shim at all.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class Scenario:
     """One fully resolved, data-backed evaluation scenario."""
@@ -403,7 +417,7 @@ class Scenario:
 
         binding = self.gates["follow-up"]
         target = closure
-        if isinstance(closure, Mapping) and (
+        if isinstance(closure, Mapping) and not isinstance(closure, AgentEvidence) and (
             "closure" in closure
             or "query_rows" in closure
             or "fixture_dir" in closure

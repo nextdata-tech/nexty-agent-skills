@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-06 | read build evidence from the runner's own data directory | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |
 | 2026-09-06 | scope the source contract and conduct rules to the scenarios that ask for them | NO_EVAL | — | [`2026-09-06-handover-and-prompt-scoping`](entries/2026-09-06-handover-and-prompt-scoping.md) |
 | 2026-09-06 | dp-scenarios declaration-based gate requiredness and waived coverage | NO_EVAL | — | [`2026-09-06-dp-scenarios-declaration-requiredness`](entries/2026-09-06-dp-scenarios-declaration-requiredness.md) |
 | 2026-09-05 | read the supervisor's real query and release payloads | NO_EVAL | — | [`2026-09-05-supervisor-evidence-harvesting`](entries/2026-09-05-supervisor-evidence-harvesting.md) |

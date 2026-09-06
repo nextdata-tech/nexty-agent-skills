@@ -2158,22 +2158,36 @@ def test_a_clean_run_reports_an_empty_interruption_block() -> None:
     }
 
 
-def test_evidence_using_a_reserved_shim_name_is_refused_rather_than_blanked(tmp_path: Path) -> None:
-    """`follow_up_check` unwraps a mapping carrying `closure` as legacy kwargs.
+def test_evidence_keeping_a_shim_name_reaches_the_handler_unchanged(tmp_path: Path) -> None:
+    """The artifact is the agent's own object; every key in it is its own.
 
-    An agent adding a `closure` field for context would silently blank the
-    target and turn the whole follow-up gate into not-examined -- a false
-    negative rather than a finding.
+    ``follow_up_check`` reads a plain mapping carrying ``closure`` as the
+    legacy positional convention and replaces the target with
+    ``closure.get("closure")``, which would zero the follow-up gate. Refusing
+    those names would only move the trap -- nothing tells the agent they are
+    reserved -- so the artifact is tagged instead and never reaches the shim.
     """
 
     from dp_scenarios.runner.tier import _follow_up_artifact
+    from dp_scenarios.scenario import AgentEvidence
 
     scenario = SimpleNamespace(follow_up_artifact="evidence/x.json")
     target = tmp_path / "evidence" / "x.json"
     target.parent.mkdir(parents=True)
 
     target.write_text(json.dumps({"rows": [], "closure": "for context"}), encoding="utf-8")
-    assert _follow_up_artifact(scenario, tmp_path) is None
+    loaded = _follow_up_artifact(scenario, tmp_path)
+    assert loaded == {"rows": [], "closure": "for context"}
+    assert isinstance(loaded, AgentEvidence)
 
     target.write_text(json.dumps({"rows": [], "note": "fine"}), encoding="utf-8")
     assert _follow_up_artifact(scenario, tmp_path) == {"rows": [], "note": "fine"}
+
+
+def test_the_shim_still_unwraps_a_plain_legacy_mapping() -> None:
+    """Tagging must not disable the convention for its real callers."""
+
+    from dp_scenarios.scenario import AgentEvidence
+
+    assert not isinstance({"closure": "x"}, AgentEvidence)
+    assert isinstance(AgentEvidence({"closure": "x"}), dict)

@@ -15,7 +15,7 @@ import os
 import sys
 import time
 
-from dp_scenarios.runner.failure_reasons import (
+from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,

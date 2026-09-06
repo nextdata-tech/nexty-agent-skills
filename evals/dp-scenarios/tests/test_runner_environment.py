@@ -690,11 +690,18 @@ def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
 
 
 def test_the_prompt_no_longer_both_requires_and_forbids_calling_the_source() -> None:
-    """One sentence said "call the source yourself", another switched it off."""
+    """One sentence said "call the source yourself", another switched it off.
 
-    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT
+    The remaining restriction names the mechanism rather than the act, and it
+    lives with the scenarios that opt in -- leaving it in the default prompt
+    would have been new relative to the baselines the pre-existing mock-source
+    packages were measured on.
+    """
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT, SCENARIO_CONDUCT_RULES
 
     assert "call the source yourself" in DEFAULT_SYSTEM_PROMPT
-    assert "Probing the source is\nexpected and is not restricted." in DEFAULT_SYSTEM_PROMPT
-    # The restriction that remains names the mechanism, not the act.
-    assert "rather than with\nWebFetch" in DEFAULT_SYSTEM_PROMPT
+    assert "WebFetch" not in DEFAULT_SYSTEM_PROMPT
+    connector = [rule for rule in SCENARIO_CONDUCT_RULES if "WebFetch" in rule]
+    assert len(connector) == 1
+    assert "Probing the source is expected and is not restricted." in connector[0]

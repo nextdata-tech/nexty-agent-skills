@@ -23,7 +23,7 @@ import subprocess
 from typing import Any, Protocol
 
 from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
-from dp_scenarios.runner.failure_reasons import (
+from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     classify_failure_reason,
