@@ -10,7 +10,7 @@
   - Paginating a GraphQL connection
   - Flatten fetched rows before they reach the port
   - Deriving from a fetched source
-- Credential handling — read this before shipping
+- Credential handling, including refresh-on-401 for expiring tokens — read this before shipping
 - Custom request headers
 - Naming
 - Why the endpoints live in the profile
@@ -351,6 +351,76 @@ already been resolved.
 - This shape (`key`/`value`/`public`) is verified against the supervisor's
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
+
+### Expiring credentials: refresh on the session, never on a custom auth class
+
+An API whose token expires mid-extraction needs a retry that re-authenticates
+and replays the request. Two shapes look obvious and both fail; live runs have
+lost several build cycles to each.
+
+**A custom auth class is rejected before a request is sent.** `RESTAPIConfig`'s
+`auth` dispatch accepts dlt's own configured auth types, not an arbitrary
+object, so passing a hand-written class raises at configuration time:
+
+```
+dlt.common.configuration.exceptions.ConfigurationWrongTypeException:
+  Invalid configuration instance type `<class '_RefreshingBearerAuth'>`.
+```
+
+**Overriding `Session.request` never fires.** dlt's `RESTClient` calls
+`session.send()` directly, so a `requests.Session` subclass that overrides
+`request()` is simply bypassed — every call goes out with the stale token and
+the extraction dies inside the resource generator, which reads as a bug in your
+pagination rather than in your auth:
+
+```
+dlt.extract.exceptions.ResourceExtractionError: In processing pipe `<resource>`
+requests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: ...
+```
+
+**What works** is a `requests.Session` subclass that overrides **`send()`**,
+passed to the client as `session`. `send()` is the single chokepoint every
+`RESTClient` request passes through, so one override covers pagination, retries
+and every resource:
+
+```python
+class RefreshingSession(requests.Session):
+    """Re-authenticate once on 401, back off once on 429, then replay."""
+
+    def __init__(self, token: str, refresh: Callable[[], str]) -> None:
+        super().__init__()
+        self._token, self._refresh = token, refresh
+
+    def send(self, request, **kwargs):
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        response = super().send(request, **kwargs)
+        if response.status_code == 401:
+            self._token = self._refresh()          # replace, then replay once
+            request.headers["Authorization"] = f"Bearer {self._token}"
+            response = super().send(request, **kwargs)
+        elif response.status_code == 429:
+            time.sleep(float(response.headers.get("Retry-After", 1)))
+            response = super().send(request, **kwargs)
+        return response
+```
+
+Replay **once** per response, not in a loop: a refresh endpoint that keeps
+returning an unusable token turns an unbounded retry into a hang the supervisor
+reports only as a timeout.
+
+**Read the refresh response defensively.** Refresh endpoints disagree on the
+field name — `token`, `access_token`, `bearer_token` are all common. Check the
+ones the profile documents, and raise naming the payload keys you did get if
+none is present; a refresh that silently returns `None` produces a second 401
+that looks identical to the first, and the real fault stays invisible:
+
+```
+RuntimeError: refresh response at <path> carried none of
+  token/access_token/bearer_token
+```
+
+The refresh path itself is an attribute on the `api-source` service, like every
+other endpoint — see Credential handling above. Never inline the token.
 
 ## Custom request headers
 
