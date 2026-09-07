@@ -176,6 +176,25 @@ report indistinguishable from a real one.
 Each scenario's own `README.md` states its fixture, execution, goal, assertions
 and limitations.
 
+### Package reference
+
+Use the package README for the exact evidence contract and the boundary of what
+the package proves. The canary is a suite preflight, not a conversational
+scenario.
+
+| Package | Tier | Run order | Primary source or drill |
+|---|---:|---:|---|
+| [drift-canary](scenarios/drift-canary/README.md) | preflight | before smoke | skill claims, companion files, negative probes, and one local build |
+| [zero-row-optional-output](scenarios/zero-row-optional-output/README.md) | smoke | 1 | file-backed fixture with one valid zero-row optional resource |
+| [parent-child-grain-trap](scenarios/parent-child-grain-trap/README.md) | smoke | 2 | generated orders and line items with a parent-grain aggregation trap |
+| [credential-rotation](scenarios/credential-rotation/README.md) | core | 3 | disposable Postgres with command-stepped credential rotation |
+| [sigterm-diagnosis](scenarios/sigterm-diagnosis/README.md) | core | 4 | deterministic transform-window plan and diagnosis evidence |
+| [restart-and-switch](scenarios/restart-and-switch/README.md) | core | 5 | attempt-keyed broker fault and workflow endpoint switch |
+| [capability-shortfall](scenarios/capability-shortfall/README.md) | live | 6 | mock REST source with supported, proxy, and impossible metrics |
+| [crm-pipeline](scenarios/crm-pipeline/README.md) | core | 7 | paginated mock CRM source with auth expiry, rate limiting, and PII |
+| [finance-close](scenarios/finance-close/README.md) | core | 8 | mock close entries with hostile decimals and missing FX |
+| [inventory-position](scenarios/inventory-position/README.md) | core | 9 | profile-backed inventory and warehouse lookup with quality warnings |
+
 ## Running
 
 ### Deterministic and replay
@@ -190,18 +209,36 @@ empty, clean-looking run.
 
 ### Live
 
-The local-only live entrypoint runs a scenario through Claude Code, the installed
-`nxd-desktop` MCP server, and the job-loop skills. Each trial gets a disposable
-home, fixture, skill-pack staging area, and evidence directory; the report and
-replay artifacts are retained under `--output-dir` or a printed temporary
-directory.
+The local-only live entrypoint runs a selected package through Claude Code, the
+installed `nxd-desktop` MCP server, and the job-loop skills. At present,
+`capability-shortfall` is the only package in the `live` tier. The runner needs
+the local `claude` executable, the `nxd-desktop-supervisor` executable, and the
+desktop Python environment at `~/.nxd/desktop-venv/bin/python` unless an
+explicit `--desktop-python` is supplied. It does not use the platform CLI or a
+Kubernetes cluster.
+
+Each trial gets a disposable home, fixture, skill-pack staging area, and
+evidence directory; the report and transcript artifacts are retained under
+`--output-dir` or a printed temporary directory. Naming a package with
+`--scenario` deliberately crosses the tier boundary. Omitting `--scenario`
+runs smoke by default; `--tier live` selects the current live package when no
+package is named.
 
 ```bash
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
-  --scenario zero-row-optional-output \
+  --scenario capability-shortfall \
   --epochs 1 \
+  --allow-host-home --allow-host-home-bash \
   --output-dir /tmp/dp-scenarios-local-run
 ```
+
+`--allow-host-home` exposes the host credential/configuration home to the agent
+process. `--allow-host-home-bash` additionally exposes shell access and should
+be used only when the scenario needs it; the current capability-shortfall live
+path needs it to probe the local HTTP source. Keep the output directory empty
+before starting a run. A non-zero exit can mean a failed grade, an
+environment/interruption result, or a canary block; read `summary.txt` and the
+`interruption` object in `report.json` before rerunning.
 
 Each run writes, next to `report.json` and `summary.txt`:
 
@@ -429,7 +466,7 @@ harness actually keeps producing goes unlooked-for: **a gate that exists but
 never fires**, and **a test that asserts the code's self-report rather than the
 property**.
 
-`scripts/mutation_test.py` drives [mutmut](https://github.com/boxed/mutmut) over
+`scripts/mutation_test.py` drives `mutmut` over
 `src/dp_scenarios/operator/` and `src/dp_scenarios/grading/`. mutmut rewrites
 each function into a numbered set of variants behind a generated trampoline and
 selects the variant by environment variable, so a mutant that did not apply

@@ -65,6 +65,22 @@ its **actual** output into `Scenario.follow_up_check`:
 Both tests assert the harness's real substrate is load-bearing rather than
 merely declared.
 
+Run the package tests from `evals/dp-scenarios/`:
+
+```bash
+uv run pytest tests/test_scenario_restart_and_switch.py -q
+```
+
+The local Claude runner can execute the conversational package, but it does not
+turn the broker and workflow helper tests into a live supervisor restart:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario restart-and-switch \
+  --epochs 1 \
+  --output-dir /tmp/dp-scenarios-restart-and-switch
+```
+
 ## Execution: what "runs locally" means here
 
 No authenticated live agent session, live supervisor build, or live desktop

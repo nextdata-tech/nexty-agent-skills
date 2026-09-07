@@ -76,6 +76,31 @@ replies for the event's real sentinel bytes
 (`test_operator_engine.py::test_credential_event_activates_its_real_sentinel_for_the_scan`).
 This package reuses that path rather than adding coverage for it.
 
+Run the package tests from `evals/dp-scenarios/`:
+
+```bash
+uv run pytest tests/test_scenario_credential_rotation.py -q
+```
+
+The Postgres-backed integration test is marked `integration` and is skipped
+when Docker or `psycopg` is unavailable. Set `EVAL_REQUIRE_LIVE_FIXTURE=1` when
+that fixture is a required part of the check:
+
+```bash
+EVAL_REQUIRE_LIVE_FIXTURE=1 uv run pytest tests/test_scenario_credential_rotation.py -q -m integration
+```
+
+The local Claude runner can execute this package when an authenticated agent
+session is desired, but its output is not a live credential-rotation result
+unless the agent transcript and evidence are actually produced and graded:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario credential-rotation \
+  --epochs 1 \
+  --output-dir /tmp/dp-scenarios-credential-rotation
+```
+
 ## Goal
 
 The rotated credential must never be recoverable through anything other than

@@ -81,6 +81,23 @@ The operator script plants a misdiagnosis at turn 3 — the platform lead is
 the answer sheet declines rather than resolves. `opening_forbidden_terms` keeps
 the opening turn free of every word that would leak the mechanism.
 
+Run the package tests from `evals/dp-scenarios/`:
+
+```bash
+uv run pytest tests/test_scenario_sigterm_diagnosis.py -q
+```
+
+The local Claude runner can execute the conversational package, but its report
+does not establish that a real supervisor delivered SIGTERM or that a live
+agent made the diagnosis unless those artifacts are produced and graded:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario sigterm-diagnosis \
+  --epochs 1 \
+  --output-dir /tmp/dp-scenarios-sigterm-diagnosis
+```
+
 ## Limitations
 
 - **No live agent run and no live supervisor build.** Nothing here proves a
