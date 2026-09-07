@@ -1134,7 +1134,10 @@ def _query_candidates(
 
     selected_index, selected_rows = compatible[0]
     if selected_index == 0:
-        return [selected_rows], ()
+        # ``rows`` is the authoritative latest result; history is only a
+        # selection aid.  Avoid scoring a separately parsed copy when it is
+        # already the newest compatible entry.
+        return [latest_rows], ()
     return [selected_rows], (
         Finding(
             "query_scored_earlier_same_shape_answer",
