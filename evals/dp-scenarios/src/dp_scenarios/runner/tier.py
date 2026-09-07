@@ -10,10 +10,11 @@ condition and to persist observations.
 from __future__ import annotations
 
 import csv
-import inspect
 import hashlib
+import inspect
 import json
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 import tempfile
@@ -1261,7 +1262,13 @@ def _efficiency(
 
 
 class TierRunner:
-    """Run the drift canary, then scenarios in declaration order."""
+    """Run the drift canary, then scenarios in declaration order.
+
+    Scenario packages may be evaluated concurrently, but epochs belonging to
+    one package remain serial so their repeatability evidence keeps its
+    existing semantics. Each epoch still owns a separate ``RunEnvironment``
+    and therefore a separate supervisor data directory.
+    """
 
     def __init__(
         self,
@@ -1285,8 +1292,12 @@ class TierRunner:
         workflow_observer: WorkflowObserver | None = None,
         operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
         allow_host_home: bool = False,
+        max_workers: int = 1,
     ) -> None:
+        if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
+            raise TierError("max_workers must be a positive integer")
         self.scenarios = tuple(scenarios)
+        self.max_workers = max_workers
         self.pins = pins
         self.canary = canary
         self.session_factory = session_factory
@@ -1439,6 +1450,33 @@ class TierRunner:
             raise TierError("supervisor reader factory returned no reader")
         return value
 
+    def _run_scenario_summary(self, scenario: Scenario, *, pins: PinnedVersions) -> ScenarioSummary:
+        """Run all epochs for one scenario and build its ordered summary."""
+
+        runs = self._run_scenario_epochs(scenario, pins=pins)
+        observations = [
+            {
+                **run.scored_dict()["score"],
+                "state": run.score.state.value,
+                "scenario_id": run.scenario_id,
+                "repeatability_tier": scenario.repeatability_tier.value,
+                "gates": run.scored_dict()["score"]["gates"],
+                # Carried so the batch-level check can exclude a run that
+                # never finished its script. ``score.state`` alone cannot
+                # say it any more: since the TURN_TIMEOUT split a truncated
+                # run scores PASSED.
+                "truncated": run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
+            }
+            for run in runs
+        ]
+        repeatability = repeatability_certificate(
+            observations,
+            getattr(scenario, "repeatability", scenario.repeatability_tier),
+        )
+        if repeatability.certified:
+            runs = tuple(_promote_certified_run(run) for run in runs)
+        return ScenarioSummary(scenario.id, repeatability, tuple(runs))
+
     def run(self) -> TierResult:
         """Run one complete tier, returning before any scenario on canary block."""
 
@@ -1459,31 +1497,60 @@ class TierRunner:
             raise TierError("canary claims hash does not match the pinned assertion")
         self._validate_evidence_destinations()
         run_pins = replace(self.pins, canary_claims_hash=canary.claims_hash)
-        summaries: list[ScenarioSummary] = []
-        for scenario in self.scenarios:
-            runs = self._run_scenario_epochs(scenario, pins=run_pins)
-            observations = [
-                {
-                    **run.scored_dict()["score"],
-                    "state": run.score.state.value,
-                    "scenario_id": run.scenario_id,
-                    "repeatability_tier": scenario.repeatability_tier.value,
-                    "gates": run.scored_dict()["score"]["gates"],
-                    # Carried so the batch-level check can exclude a run that
-                    # never finished its script.  ``score.state`` alone cannot
-                    # say it any more: since the TURN_TIMEOUT split a truncated
-                    # run scores PASSED.
-                    "truncated": run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
-                }
-                for run in runs
+        if self.max_workers == 1 or len(self.scenarios) <= 1:
+            summaries = [
+                self._run_scenario_summary(scenario, pins=run_pins)
+                for scenario in self.scenarios
             ]
-            repeatability = repeatability_certificate(
-                observations,
-                getattr(scenario, "repeatability", scenario.repeatability_tier),
+        else:
+            # Submit in declaration order and collect in that same order. A
+            # faster scenario must not reorder the report or its conversation
+            # paths. Detect a worker failure independently of report order so
+            # queued scenarios can be cancelled before they start.
+            executor = ThreadPoolExecutor(
+                max_workers=min(self.max_workers, len(self.scenarios)),
+                thread_name_prefix="dp-scenario",
             )
-            if repeatability.certified:
-                runs = tuple(_promote_certified_run(run) for run in runs)
-            summaries.append(ScenarioSummary(scenario.id, repeatability, tuple(runs)))
+            futures: dict[object, int] = {}
+            summaries_by_index: dict[int, ScenarioSummary] = {}
+            next_index = 0
+
+            for index, scenario in enumerate(self.scenarios[: self.max_workers]):
+                future = executor.submit(self._run_scenario_summary, scenario, pins=run_pins)
+                futures[future] = index
+                next_index = index + 1
+            try:
+                while futures:
+                    completed, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+                    # Process every completion before replenishing the pool.
+                    # If one of a group fails, no replacement can start after
+                    # that failure and before the coordinator cancels work.
+                    for future in completed:
+                        index = futures.pop(future)
+                        summaries_by_index[index] = future.result()
+                    for _ in completed:
+                        if next_index >= len(self.scenarios):
+                            break
+                        scenario = self.scenarios[next_index]
+                        future = executor.submit(
+                            self._run_scenario_summary,
+                            scenario,
+                            pins=run_pins,
+                        )
+                        futures[future] = next_index
+                        next_index += 1
+            except BaseException:
+                # A worker may have failed while later scenarios were still
+                # active. Cancel those futures before waiting for active
+                # workers, so a live run cannot start extra paid sessions
+                # after the tier is already known to be invalid.
+                for future in futures:
+                    future.cancel()
+                executor.shutdown(wait=True, cancel_futures=True)
+                raise
+            else:
+                executor.shutdown(wait=True)
+                summaries = [summaries_by_index[index] for index in range(len(self.scenarios))]
         states = [run.score.state for summary in summaries for run in summary.runs]
         # A truncated run never reached the end of its script, so the gates it
         # did examine are not evidence that the run was clean.  Before the
@@ -1517,6 +1584,9 @@ class TierRunner:
     def _validate_evidence_destinations(self) -> None:
         """Reject bundle collisions before constructing any scenario session."""
 
+        scenario_ids = [scenario.id for scenario in self.scenarios]
+        if len(scenario_ids) != len(set(scenario_ids)):
+            raise TierError("scenario ids must be unique")
         if self.evidence_root is None:
             return
         for scenario in self.scenarios:

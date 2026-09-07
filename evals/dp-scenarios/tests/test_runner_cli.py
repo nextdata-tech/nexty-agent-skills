@@ -67,6 +67,8 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
             "mock-1",
             "--canary-claims-hash",
             "claims-1",
+            "--jobs",
+            "2",
             "--knob-plan",
             str(tmp_path / "knobs.json"),
             "--report-json",
@@ -80,6 +82,7 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     assert callable(captured["session_factory"])
     assert captured["replay_recordings"] == {}
     assert captured["knob_plan"] == knob_plan
+    assert captured["max_workers"] == 2
 
 
 def test_cli_rejects_workflow_switch_without_endpoint_callbacks(
@@ -196,10 +199,19 @@ def test_runner_cli_mirrors_the_driver_flags_and_defaults_to_scripted() -> None:
     assert args.driver_temperature == 1.0
     assert args.driver_timeout == 60.0
     assert args.driver_max_tokens == 400
+    assert args.jobs == 1
 
     pins, factory = cli._driver_configuration(args, _cli_pins())
     assert factory is None
     assert pins.driver_model_id == "not-applicable"
+
+
+@pytest.mark.parametrize("jobs", [0, -1])
+def test_runner_cli_rejects_non_positive_jobs(
+    tmp_path: Path, jobs: int
+) -> None:
+    with pytest.raises(cli.TierError, match="--jobs must be a positive integer"):
+        cli.main(_replay_argv(tmp_path, "smoke", "replay") + ["--jobs", str(jobs)])
 
 
 def test_runner_cli_driver_requires_the_key_and_pins_the_prompt_hash(

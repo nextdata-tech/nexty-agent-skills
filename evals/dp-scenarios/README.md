@@ -209,6 +209,21 @@ Each run writes, next to `report.json` and `summary.txt`:
 conversation-<scenario>-epoch-<n>.md
 ```
 
+To run several selected scenario packages at once, repeat `--scenario` and set
+`--jobs`, for example:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario zero-row-optional-output \
+  --scenario parent-child-grain-trap \
+  --jobs 2
+```
+
+`--jobs` fans out different scenario packages; epochs within one package stay
+serial. Every epoch has its own temporary root and Desktop supervisor data
+directory, so this does not rely on one supervisor serving multiple workflows
+at the same time. Results remain in scenario declaration order.
+
 That is the readable transcript — every operator and agent turn, which rule
 answered each one, whether the driver authored it or fell back, the tools the
 agent called, and the gate results. Start there when you want to know how a run

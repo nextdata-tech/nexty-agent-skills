@@ -313,6 +313,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--epochs", type=int, default=1, help="epochs per selected scenario (use 5 for the declared deterministic tier)")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="maximum number of scenario packages to execute concurrently (epochs stay serial)",
+    )
     parser.add_argument("--output-dir", type=Path, help="directory for report.json and summary.txt (default: a retained temp directory)")
     parser.add_argument(
         "--env-file",
@@ -372,6 +378,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.turn_timeout <= 0:
         raise TierError("--turn-timeout must be positive")
+    if args.jobs < 1:
+        raise TierError("--jobs must be a positive integer")
     if args.allow_host_home_bash and not args.allow_host_home:
         raise TierError("--allow-host-home-bash requires --allow-host-home")
     repo_root = REPO_ROOT
@@ -475,6 +483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
             allow_host_home=args.allow_host_home,
             operator_factory=operator_factory,
+            max_workers=args.jobs,
         ).run()
         _, _, conversations = write_report(
             result, json_path=report_dir / "report.json", summary_path=report_dir / "summary.txt"
