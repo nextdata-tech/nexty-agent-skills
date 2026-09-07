@@ -238,3 +238,14 @@ jobs:
           path: |
             evals/dp-scenarios/mutation-report.txt
           if-no-files-found: warn
+
+      - name: Slack Notification
+        if: failure()
+        uses: ./.github/actions/slack
+        with:
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          label: 'nightly mutation'
+          detail: >-
+            dp-scenarios mutation testing failed for `${{ github.sha }}`.
+            Inspect the job summary and the `mutation-report` artifact for the
+            survivor details.
