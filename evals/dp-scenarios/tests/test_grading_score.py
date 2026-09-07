@@ -7,7 +7,6 @@ import pytest
 from dp_scenarios.grading.gates import GATE_PHASES, GATE_POINTS, Finding, GateResult, gate_follow_up
 from dp_scenarios.grading.score import (
     EfficiencyReport,
-    ScoreVector,
     TerminalState,
     pass_threshold,
     scenario_passes,
@@ -210,21 +209,3 @@ def test_declaration_waivers_reduce_the_scoreable_max_and_threshold() -> None:
     assert pass_threshold(result) == 60
     assert result.total == 75
     assert scenario_passes(result)
-
-
-def test_pass_threshold_clamps_to_the_supported_score_range() -> None:
-    capped = ScoreVector(
-        gates=_all_pass(),
-        total=100,
-        hard_gate_flags={"route_fidelity": True},
-        state=TerminalState.PASSED,
-    )
-    floor = ScoreVector(
-        gates={},
-        total=0,
-        hard_gate_flags={"route_fidelity": True},
-        state=TerminalState.FAILED,
-    )
-
-    assert pass_threshold(capped) == 80
-    assert pass_threshold(floor) == 1

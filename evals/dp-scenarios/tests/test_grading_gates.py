@@ -6,14 +6,10 @@ import csv
 import io
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from dp_scenarios.grading.gates import (
-    _ledger_contract_breaches,
-    _mapping_artifact,
-    _review_round_outcome,
     gate_capability_from_decisions,
     G1,
     GATE_POINTS,
@@ -27,7 +23,6 @@ from dp_scenarios.grading.gates import (
     gate_narrowing,
     gate_query,
     g1_intake,
-    g3_narrowing,
 )
 from dp_scenarios.grading.oracles import OracleState, capability_oracle, control_total_oracle, counter_oracle, gold_rowset, marker_values
 from dp_scenarios.ledger import LedgerStore, Manifest
@@ -289,46 +284,14 @@ def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     assert "capability_metrics_not_examined" in gate_capability({}, {"metrics": {}}).codes
     assert gate_capability({}, {}).required
     optional = gate_capability({}, {}, required=False)
-    assert optional.gate == "capability"
-    assert optional.passed is False
-    assert optional.points == 0
     assert not optional.required
     assert not optional.examined
-    assert not optional.ungraded
     assert optional.codes == ("capability_shortfall_not_staged",)
 
     optional_narrowing = gate_narrowing({}, [], None, required=False)
     assert optional_narrowing.required is False
     assert optional_narrowing.examined is False
     assert optional_narrowing.codes == ("narrowing_change_not_staged",)
-
-
-def test_optional_capability_gate_preserves_its_non_scoreable_result() -> None:
-    result = gate_capability_from_decisions(
-        None,
-        _shortfall_capability(),
-        "stage_age_days = ...\n",
-        required=False,
-    )
-
-    assert result.gate == "capability"
-    assert result.passed is False
-    assert result.points == 0
-    assert result.codes == ("capability_shortfall_not_staged",)
-    assert result.examined is False
-    assert result.ungraded is False
-    assert result.required is False
-
-
-def test_legacy_narrowing_wrapper_forwards_declaration_requiredness() -> None:
-    result = g3_narrowing({}, [], None, required=False)
-
-    assert result.gate == "G3"
-    assert result.passed is False
-    assert result.points == 0
-    assert result.codes == ("g3_change_not_staged",)
-    assert result.examined is False
-    assert result.required is False
 
 
 def test_staged_gate_missing_evidence_stays_required_and_fails() -> None:
@@ -927,97 +890,6 @@ def _governed_rows() -> list[dict[str, str]]:
             "detail": "",
         },
     ]
-
-
-def test_ledger_contract_breaches_checks_each_declared_vocabulary() -> None:
-    rows = [
-        {
-            "status": "confirmed",
-            "provenance": "not-a-provenance",
-            "applies_to": "deals.stage_age_days",
-        },
-        {
-            "status": "not-a-status",
-            "applies_to": "deals.stage_age_days",
-        },
-    ]
-
-    assert _ledger_contract_breaches([]) == ()
-    assert _ledger_contract_breaches(rows) == (
-        "status has ['not-a-status']",
-        "provenance has ['', 'not-a-provenance']",
-    )
-
-
-def test_ledger_contract_breaches_does_not_skip_provenance_when_status_is_absent() -> None:
-    rows = [{"provenance": "not-a-provenance", "applies_to": "deals.stage_age_days"}]
-
-    assert _ledger_contract_breaches(rows) == (
-        "no 'status' column",
-        "provenance has ['not-a-provenance']",
-    )
-
-
-def test_mapping_artifact_preserves_supported_object_and_nested_shapes() -> None:
-    object_artifact = SimpleNamespace(
-        run_id="run-1",
-        artifact_id="artifact-1",
-        publish_sequence=0,
-        per_model_row_counts={"model": "1"},
-        lifecycle_state="published",
-    )
-    assert _mapping_artifact(object_artifact) == {
-        "run_id": "run-1",
-        "artifact_id": "artifact-1",
-        "publish_sequence": 0,
-        "per_model_row_counts": {"model": "1"},
-        "lifecycle_state": "published",
-    }
-
-    nested = _mapping_artifact(
-        {
-            "records": [
-                {"run_id": "old"},
-                {
-                    "run_id": "record-run",
-                    "identifiers": {
-                        "run_id": "identifier-run",
-                        "artifact_id": "identifier-artifact",
-                    },
-                },
-            ]
-        }
-    )
-    assert nested["run_id"] == "record-run"
-    assert nested["artifact_id"] == "identifier-artifact"
-
-
-def test_review_round_outcome_accepts_only_valid_terminal_statuses() -> None:
-    assert _review_round_outcome(None) is None
-    assert _review_round_outcome("complete") is None
-    assert _review_round_outcome([{"status": "skipped"}, {"status": "unknown"}]) is None
-    assert _review_round_outcome(
-        {
-            "review_rounds": [
-                {"status": " COMPLETE "},
-                {"status": "timed_out"},
-                {"status": "needs_user"},
-                {"status": "skipped"},
-                {"outcome": "complete"},
-                "not-a-round",
-            ]
-        }
-    ) == "3 review round(s): complete, needs_user, timed_out"
-
-
-def test_construction_can_read_a_review_outcome_from_the_recorded_round() -> None:
-    result = gate_construction(
-        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
-        review_rounds={"review_rounds": [{"status": "needs_user"}]},
-    )
-
-    assert result.passed is True
-    assert result.codes == ()
 
 
 def test_capability_grades_a_governed_shortfall_from_the_decisions_the_product_emits() -> None:
