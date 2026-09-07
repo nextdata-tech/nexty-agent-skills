@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -53,3 +57,36 @@ def test_reference_builder_registration_rejects_duplicate_names() -> None:
             register_reference_builder("registry-test-gold", builder)
     finally:
         _REFERENCE_BUILDERS.pop("registry-test-gold", None)
+
+
+def test_reference_plugins_are_safe_to_discover_during_concurrent_generation() -> None:
+    script = """
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from dp_scenarios.synthgen import generate_dataset
+
+
+def build(item):
+    name, destination = item
+    generate_dataset(name, 29, Path(destination))
+
+
+with TemporaryDirectory() as root:
+    jobs = [
+        (name, str(Path(root) / name))
+        for name in ("crm_pipeline", "finance_close", "inventory_position")
+    ]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        list(executor.map(build, jobs))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr

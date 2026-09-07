@@ -347,6 +347,7 @@ def test_tier_runs_scenarios_concurrently_and_preserves_declaration_order(tmp_pa
     ).run()
 
     assert [summary.scenario_id for summary in result.scenarios] == ["first", "second"]
+    assert machine_report(result)["max_workers"] == 2
     assert set(roots) == {"first", "second"}
     assert len(set(roots.values())) == 2
     assert all(not root.exists() for root in roots.values())

@@ -209,6 +209,12 @@ Each run writes, next to `report.json` and `summary.txt`:
 conversation-<scenario>-epoch-<n>.md
 ```
 
+That is the readable transcript — every operator and agent turn, which rule
+answered each one, whether the driver authored it or fell back, the tools the
+agent called, and the gate results. Start there when you want to know how a run
+actually went; `summary.txt` gives you the verdict and gate codes, and names the
+transcripts at the end.
+
 To run several selected scenario packages at once, repeat `--scenario` and set
 `--jobs`, for example:
 
@@ -222,13 +228,13 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 `--jobs` fans out different scenario packages; epochs within one package stay
 serial. Every epoch has its own temporary root and Desktop supervisor data
 directory, so this does not rely on one supervisor serving multiple workflows
-at the same time. Results remain in scenario declaration order.
+at the same time. Results remain in scenario declaration order. The effective
+worker count is recorded as `max_workers` in `report.json`.
 
-That is the readable transcript — every operator and agent turn, which rule
-answered each one, whether the driver authored it or fell back, the tools the
-agent called, and the gate results. Start there when you want to know how a run
-actually went; `summary.txt` gives you the verdict and gate codes, and names the
-transcripts at the end.
+Parallel workers compete for host CPU, memory, subprocesses, and local ports.
+That contention can trip `--turn-timeout`, which makes the tier `ungraded`; do
+not compare `wall_clock_seconds` or `efficiency` between serial and parallel
+runs as if they were the same execution conditions.
 
 With no `--scenario` it runs the smoke tier rather than every package on disk.
 Naming a scenario id explicitly crosses the tier, which is how you run one core

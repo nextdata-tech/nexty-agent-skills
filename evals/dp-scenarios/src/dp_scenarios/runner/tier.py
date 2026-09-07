@@ -14,7 +14,7 @@ import hashlib
 import inspect
 import json
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 import tempfile
@@ -301,6 +301,7 @@ class TierResult:
     scenarios: tuple[ScenarioSummary, ...]
     wall_clock_seconds: float
     blocked_reason: tuple[Mapping[str, object], ...] = ()
+    max_workers: int = 1
 
     @property
     def scenario_runs(self) -> tuple[ScenarioRun, ...]:
@@ -320,6 +321,7 @@ class TierResult:
             "canary": self.canary.to_dict(),
             "scenarios": [summary.as_dict(report_safe=report_safe) for summary in self.scenarios],
             "wall_clock_seconds": self.wall_clock_seconds,
+            "max_workers": self.max_workers,
             "blocked_reason": list(self.blocked_reason),
             "clean_tier_means": (
                 "the canary found no drift in its claims, the scenarios' gates passed against their oracles, and the ledger lint was clean; "
@@ -1325,6 +1327,12 @@ class TierRunner:
         self.operator_factory = operator_factory
         self.allow_host_home = allow_host_home
 
+    @property
+    def effective_max_workers(self) -> int:
+        """Return the worker count this tier can actually use."""
+
+        return min(self.max_workers, len(self.scenarios)) if self.scenarios else 1
+
     def _workflow_restart(
         self,
         scenario: Scenario,
@@ -1490,7 +1498,14 @@ class TierRunner:
         canary = self._canary()
         if canary.blocking:
             reasons = tuple(issue.to_dict() for issue in canary.verdict.issues)
-            return TierResult("blocked_by_canary", canary, (), time.monotonic() - started, reasons)
+            return TierResult(
+                "blocked_by_canary",
+                canary,
+                (),
+                time.monotonic() - started,
+                reasons,
+                self.effective_max_workers,
+            )
         if not isinstance(canary.claims_hash, str) or not canary.claims_hash.strip():
             raise TierError("a non-blocking canary result must carry its claims hash")
         if canary.claims_hash != self.pins.canary_claims_hash:
@@ -1507,50 +1522,75 @@ class TierRunner:
             # faster scenario must not reorder the report or its conversation
             # paths. Detect a worker failure independently of report order so
             # queued scenarios can be cancelled before they start.
-            executor = ThreadPoolExecutor(
-                max_workers=min(self.max_workers, len(self.scenarios)),
-                thread_name_prefix="dp-scenario",
-            )
-            futures: dict[object, int] = {}
             summaries_by_index: dict[int, ScenarioSummary] = {}
+            futures: dict[Future[ScenarioSummary], int] = {}
             next_index = 0
-
-            for index, scenario in enumerate(self.scenarios[: self.max_workers]):
-                future = executor.submit(self._run_scenario_summary, scenario, pins=run_pins)
-                futures[future] = index
-                next_index = index + 1
-            try:
-                while futures:
-                    completed, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
-                    # Process every completion before replenishing the pool.
-                    # If one of a group fails, no replacement can start after
-                    # that failure and before the coordinator cancels work.
-                    for future in completed:
-                        index = futures.pop(future)
-                        summaries_by_index[index] = future.result()
-                    for _ in completed:
-                        if next_index >= len(self.scenarios):
-                            break
-                        scenario = self.scenarios[next_index]
+            with ThreadPoolExecutor(
+                max_workers=self.effective_max_workers,
+                thread_name_prefix="dp-scenario",
+            ) as executor:
+                try:
+                    for index, scenario in enumerate(self.scenarios[: self.effective_max_workers]):
                         future = executor.submit(
                             self._run_scenario_summary,
                             scenario,
                             pins=run_pins,
                         )
-                        futures[future] = next_index
-                        next_index += 1
-            except BaseException:
-                # A worker may have failed while later scenarios were still
-                # active. Cancel those futures before waiting for active
-                # workers, so a live run cannot start extra paid sessions
-                # after the tier is already known to be invalid.
-                for future in futures:
-                    future.cancel()
-                executor.shutdown(wait=True, cancel_futures=True)
-                raise
-            else:
-                executor.shutdown(wait=True)
-                summaries = [summaries_by_index[index] for index in range(len(self.scenarios))]
+                        futures[future] = index
+                        next_index = index + 1
+                    while futures:
+                        completed, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+                        # Process every completion before replenishing the pool.
+                        # If one of a group fails, no replacement can start after
+                        # that failure and before the coordinator cancels work.
+                        errors: list[BaseException] = []
+                        for future in completed:
+                            index = futures.pop(future)
+                            try:
+                                summaries_by_index[index] = future.result()
+                            except BaseException as error:  # noqa: BLE001 - preserve worker failures
+                                errors.append(error)
+                        if errors:
+                            primary, *secondary = errors
+                            for error in secondary:
+                                primary.add_note(
+                                    f"another concurrent scenario failed: "
+                                    f"{type(error).__name__}: {error}"
+                                )
+                            raise primary
+                        for _ in completed:
+                            if next_index >= len(self.scenarios):
+                                break
+                            scenario = self.scenarios[next_index]
+                            future = executor.submit(
+                                self._run_scenario_summary,
+                                scenario,
+                                pins=run_pins,
+                            )
+                            futures[future] = next_index
+                            next_index += 1
+                except BaseException as primary_error:
+                    # A worker may have failed while later scenarios were still
+                    # active. Cancel those futures before the context manager
+                    # waits for active workers, so a live run cannot start
+                    # extra paid sessions after the tier is already invalid.
+                    remaining_futures = tuple(futures)
+                    for future in remaining_futures:
+                        future.cancel()
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    for future in remaining_futures:
+                        if future.cancelled():
+                            continue
+                        try:
+                            future.result()
+                        except BaseException as secondary_error:  # noqa: BLE001 - preserve all worker failures
+                            if secondary_error is not primary_error:
+                                primary_error.add_note(
+                                    f"another concurrent scenario failed: "
+                                    f"{type(secondary_error).__name__}: {secondary_error}"
+                                )
+                    raise
+            summaries = [summaries_by_index[index] for index in range(len(self.scenarios))]
         states = [run.score.state for summary in summaries for run in summary.runs]
         # A truncated run never reached the end of its script, so the gates it
         # did examine are not evidence that the run was clean.  Before the
@@ -1579,7 +1619,13 @@ class TierRunner:
             verdict = "ungraded"
         else:
             verdict = "failed"
-        return TierResult(verdict, canary, tuple(summaries), time.monotonic() - started)
+        return TierResult(
+            verdict,
+            canary,
+            tuple(summaries),
+            time.monotonic() - started,
+            max_workers=self.effective_max_workers,
+        )
 
     def _validate_evidence_destinations(self) -> None:
         """Reject bundle collisions before constructing any scenario session."""
