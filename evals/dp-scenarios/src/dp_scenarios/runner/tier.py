@@ -1543,16 +1543,17 @@ class TierRunner:
                         # Process every completion before replenishing the pool.
                         # If one of a group fails, no replacement can start after
                         # that failure and before the coordinator cancels work.
-                        errors: list[BaseException] = []
+                        errors: list[tuple[int, BaseException]] = []
                         for future in completed:
                             index = futures.pop(future)
                             try:
                                 summaries_by_index[index] = future.result()
                             except BaseException as error:  # noqa: BLE001 - preserve worker failures
-                                errors.append(error)
+                                errors.append((index, error))
                         if errors:
-                            primary, *secondary = errors
-                            for error in secondary:
+                            errors.sort(key=lambda item: item[0])
+                            (_, primary), *secondary = errors
+                            for _, error in secondary:
                                 primary.add_note(
                                     f"another concurrent scenario failed: "
                                     f"{type(error).__name__}: {error}"

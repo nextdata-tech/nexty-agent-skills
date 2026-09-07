@@ -233,8 +233,10 @@ worker count is recorded as `max_workers` in `report.json`.
 
 Parallel workers compete for host CPU, memory, subprocesses, and local ports.
 That contention can trip `--turn-timeout`, which makes the tier `ungraded`; do
-not compare `wall_clock_seconds` or `efficiency` between serial and parallel
-runs as if they were the same execution conditions.
+not compare the `Total wall-clock` value in `summary.txt` between serial and
+parallel runs as if they were the same execution conditions. The `efficiency`
+fields in `report.json` are reported-only turn and call counts; they do not
+measure this host contention.
 
 With no `--scenario` it runs the smoke tier rather than every package on disk.
 Naming a scenario id explicitly crosses the tier, which is how you run one core

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import subprocess
 import sys
+from textwrap import dedent
 from types import SimpleNamespace
 
 import pytest
@@ -60,16 +61,33 @@ def test_reference_builder_registration_rejects_duplicate_names() -> None:
 
 
 def test_reference_plugins_are_safe_to_discover_during_concurrent_generation() -> None:
-    script = """
+    script = dedent(
+        """
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier
+import time
 
 from dp_scenarios.synthgen import generate_dataset
+from dp_scenarios.synthgen import reference
+
+
+real_import = reference.importlib.import_module
+
+
+def slow_import(name):
+    time.sleep(0.2)
+    return real_import(name)
+
+
+reference.importlib.import_module = slow_import
+start = Barrier(3)
 
 
 def build(item):
     name, destination = item
+    start.wait()
     generate_dataset(name, 29, Path(destination))
 
 
@@ -81,9 +99,10 @@ with TemporaryDirectory() as root:
     with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
         list(executor.map(build, jobs))
 """
+    )
     completed = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=Path(__file__).parents[1],
+        cwd=Path(__file__).parents[1] / "src",
         capture_output=True,
         text=True,
         check=False,
