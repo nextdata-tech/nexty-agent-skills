@@ -14,7 +14,8 @@ the non-ASCII value byte-for-byte. The fixture is local and deterministic; it
 does not prove a live regional source or authenticated agent run.
 
 The query gate scores the exact committed Japanese-category row-set against the
-newest structured semantic-query result with the same row-arity shape. This
-keeps an earlier governed answer observable if a later exploratory query has a
-different row shape while preserving latest-wins for same-shaped corrections;
-the follow-up remains separately graded.
+newest structured semantic-query result with the same row-arity and
+distinct-row-count shape. This keeps an earlier governed answer observable if
+a later exploratory query has a different result grain while preserving
+latest-wins for same-shaped corrections; the follow-up remains separately
+graded.

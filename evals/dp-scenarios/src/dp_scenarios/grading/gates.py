@@ -1057,22 +1057,21 @@ def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bo
 
 def _query_shape(
     rows: Sequence[Mapping[str, object]],
-    columns: Sequence[str] | None = None,
-) -> frozenset[int] | None:
-    """Return the name-blind row-arity shape used for history matching.
+) -> tuple[frozenset[int], int] | None:
+    """Return the EX-necessary shape used for history matching.
 
-    Empty results use the retained header width when one is available. The EX
-    scorer itself sees an empty row-set, but the header still distinguishes an
-    empty correction from an unrelated query shape.
+    The shape mirrors the invariants required before the deterministic EX
+    scorer can pass: row arities plus the number of distinct normalized rows.
+    It deliberately ignores retained column headers. Headers are useful
+    display metadata, but treating them as evidence made headered and
+    headerless empty results take different grading paths.
     """
 
     if any(not isinstance(row, Mapping) for row in rows):
         return None
-    if rows:
-        return frozenset(len(row) for row in rows)
-    if columns is not None:
-        return frozenset({len(columns)})
-    return frozenset()
+    from nxd_eval.scoring import _norm_rowset
+
+    return (frozenset(len(row) for row in rows), len(_norm_rowset(list(rows))))
 
 
 def _query_candidates(
@@ -1080,13 +1079,13 @@ def _query_candidates(
     latest_rows: list[dict[str, object]],
     gold_rows: list[object],
 ) -> tuple[list[list[dict[str, object]]], tuple[Finding, ...]]:
-    """Select the newest retained answer with the gold row-arity shape.
+    """Select the newest retained answer with the gold result shape.
 
-    The latest result remains authoritative among answers with the same
-    shape. A different-shaped exploratory query cannot erase an earlier
-    governed answer, but a same-shaped correction must still win. History is
-    trusted only when its last entry is the result stored under ``rows``;
-    otherwise a hand-edited or stale history falls back to that latest result.
+    The latest result remains authoritative among answers with the same shape.
+    A different-shaped exploratory query cannot erase an earlier governed
+    answer, but a same-shaped correction must still win. History is trusted
+    only when its last entry is the result stored under ``rows``; otherwise a
+    hand-edited or stale history falls back to that latest result.
     """
 
     if not isinstance(value, Mapping):
@@ -1095,27 +1094,14 @@ def _query_candidates(
     if not isinstance(raw_history, list) or not raw_history:
         return [latest_rows], ()
 
-    entries: list[tuple[list[dict[str, object]], list[str] | None]] = []
+    entries: list[list[dict[str, object]]] = []
     for raw_entry in raw_history:
         if isinstance(raw_entry, list):
             raw_rows = raw_entry
-            columns = None
         elif isinstance(raw_entry, Mapping):
             raw_rows = raw_entry.get("rows")
-            raw_columns = raw_entry.get("columns")
-            if raw_columns is not None:
-                if (
-                    not isinstance(raw_columns, list)
-                    or any(not isinstance(column, str) for column in raw_columns)
-                    or len(set(raw_columns)) != len(raw_columns)
-                ):
-                    raw_rows = None
-                columns = list(raw_columns) if raw_rows is not None else None
-            else:
-                columns = None
         else:
             raw_rows = None
-            columns = None
         if not isinstance(raw_rows, list) or any(not isinstance(row, Mapping) for row in raw_rows):
             return [latest_rows], (
                 Finding(
@@ -1123,9 +1109,9 @@ def _query_candidates(
                     "retained semantic-query history was malformed or disagreed with the latest rows",
                 ),
             )
-        entries.append(([dict(row) for row in raw_rows], columns))
+        entries.append([dict(row) for row in raw_rows])
 
-    if entries[-1][0] != latest_rows:
+    if entries[-1] != latest_rows:
         return [latest_rows], (
             Finding(
                 "query_history_ignored",
@@ -1140,8 +1126,8 @@ def _query_candidates(
     newest_first = list(reversed(entries))
     compatible = [
         (index, rows)
-        for index, (rows, columns) in enumerate(newest_first)
-        if _query_shape(rows, columns) == gold_shape
+        for index, rows in enumerate(newest_first)
+        if _query_shape(rows) == gold_shape
     ]
     if not compatible:
         return [latest_rows], ()
@@ -1152,7 +1138,7 @@ def _query_candidates(
     return [selected_rows], (
         Finding(
             "query_scored_earlier_same_shape_answer",
-            "an earlier retained semantic-query row-set was the newest result with the gold row shape",
+            "an earlier retained semantic-query row-set was the newest result with the gold result shape",
             {
                 "candidate_index": selected_index,
                 "candidate_count": len(newest_first),
