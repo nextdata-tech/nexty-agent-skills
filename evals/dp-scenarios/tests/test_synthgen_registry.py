@@ -63,42 +63,40 @@ def test_reference_builder_registration_rejects_duplicate_names() -> None:
 def test_reference_plugins_are_safe_to_discover_during_concurrent_generation() -> None:
     script = dedent(
         """
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from threading import Barrier
-import time
+        from concurrent.futures import ThreadPoolExecutor
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from threading import Barrier
+        import time
 
-from dp_scenarios.synthgen import generate_dataset
-from dp_scenarios.synthgen import reference
-
-
-real_import = reference.importlib.import_module
+        from dp_scenarios.synthgen import generate_dataset
+        from dp_scenarios.synthgen import reference
 
 
-def slow_import(name):
-    time.sleep(0.2)
-    return real_import(name)
+        real_import = reference.importlib.import_module
 
 
-reference.importlib.import_module = slow_import
-start = Barrier(3)
+        def slow_import(name):
+            time.sleep(0.2)
+            return real_import(name)
 
 
-def build(item):
-    name, destination = item
-    start.wait()
-    generate_dataset(name, 29, Path(destination))
+        reference.importlib.import_module = slow_import
+        names = ("crm_pipeline", "finance_close", "inventory_position")
+        start = Barrier(len(names))
 
 
-with TemporaryDirectory() as root:
-    jobs = [
-        (name, str(Path(root) / name))
-        for name in ("crm_pipeline", "finance_close", "inventory_position")
-    ]
-    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
-        list(executor.map(build, jobs))
-"""
+        def build(item):
+            name, destination = item
+            start.wait()
+            generate_dataset(name, 29, Path(destination))
+
+
+        with TemporaryDirectory() as root:
+            jobs = [(name, str(Path(root) / name)) for name in names]
+            with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+                list(executor.map(build, jobs))
+        """
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],
