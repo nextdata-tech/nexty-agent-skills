@@ -8,7 +8,10 @@ turns:
     substitute_reply: false
     approval: true
   - Show me the source rows behind the count difference.
-  - Please continue with the governed reconciliation query.
+  - Please continue with the governed reconciliation query. Return exactly one
+    reconciliation-metric row with export_applications,
+    dashboard_active_applications, difference, status_filter_exclusions, and
+    tombstone_exclusions.
   - Please record the decision and finish the reconciliation.
   - Where are we?
 source_answers:

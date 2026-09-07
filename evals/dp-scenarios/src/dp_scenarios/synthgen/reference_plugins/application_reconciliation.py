@@ -54,7 +54,6 @@ def _application_reconciliation_gold(data_dir: Path) -> ReferenceGold:
     }
     answer = [
         {
-            "reconciliation_snapshot_date": snapshot["snapshot_date"],
             "export_applications": export_count,
             "dashboard_active_applications": dashboard_count,
             "difference": export_count - dashboard_count,
