@@ -164,3 +164,44 @@ def test_unreadable_query_gold_is_ungraded_for_the_grain_followup(tmp_path: Path
     assert result["status"] == "ungraded"
     assert result["passed"] is False
     assert result["findings"] == ["gold_artifact_unreadable"]
+
+
+@pytest.mark.parametrize(
+    ("scenario_name", "target", "preserved_finding"),
+    [
+        (
+            "credential-rotation",
+            {
+                "rotation_records": [{"step": 0, "observations": {}}],
+                "surfaces": {},
+                "diagnostics": {},
+                "diff": {},
+            },
+            "rotation_records_incomplete",
+        ),
+        (
+            "sigterm-diagnosis",
+            {
+                "run_records": {"naive": {}, "bounded": {}},
+            },
+            "naive_run_not_sigterm",
+        ),
+    ],
+)
+def test_malformed_json_gold_preserves_findings_measured_before_gold_read(
+    tmp_path: Path,
+    scenario_name: str,
+    target: dict[str, object],
+    preserved_finding: str,
+) -> None:
+    scenario = load_scenario(ROOT / "scenarios" / scenario_name)
+    invalid_gold = tmp_path / f"{scenario_name}-invalid.json"
+    invalid_gold.write_text("not-json", encoding="utf-8")
+    broken = replace(scenario, gold={**scenario.gold, "diagnostics": invalid_gold})
+
+    result = broken.follow_up_check(target)
+
+    assert result["status"] == "ungraded"
+    assert result["passed"] is False
+    assert result["findings"][0] == "diagnostics_gold_unreadable"
+    assert preserved_finding in result["findings"]

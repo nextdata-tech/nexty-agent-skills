@@ -101,9 +101,6 @@ def check(
     # a real attempt -- never trusted merely because the target's own numbers
     # are self-consistent.
     oracle = scenario.raw_gold("oracle")
-    fault_attempt: int | None = None
-    cleared_attempt: int | None = None
-    max_attempts: int | None = None
     if not isinstance(oracle, Mapping):
         return _ungraded("oracle_gold_unreadable", *findings)
     fault_attempt = _positive_int(oracle.get("fault_attempt"))
