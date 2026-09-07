@@ -119,7 +119,7 @@ def check(
 KIND = register(
     FollowUpKind(
         name="application_reconciliation",
-        gold_keys=frozenset({"dispute", "lineage"}),
+        gold_keys=frozenset({"answer", "dispute", "lineage"}),
         handler=check,
         evidence_contract={
             "reconciliation": (

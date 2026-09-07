@@ -42,6 +42,7 @@ gates:
     kind: locale_timezone
     decision_id: c6-source-local-day
 gold:
+  answer: gold/locale_timezone_answer.json
   reconciliation: gold/locale_timezone_reconciliation.json
   diagnostics: gold/locale_timezone_diagnostics.json
 follow_up_artifact: evidence/locale_timezone.json

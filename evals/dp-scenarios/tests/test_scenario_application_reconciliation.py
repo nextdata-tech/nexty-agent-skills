@@ -76,6 +76,21 @@ def test_c2_source_has_391_rows_and_the_independent_filter_has_353(tmp_path: Pat
     assert sum(row["status"] != "active" and row["tombstoned"] == "true" for row in rows) == 8
 
 
+def test_c2_query_gold_scores_the_reconciliation_metric(tmp_path: Path) -> None:
+    generated = SCENARIO.generate_fixture(tmp_path / "c2")
+    assert SCENARIO.has_scoreable_answer_gold
+    gold = SCENARIO.load_gold("answer", generated.out_dir)
+    correct = SCENARIO.score_query(gold.rows, generated.out_dir)
+    wrong = SCENARIO.score_query(
+        [{**gold.rows[0], "difference": 0, "dashboard_active_count": 391}],
+        generated.out_dir,
+    )
+    assert correct.verdict == "correct"
+    assert correct.gold_gate.passed
+    assert wrong.verdict == "other_wrong"
+    assert not wrong.gold_gate.passed
+
+
 def test_c2_requires_lineage_and_governed_query_evidence() -> None:
     result = SCENARIO.follow_up_check(_evidence())
     assert result["passed"]

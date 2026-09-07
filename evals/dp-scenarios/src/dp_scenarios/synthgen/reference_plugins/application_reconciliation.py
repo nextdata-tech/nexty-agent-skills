@@ -52,8 +52,10 @@ def _application_reconciliation_gold(data_dir: Path) -> ReferenceGold:
         ],
         "disjoint_exclusion_total": status_excluded + tombstones,
     }
+    answer = [dict(dispute)]
     return ReferenceGold(
         files={
+            "application_reconciliation_answer.json": answer,
             "application_reconciliation_dispute.json": dispute,
             "application_reconciliation_lineage.json": lineage,
         }

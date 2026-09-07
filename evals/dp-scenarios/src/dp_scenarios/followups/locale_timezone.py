@@ -88,7 +88,7 @@ def check(
 KIND = register(
     FollowUpKind(
         name="locale_timezone",
-        gold_keys=frozenset({"reconciliation", "diagnostics"}),
+        gold_keys=frozenset({"answer", "reconciliation", "diagnostics"}),
         handler=check,
         evidence_contract={
             "time_policy": (

@@ -36,7 +36,10 @@ def _locale_timezone_gold(data_dir: Path) -> ReferenceGold:
         if local_timestamp.tzinfo is None or recorded_utc.tzinfo is None:
             raise ValueError("timestamps must include offsets")
         localized = local_timestamp.replace(tzinfo=None).replace(tzinfo=source_zone)
-        derived_utc = localized.astimezone(timezone.utc)
+        offset = localized.utcoffset()
+        if offset is None:
+            raise ValueError("source-local timestamp has no timezone offset")
+        derived_utc = (localized - offset).replace(tzinfo=timezone.utc)
         if local_timestamp.utcoffset() != localized.utcoffset() or derived_utc != recorded_utc:
             raise ValueError("event_utc does not match the source-local timestamp")
         local_day = localized.date().isoformat()
@@ -83,6 +86,7 @@ def _locale_timezone_gold(data_dir: Path) -> ReferenceGold:
     query_row_count = sum(row["category"] == query_category for row in rows)
     if query_row_count == 0:
         raise ValueError(f"query category is absent: {query_category}")
+    answer = [{"category": query_category, "row_count": query_row_count}]
     diagnostics = {
         "local_day_count": len(local_daily),
         "utc_day_count": len(utc_daily),
@@ -92,6 +96,7 @@ def _locale_timezone_gold(data_dir: Path) -> ReferenceGold:
     }
     return ReferenceGold(
         files={
+            "locale_timezone_answer.json": answer,
             "locale_timezone_reconciliation.json": result,
             "locale_timezone_diagnostics.json": diagnostics,
         }

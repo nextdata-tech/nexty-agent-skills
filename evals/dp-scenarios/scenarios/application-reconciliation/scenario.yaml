@@ -41,6 +41,7 @@ gates:
     kind: application_reconciliation
     decision_id: c2-active-count-reconciliation
 gold:
+  answer: gold/application_reconciliation_answer.json
   dispute: gold/application_reconciliation_dispute.json
   lineage: gold/application_reconciliation_lineage.json
 follow_up_artifact: evidence/application_reconciliation.json

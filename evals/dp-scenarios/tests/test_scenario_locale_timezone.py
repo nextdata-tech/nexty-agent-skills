@@ -85,6 +85,21 @@ def test_c6_preserves_non_ascii_source_values_and_has_one_boundary_shift(tmp_pat
     assert rows[13]["event_utc"].startswith("2024-03-11")
 
 
+def test_c6_query_gold_scores_the_unicode_category_count(tmp_path: Path) -> None:
+    generated = SCENARIO.generate_fixture(tmp_path / "c6")
+    assert SCENARIO.has_scoreable_answer_gold
+    gold = SCENARIO.load_gold("answer", generated.out_dir)
+    correct = SCENARIO.score_query(gold.rows, generated.out_dir)
+    wrong = SCENARIO.score_query(
+        [{"category": "契約", "row_count": 6}],
+        generated.out_dir,
+    )
+    assert correct.verdict == "correct"
+    assert correct.gold_gate.passed
+    assert wrong.verdict == "other_wrong"
+    assert not wrong.gold_gate.passed
+
+
 def test_c6_requires_timezone_policy_daily_comparison_and_unicode_query() -> None:
     result = SCENARIO.follow_up_check(_evidence())
     assert result["passed"]
