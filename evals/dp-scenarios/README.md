@@ -241,8 +241,8 @@ environment/interruption result, or a canary block; read `summary.txt` and the
 `interruption` object in `report.json` before rerunning.
 
 `--allow-host-home-bash` cannot be combined with a Claude OAuth token. Unset
-`CLAUDE_CODE_OAUTH_TOKEN` to grant Bash, or drop the flag to run
-token-authenticated without a shell.
+`CLAUDE_CODE_OAUTH_TOKEN` (and omit `--env-file`) to grant Bash, or drop the
+flag to run token-authenticated without a shell.
 
 Each run writes, next to `report.json` and `summary.txt`:
 
@@ -470,7 +470,7 @@ harness actually keeps producing goes unlooked-for: **a gate that exists but
 never fires**, and **a test that asserts the code's self-report rather than the
 property**.
 
-`scripts/mutation_test.py` drives `mutmut` over
+`scripts/mutation_test.py` drives [mutmut](https://github.com/boxed/mutmut) over
 `src/dp_scenarios/operator/` and `src/dp_scenarios/grading/`. mutmut rewrites
 each function into a numbered set of variants behind a generated trampoline and
 selects the variant by environment variable, so a mutant that did not apply
