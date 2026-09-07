@@ -738,6 +738,65 @@ def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: 
     assert not errored.passed
 
 
+def test_query_accepts_an_earlier_retained_answer_when_a_later_query_differs() -> None:
+    gold = [{"category": "契約", "row_count": 7}]
+    actual = {
+        "rows": [{"category": "Renovación", "row_count": 7}],
+        "queries": [
+            gold,
+            [{"category": "Renovación", "row_count": 7}],
+            gold,
+        ],
+    }
+
+    result = gate_query(actual, gold)
+
+    assert result.passed
+    assert result.examined
+    assert result.diagnostics[0].code == "query_matched_earlier_answer"
+    assert result.diagnostics[0].value == {
+        "candidate_index": 1,
+        "candidate_count": 2,
+        "latest_query_matched": False,
+    }
+
+
+def test_query_keeps_latest_rows_as_a_fallback_when_history_diverges() -> None:
+    gold = [{"metric": "reconciliation", "difference": 38}]
+    result = gate_query(
+        {
+            "rows": gold,
+            "queries": [[{"metric": "reconciliation", "difference": 0}]],
+        },
+        gold,
+    )
+
+    assert result.passed
+    assert result.diagnostics == ()
+
+
+def test_query_rejects_malformed_retained_rows_without_raising() -> None:
+    result = gate_query(
+        {
+            "rows": [{"category": "Renovación", "row_count": 7}],
+            "queries": [["not a row"]],
+        },
+        [{"category": "契約", "row_count": 7}],
+    )
+
+    assert not result.passed
+    assert result.examined
+    assert result.codes == ("query_query_rows_differ",)
+
+
+def test_query_rejects_malformed_latest_rows_without_raising() -> None:
+    result = gate_query({"rows": ["not a row"]}, [{"metric": "reconciliation"}])
+
+    assert not result.passed
+    assert not result.examined
+    assert result.codes == ("query_actual_not_examined",)
+
+
 def test_query_rejects_unknown_scorer_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fixture = tmp_path / "fixture"
     generate_dataset("grain_trap", 29, fixture)

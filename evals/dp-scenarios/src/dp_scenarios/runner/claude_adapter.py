@@ -708,6 +708,7 @@ def _update_machine_artifacts(
     build_context: dict[str, object],
     lifecycles: dict[str, str] | None = None,
     built_runs: set[str] | None = None,
+    query_history: list[list[dict[str, object]]] | None = None,
 ) -> None:
     """Derive query/fact artifacts only from structured MCP results.
 
@@ -724,6 +725,8 @@ def _update_machine_artifacts(
     """
 
     latest_query: Mapping[str, object] | None = None
+    if query_history is None:
+        query_history = []
     if built_runs is None:
         built_runs = set()
     built_runs.update(
@@ -820,6 +823,7 @@ def _update_machine_artifacts(
             rows = _rows_as_mappings(payload)
             if rows is not None:
                 latest_query = {"rows": rows}
+                query_history.append(rows)
     if verified is not None:
         # A verified release is the supervisor's own published statement, so it
         # supersedes anything assembled from the build call alone.
@@ -838,7 +842,13 @@ def _update_machine_artifacts(
         # One observed run cannot be paired with the wrong identifiers.
         facts["lifecycle_state"] = next(iter(lifecycles.values()))
     if latest_query is not None:
-        _write_json(artifact_dir / "query-results.json", latest_query)
+        # Keep the latest result under ``rows`` for replay compatibility, but
+        # retain earlier governed answers too. A later exploratory query must
+        # not erase an earlier answer that matched the scenario gold.
+        _write_json(
+            artifact_dir / "query-results.json",
+            {**latest_query, "queries": list(query_history)},
+        )
     _write_supervisor_facts(facts, artifact_dir=artifact_dir)
 
 
@@ -905,6 +915,8 @@ class ClaudeCodeAdapter:
         # with identifiers published on a later one.
         self._lifecycles: dict[str, str] = {}
         self._built_runs: set[str] = set()
+        # Every structured semantic-query result in this session, in order.
+        self._query_history: list[list[dict[str, object]]] = []
         # The supervisor's own data directory, when this adapter owns the
         # server.  It is the runner's copy of the build evidence.
         # On the --mcp-config path this adapter does not start the supervisor,
@@ -1155,6 +1167,7 @@ class ClaudeCodeAdapter:
             build_context=self._build_context,
             lifecycles=self._lifecycles,
             built_runs=self._built_runs,
+            query_history=self._query_history,
         )
         if self._state_dir is not None:
             # Harness-owned, so the build gate no longer depends on the agent

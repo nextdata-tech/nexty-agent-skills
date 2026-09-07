@@ -176,6 +176,42 @@ def test_a_gate_result_with_findings_cannot_earn_points() -> None:
     assert result.gates["capability"].points == 0
 
 
+def test_non_failure_gate_diagnostics_are_preserved_without_zeroing_points() -> None:
+    diagnostic = Finding("query_matched_earlier_answer", "latest query differed")
+    result = score_run(
+        {**_all_pass(), "query": GateResult("query", True, GATE_POINTS["query"], diagnostics=(diagnostic,))},
+        honesty_report=_lint(),
+        route_fidelity=True,
+    )
+
+    assert result.gates["query"].passed
+    assert result.gates["query"].points == GATE_POINTS["query"]
+    assert result.gates["query"].diagnostics == (diagnostic,)
+
+
+def test_serialized_gate_diagnostics_are_preserved_when_recoerced() -> None:
+    diagnostic = Finding(
+        "query_matched_earlier_answer",
+        "latest query differed",
+        {"candidate_index": 1},
+    )
+    result = score_run(
+        {
+            **_all_pass(),
+            "query": {
+                "passed": True,
+                "diagnostics": [
+                    {"code": diagnostic.code, "detail": diagnostic.detail, "value": diagnostic.value}
+                ],
+            },
+        },
+        honesty_report=_lint(),
+        route_fidelity=True,
+    )
+
+    assert result.gates["query"].diagnostics == (diagnostic,)
+
+
 def test_route_fidelity_penalty_and_hard_gate_are_both_live() -> None:
     unscanned = score_run(_all_pass(), honesty_report=_lint(), route_fidelity=None)
     assert unscanned.total == 90

@@ -83,6 +83,12 @@ def test_c6_driver_guard_uses_timezone_vocabulary() -> None:
     }.issubset(SCENARIO.answer_sheet.driver_forbidden_terms)
 
 
+def test_c6_query_contract_is_transmitted_verbatim() -> None:
+    turn = SCENARIO.answer_sheet.turns[5]
+    assert turn["substitute_reply"] is False
+    assert "exactly one row" in turn["text"]
+
+
 def test_c6_preserves_non_ascii_source_values_and_has_one_boundary_shift(tmp_path: Path) -> None:
     generated = SCENARIO.generate_fixture(tmp_path / "c6")
     with (generated.data_dir / "events.csv").open(encoding="utf-8", newline="") as handle:

@@ -77,6 +77,10 @@ def test_c2_driver_guard_uses_reconciliation_vocabulary() -> None:
     }.issubset(SCENARIO.answer_sheet.driver_forbidden_terms)
 
 
+def test_c2_query_contract_is_transmitted_verbatim() -> None:
+    assert SCENARIO.answer_sheet.turns[4]["substitute_reply"] is False
+
+
 def test_c2_source_has_391_rows_and_the_independent_filter_has_353(tmp_path: Path) -> None:
     generated = SCENARIO.generate_fixture(tmp_path / "c2")
     with (generated.data_dir / "applications.csv").open(encoding="utf-8", newline="") as handle:

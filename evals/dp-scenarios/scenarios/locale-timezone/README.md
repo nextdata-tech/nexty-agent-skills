@@ -12,3 +12,8 @@ The follow-up evidence must state the source timezone, choose the source-local
 daily boundary, retain UTC for audit, show both daily groupings, and preserve
 the non-ASCII value byte-for-byte. The fixture is local and deterministic; it
 does not prove a live regional source or authenticated agent run.
+
+The query gate scores the exact committed Japanese-category row-set against
+every structured semantic-query result retained from the session, newest first.
+This keeps an earlier governed answer observable if a later exploratory query
+has a different row shape; the follow-up remains separately graded.

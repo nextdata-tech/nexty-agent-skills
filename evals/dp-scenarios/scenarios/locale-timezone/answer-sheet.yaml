@@ -9,7 +9,8 @@ turns:
     approval: true
   - Please continue with the daily comparison.
   - Show me what changes at the timezone boundary.
-  - Query the Japanese category as well.
+  - text: Query only the Japanese category and return exactly one row with category and row_count.
+    substitute_reply: false
   - Please record the decision and finish the view.
   - Where are we?
 source_answers:

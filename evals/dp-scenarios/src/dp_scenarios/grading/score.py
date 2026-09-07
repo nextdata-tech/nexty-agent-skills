@@ -121,11 +121,21 @@ def _coerce_gate(name: str, value: object) -> GateResult:
             examined=value.examined,
             ungraded=value.ungraded,
             required=value.required,
+            diagnostics=value.diagnostics,
         )
     if isinstance(value, Mapping):
         passed = bool(value.get("passed", value.get("pass", False)))
         ungraded = bool(value.get("ungraded", False))
         findings = tuple(Finding(str(code)) for code in value.get("codes", ()) if isinstance(code, str))
+        diagnostics = tuple(
+            Finding(
+                item["code"],
+                str(item.get("detail", "")),
+                item.get("value"),
+            )
+            for item in value.get("diagnostics", ())
+            if isinstance(item, Mapping) and isinstance(item.get("code"), str)
+        )
         examined = bool(value.get("examined", not ungraded))
         passed = passed and not findings
         return GateResult(
@@ -136,6 +146,7 @@ def _coerce_gate(name: str, value: object) -> GateResult:
             examined=examined,
             ungraded=ungraded,
             required=bool(value.get("required", name != "follow-up")),
+            diagnostics=diagnostics,
         )
     if isinstance(value, bool):
         return GateResult(name, value, GATE_POINTS[name] if value else 0)

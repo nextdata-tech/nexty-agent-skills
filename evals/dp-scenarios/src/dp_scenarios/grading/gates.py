@@ -39,6 +39,7 @@ class GateResult:
     examined: bool = True
     ungraded: bool = False
     required: bool = True
+    diagnostics: tuple[Finding, ...] = ()
 
     @property
     def codes(self) -> tuple[str, ...]:
@@ -139,6 +140,7 @@ def _result(
     examined: bool = True,
     ungraded: bool = False,
     required: bool = True,
+    diagnostics: Iterable[Finding] = (),
 ) -> GateResult:
     finding_tuple = tuple(findings)
     return GateResult(
@@ -149,6 +151,7 @@ def _result(
         examined=examined,
         ungraded=ungraded,
         required=required,
+        diagnostics=tuple(diagnostics),
     )
 
 
@@ -1044,8 +1047,45 @@ def gate_build(supervisor_records: object, row_count_oracle: object = None) -> G
 def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bool]:
     if isinstance(value, Mapping):
         rows = value.get("rows", value.get("query_rows", value.get("result")))
-        return rows if isinstance(rows, list) else None, bool(value.get("abstained", False)), bool(value.get("errored", False))
-    return value if isinstance(value, list) else None, False, False
+        if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+            return None, bool(value.get("abstained", False)), bool(value.get("errored", False))
+        return [dict(row) for row in rows], bool(value.get("abstained", False)), bool(value.get("errored", False))
+    if not isinstance(value, list) or any(not isinstance(row, Mapping) for row in value):
+        return None, False, False
+    return [dict(row) for row in value], False, False
+
+
+def _query_candidates(value: object, latest_rows: list[dict[str, object]]) -> list[list[dict[str, object]]]:
+    """Return retained query answers newest-first, falling back to ``rows``.
+
+    Older replay artifacts contain only ``rows``. New live artifacts retain
+    every successful semantic-query row-set in ``queries`` so a later
+    exploratory query cannot erase an earlier answer that matched the gold.
+    Malformed history is ignored rather than making an otherwise readable
+    latest result not-examined.
+    """
+
+    if not isinstance(value, Mapping):
+        return [latest_rows]
+    history = value.get("queries")
+    if not isinstance(history, list) or not history:
+        return [latest_rows]
+    if not all(
+        isinstance(rows, list) and all(isinstance(row, Mapping) for row in rows)
+        for rows in history
+    ):
+        return [latest_rows]
+    retained = [[dict(row) for row in rows] for rows in reversed(history)]
+    # ``rows`` is the current artifact surface and remains authoritative for
+    # the latest query.  Keep it as the first candidate even when a foreign or
+    # hand-edited artifact has a divergent ``queries`` history.  Live adapter
+    # artifacts duplicate the latest answer in history, so de-duplicate that
+    # normal case while retaining older answers for governed-query matching.
+    candidates = [latest_rows]
+    for candidate in retained:
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
 
 def gate_query(actual: object, gold: object, *, required: bool = True) -> GateResult:
@@ -1069,10 +1109,36 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
         return _result("query", False, [Finding("query_gold_not_examined", "gold row-set is absent")], examined=False, required=required)
     # Set-mode is intentional for distinct-key aggregates; the row-count
     # pairing still catches fan-out that duplicates rows without changing values.
-    verdict = score_one({"rows": actual_rows, "abstained": abstained, "errored": errored}, {"rows": gold_rows, "equality_mode": "set"})
-    if verdict != "PASS":
-        return _result("query", False, [Finding("query_query_rows_differ", f"deterministic EX verdict was {verdict}", verdict)])
-    return _result("query", True)
+    candidates = _query_candidates(actual, actual_rows)
+    verdicts = [
+        score_one(
+            {"rows": candidate, "abstained": abstained, "errored": errored},
+            {"rows": gold_rows, "equality_mode": "set"},
+        )
+        for candidate in candidates
+    ]
+    if "PASS" not in verdicts:
+        verdict = verdicts[0] if verdicts else "NOT_EXAMINED"
+        return _result(
+            "query",
+            False,
+            [Finding("query_query_rows_differ", f"deterministic EX verdict was {verdict}", verdict)],
+        )
+    matched_index = verdicts.index("PASS")
+    diagnostics: tuple[Finding, ...] = ()
+    if matched_index > 0:
+        diagnostics = (
+            Finding(
+                "query_matched_earlier_answer",
+                "an earlier retained semantic-query row-set matched the committed gold",
+                {
+                    "candidate_index": matched_index,
+                    "candidate_count": len(candidates),
+                    "latest_query_matched": False,
+                },
+            ),
+        )
+    return _result("query", True, diagnostics=diagnostics)
 
 
 def gate_follow_up(check: object) -> GateResult:
