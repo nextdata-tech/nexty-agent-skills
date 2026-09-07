@@ -240,6 +240,10 @@ before starting a run. A non-zero exit can mean a failed grade, an
 environment/interruption result, or a canary block; read `summary.txt` and the
 `interruption` object in `report.json` before rerunning.
 
+`--allow-host-home-bash` cannot be combined with a Claude OAuth token. Unset
+`CLAUDE_CODE_OAUTH_TOKEN` to grant Bash, or drop the flag to run
+token-authenticated without a shell.
+
 Each run writes, next to `report.json` and `summary.txt`:
 
 ```

@@ -169,6 +169,10 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --output-dir /tmp/dp-scenarios-capability-shortfall
 ```
 
+`--allow-host-home-bash` cannot be combined with a Claude OAuth token. Unset
+`CLAUDE_CODE_OAUTH_TOKEN` to grant Bash, or drop the flag to run
+token-authenticated without a shell.
+
 The run directory contains `report.json`, `summary.txt`, and one readable
 conversation transcript per epoch. A transport-reached or intake-passing run
 is not a passing capability result; inspect the follow-up gate and the
