@@ -31,7 +31,9 @@ changed contracts directly.
 - `evals/dp-scenarios/tests/test_scenario_restart_and_switch.py` — invalid oracle
   gold does not emit the unreachable `attempts_not_reconciled_against_oracle`
   finding.
-- `evals/dp-scenarios/tests/test_runner_claude_adapter.py` — the spawned
-  delegation/session-tool policy remains explicit and testable.
-- `evals/dp-scenarios/tests/test_runner_environment.py` — the default prompt
-  continues to describe mechanics without countermanding the skill flow.
+
+The Step 6b and API-source changes are prose guidance, so their direct carrying
+check is `scripts/validate_skills.py`; there is no separate behavior assertion
+for those text-only edits. The harness delegation/session-tool tests belong to
+the sibling `2026-09-07-background-subagents-void-the-run` entry and are not
+duplicated here.

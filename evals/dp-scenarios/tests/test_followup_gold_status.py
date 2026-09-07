@@ -139,6 +139,12 @@ def test_unreadable_followup_gold_is_ungraded_for_each_gold_backed_kind(
         # The run-record checks precede the gold read and remain useful for
         # triage even when the committed diagnostics artifact is broken.
         assert "naive_run_not_sigterm" in result["findings"]
+    elif kind == "optional":
+        # Requiredness is checked before the count oracle; retain that
+        # mismatch when the committed count gold is unreadable.
+        target["requiredness"]["optional_events"] = True
+        result = handler(unreadable, target, settings, context)
+        assert "requiredness_artifact_mismatch" in result["findings"]
 
 
 def test_unreadable_query_gold_is_ungraded_for_the_grain_followup(tmp_path: Path) -> None:

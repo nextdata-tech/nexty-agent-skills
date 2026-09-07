@@ -123,7 +123,7 @@ def check(
     try:
         expected_counts = _count_rows(scenario.raw_gold("counts", fixture_dir))
     except ScenarioError:
-        return _ungraded("optional_output_gold_unreadable")
+        return _ungraded("optional_output_gold_unreadable", *findings)
     for resource, required in declared_required.items():
         if resource not in actual_counts:
             if resource in malformed_resources:
