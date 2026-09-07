@@ -52,7 +52,16 @@ def _application_reconciliation_gold(data_dir: Path) -> ReferenceGold:
         ],
         "disjoint_exclusion_total": status_excluded + tombstones,
     }
-    answer = [dict(dispute)]
+    answer = [
+        {
+            "reconciliation_snapshot_date": snapshot["snapshot_date"],
+            "export_applications": export_count,
+            "dashboard_active_applications": dashboard_count,
+            "difference": export_count - dashboard_count,
+            "status_filter_exclusions": status_excluded,
+            "tombstone_exclusions": tombstones,
+        }
+    ]
     return ReferenceGold(
         files={
             "application_reconciliation_answer.json": answer,

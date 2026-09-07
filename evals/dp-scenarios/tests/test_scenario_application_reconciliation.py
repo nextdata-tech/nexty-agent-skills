@@ -92,9 +92,19 @@ def test_c2_query_gold_scores_the_reconciliation_metric(tmp_path: Path) -> None:
     generated = SCENARIO.generate_fixture(tmp_path / "c2")
     assert SCENARIO.has_scoreable_answer_gold
     gold = SCENARIO.load_gold("answer", generated.out_dir)
+    assert gold.rows == [
+        {
+            "reconciliation_snapshot_date": "2024-04-30",
+            "export_applications": 391,
+            "dashboard_active_applications": 353,
+            "difference": 38,
+            "status_filter_exclusions": 30,
+            "tombstone_exclusions": 8,
+        }
+    ]
     correct = SCENARIO.score_query(gold.rows, generated.out_dir)
     wrong = SCENARIO.score_query(
-        [{**gold.rows[0], "difference": 0, "dashboard_active_count": 391}],
+        [{**gold.rows[0], "difference": 0, "dashboard_active_applications": 391}],
         generated.out_dir,
     )
     assert correct.verdict == "correct"
