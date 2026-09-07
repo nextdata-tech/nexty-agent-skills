@@ -161,6 +161,12 @@ never pulled into a smoke run:
   warehouse identifiers and negative stock. The local mock profile preserves
   these as data-quality warnings and documents the retained-run boundary for
   B10.
+- **application-reconciliation** — C2's 391-row export versus 353-row active
+  dashboard dispute, with 30 status exclusions and 8 tombstones reconciled by
+  independent lineage evidence.
+- **locale-timezone** — C6's UTF-8 categories, real America/New_York DST
+  transition, and UTC date-boundary event, where source-local and UTC daily
+  views preserve totals while one of 14 rows shifts.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -194,6 +200,8 @@ scenario.
 | [crm-pipeline](scenarios/crm-pipeline/README.md) | core | 7 | paginated mock CRM source with auth expiry, rate limiting, and PII |
 | [finance-close](scenarios/finance-close/README.md) | core | 8 | mock close entries with hostile decimals and missing FX |
 | [inventory-position](scenarios/inventory-position/README.md) | core | 9 | profile-backed inventory and warehouse lookup with quality warnings |
+| [application-reconciliation](scenarios/application-reconciliation/README.md) | core | 10 | 391-to-353 count dispute with status/tombstone lineage |
+| [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
 
 ## Running
 

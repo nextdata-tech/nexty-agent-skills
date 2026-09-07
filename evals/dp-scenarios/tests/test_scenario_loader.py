@@ -50,6 +50,8 @@ EXPECTED_TIERS = {
     "crm-pipeline": "core",
     "finance-close": "core",
     "inventory-position": "core",
+    "application-reconciliation": "core",
+    "locale-timezone": "core",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -470,6 +472,8 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "crm-pipeline")
     shutil.rmtree(root / "finance-close")
     shutil.rmtree(root / "inventory-position")
+    shutil.rmtree(root / "application-reconciliation")
+    shutil.rmtree(root / "locale-timezone")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -498,6 +502,8 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.rmtree(root / "crm-pipeline")
     shutil.rmtree(root / "finance-close")
     shutil.rmtree(root / "inventory-position")
+    shutil.rmtree(root / "application-reconciliation")
+    shutil.rmtree(root / "locale-timezone")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)

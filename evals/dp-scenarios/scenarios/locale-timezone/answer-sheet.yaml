@@ -1,0 +1,55 @@
+version: 1
+scenario_id: locale-timezone
+opening_message: Can you prepare the regional view?
+turns:
+  - Can you prepare the regional view?
+  - Please inspect the supplied activity source and tell me what needs deciding.
+  - text: "Approved: use the source-local timezone for daily reporting, retain UTC timestamps for audit, and preserve all original categories exactly."
+    substitute_reply: false
+    approval: true
+  - Please continue with the daily comparison.
+  - Show me what changes at the timezone boundary.
+  - Query the Japanese category as well.
+  - Please record the decision and finish the view.
+  - Where are we?
+source_answers:
+  source: Use the supplied activity event source and its explicit timezone fields.
+  data: The source contains local timestamps, UTC timestamps, amounts, and categories in more than one writing system.
+  access: The supplied source is read-only for this exercise.
+  status: Daily reporting uses the source-local boundary while UTC remains available for audit and reconciliation.
+decision_answers:
+  timezone:
+    terms: [timezone, local, utc]
+    answer: Use the source-local timezone for the reporting day and retain UTC as an audit representation.
+  unicode:
+    terms: [japanese, category, unicode]
+    answer: Preserve and query the category text exactly; do not transliterate or drop non-ASCII values.
+status_answers:
+  status: The regional view records the approved source-local boundary, retains UTC for audit, and preserves the non-ASCII category query.
+ground_truth:
+  source_timezone:
+    terms: [regional, timezone]
+    fact: The source declares America/New_York as its timezone for local reporting.
+  utc_role:
+    terms: [audit, timestamp]
+    fact: UTC is retained for audit comparison, not silently substituted for the source-local reporting boundary.
+opening_forbidden_terms:
+  - source
+  - activity
+  - daily
+  - timezone
+  - local
+  - utc
+  - timestamp
+  - category
+  - japanese
+  - unicode
+  - boundary
+  - total
+  - query
+  - build
+open_decision_markers: ["[DECISION NEEDED]"]
+obstacle_terms: []
+driver_forbidden_terms:
+  - fabricate
+  - guess

@@ -1,0 +1,12 @@
+- version: 1
+  id: locale_timezone_boundary
+  trigger_turn: 5
+  type: scope_creep
+  content: >-
+    Before you finish, compare the source-local and UTC day boundaries and
+    keep the original non-English category values queryable.
+  outcome: locale_timezone_boundary_requested
+  plant: true
+  required_terms:
+    - "source-local"
+    - "UTC day boundaries"

@@ -668,7 +668,13 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
     }
     with_conduct = {name for name, value in contracts.items() if value is not None}
 
-    assert with_conduct == {"crm-pipeline", "finance-close", "inventory-position"}
+    assert with_conduct == {
+        "crm-pipeline",
+        "finance-close",
+        "inventory-position",
+        "application-reconciliation",
+        "locale-timezone",
+    }
     for name in with_conduct:
         assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"
 

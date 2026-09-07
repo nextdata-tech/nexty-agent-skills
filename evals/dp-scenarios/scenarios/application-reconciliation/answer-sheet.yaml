@@ -1,0 +1,54 @@
+version: 1
+scenario_id: application-reconciliation
+opening_message: Can you clarify the discrepancy?
+turns:
+  - Can you clarify the discrepancy?
+  - Please inspect the supplied application source and trace the difference.
+  - text: "The active, non-tombstoned definition is approved. Reconcile the difference and show the lineage behind each exclusion."
+    substitute_reply: false
+    approval: true
+  - Please continue with the governed reconciliation query.
+  - Show me the source rows behind the count difference.
+  - Please record the decision and finish the reconciliation.
+  - Where are we?
+source_answers:
+  source: Use the supplied application export and dashboard snapshot.
+  data: The export includes status and tombstone fields; the dashboard is the active, non-tombstoned population.
+  access: The supplied source is read-only for this exercise.
+  status: Reconcile the dashboard to the export by applying the approved filters, not by editing source rows.
+decision_answers:
+  active_population:
+    terms: [active, non-tombstoned]
+    answer: Count applications whose status is active and whose tombstoned flag is false.
+  difference:
+    terms: [difference, reconcile, exclusions]
+    answer: Decompose the difference into disjoint status exclusions and tombstones, with a governed query behind the numbers.
+status_answers:
+  status: The export reconciles to the approved active, non-tombstoned population, with each exclusion cause and its lineage recorded.
+ground_truth:
+  dashboard_definition:
+    terms: [dashboard, active]
+    fact: The dashboard count represents active applications that are not tombstoned.
+  export_definition:
+    terms: [export, rows]
+    fact: The export contains the full supplied application population, including withdrawn and tombstoned rows.
+opening_forbidden_terms:
+  - source
+  - export
+  - dashboard
+  - active
+  - tombstone
+  - status
+  - application
+  - count
+  - difference
+  - reconcile
+  - exclusion
+  - lineage
+  - query
+  - build
+open_decision_markers: ["[DECISION NEEDED]"]
+obstacle_terms: []
+driver_forbidden_terms:
+  - fabricate
+  - guess
