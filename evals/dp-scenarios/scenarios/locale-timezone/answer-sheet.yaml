@@ -51,5 +51,12 @@ opening_forbidden_terms:
 open_decision_markers: ["[DECISION NEEDED]"]
 obstacle_terms: []
 driver_forbidden_terms:
-  - fabricate
-  - guess
+  # These are the facts offered to a driven operator. Keep their salient
+  # vocabulary guarded so the driver cannot volunteer the timezone policy
+  # before the agent asks for it.
+  - regional
+  - timezone
+  - source-local
+  - utc
+  - audit
+  - timestamp

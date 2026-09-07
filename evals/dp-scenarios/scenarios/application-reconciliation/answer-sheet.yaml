@@ -50,5 +50,12 @@ opening_forbidden_terms:
 open_decision_markers: ["[DECISION NEEDED]"]
 obstacle_terms: []
 driver_forbidden_terms:
-  - fabricate
-  - guess
+  # These are the facts offered to a driven operator. Keep their salient
+  # vocabulary guarded so the driver cannot volunteer the reconciliation
+  # definition before the agent asks for it.
+  - dashboard
+  - active
+  - tombstoned
+  - export
+  - rows
+  - withdrawn
