@@ -214,8 +214,14 @@ def test_declaration_waivers_reduce_the_scoreable_max_and_threshold() -> None:
 
 def test_pass_threshold_clamps_to_the_supported_score_range() -> None:
     capped = ScoreVector(
-        gates=_all_pass(),
-        total=100,
+        gates={
+            **_all_pass(),
+            # Legacy aliases remain accepted by the points table. Keeping an
+            # alias alongside its canonical key makes the upper clamp
+            # observable without changing production scoring inputs.
+            "G1": GateResult("G1", True, GATE_POINTS["G1"]),
+        },
+        total=110,
         hard_gate_flags={"route_fidelity": True},
         state=TerminalState.PASSED,
     )

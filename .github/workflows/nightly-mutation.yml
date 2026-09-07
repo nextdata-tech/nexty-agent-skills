@@ -240,12 +240,13 @@ jobs:
           if-no-files-found: warn
 
       - name: Slack Notification
-        if: failure()
+        if: ${{ failure() || (cancelled() && github.event_name == 'schedule') }}
         uses: ./.github/actions/slack
         with:
           slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
           label: 'nightly mutation'
           detail: >-
             dp-scenarios mutation testing failed for `${{ github.sha }}`.
-            Inspect the job summary and the `mutation-report` artifact for the
-            survivor details.
+            Mutation step outcome: `${{ steps.mutation.outcome || 'not reached' }}`.
+            Inspect the job summary and the `mutation-report` artifact when
+            available for survivor details.

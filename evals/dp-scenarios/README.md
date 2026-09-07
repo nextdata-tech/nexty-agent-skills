@@ -603,7 +603,8 @@ attribution is usually a one-PR question -- but a red *weekly* run can span a
 week of them, and then you are bisecting. Run
 `scripts/mutation_test.py changed --base origin/main` locally before merging
 anything under the two guarded directories, and read the nightly result the day
-after a merge that touches them.
+after a merge that touches them. A red scheduled run also posts a Slack
+notification with the run and survivor-report context.
 
 ### Two things that will mislead you
 
