@@ -696,11 +696,29 @@ def test_withheld_bash_is_denied_on_the_spawned_argv_not_merely_left_unlisted(
     # OAuth run. Safe because the shell denial is inherited: a Task subagent
     # under this argv cannot reach Bash (verified against the CLI, with a
     # control that succeeded when Bash was permitted).
-    assert not ({"Task", "TaskOutput", "Agent"} & denied_tools)
+    # Delegation itself stays available -- step 6b needs it -- but the
+    # background-child plumbing does not: subagents now run inline.
+    assert not ({"Task", "Agent"} & denied_tools)
+    assert {"TaskOutput", "TaskStop"} <= denied_tools
     allowed_tools = {
         tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
     }
     assert "Bash" not in allowed_tools
+
+
+def test_session_tools_are_denied_on_every_run() -> None:
+    """They reached the agent because they were on neither list.
+
+    ``--allowedTools`` is auto-approval, so omitting a tool grants it. A live
+    run used ``ListAgents`` and ``ScheduleWakeup`` to poll a background subagent
+    for eight turns and built nothing. None is used by any skill under ``src/``.
+    """
+
+    from dp_scenarios.runner.claude_adapter import SESSION_TOOLS, SHELL_TOOLS
+
+    assert "Monitor" in SHELL_TOOLS, "Monitor executes a shell command"
+    for tool in ("ListAgents", "SendMessage", "ScheduleWakeup", "TaskOutput", "TaskStop"):
+        assert tool in SESSION_TOOLS
 
 
 def test_granting_bash_denies_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -833,7 +851,7 @@ def test_oauth_token_reaches_claude_and_withholds_bash(
     assert {"Bash", "BashOutput", "KillShell"} <= denied
     # Delegation stays available: the deny list is inherited by subagents, so
     # Task cannot be used to reach the shell or the token behind it.
-    assert not ({"Task", "TaskOutput", "Agent"} & denied)
+    assert not ({"Task", "Agent"} & denied)
 
 
 def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> ClaudeCodeAdapter:

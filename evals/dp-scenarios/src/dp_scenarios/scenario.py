@@ -525,7 +525,15 @@ class Scenario:
             0,
             findings,
             examined=base.examined,
-            ungraded=base.ungraded or result.get("status") in {"not-examined", "ungraded"},
+            # Only an explicit ``ungraded`` voids the run. ``not-examined``
+            # used to void it too, which meant an agent that produced no
+            # evidence artifact at all got its run discarded instead of failed
+            # -- the "dodge a gate by producing nothing" hole the requiredness
+            # work exists to close, surviving in the follow-up path. A live run
+            # stalled, built nothing, and scored ``ungraded`` rather than a
+            # loss. ``gates.py`` already states the policy this restores:
+            # ungraded is for a planted check that fired and measured nothing.
+            ungraded=base.ungraded or result.get("status") == "ungraded",
         )
 
     def check_follow_up(

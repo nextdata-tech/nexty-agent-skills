@@ -81,6 +81,11 @@ nxd-desktop check/build/query MCP tools for runtime verification instead. That
 substitutes a mechanism, not a workflow -- follow the installed Nexty skills'
 normal flow. Do not launch a subagent merely to find or run a shell-only
 helper.
+
+Background execution is disabled in this session: any helper you start runs to
+completion inside your current turn and hands its result back in that same tool
+result, and there is no scheduling, polling, or messaging channel. Nothing
+continues between turns.
 """
 
 
@@ -156,7 +161,31 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
 #: in the process environment -- stays unreachable through a subagent.  The
 #: stall the original reasoning worried about is addressed where it belongs,
 #: in the prompt: do not delegate *shell-only* validation when Bash is absent.
-SHELL_TOOLS = ("Bash", "BashOutput", "KillShell")
+#: ``Monitor`` belongs here because it *executes a shell command* -- verified
+#: under ``--disallowedTools Bash,BashOutput,KillShell``, where it still ran --
+#: so without it the no-shell guarantee this constant documents was not true.
+SHELL_TOOLS = ("Bash", "BashOutput", "KillShell", "Monitor")
+
+#: Session and harness-control tools that reached the agent under test because
+#: they were named on neither list: ``--allowedTools`` is auto-approval, so
+#: omission grants rather than withholds.  None is used by any skill under
+#: ``src/``, and each breaks the run's isolation in its own way -- ``ListAgents``
+#: and ``SendMessage`` reach *other sessions on this machine*, including the
+#: grader; ``ScheduleWakeup`` and the ``Cron*`` family inject events no operator
+#: turn asked for, which the turn reader would attribute to the next operator
+#: message; ``EnterWorktree`` moves the cwd out of the graded workspace;
+#: ``ExitPlanMode`` asks for an approval that headless mode cannot answer.
+#: ``TaskOutput``/``TaskStop`` are meaningful only for background children,
+#: which are now disabled.  Denied on every run, not only when Bash is off.
+SESSION_TOOLS = (
+    "ListAgents", "SendMessage", "ScheduleWakeup",
+    "CronCreate", "CronList", "CronDelete",
+    "TaskOutput", "TaskStop",
+    "PushNotification", "RemoteTrigger",
+    "EnterWorktree", "ExitWorktree",
+    "EnterPlanMode", "ExitPlanMode",
+    "Workflow", "DesignSync", "ReportFindings",
+)
 
 
 class ClaudeAdapterError(RuntimeError):
@@ -989,8 +1018,8 @@ class ClaudeCodeAdapter:
         """Return the tools this adapter denies outright for this run."""
 
         if self.allow_bash:
-            return ()
-        return SHELL_TOOLS
+            return SESSION_TOOLS
+        return SESSION_TOOLS + SHELL_TOOLS
 
     def start(self) -> None:
         """Start the private MCP config and Claude process."""
@@ -1034,6 +1063,19 @@ class ClaudeCodeAdapter:
         # unrecoverable: an agent under test that can read the key can call the
         # same provider the operator does.
         environment.pop("OPENAI_API_KEY", None)
+        # Subagents must complete inside the turn that launched them.  The CLI
+        # runs them in the background by default, returning only "Async agent
+        # launched successfully" and delivering the reply as a task-notification
+        # on a *later* model invocation.  This adapter holds one persistent
+        # stream-json session whose per-turn ``result`` is not held back for a
+        # background child, and the scripted operator advances turns in seconds,
+        # so that notification never arrives inside the run: a live crm-pipeline
+        # run dispatched one subagent, then spent its remaining eight turns
+        # answering "still running" and built nothing -- an ``ungraded`` verdict
+        # that measured no agent behaviour at all.  Verified against the CLI
+        # with a matched probe: unset launches in the background, this set
+        # returns the child's reply inline in the same tool result.
+        environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
         if self.claude_config_dir is not None:
             environment["CLAUDE_CONFIG_DIR"] = str(self.claude_config_dir)
         self._process = subprocess.Popen(

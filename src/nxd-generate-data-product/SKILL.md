@@ -448,7 +448,7 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and `provena
 
 ### Step 6b — Adversarial review, BEFORE the self-check (MANDATORY when `nxd-review-closure` is installed)
 
-Dispatch one **built-in** read-only reviewer — never a custom/plugin agent definition — with the closure path and the verbatim request; it returns claims only and never edits, builds, serves or talks to the user. Record every claim, or a terminal `timed_out` round, in `build-record.json` `review_rounds[]`, adjudicate each with a citation, and relay all of them to the user. Reviewing before the self-check means a fix does not invalidate a green one. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Budget, self-heal exception and round schema: [reference/adversarial-review.md](reference/adversarial-review.md).
+Explicitly dispatch one built-in read-only reviewer — never a custom/plugin agent definition — with the closure path and verbatim request, to return claims only; it never edits, builds, serves, transforms, or talks to the user. Record every claim, or a terminal `timed_out` round, in `build-record.json` `review_rounds[]`, adjudicate each with a citation, and relay all of them to the user. Reviewing before the self-check means a fix does not invalidate a green one. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Budget, self-heal exception and round schema: [reference/adversarial-review.md](reference/adversarial-review.md).
 
 ### Step 7 — Self-check before handing off (MANDATORY)
 
