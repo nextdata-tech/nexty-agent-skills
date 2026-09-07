@@ -1055,37 +1055,111 @@ def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bo
     return [dict(row) for row in value], False, False
 
 
-def _query_candidates(value: object, latest_rows: list[dict[str, object]]) -> list[list[dict[str, object]]]:
-    """Return retained query answers newest-first, falling back to ``rows``.
+def _query_shape(
+    rows: Sequence[Mapping[str, object]],
+    columns: Sequence[str] | None = None,
+) -> frozenset[int] | None:
+    """Return the name-blind row-arity shape used for history matching.
 
-    Older replay artifacts contain only ``rows``. New live artifacts retain
-    every successful semantic-query row-set in ``queries`` so a later
-    exploratory query cannot erase an earlier answer that matched the gold.
-    Malformed history is ignored rather than making an otherwise readable
-    latest result not-examined.
+    Empty results use the retained header width when one is available. The EX
+    scorer itself sees an empty row-set, but the header still distinguishes an
+    empty correction from an unrelated query shape.
+    """
+
+    if any(not isinstance(row, Mapping) for row in rows):
+        return None
+    if rows:
+        return frozenset(len(row) for row in rows)
+    if columns is not None:
+        return frozenset({len(columns)})
+    return frozenset()
+
+
+def _query_candidates(
+    value: object,
+    latest_rows: list[dict[str, object]],
+    gold_rows: list[object],
+) -> tuple[list[list[dict[str, object]]], tuple[Finding, ...]]:
+    """Select the newest retained answer with the gold row-arity shape.
+
+    The latest result remains authoritative among answers with the same
+    shape. A different-shaped exploratory query cannot erase an earlier
+    governed answer, but a same-shaped correction must still win. History is
+    trusted only when its last entry is the result stored under ``rows``;
+    otherwise a hand-edited or stale history falls back to that latest result.
     """
 
     if not isinstance(value, Mapping):
-        return [latest_rows]
-    history = value.get("queries")
-    if not isinstance(history, list) or not history:
-        return [latest_rows]
-    if not all(
-        isinstance(rows, list) and all(isinstance(row, Mapping) for row in rows)
-        for rows in history
-    ):
-        return [latest_rows]
-    retained = [[dict(row) for row in rows] for rows in reversed(history)]
-    # ``rows`` is the current artifact surface and remains authoritative for
-    # the latest query.  Keep it as the first candidate even when a foreign or
-    # hand-edited artifact has a divergent ``queries`` history.  Live adapter
-    # artifacts duplicate the latest answer in history, so de-duplicate that
-    # normal case while retaining older answers for governed-query matching.
-    candidates = [latest_rows]
-    for candidate in retained:
-        if candidate not in candidates:
-            candidates.append(candidate)
-    return candidates
+        return [latest_rows], ()
+    raw_history = value.get("queries")
+    if not isinstance(raw_history, list) or not raw_history:
+        return [latest_rows], ()
+
+    entries: list[tuple[list[dict[str, object]], list[str] | None]] = []
+    for raw_entry in raw_history:
+        if isinstance(raw_entry, list):
+            raw_rows = raw_entry
+            columns = None
+        elif isinstance(raw_entry, Mapping):
+            raw_rows = raw_entry.get("rows")
+            raw_columns = raw_entry.get("columns")
+            if raw_columns is not None:
+                if (
+                    not isinstance(raw_columns, list)
+                    or any(not isinstance(column, str) for column in raw_columns)
+                    or len(set(raw_columns)) != len(raw_columns)
+                ):
+                    raw_rows = None
+                columns = list(raw_columns) if raw_rows is not None else None
+            else:
+                columns = None
+        else:
+            raw_rows = None
+            columns = None
+        if not isinstance(raw_rows, list) or any(not isinstance(row, Mapping) for row in raw_rows):
+            return [latest_rows], (
+                Finding(
+                    "query_history_ignored",
+                    "retained semantic-query history was malformed or disagreed with the latest rows",
+                ),
+            )
+        entries.append(([dict(row) for row in raw_rows], columns))
+
+    if entries[-1][0] != latest_rows:
+        return [latest_rows], (
+            Finding(
+                "query_history_ignored",
+                "retained semantic-query history was malformed or disagreed with the latest rows",
+            ),
+        )
+
+    gold_shape = _query_shape([row for row in gold_rows if isinstance(row, Mapping)])
+    if gold_shape is None or len([row for row in gold_rows if isinstance(row, Mapping)]) != len(gold_rows):
+        return [latest_rows], ()
+
+    newest_first = list(reversed(entries))
+    compatible = [
+        (index, rows)
+        for index, (rows, columns) in enumerate(newest_first)
+        if _query_shape(rows, columns) == gold_shape
+    ]
+    if not compatible:
+        return [latest_rows], ()
+
+    selected_index, selected_rows = compatible[0]
+    if selected_index == 0:
+        return [selected_rows], ()
+    return [selected_rows], (
+        Finding(
+            "query_scored_earlier_same_shape_answer",
+            "an earlier retained semantic-query row-set was the newest result with the gold row shape",
+            {
+                "candidate_index": selected_index,
+                "candidate_count": len(newest_first),
+                "latest_query_matched": False,
+            },
+        ),
+    )
 
 
 def gate_query(actual: object, gold: object, *, required: bool = True) -> GateResult:
@@ -1109,7 +1183,7 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
         return _result("query", False, [Finding("query_gold_not_examined", "gold row-set is absent")], examined=False, required=required)
     # Set-mode is intentional for distinct-key aggregates; the row-count
     # pairing still catches fan-out that duplicates rows without changing values.
-    candidates = _query_candidates(actual, actual_rows)
+    candidates, diagnostics = _query_candidates(actual, actual_rows, gold_rows)
     verdicts = [
         score_one(
             {"rows": candidate, "abstained": abstained, "errored": errored},
@@ -1118,25 +1192,12 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
         for candidate in candidates
     ]
     if "PASS" not in verdicts:
-        verdict = verdicts[0] if verdicts else "NOT_EXAMINED"
+        verdict = verdicts[0]
         return _result(
             "query",
             False,
             [Finding("query_query_rows_differ", f"deterministic EX verdict was {verdict}", verdict)],
-        )
-    matched_index = verdicts.index("PASS")
-    diagnostics: tuple[Finding, ...] = ()
-    if matched_index > 0:
-        diagnostics = (
-            Finding(
-                "query_matched_earlier_answer",
-                "an earlier retained semantic-query row-set matched the committed gold",
-                {
-                    "candidate_index": matched_index,
-                    "candidate_count": len(candidates),
-                    "latest_query_matched": False,
-                },
-            ),
+            diagnostics=diagnostics,
         )
     return _result("query", True, diagnostics=diagnostics)
 

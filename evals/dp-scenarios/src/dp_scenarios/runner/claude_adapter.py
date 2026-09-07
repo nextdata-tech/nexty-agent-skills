@@ -245,6 +245,9 @@ def _mcp_name(name: object) -> str | None:
     return name.removeprefix("mcp__nxd-desktop__")
 
 
+_MAX_QUERY_HISTORY = 32
+
+
 def _payload_from_call(call: Mapping[str, object]) -> object:
     """Read the structured MCP payload from one paired Claude tool result."""
 
@@ -708,7 +711,7 @@ def _update_machine_artifacts(
     build_context: dict[str, object],
     lifecycles: dict[str, str] | None = None,
     built_runs: set[str] | None = None,
-    query_history: list[list[dict[str, object]]] | None = None,
+    query_history: list[dict[str, object]] | None = None,
 ) -> None:
     """Derive query/fact artifacts only from structured MCP results.
 
@@ -823,7 +826,19 @@ def _update_machine_artifacts(
             rows = _rows_as_mappings(payload)
             if rows is not None:
                 latest_query = {"rows": rows}
-                query_history.append(rows)
+                columns = payload.get("columns")
+                if (
+                    isinstance(columns, list)
+                    and all(isinstance(column, str) for column in columns)
+                    and len(set(columns)) == len(columns)
+                ):
+                    query_columns = list(columns)
+                elif rows:
+                    query_columns = list(rows[0].keys())
+                else:
+                    query_columns = None
+                query_history.append({"columns": query_columns, "rows": rows})
+                del query_history[:-_MAX_QUERY_HISTORY]
     if verified is not None:
         # A verified release is the supervisor's own published statement, so it
         # supersedes anything assembled from the build call alone.
@@ -843,8 +858,9 @@ def _update_machine_artifacts(
         facts["lifecycle_state"] = next(iter(lifecycles.values()))
     if latest_query is not None:
         # Keep the latest result under ``rows`` for replay compatibility, but
-        # retain earlier governed answers too. A later exploratory query must
-        # not erase an earlier answer that matched the scenario gold.
+        # retain earlier governed answers too. A later exploratory query with
+        # a different row shape must not erase an earlier answer that matched
+        # the scenario gold; the gate still applies latest-wins within a shape.
         _write_json(
             artifact_dir / "query-results.json",
             {**latest_query, "queries": list(query_history)},
@@ -916,7 +932,7 @@ class ClaudeCodeAdapter:
         self._lifecycles: dict[str, str] = {}
         self._built_runs: set[str] = set()
         # Every structured semantic-query result in this session, in order.
-        self._query_history: list[list[dict[str, object]]] = []
+        self._query_history: list[dict[str, object]] = []
         # The supervisor's own data directory, when this adapter owns the
         # server.  It is the runner's copy of the build evidence.
         # On the --mcp-config path this adapter does not start the supervisor,

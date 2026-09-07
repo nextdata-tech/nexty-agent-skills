@@ -812,7 +812,7 @@ def test_scenario_run_scored_dict_serializes_gate_diagnostics() -> None:
         replay_recordings={scenario.id: recording},
     ).run()
     run = result.scenario_runs[0]
-    diagnostic = Finding("query_matched_earlier_answer", "latest query differed", {"candidate_index": 1})
+    diagnostic = Finding("query_scored_earlier_same_shape_answer", "latest query differed", {"candidate_index": 1})
     score = replace(run.score, gates={**run.score.gates, "query": GateResult("query", True, GATE_POINTS["query"], diagnostics=(diagnostic,))})
 
     serialized = replace(run, score=score).scored_dict()

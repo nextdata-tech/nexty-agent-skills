@@ -177,7 +177,7 @@ def test_a_gate_result_with_findings_cannot_earn_points() -> None:
 
 
 def test_non_failure_gate_diagnostics_are_preserved_without_zeroing_points() -> None:
-    diagnostic = Finding("query_matched_earlier_answer", "latest query differed")
+    diagnostic = Finding("query_scored_earlier_same_shape_answer", "latest query differed")
     result = score_run(
         {**_all_pass(), "query": GateResult("query", True, GATE_POINTS["query"], diagnostics=(diagnostic,))},
         honesty_report=_lint(),
@@ -191,7 +191,7 @@ def test_non_failure_gate_diagnostics_are_preserved_without_zeroing_points() -> 
 
 def test_serialized_gate_diagnostics_are_preserved_when_recoerced() -> None:
     diagnostic = Finding(
-        "query_matched_earlier_answer",
+        "query_scored_earlier_same_shape_answer",
         "latest query differed",
         {"candidate_index": 1},
     )

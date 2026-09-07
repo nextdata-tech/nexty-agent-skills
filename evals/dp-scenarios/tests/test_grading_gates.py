@@ -738,27 +738,81 @@ def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: 
     assert not errored.passed
 
 
-def test_query_accepts_an_earlier_retained_answer_when_a_later_query_differs() -> None:
+def test_query_rejects_a_later_wrong_answer_with_the_same_shape() -> None:
     gold = [{"category": "契約", "row_count": 7}]
+    wrong = [{"category": "Renovación", "row_count": 7}]
     actual = {
-        "rows": [{"category": "Renovación", "row_count": 7}],
+        "rows": wrong,
         "queries": [
-            gold,
-            [{"category": "Renovación", "row_count": 7}],
-            gold,
+            {"columns": ["category", "row_count"], "rows": gold},
+            {"columns": ["category", "row_count"], "rows": wrong},
         ],
     }
 
     result = gate_query(actual, gold)
 
+    assert not result.passed
+    assert result.examined
+    assert result.codes == ("query_query_rows_differ",)
+    assert result.diagnostics == ()
+
+
+def test_query_accepts_an_earlier_answer_when_a_later_query_has_a_different_shape() -> None:
+    gold = [{"category": "契約", "row_count": 7}]
+    exploratory = [{"category": "Renovación"}]
+    result = gate_query(
+        {
+            "rows": exploratory,
+            "queries": [
+                {"columns": ["category", "row_count"], "rows": gold},
+                {"columns": ["category"], "rows": exploratory},
+            ],
+        },
+        gold,
+    )
+
     assert result.passed
     assert result.examined
-    assert result.diagnostics[0].code == "query_matched_earlier_answer"
+    assert result.diagnostics[0].code == "query_scored_earlier_same_shape_answer"
     assert result.diagnostics[0].value == {
         "candidate_index": 1,
         "candidate_count": 2,
         "latest_query_matched": False,
     }
+
+
+def test_query_rejects_a_same_shape_correction_after_a_different_shape_query() -> None:
+    gold = [{"category": "契約", "row_count": 7}]
+    wrong = [{"category": "Renovación", "row_count": 7}]
+    result = gate_query(
+        {
+            "rows": wrong,
+            "queries": [
+                {"columns": ["category", "row_count"], "rows": gold},
+                {"columns": ["category"], "rows": [{"category": "Renovación"}]},
+                {"columns": ["category", "row_count"], "rows": wrong},
+            ],
+        },
+        gold,
+    )
+
+    assert not result.passed
+    assert result.codes == ("query_query_rows_differ",)
+
+
+def test_query_preserves_name_blind_aliases_with_the_same_arity() -> None:
+    gold = [{"region": "east", "regional_revenue": 1602.82}]
+    aliased = [{"region": "east", "revenue": 1602.82}]
+
+    result = gate_query(
+        {
+            "rows": aliased,
+            "queries": [{"columns": ["region", "revenue"], "rows": aliased}],
+        },
+        gold,
+    )
+
+    assert result.passed
 
 
 def test_query_keeps_latest_rows_as_a_fallback_when_history_diverges() -> None:
@@ -772,7 +826,7 @@ def test_query_keeps_latest_rows_as_a_fallback_when_history_diverges() -> None:
     )
 
     assert result.passed
-    assert result.diagnostics == ()
+    assert result.diagnostics[0].code == "query_history_ignored"
 
 
 def test_query_rejects_malformed_retained_rows_without_raising() -> None:
