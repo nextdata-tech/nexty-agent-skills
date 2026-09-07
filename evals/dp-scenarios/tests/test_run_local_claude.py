@@ -83,6 +83,8 @@ def test_local_runner_host_home_flag_and_bash_require_a_second_opt_in() -> None:
     args = module.build_parser().parse_args(["--allow-host-home", "--allow-host-home-bash"])
     assert args.allow_host_home is True
     assert args.allow_host_home_bash is True
+    assert module.build_parser().parse_args([]).jobs == 1
+    assert module.build_parser().parse_args(["--jobs", "2"]).jobs == 2
 
     with pytest.raises(TierError, match="requires --allow-host-home"):
         module.main(["--allow-host-home-bash"])
@@ -118,6 +120,14 @@ def test_oauth_credentials_always_withhold_bash() -> None:
     args = module.build_parser().parse_args([])
 
     assert module._tool_grant_arguments(args, oauth_token_present=True) == ["--no-bash"]
+
+
+@pytest.mark.parametrize("jobs", [0, -1])
+def test_local_runner_rejects_non_positive_jobs(jobs: int) -> None:
+    module = _load_runner_module()
+
+    with pytest.raises(TierError, match="--jobs must be a positive integer"):
+        module.main(["--jobs", str(jobs)])
 
 
 @pytest.mark.parametrize(

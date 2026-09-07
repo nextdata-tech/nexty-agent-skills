@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
+import threading
+import time
 from typing import Mapping
 from types import SimpleNamespace
 
@@ -316,6 +318,136 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
     if first is not None:
         responses[0] = first
     return responses
+
+
+def test_tier_runs_scenarios_concurrently_and_preserves_declaration_order(tmp_path: Path) -> None:
+    scenarios = (make_scenario("first"), make_scenario("second"))
+    (tmp_path / "runs").mkdir()
+    both_started = threading.Barrier(2)
+    roots: dict[str, Path] = {}
+    roots_lock = threading.Lock()
+
+    def factory(scenario: FakeScenario, environment: object, epoch: int) -> InMemoryTransport:
+        del epoch
+        with roots_lock:
+            roots[scenario.id] = environment.base_dir  # type: ignore[attr-defined]
+        both_started.wait(timeout=5)
+        if scenario.id == "first":
+            time.sleep(0.05)
+        return InMemoryTransport(responses_for(scenario))
+
+    result = TierRunner(
+        scenarios,
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=factory,
+        environment_root=tmp_path / "runs",
+        evidence_root=tmp_path / "evidence",
+        max_workers=2,
+    ).run()
+
+    assert [summary.scenario_id for summary in result.scenarios] == ["first", "second"]
+    assert machine_report(result)["max_workers"] == 2
+    assert set(roots) == {"first", "second"}
+    assert len(set(roots.values())) == 2
+    assert all(not root.exists() for root in roots.values())
+    runs = [summary.runs[0] for summary in result.scenarios]
+    assert len({run.ledger_path for run in runs}) == 2
+    assert len({run.evidence_bundle_dir for run in runs}) == 2
+
+
+def test_parallel_worker_failure_waits_for_and_cleans_all_environments(tmp_path: Path) -> None:
+    scenarios = (make_scenario("bad"), make_scenario("good"))
+    (tmp_path / "runs").mkdir()
+    roots: list[Path] = []
+    roots_lock = threading.Lock()
+
+    def factory(scenario: FakeScenario, environment: object, epoch: int) -> InMemoryTransport:
+        del epoch
+        with roots_lock:
+            roots.append(environment.base_dir)  # type: ignore[attr-defined]
+        if scenario.id == "bad":
+            raise RuntimeError("worker failed")
+        return InMemoryTransport(responses_for(scenario))
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        TierRunner(
+            scenarios,
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=factory,
+            environment_root=tmp_path / "runs",
+            max_workers=2,
+        ).run()
+
+    assert len(roots) == 2
+    assert all(not root.exists() for root in roots)
+
+
+def test_parallel_worker_failure_cancels_queued_scenarios(tmp_path: Path) -> None:
+    scenarios = (make_scenario("bad"), make_scenario("active"), make_scenario("queued"))
+    (tmp_path / "runs").mkdir()
+    active_started = threading.Event()
+    release_active = threading.Event()
+    bad_raised = threading.Event()
+    started: list[str] = []
+    roots: list[Path] = []
+    lock = threading.Lock()
+
+    def factory(scenario: FakeScenario, environment: object, epoch: int) -> InMemoryTransport:
+        del epoch
+        with lock:
+            started.append(scenario.id)
+            roots.append(environment.base_dir)  # type: ignore[attr-defined]
+        if scenario.id == "bad":
+            bad_raised.set()
+            raise RuntimeError("worker failed")
+        if scenario.id == "active":
+            active_started.set()
+            assert release_active.wait(timeout=5)
+        return InMemoryTransport(responses_for(scenario))
+
+    error: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            TierRunner(
+                scenarios,
+                pins=pins(),
+                canary=clean_canary(),
+                session_factory=factory,
+                environment_root=tmp_path / "runs",
+                max_workers=2,
+            ).run()
+        except BaseException as exc:  # noqa: BLE001 - test captures the worker error
+            error.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert bad_raised.wait(timeout=5)
+    assert active_started.wait(timeout=5)
+    time.sleep(0.05)
+    release_active.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert len(error) == 1
+    assert isinstance(error[0], RuntimeError)
+    assert str(error[0]) == "worker failed"
+    assert set(started) == {"bad", "active"}
+    assert len(started) == 2
+    assert all(not root.exists() for root in roots)
+
+
+@pytest.mark.parametrize("max_workers", [0, -1, True, 1.5, "2"])
+def test_tier_rejects_invalid_max_workers(max_workers: object) -> None:
+    with pytest.raises(TierError, match="max_workers"):
+        TierRunner(
+            [],
+            pins=pins(),
+            canary=clean_canary(),
+            max_workers=max_workers,  # type: ignore[arg-type]
+        )
 
 
 def populated_parent_child_recordings(

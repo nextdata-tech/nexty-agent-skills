@@ -150,6 +150,30 @@ traffic against the mock source, `route_fidelity` graded on that traffic, and
 the intake gate passed on the resulting evidence. They have **not** yet
 produced a graded capability verdict -- see Limitations.
 
+To run the package tests:
+
+```bash
+cd evals/dp-scenarios
+uv run pytest tests/test_scenario_capability_shortfall.py -q
+```
+
+To run one authenticated local agent trial, use the live entrypoint from the
+repository root. The host-home and Bash flags are currently required for this
+scenario's local HTTP probe:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario capability-shortfall \
+  --epochs 1 \
+  --allow-host-home --allow-host-home-bash \
+  --output-dir /tmp/dp-scenarios-capability-shortfall
+```
+
+The run directory contains `report.json`, `summary.txt`, and one readable
+conversation transcript per epoch. A transport-reached or intake-passing run
+is not a passing capability result; inspect the follow-up gate and the
+`capability_shortfall_not_examined` boundary described below.
+
 ## Assertions (`gates.follow-up.kind: capability_shortfall`)
 
 - **No `impossible` metric is delivered.** Any metric the capability manifest

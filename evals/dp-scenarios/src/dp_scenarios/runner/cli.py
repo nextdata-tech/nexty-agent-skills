@@ -194,6 +194,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(SCENARIO_TIERS),
         help="Tier to run; only scenarios declaring it are selected from --scenario-root",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="maximum number of scenario packages to execute concurrently (epochs stay serial)",
+    )
     parser.add_argument("--canary-dir", type=Path, required=True)
     parser.add_argument("--skills-root", type=Path, required=True)
     parser.add_argument("--canary-replay", type=Path)
@@ -239,6 +245,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected tier and write both report surfaces."""
 
     args = build_parser().parse_args(argv)
+    if args.jobs < 1:
+        raise TierError("--jobs must be a positive integer")
     if requires_live_session(args.tier) and args.mode != "live":
         # A live-tier scenario grades what an agent did across turns. Replaying
         # a stored session would grade the recording instead and report it as a
@@ -306,6 +314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         knob_plan=knob_plan,
         budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
         operator_factory=operator_factory,
+        max_workers=args.jobs,
     ).run()
     write_report(result, json_path=args.report_json, summary_path=args.report_summary)
     return 0 if result.verdict == "clean" else 1

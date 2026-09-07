@@ -17,12 +17,14 @@ import json
 from pathlib import Path
 import pkgutil
 import sqlite3
+import threading
 from typing import Any, Mapping
 
 
 ReferenceBuilder = Any
 _REFERENCE_BUILDERS: dict[str, ReferenceBuilder] = {}
 _REFERENCE_PLUGINS_DISCOVERED = False
+_REFERENCE_DISCOVERY_LOCK = threading.Lock()
 
 
 def register_reference_builder(dataset_name: str, builder: ReferenceBuilder) -> ReferenceBuilder:
@@ -44,13 +46,16 @@ def _discover_reference_plugins() -> None:
     global _REFERENCE_PLUGINS_DISCOVERED
     if _REFERENCE_PLUGINS_DISCOVERED:
         return
-    _REFERENCE_PLUGINS_DISCOVERED = True
-    from . import reference_plugins
+    with _REFERENCE_DISCOVERY_LOCK:
+        if _REFERENCE_PLUGINS_DISCOVERED:
+            return
+        from . import reference_plugins
 
-    for module in pkgutil.iter_modules(reference_plugins.__path__):
-        if module.name.startswith("_"):
-            continue
-        importlib.import_module(f"{reference_plugins.__name__}.{module.name}")
+        for module in pkgutil.iter_modules(reference_plugins.__path__):
+            if module.name.startswith("_"):
+                continue
+            importlib.import_module(f"{reference_plugins.__name__}.{module.name}")
+        _REFERENCE_PLUGINS_DISCOVERED = True
 
 
 @dataclass(frozen=True)
