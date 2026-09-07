@@ -10,11 +10,11 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+  - Agent
 metadata:
   author: nextdata
   version: 0.45.1
 ---
-
 # nxd-generate-data-product skill
 
 ## Overview
@@ -448,7 +448,7 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and `provena
 
 ### Step 6b — Adversarial review, BEFORE the self-check (MANDATORY when `nxd-review-closure` is installed)
 
-**explicitly dispatch one built-in** read-only reviewer — never a custom/plugin agent definition — with the closure path and verbatim request to return claims only; it never edits, builds, serves, transforms or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
+**Explicitly dispatch one built-in read-only reviewer** — never a custom/plugin agent definition — with the closure path and verbatim request to return claims only; it never edits, builds, serves, transforms or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs; adjudication is not authorization to mutate the closure. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Contract: [reference/adversarial-review.md](reference/adversarial-review.md), including the authorization rules.
 
 ### Step 7 — Self-check before handing off (MANDATORY)
 

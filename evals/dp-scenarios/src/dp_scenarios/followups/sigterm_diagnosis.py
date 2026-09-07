@@ -81,7 +81,7 @@ def check(
     oracle = scenario.raw_gold("diagnostics")
     plan = target.get("run_plan")
     if not isinstance(oracle, Mapping):
-        return _ungraded("diagnostics_gold_unreadable")
+        return _ungraded("diagnostics_gold_unreadable", *findings)
     elif not isinstance(plan, Mapping):
         findings.append("run_plan_not_examined")
     else:

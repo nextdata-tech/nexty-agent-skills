@@ -155,7 +155,7 @@ def check(
     expected_diagnostics = scenario.raw_gold("diagnostics")
     reported = target.get("diagnostics")
     if not isinstance(expected_diagnostics, Mapping):
-        return _ungraded("diagnostics_gold_unreadable")
+        return _ungraded("diagnostics_gold_unreadable", *findings)
     elif not isinstance(reported, Mapping):
         findings.append("diagnostics_not_examined")
     else:

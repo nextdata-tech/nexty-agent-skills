@@ -1016,12 +1016,17 @@ add it explicitly rather than assuming it's already covered.
   time is an attribute on the `api-source` service.
 
   **Every api-source closure using this desktop-supervisor compatibility path still needs
-  `csv-source-path` and a non-empty `data/` tree before it will stage an
-  api-only closure.** This is a staging preflight requirement, not an
+  `csv-source-path` and a non-empty `data/` tree before the desktop supervisor
+  will stage an api-only closure.** This is a staging preflight requirement, not an
   api-source contract: the API connector does not read the placeholder as
   source data. If that preflight is the path being exercised, it pins the
   directory before the connector runtime runs, so the closure must satisfy it
   even though it has no landed reference data.
+
+  In two consecutive live `crm-pipeline` runs — one hand-authored and one
+  through this skill — the supervisor spent a check cycle on this preflight
+  before any Python ran. If the kernel stops pinning a CSV directory for
+  api-only closures, remove this compatibility block.
 
   Ship the `csv-source-path` file holding the relative export root, exactly as a
   CSV closure does, and put at least one `.csv` under that root. Three findings

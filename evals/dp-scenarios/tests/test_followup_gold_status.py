@@ -131,6 +131,14 @@ def test_unreadable_followup_gold_is_ungraded_for_each_gold_backed_kind(
     result = handler(unreadable, target, settings, context)
     assert result["status"] == "ungraded"
     assert result["passed"] is False
+    if kind == "credential":
+        # Gold failure must not erase findings already measured from the
+        # rotation records before the diagnostics artifact was read.
+        assert "rotation_records_incomplete" in result["findings"]
+    elif kind == "sigterm":
+        # The run-record checks precede the gold read and remain useful for
+        # triage even when the committed diagnostics artifact is broken.
+        assert "naive_run_not_sigterm" in result["findings"]
 
 
 def test_unreadable_query_gold_is_ungraded_for_the_grain_followup(tmp_path: Path) -> None:
