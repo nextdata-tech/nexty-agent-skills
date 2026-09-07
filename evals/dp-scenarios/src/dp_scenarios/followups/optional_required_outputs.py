@@ -24,7 +24,7 @@ from ..support import (
     _row_count_mapping,
     _string,
 )
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def check(
@@ -120,7 +120,10 @@ def check(
     if actual_counts is None:
         return {"status": "not-examined", "passed": False, "findings": ["resource_counts_not_examined"]}
 
-    expected_counts = _count_rows(scenario.raw_gold("counts", fixture_dir))
+    try:
+        expected_counts = _count_rows(scenario.raw_gold("counts", fixture_dir))
+    except ScenarioError:
+        return _ungraded("optional_output_gold_unreadable")
     for resource, required in declared_required.items():
         if resource not in actual_counts:
             if resource in malformed_resources:

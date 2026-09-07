@@ -18,7 +18,7 @@ from collections.abc import Mapping
 
 from ..knobs import BrokerFaultPlan, BrokerFaultShape, KnobError
 from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 # The two evidence-ref phases this drill's evidence is allowed to cite. Fixed
 # harness vocabulary, not a per-scenario setting: an un-health claim backed by
@@ -106,7 +106,7 @@ def check(
     cleared_attempt: int | None = None
     max_attempts: int | None = None
     if not isinstance(oracle, Mapping):
-        findings.append("oracle_gold_unreadable")
+        return _ungraded("oracle_gold_unreadable", "attempts_not_reconciled_against_oracle")
     else:
         fault_attempt = _positive_int(oracle.get("fault_attempt"))
         cleared_attempt = _positive_int(oracle.get("cleared_attempt"))
@@ -118,7 +118,7 @@ def check(
             or max_attempts is None
             or not isinstance(fault_shape_name, str)
         ):
-            findings.append("oracle_gold_malformed")
+            return _ungraded("oracle_gold_malformed", "attempts_not_reconciled_against_oracle")
         else:
             try:
                 fault_shape = BrokerFaultShape(fault_shape_name)
@@ -131,8 +131,19 @@ def check(
                     real_entrypoint="oracle-reconciliation-entrypoint",
                 )
             except (ValueError, KnobError):
-                findings.append("oracle_gold_malformed")
-                plan = None
+                return _ungraded("oracle_gold_malformed", "attempts_not_reconciled_against_oracle")
+
+    expected_from = oracle.get("from_workflow")
+    expected_to = oracle.get("to_workflow")
+    stale_endpoint = oracle.get("stale_endpoint")
+    new_endpoint = oracle.get("new_endpoint")
+    if (
+        not isinstance(expected_from, str)
+        or not isinstance(expected_to, str)
+        or not isinstance(stale_endpoint, str)
+        or not isinstance(new_endpoint, str)
+    ):
+        return _ungraded("oracle_gold_malformed")
 
     if plan is None or fault_attempt is None or cleared_attempt is None or max_attempts is None:
         findings.append("attempts_not_reconciled_against_oracle")
@@ -240,18 +251,7 @@ def check(
     # -- matching dp_scenarios.knobs.script_restart_and_switch's own
     # contract, never merely narrated.
     switch = target.get("workflow_switch")
-    expected_from = oracle.get("from_workflow") if isinstance(oracle, Mapping) else None
-    expected_to = oracle.get("to_workflow") if isinstance(oracle, Mapping) else None
-    stale_endpoint = oracle.get("stale_endpoint") if isinstance(oracle, Mapping) else None
-    new_endpoint = oracle.get("new_endpoint") if isinstance(oracle, Mapping) else None
-    if (
-        not isinstance(expected_from, str)
-        or not isinstance(expected_to, str)
-        or not isinstance(stale_endpoint, str)
-        or not isinstance(new_endpoint, str)
-    ):
-        findings.append("oracle_gold_malformed")
-    elif not isinstance(switch, Mapping):
+    if not isinstance(switch, Mapping):
         findings.append("workflow_switch_not_examined")
     else:
         from_workflow = switch.get("from_workflow")

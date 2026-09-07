@@ -47,6 +47,10 @@ from .operator.answer_sheet import AnswerSheet, load_answer_sheet
 from .synthgen import GenerationResult, generate_dataset, get_dataset
 
 
+class GoldArtifactError(ScenarioError):
+    """A committed or generated gold reference could not be graded."""
+
+
 def _strings(value: object, location: str, *, allow_empty: bool = False) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise ScenarioError(f"{location} must be a list of strings")
@@ -314,7 +318,7 @@ class Scenario:
             return self.gold[name]
         path = (Path(fixture_dir) / relative).resolve()
         if not path.is_file():
-            raise ScenarioError(f"generated gold artifact does not exist: {relative}")
+            raise GoldArtifactError(f"generated gold artifact does not exist: {relative}")
         return path
 
     def load_gold(self, name: str = "answer", fixture_dir: str | Path | None = None) -> GoldRowSet:
@@ -323,7 +327,7 @@ class Scenario:
         result = gold_rowset(self.gold_path(name, fixture_dir))
         if not result.passed or not isinstance(result.value, GoldRowSet):
             detail = result.findings[0].detail if result.findings else "gold row-set was not examined"
-            raise ScenarioError(f"gold artifact {name!r} was rejected: {detail}")
+            raise GoldArtifactError(f"gold artifact {name!r} was rejected: {detail}")
         return result.value
 
     def raw_gold(self, name: str, fixture_dir: str | Path | None = None) -> object:
@@ -333,7 +337,7 @@ class Scenario:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ScenarioError(f"could not read gold artifact {name!r}: {exc}") from exc
+            raise GoldArtifactError(f"could not read gold artifact {name!r}: {exc}") from exc
 
     @property
     def control_total(self) -> float:
@@ -453,23 +457,35 @@ class Scenario:
                 "findings": ["unknown_follow_up_kind"],
             }
         else:
-            result = dict(kind.handler(self, target, binding.settings, context))
-        if query_rows is not None and self.has_scoreable_answer_gold:
-            assessment = self.score_query(
-                query_rows,
-                fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
-            )
-            result["query_verdict"] = assessment.verdict
-            result["query_gate_passed"] = assessment.gold_gate.passed
-            if "control_total" in self.gold:
-                control = self.reconcile_control_total(
-                    query_rows,
-                    fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
-                )
-                result["control_total_verdict"] = control.outcome
-                if not control.passed:
-                    result.setdefault("findings", [])
-                    result["findings"] = [*result["findings"], *control.codes]
+            try:
+                result = dict(kind.handler(self, target, binding.settings, context))
+                if query_rows is not None and self.has_scoreable_answer_gold:
+                    assessment = self.score_query(
+                        query_rows,
+                        fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
+                    )
+                    result["query_verdict"] = assessment.verdict
+                    result["query_gate_passed"] = assessment.gold_gate.passed
+                    if "control_total" in self.gold:
+                        control = self.reconcile_control_total(
+                            query_rows,
+                            fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
+                        )
+                        result["control_total_verdict"] = control.outcome
+                        if not control.passed:
+                            result.setdefault("findings", [])
+                            result["findings"] = [*result["findings"], *control.codes]
+            except GoldArtifactError as exc:
+                # A committed reference is harness-owned. If it cannot be read
+                # or validated, the follow-up did not measure the agent; void
+                # it explicitly instead of turning the agent's result into a
+                # failure.
+                return {
+                    "status": "ungraded",
+                    "passed": False,
+                    "findings": ["gold_artifact_unreadable"],
+                    "detail": str(exc),
+                }
         return result
 
     def follow_up_gate(
@@ -1242,6 +1258,7 @@ def _naive_rows(value: object) -> list[dict[str, object]] | None:
 
 __all__ = [
     "FixtureSpec",
+    "GoldArtifactError",
     "GateSpec",
     "QueryAssessment",
     "RepeatabilitySpec",

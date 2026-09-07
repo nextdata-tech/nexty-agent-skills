@@ -792,7 +792,7 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
                 # reply. Crediting it would let a detached launch plus a
                 # hand-written review_rounds[] entry satisfy the reviewer half
                 # with no review having happened.
-                rendered = json.dumps(result, default=str) if not isinstance(result, str) else result
+                rendered = json.dumps(result, default=str)
                 if "async agent launched" not in rendered.lower():
                     found.add("_delegated")
             if name == "skill" and isinstance(arguments, Mapping):

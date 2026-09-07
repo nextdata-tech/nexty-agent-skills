@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def _validate_settings(settings: Mapping[str, object]) -> None:
@@ -48,7 +48,7 @@ def check(
     expected_rows = scenario.raw_gold("reconciliation")
     expected_diagnostics = scenario.raw_gold("diagnostics")
     if not isinstance(expected_rows, Mapping) or not isinstance(expected_diagnostics, Mapping):
-        return _not_examined("inventory_gold_unreadable")
+        return _ungraded("inventory_gold_unreadable")
     findings: list[str] = []
     if landed.get("rows") != expected_rows.get("rows"):
         findings.append("landed_inventory_disagrees_with_reference")

@@ -1446,6 +1446,7 @@ __all__ = [
     "ClaudeCodeAdapter",
     "DEFAULT_SYSTEM_PROMPT",
     "SHELL_TOOLS",
+    "SESSION_TOOLS",
     "build_parser",
     "main",
     "parse_claude_events",

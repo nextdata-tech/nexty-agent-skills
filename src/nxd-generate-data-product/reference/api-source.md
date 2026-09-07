@@ -384,6 +384,13 @@ passed to the client as `session`. `send()` is the single chokepoint every
 and every resource:
 
 ```python
+import time
+from collections.abc import Callable
+
+import requests
+from dlt.sources.rest_api import RESTAPIConfig, rest_api_resources
+
+
 class RefreshingSession(requests.Session):
     """Re-authenticate once on 401, back off once on 429, then replay."""
 
@@ -402,7 +409,30 @@ class RefreshingSession(requests.Session):
             time.sleep(float(response.headers.get("Retry-After", 1)))
             response = super().send(request, **kwargs)
         return response
+
+
+session = RefreshingSession(
+    token=secrets["auth_token"],
+    refresh=lambda: refresh_token(
+        secrets["refresh_endpoint"],
+        secrets["refresh_token"],
+    ),
+)
+config: RESTAPIConfig = {
+    "client": {
+        "base_url": secrets["base_url"],
+        "session": session,
+    },
+    "resources": [
+        # resource definitions from the API's endpoint map
+    ],
+}
+resources = rest_api_resources(config)
 ```
+
+The session is attached at `config["client"]["session"]`, which is the
+`RESTAPIConfig` client field consumed by dlt's `RESTClient`; do not put it on a
+custom auth object or as a top-level config field.
 
 Replay **once** per response, not in a loop: a refresh endpoint that keeps
 returning an unusable token turns an unbounded retry into a hang the supervisor
@@ -985,11 +1015,13 @@ add it explicitly rather than assuming it's already covered.
   these attributes, not in a companion file. Everything the transform reads at run
   time is an attribute on the `api-source` service.
 
-  **Every api-source closure still needs `csv-source-path` AND a non-empty
-  `data/` tree — not only one that carries landed reference data.** The desktop
-  kernel reads one local CSV source per run, so it pins that directory whatever
-  the closure's connector type is. Two consecutive live crm-pipeline runs, one
-  hand-authored and one through this skill, each lost a check cycle to it.
+  **Every api-source closure using this desktop-supervisor compatibility path still needs
+  `csv-source-path` and a non-empty `data/` tree before it will stage an
+  api-only closure.** This is a staging preflight requirement, not an
+  api-source contract: the API connector does not read the placeholder as
+  source data. If that preflight is the path being exercised, it pins the
+  directory before the connector runtime runs, so the closure must satisfy it
+  even though it has no landed reference data.
 
   Ship the `csv-source-path` file holding the relative export root, exactly as a
   CSV closure does, and put at least one `.csv` under that root. Three findings
@@ -1008,10 +1040,19 @@ add it explicitly rather than assuming it's already covered.
 
   An empty `csv-source-path` file is its own finding (`structure/csv_source_invalid`),
   so blanking it is not a way out. For a closure with no landed reference data,
-  `printf 'data\n' > csv-source-path` plus a single placeholder row under
-  `data/_unused/_unused.csv` clears all three. None of this declares a CSV
-  connector: the closure still names only `api-source` in `.secrets([...])`, and
-  there is still no `csv-source` service in the profile.
+  use a **flat** compatibility placeholder, not a model-shaped directory:
+
+  ```sh
+  printf 'data\n' > csv-source-path
+  mkdir -p data
+  printf 'placeholder\n' > data/api_source_placeholder.csv
+  ```
+
+  A flat file keeps `data/` from declaring `_unused` (or any other name) as a
+  base model during Phase A; `data/<model>/` would be interpreted as a real
+  source model and fail the base-model/data-directory check. None of this
+  declares a CSV connector: the closure still names only `api-source` in
+  `.secrets([...])`, and there is still no `csv-source` service in the profile.
 
   > This documents a supervisor requirement that contradicts the api-source
   > contract, not a design intent. If the kernel stops pinning a CSV directory

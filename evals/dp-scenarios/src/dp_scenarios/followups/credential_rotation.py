@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from ..grading import sentinel_byte_scan
 from ..operator import EventType
 from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def check(
@@ -155,7 +155,7 @@ def check(
     expected_diagnostics = scenario.raw_gold("diagnostics")
     reported = target.get("diagnostics")
     if not isinstance(expected_diagnostics, Mapping):
-        findings.append("diagnostics_gold_unreadable")
+        return _ungraded("diagnostics_gold_unreadable")
     elif not isinstance(reported, Mapping):
         findings.append("diagnostics_not_examined")
     else:

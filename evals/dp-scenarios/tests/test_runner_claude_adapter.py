@@ -706,19 +706,27 @@ def test_withheld_bash_is_denied_on_the_spawned_argv_not_merely_left_unlisted(
     assert "Bash" not in allowed_tools
 
 
-def test_session_tools_are_denied_on_every_run() -> None:
-    """They reached the agent because they were on neither list.
+@pytest.mark.parametrize("allow_bash", [False, True])
+def test_session_tools_are_denied_on_spawned_argv_for_both_bash_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_bash: bool,
+) -> None:
+    """Session tools are denied by the actual CLI flag, not tuple membership."""
 
-    ``--allowedTools`` is auto-approval, so omitting a tool grants it. A live
-    run used ``ListAgents`` and ``ScheduleWakeup`` to poll a background subagent
-    for eight turns and built nothing. None is used by any skill under ``src/``.
-    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=allow_bash)
+    denied = {
+        tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")
+    }
 
     from dp_scenarios.runner.claude_adapter import SESSION_TOOLS, SHELL_TOOLS
 
-    assert "Monitor" in SHELL_TOOLS, "Monitor executes a shell command"
-    for tool in ("ListAgents", "SendMessage", "ScheduleWakeup", "TaskOutput", "TaskStop"):
-        assert tool in SESSION_TOOLS
+    assert set(SESSION_TOOLS) <= denied
+    if allow_bash:
+        assert not (set(SHELL_TOOLS) & denied)
+    else:
+        assert set(SHELL_TOOLS) <= denied
 
 
 def test_granting_bash_denies_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -818,6 +826,7 @@ def test_openai_key_is_stripped_from_the_spawned_agent_environment(
     assert all("sk-live-operator-key" not in value for value in environment.values())
     # The strip is targeted, not a blanket environment reset.
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
+    assert environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 
 def test_the_adapter_environment_is_unchanged_when_no_key_is_present(

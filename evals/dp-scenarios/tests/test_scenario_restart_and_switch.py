@@ -386,6 +386,7 @@ def _scenario_with_oracle(tmp_path: Path, oracle: object) -> object:
 def test_a_non_mapping_oracle_fails_rather_than_skipping_reconciliation(tmp_path: Path) -> None:
     scenario = _scenario_with_oracle(tmp_path, ["not", "a", "mapping"])
     result = scenario.follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_unreadable" in result["findings"]
     assert "attempts_not_reconciled_against_oracle" in result["findings"]
@@ -405,6 +406,7 @@ def test_a_malformed_oracle_field_fails_rather_than_skipping_reconciliation(
     tmp_path: Path, mutation: dict[str, object]
 ) -> None:
     result = _scenario_with_oracle(tmp_path, {**GOLD, **mutation}).follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_malformed" in result["findings"]
     assert "attempts_not_reconciled_against_oracle" in result["findings"]
@@ -416,6 +418,7 @@ def test_an_unknown_fault_shape_fails_rather_than_skipping_reconciliation(tmp_pa
     result = _scenario_with_oracle(
         tmp_path, {**GOLD, "fault_shape": "no-such-shape"}
     ).follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_malformed" in result["findings"]
     assert "attempts_not_reconciled_against_oracle" in result["findings"]
@@ -509,11 +512,12 @@ def test_a_call_answered_by_an_endpoint_the_gold_does_not_declare_is_caught() ->
 
 
 @pytest.mark.parametrize("field", ["stale_endpoint", "new_endpoint"])
-def test_a_gold_missing_an_endpoint_identity_is_malformed_not_ungraded(
+def test_a_gold_missing_an_endpoint_identity_is_ungraded(
     tmp_path: Path, field: str
 ) -> None:
     oracle = {key: value for key, value in GOLD.items() if key != field}
     result = _scenario_with_oracle(tmp_path, oracle).follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_malformed" in result["findings"]
 

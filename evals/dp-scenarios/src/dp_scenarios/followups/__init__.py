@@ -44,6 +44,12 @@ PlantEvidenceValidator = Callable[[frozenset[str], Mapping[str, object]], None]
 FixtureGoldValidator = Callable[[Mapping[str, object], Mapping[str, Path]], None]
 
 
+def _ungraded(*findings: str) -> dict[str, object]:
+    """Return the settled result for an unreadable committed gold artifact."""
+
+    return {"status": "ungraded", "passed": False, "findings": list(findings)}
+
+
 @dataclass(frozen=True, slots=True)
 class FollowUpKind:
     """One registered follow-up kind and everything the loader needs from it."""
