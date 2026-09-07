@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from ..support import _string
 from . import FollowUpContext, FollowUpKind, register

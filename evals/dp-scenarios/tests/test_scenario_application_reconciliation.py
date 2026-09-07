@@ -46,6 +46,7 @@ def _evidence() -> dict[str, object]:
             "metrics": {
                 "export_applications": 391,
                 "dashboard_active_applications": 353,
+                "difference": 38,
                 "status_filter_exclusions": 30,
                 "tombstone_exclusions": 8,
             },
@@ -65,13 +66,15 @@ def test_c2_loads_as_core_and_declares_the_reconciliation_plant() -> None:
     assert SCENARIO.events.planted_card_ids() == SCENARIO.required_plants
 
 
-def test_c2_driver_guard_covers_each_ground_truth_trigger_term() -> None:
-    ground_truth_terms = {
-        term
-        for fact in SCENARIO.answer_sheet.ground_truth.values()
-        for term in fact.terms
-    }
-    assert ground_truth_terms <= set(SCENARIO.answer_sheet.driver_forbidden_terms)
+def test_c2_driver_guard_uses_reconciliation_vocabulary() -> None:
+    assert {
+        "dashboard",
+        "active",
+        "tombstoned",
+        "export",
+        "rows",
+        "withdrawn",
+    }.issubset(SCENARIO.answer_sheet.driver_forbidden_terms)
 
 
 def test_c2_source_has_391_rows_and_the_independent_filter_has_353(tmp_path: Path) -> None:

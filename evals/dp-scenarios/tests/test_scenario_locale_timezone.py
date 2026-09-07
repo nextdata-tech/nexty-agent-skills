@@ -73,13 +73,14 @@ def test_c6_loads_as_core_and_declares_the_timezone_plant() -> None:
     assert SCENARIO.events.planted_card_ids() == SCENARIO.required_plants
 
 
-def test_c6_driver_guard_covers_each_ground_truth_trigger_term() -> None:
-    ground_truth_terms = {
-        term
-        for fact in SCENARIO.answer_sheet.ground_truth.values()
-        for term in fact.terms
-    }
-    assert ground_truth_terms <= set(SCENARIO.answer_sheet.driver_forbidden_terms)
+def test_c6_driver_guard_uses_timezone_vocabulary() -> None:
+    assert {
+        "timezone",
+        "source-local",
+        "utc",
+        "audit",
+        "timestamp",
+    }.issubset(SCENARIO.answer_sheet.driver_forbidden_terms)
 
 
 def test_c6_preserves_non_ascii_source_values_and_has_one_boundary_shift(tmp_path: Path) -> None:

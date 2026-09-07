@@ -91,6 +91,7 @@ def check(
     expected_metrics = {
         "export_applications": expected["export_count"],
         "dashboard_active_applications": expected["dashboard_active_count"],
+        "difference": expected["difference"],
         "status_filter_exclusions": expected["status_filter_exclusions"],
         "tombstone_exclusions": expected["tombstone_exclusions"],
     }
@@ -142,7 +143,8 @@ KIND = register(
                 "including 'status = active' and 'tombstoned = false', and a "
                 "metrics object with exactly the integer keys "
                 "export_applications, dashboard_active_applications, "
-                "status_filter_exclusions, and tombstone_exclusions"
+                "difference, status_filter_exclusions, and "
+                "tombstone_exclusions"
             ),
             "decision": (
                 "object with exactly id='c2-active-count-reconciliation', status "

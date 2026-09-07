@@ -446,8 +446,9 @@ A scenario package is additive: it needs no edit to a shared file, so two
 scenarios can be authored in parallel without conflicting.
 
 1. `scenarios/<name>/` — `scenario.yaml` (unique `run_order`, declared `tier`),
-   `answer-sheet.yaml`, `events.yaml`, `gold/`, and a `README.md` stating the
-   fixture, execution, goal, assertions and limitations.
+   `answer-sheet.yaml`, `events.yaml`, `gold/`, a `.gitattributes` file that
+   protects the committed gold extensions from LFS filtering, and a `README.md`
+   stating the fixture, execution, goal, assertions and limitations.
 2. `src/dp_scenarios/followups/<kind>.py` — the follow-up check. Define
    `check(scenario, target, settings, context)` and `register()` a `FollowUpKind`
    naming its gold keys, any certification gold, and a settings validator.
