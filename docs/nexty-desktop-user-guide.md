@@ -33,12 +33,12 @@ Nexty turns a job you do by hand into something that does it for you. It reads t
 > of the guide makes sense, but it cannot be followed until that channel
 > exists. Do not treat the steps below as tested.
 
-The packager produces two artifacts, and there is no Intel macOS build:
+Nexty desktop is available for the following platforms:
 
-| Artifact | For |
-| --- | --- |
-| `macos-arm64` | Apple silicon Macs, running Claude Desktop. |
-| `linux-aarch64` | The offline bundle Cowork needs. |
+| Artifact | Platform                                    |
+| --- |---------------------------------------------|
+| `macos-arm64` | Apple silicon Macs. |
+| `linux-aarch64` | Linux ARM64 systems.            |
 
 Pick the path that matches where you work. They are different installs, not two ways of doing the same one.
 
@@ -220,11 +220,11 @@ Nexty finds the data product and reconnects, usually in seconds and without rebu
 
 ### Sharing
 
-After each build Nexty writes a **blueprint page**: one self-contained markdown file describing the data product, its logic, its definitions, and what it promises.
+The blueprint you approved in phase 3 is saved with the product, as markdown, in the workflow's own folder. That is the document to hand someone: what the product is for, the questions it answers, what your terms mean, the rules that always apply, and what it promises.
 
 > Give me the blueprint for this data product.
 
-Email it, post it, attach it to a deck. It answers "where does this number come from?" without a meeting.
+Email it, post it, attach it to a deck. It answers "where does this number come from?" without a meeting, and it reads as plain text anywhere.
 
 ### When the job changes
 
@@ -358,7 +358,7 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 ### Sharing
 
-> Generate the blueprint page and tell me where to find it.
+> Where is the blueprint for this product? I want to send it to someone.
 
 > Export this product so I can send it to a colleague.
 
