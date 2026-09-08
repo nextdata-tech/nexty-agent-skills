@@ -450,6 +450,36 @@ def test_tier_rejects_invalid_max_workers(max_workers: object) -> None:
         )
 
 
+def _recorded_review_round() -> dict[str, object]:
+    """A complete empty review in the shipped build-record schema."""
+
+    return {
+        "status": "complete",
+        "started_at_unix_ms": 1_000,
+        "ended_at_unix_ms": 2_000,
+        "budget_ms": 120_000,
+        "findings": [],
+        "adjudications": [],
+        "user_decision": None,
+    }
+
+
+def _completed_review_call() -> ToolCall:
+    """The built-in reviewer returned claims inline in the launching turn."""
+
+    return ToolCall(
+        "Agent",
+        arguments={
+            "subagent_type": "general-purpose",
+            "prompt": (
+                "Review closure ./closure against the original request; "
+                "return claims only."
+            ),
+        },
+        result={"is_error": False, "content": "No claims."},
+    )
+
+
 def populated_parent_child_recordings(
     tmp_path: Path, *, truncate_final_turn: bool = False, truncate_every_epoch: bool = False
 ) -> tuple[object, list[ReplayRecording]]:
@@ -498,6 +528,7 @@ def populated_parent_child_recordings(
                 }
             },
             "closure/built-spec.json": {"metrics": {"regional_revenue": "supported"}},
+            "closure/build-record.json": {"review_rounds": [_recorded_review_round()]},
         }
         files = tuple(
             TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -512,7 +543,7 @@ def populated_parent_child_recordings(
                 agent_message="The build completed.",
                 tool_calls=(
                     ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
-                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                    _completed_review_call(),
                 ),
                 files_touched=files,
             ),
@@ -564,6 +595,7 @@ def populated_zero_row_recordings(
                 "requiredness": {"optional_events": False, "primary": True}
             },
             "closure/built-spec.json": {"metrics": {"primary": "supported"}},
+            "closure/build-record.json": {"review_rounds": [_recorded_review_round()]},
         }
         for resource in ("optional_events", "primary"):
             source_text = (generated.data_dir / f"{resource}.csv").read_text(encoding="utf-8")
@@ -592,7 +624,7 @@ def populated_zero_row_recordings(
                 agent_message="The build completed.",
                 tool_calls=(
                     ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
-                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                    _completed_review_call(),
                 ),
                 files_touched=files,
             ),
@@ -2452,6 +2484,7 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
                 "semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}
             },
             "closure/built-spec.json": {"metrics": {"regional_revenue": "supported"}},
+            "closure/build-record.json": {"review_rounds": [_recorded_review_round()]},
         }
         files = tuple(
             TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -2473,7 +2506,7 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
                 agent_message="The build completed.",
                 tool_calls=(
                     ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
-                    ToolCall("Skill", arguments={"skill": "nxd-review-closure"}, result={"status": "pass"}),
+                    _completed_review_call(),
                 ),
                 files_touched=files,
             ),

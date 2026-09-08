@@ -786,32 +786,15 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
             if not isinstance(name, str):
                 continue
             name = name.lower()
-            arguments = call.get("arguments")
             if name == f"mcp__{desktop_server_name.lower()}__check_data_product":
                 found.add("self_check")
-            if name in {"task", "agent"}:
+            if name in {"task", "agent"} and _is_completed_review_delegation(call):
                 # A background launch returns "Async agent launched
                 # successfully" and nothing else -- non-error, but no child
                 # reply. Crediting it would let a detached launch plus a
                 # hand-written review_rounds[] entry satisfy the reviewer half
                 # with no review having happened.
-                rendered = json.dumps(result, default=str)
-                if "async agent launched" not in rendered.lower():
-                    found.add("_delegated")
-            if name == "skill" and isinstance(arguments, Mapping):
-                skill_name = arguments.get("skill")
-                if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
-                    found.add("adversarial_review")
-            # Both names, because the delegation tool is not called the same
-            # thing in every Claude Code build: a live crm-pipeline run made
-            # four ``Agent`` calls and zero ``Task`` calls, so matching only
-            # ``task`` made the reviewer dispatch unobservable by name -- the
-            # gate would have failed an agent that did exactly what step 6b
-            # mandates.
-            if name in {"task", "agent"} and isinstance(arguments, Mapping):
-                subagent_type = arguments.get("subagent_type")
-                if subagent_type in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
-                    found.add("adversarial_review")
+                found.add("_review_delegated")
     return found
 
 
@@ -819,6 +802,179 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
 #: deliberately not a review status (`reference/adversarial-review.md`), and a
 #: non-eligible review produces no entry at all.
 _REVIEW_ROUND_STATUS = frozenset({"complete", "timed_out", "needs_user"})
+_REVIEW_CLASSIFICATIONS = frozenset({"behavior_affecting", "structural_note"})
+_REVIEW_FINDING_STATES = frozenset({"not_applied", "needs_user", "applied"})
+_REVIEW_DISPOSITIONS = frozenset({"accepted", "rejected", "out_of_scope"})
+
+
+def _is_completed_review_delegation(call: Mapping[str, object]) -> bool:
+    """Whether a delegation returned the mandated closure-review result.
+
+    The reviewer contract requires the closure and original request and tells
+    the child to ``return claims only``.  That phrase distinguishes the review
+    dispatch from authoring, documentation-hunting, and file-editing helpers.
+    A non-empty inline tool result proves that the child returned in this turn;
+    an async launch or an empty success envelope proves only that it started.
+    """
+
+    arguments = call.get("arguments")
+    result = call.get("result")
+    if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
+        return False
+    prompt = arguments.get("prompt")
+    if not isinstance(prompt, str):
+        return False
+    normalized_prompt = " ".join(prompt.casefold().split())
+    if not all(term in normalized_prompt for term in ("closure", "request", "return claims only")):
+        return False
+    content = result.get("content")
+    if isinstance(content, str):
+        rendered = content.strip()
+    elif isinstance(content, (Mapping, Sequence)) and not isinstance(content, (bytes, bytearray)):
+        rendered = json.dumps(content, default=str).strip()
+        if rendered in {"{}", "[]", '""'}:
+            return False
+    else:
+        return False
+    return bool(rendered) and "async agent launched" not in rendered.casefold()
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _valid_review_round(entry: object) -> bool:
+    """Validate the review evidence shape the shipped job-loop enforces.
+
+    This mirrors ``validate_review_round`` in
+    ``src/nxd-run-job-loop/scripts/dp_diagnostics.py``.  The eval package
+    cannot import that shipped standalone helper, so keep this deliberately
+    closed and structural: a status token by itself is not a review round.
+    """
+
+    if not isinstance(entry, Mapping):
+        return False
+    required = {
+        "status",
+        "started_at_unix_ms",
+        "ended_at_unix_ms",
+        "budget_ms",
+        "findings",
+        "adjudications",
+        "user_decision",
+    }
+    if set(entry) != required:
+        return False
+    status = entry.get("status")
+    started = entry.get("started_at_unix_ms")
+    ended = entry.get("ended_at_unix_ms")
+    budget = entry.get("budget_ms")
+    if status not in _REVIEW_ROUND_STATUS:
+        return False
+    if not (_is_int(started) and _is_int(ended) and _is_int(budget) and budget > 0):
+        return False
+    assert isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int)
+    elapsed = ended - started
+    if elapsed < 0:
+        return False
+    if status == "timed_out" and elapsed < budget:
+        return False
+    if status in {"complete", "needs_user"} and elapsed > budget:
+        return False
+
+    findings = entry.get("findings")
+    adjudications = entry.get("adjudications")
+    if not isinstance(findings, list) or not isinstance(adjudications, list):
+        return False
+    finding_ids: set[str] = set()
+    states_by_id: dict[str, object] = {}
+    classifications_by_id: dict[str, object] = {}
+    for finding in findings:
+        if not isinstance(finding, Mapping) or set(finding) != {
+            "id", "claim", "evidence", "classification", "proposed_effect", "applied_files", "state"
+        }:
+            return False
+        finding_id = finding.get("id")
+        evidence = finding.get("evidence")
+        applied_files = finding.get("applied_files")
+        if not isinstance(finding_id, str) or not finding_id or finding_id in finding_ids:
+            return False
+        if not isinstance(finding.get("claim"), str) or not finding.get("claim"):
+            return False
+        if not isinstance(evidence, list) or not evidence or any(
+            not isinstance(citation, str) or not citation for citation in evidence
+        ):
+            return False
+        if finding.get("classification") not in _REVIEW_CLASSIFICATIONS:
+            return False
+        if not isinstance(finding.get("proposed_effect"), str) or not finding.get("proposed_effect"):
+            return False
+        if not isinstance(applied_files, list) or any(
+            not isinstance(path, str) or not path for path in applied_files
+        ):
+            return False
+        state = finding.get("state")
+        if state not in _REVIEW_FINDING_STATES:
+            return False
+        if (state == "applied") != bool(applied_files):
+            return False
+        finding_ids.add(finding_id)
+        states_by_id[finding_id] = state
+        classifications_by_id[finding_id] = finding.get("classification")
+
+    adjudicated_ids: set[str] = set()
+    for adjudication in adjudications:
+        if not isinstance(adjudication, Mapping) or set(adjudication) != {
+            "finding_id", "disposition", "citation"
+        }:
+            return False
+        finding_id = adjudication.get("finding_id")
+        disposition = adjudication.get("disposition")
+        citation = adjudication.get("citation")
+        if not isinstance(finding_id, str) or not finding_id or finding_id in adjudicated_ids:
+            return False
+        if disposition not in _REVIEW_DISPOSITIONS:
+            return False
+        if citation is not None and (not isinstance(citation, str) or not citation):
+            return False
+        if disposition == "rejected" and not citation:
+            return False
+        adjudicated_ids.add(finding_id)
+    if finding_ids != adjudicated_ids:
+        return False
+
+    user_decision = entry.get("user_decision")
+    approved_ids: set[str] = set()
+    if user_decision is not None:
+        if not isinstance(user_decision, Mapping) or set(user_decision) != {
+            "approved_at_unix_ms", "citation", "approved_finding_ids"
+        }:
+            return False
+        approved = user_decision.get("approved_finding_ids")
+        if not _is_int(user_decision.get("approved_at_unix_ms")):
+            return False
+        if not isinstance(user_decision.get("citation"), str) or not user_decision.get("citation"):
+            return False
+        if not isinstance(approved, list) or any(
+            not isinstance(finding_id, str) or not finding_id for finding_id in approved
+        ):
+            return False
+        if len(approved) != len(set(approved)) or not set(approved).issubset(finding_ids):
+            return False
+        if status not in {"complete", "timed_out"}:
+            return False
+        approved_ids = set(approved)
+
+    needs_user_ids = {key for key, value in states_by_id.items() if value == "needs_user"}
+    if (status == "needs_user") != bool(needs_user_ids):
+        return False
+    applied_behavior_ids = {
+        finding_id
+        for finding_id, state in states_by_id.items()
+        if state == "applied"
+        and classifications_by_id.get(finding_id) == "behavior_affecting"
+    }
+    return applied_behavior_ids.issubset(approved_ids)
 
 
 def _review_round_outcome(review_rounds: object) -> str | None:
@@ -835,12 +991,7 @@ def _review_round_outcome(review_rounds: object) -> str | None:
         review_rounds = review_rounds.get("review_rounds")
     if not isinstance(review_rounds, Sequence) or isinstance(review_rounds, (str, bytes, bytearray)):
         return None
-    statuses = [
-        str(entry.get("status", "")).strip().lower()
-        for entry in review_rounds
-        if isinstance(entry, Mapping)
-    ]
-    valid = [status for status in statuses if status in _REVIEW_ROUND_STATUS]
+    valid = [str(entry["status"]) for entry in review_rounds if _valid_review_round(entry)]
     if not valid:
         return None
     return f"{len(valid)} review round(s): {', '.join(sorted(set(valid)))}"
@@ -892,20 +1043,14 @@ def gate_construction(
     )
     # ``_delegated`` is a marker, not a construction kind; take it out before
     # the per-kind loops so it can never read as one.
-    delegated = "_delegated" in observed_calls
-    observed_calls.discard("_delegated")
-    # The reviewer dispatch cannot be recognised by ``subagent_type``. The
-    # skill mandates "one built-in read-only subagent -- never a custom/plugin
-    # agent definition", this plugin registers no agents, and the CLI rejects
-    # an unknown type outright, so ``subagent_type="nxd-review-closure"`` is a
-    # token a compliant agent can never emit. Keying the gate on it made
-    # ``construction`` unpassable by an agent doing exactly what the skill says.
-    #
-    # What the mandated flow does produce is a ``review_rounds[]`` entry in
-    # build-record.json. Requiring it *together with* an observed delegation
-    # call keeps both halves honest: a research subagent alone records no
-    # round, and a fabricated round alone dispatched nothing. That pairing is
-    # the behaviour, where ``subagent_type`` was only ever a proxy for it.
+    delegated = "_review_delegated" in observed_calls
+    observed_calls.discard("_review_delegated")
+    # A loaded ``Skill`` only proves that instructions were read, not that an
+    # independent review happened. Likewise, ``subagent_type`` is only an
+    # argument to a delegation call; the review is observable only when the
+    # call completed and the build recorded a valid review round. Requiring
+    # both halves keeps a research subagent alone and a fabricated round alone
+    # from satisfying the reviewer gate.
     round_outcome = _review_round_outcome(review_rounds)
     if round_outcome is not None and delegated:
         observed_calls.add("adversarial_review")
