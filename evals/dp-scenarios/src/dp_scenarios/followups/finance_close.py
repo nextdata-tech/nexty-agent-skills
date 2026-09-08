@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from ..support import ScenarioError, _mapping, _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def _validate_settings(settings: Mapping[str, object]) -> None:
@@ -37,7 +37,7 @@ def check(
     expected = scenario.raw_gold("reconciliation")
     diagnostics_gold = scenario.raw_gold("diagnostics")
     if not isinstance(expected, Mapping) or not isinstance(diagnostics_gold, Mapping):
-        return _not_examined("finance_close_gold_unreadable")
+        return _ungraded("finance_close_gold_unreadable")
     landed = target.get("landed")
     promise = target.get("promise")
     reported_diagnostics = target.get("diagnostics")

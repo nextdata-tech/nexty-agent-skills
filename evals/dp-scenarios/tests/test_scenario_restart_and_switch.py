@@ -386,9 +386,10 @@ def _scenario_with_oracle(tmp_path: Path, oracle: object) -> object:
 def test_a_non_mapping_oracle_fails_rather_than_skipping_reconciliation(tmp_path: Path) -> None:
     scenario = _scenario_with_oracle(tmp_path, ["not", "a", "mapping"])
     result = scenario.follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_unreadable" in result["findings"]
-    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" not in result["findings"]
 
 
 @pytest.mark.parametrize(
@@ -405,9 +406,10 @@ def test_a_malformed_oracle_field_fails_rather_than_skipping_reconciliation(
     tmp_path: Path, mutation: dict[str, object]
 ) -> None:
     result = _scenario_with_oracle(tmp_path, {**GOLD, **mutation}).follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_malformed" in result["findings"]
-    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" not in result["findings"]
 
 
 def test_an_unknown_fault_shape_fails_rather_than_skipping_reconciliation(tmp_path: Path) -> None:
@@ -416,31 +418,35 @@ def test_an_unknown_fault_shape_fails_rather_than_skipping_reconciliation(tmp_pa
     result = _scenario_with_oracle(
         tmp_path, {**GOLD, "fault_shape": "no-such-shape"}
     ).follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_malformed" in result["findings"]
-    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" not in result["findings"]
 
 
-def test_a_reconciliation_failure_does_not_silently_pass_the_whole_attempt_block(
+def test_an_unreadable_oracle_is_ungraded_without_a_fake_reconciliation_failure(
     tmp_path: Path,
 ) -> None:
-    """The single guard standing between an unusable oracle and a clean pass.
+    """An unusable oracle voids the reconciliation without inventing a code.
 
-    With the oracle unreadable, the entire per-attempt block (count, fault,
-    stderr silence, evidence phase, outcome) is skipped. Nothing else would
-    notice, so this pins that the skip is reported as a failure rather than
-    producing a pass on evidence nothing checked.
+    The per-attempt checks need a valid oracle schedule. The gold finding is
+    therefore the truthful diagnosis; the old ``attempts_not_reconciled``
+    fallback was unreachable and claimed a comparison that never happened.
     """
 
     scenario = _scenario_with_oracle(tmp_path, ["unreadable"])
     target = _clean_target()
-    # Evidence that would fail every skipped per-attempt check.
+    # Evidence that would fail the per-attempt checks if a valid oracle made
+    # those checks possible. It must not manufacture a reconciliation code
+    # when the oracle itself is unreadable.
     target["attempts"]["1"]["fault"] = "not-the-planted-shape"
     target["attempts"]["1"]["stderr"] = "a leaked diagnostic"
     target["attempts"]["1"]["evidence_ref"] = "build-phase/attempt-1/bind"
     result = scenario.follow_up_check(target)
+    assert result["status"] == "ungraded"
     assert not result["passed"]
-    assert "attempts_not_reconciled_against_oracle" in result["findings"]
+    assert "oracle_gold_unreadable" in result["findings"]
+    assert "attempts_not_reconciled_against_oracle" not in result["findings"]
 
 
 @pytest.mark.parametrize(
@@ -509,11 +515,12 @@ def test_a_call_answered_by_an_endpoint_the_gold_does_not_declare_is_caught() ->
 
 
 @pytest.mark.parametrize("field", ["stale_endpoint", "new_endpoint"])
-def test_a_gold_missing_an_endpoint_identity_is_malformed_not_ungraded(
+def test_a_gold_missing_an_endpoint_identity_is_ungraded(
     tmp_path: Path, field: str
 ) -> None:
     oracle = {key: value for key, value in GOLD.items() if key != field}
     result = _scenario_with_oracle(tmp_path, oracle).follow_up_check(_clean_target())
+    assert result["status"] == "ungraded"
     assert not result["passed"]
     assert "oracle_gold_malformed" in result["findings"]
 

@@ -18,7 +18,7 @@ from collections.abc import Mapping
 
 from ..knobs import BrokerFaultPlan, BrokerFaultShape, KnobError
 from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 # The two evidence-ref phases this drill's evidence is allowed to cite. Fixed
 # harness vocabulary, not a per-scenario setting: an un-health claim backed by
@@ -101,78 +101,80 @@ def check(
     # a real attempt -- never trusted merely because the target's own numbers
     # are self-consistent.
     oracle = scenario.raw_gold("oracle")
-    plan: BrokerFaultPlan | None = None
-    fault_attempt: int | None = None
-    cleared_attempt: int | None = None
-    max_attempts: int | None = None
     if not isinstance(oracle, Mapping):
-        findings.append("oracle_gold_unreadable")
-    else:
-        fault_attempt = _positive_int(oracle.get("fault_attempt"))
-        cleared_attempt = _positive_int(oracle.get("cleared_attempt"))
-        max_attempts = _positive_int(oracle.get("max_attempts"))
-        fault_shape_name = oracle.get("fault_shape")
-        if (
-            fault_attempt is None
-            or cleared_attempt is None
-            or max_attempts is None
-            or not isinstance(fault_shape_name, str)
-        ):
-            findings.append("oracle_gold_malformed")
-        else:
-            try:
-                fault_shape = BrokerFaultShape(fault_shape_name)
-                # bind_timeout_s/margin_s stay at BrokerFaultPlan's defaults:
-                # only the sleep_past_bind_timeout shape reads them, and this
-                # drill plants an occupied port. Carrying them in the gold
-                # would be a declared constant nothing grades against.
-                plan = BrokerFaultPlan(
-                    {fault_attempt: fault_shape},
-                    real_entrypoint="oracle-reconciliation-entrypoint",
-                )
-            except (ValueError, KnobError):
-                findings.append("oracle_gold_malformed")
-                plan = None
+        return _ungraded("oracle_gold_unreadable", *findings)
+    fault_attempt = _positive_int(oracle.get("fault_attempt"))
+    cleared_attempt = _positive_int(oracle.get("cleared_attempt"))
+    max_attempts = _positive_int(oracle.get("max_attempts"))
+    fault_shape_name = oracle.get("fault_shape")
+    if (
+        fault_attempt is None
+        or cleared_attempt is None
+        or max_attempts is None
+        or not isinstance(fault_shape_name, str)
+    ):
+        return _ungraded("oracle_gold_malformed", *findings)
+    try:
+        fault_shape = BrokerFaultShape(fault_shape_name)
+        # bind_timeout_s/margin_s stay at BrokerFaultPlan's defaults:
+        # only the sleep_past_bind_timeout shape reads them, and this
+        # drill plants an occupied port. Carrying them in the gold
+        # would be a declared constant nothing grades against.
+        plan = BrokerFaultPlan(
+            {fault_attempt: fault_shape},
+            real_entrypoint="oracle-reconciliation-entrypoint",
+        )
+    except (ValueError, KnobError):
+        return _ungraded("oracle_gold_malformed", *findings)
 
-    if plan is None or fault_attempt is None or cleared_attempt is None or max_attempts is None:
-        findings.append("attempts_not_reconciled_against_oracle")
-    else:
-        # No retry-until-lucky: the attempt count and identities must be
-        # exactly the declared schedule, never more. A target that kept
-        # trying beyond the plan (or dropped the cleared attempt) reports a
-        # different, unbounded retry shape.
-        if set(attempts) != {fault_attempt, cleared_attempt} or len(attempts) != max_attempts:
-            findings.append("attempt_count_disagrees_with_plan")
-        for attempt_number, entry in sorted(attempts.items()):
-            # Every key reaching here is already a positive int (attempts that
-            # are not were returned as not-examined above), so this call
-            # cannot raise; the bound on which attempts are legal is the
-            # set/len comparison directly above, not the plan lookup.
-            expected_fault = plan.fault_for_attempt(attempt_number)
-            expected_fault_value = expected_fault.value if expected_fault is not None else "none"
-            declared_fault = entry.get("fault")
-            if declared_fault != expected_fault_value:
-                findings.append(f"attempt_fault_disagrees_with_plan:{attempt_number}")
-            stderr = entry.get("stderr")
-            if not isinstance(stderr, str):
-                findings.append(f"attempt_evidence_not_examined:{attempt_number}")
-            elif stderr != "":
-                # The planted fault is defined to be silent; leaked stderr
-                # means the evidence was not actually produced by the
-                # no-stderr occupied-port/sleep-past-bind-timeout shim.
-                findings.append(f"attempt_leaked_stderr:{attempt_number}")
-            evidence_ref = entry.get("evidence_ref")
-            if not isinstance(evidence_ref, str) or not evidence_ref.startswith(SERVE_PHASE_PREFIX):
-                # A bind attempt is always serve-phase evidence, whichever way
-                # it comes out: this is about *what happened when the process
-                # tried to bind and serve*, never about the build.
-                findings.append(f"attempt_evidence_ref_not_serve_phase:{attempt_number}")
-            outcome = entry.get("outcome")
-            if expected_fault is not None:
-                if outcome != "bind_failed":
-                    findings.append(f"faulted_attempt_did_not_fail_to_bind:{attempt_number}")
-            elif outcome != "served":
-                findings.append(f"cleared_attempt_did_not_serve:{attempt_number}")
+    expected_from = oracle.get("from_workflow")
+    expected_to = oracle.get("to_workflow")
+    stale_endpoint = oracle.get("stale_endpoint")
+    new_endpoint = oracle.get("new_endpoint")
+    if (
+        not isinstance(expected_from, str)
+        or not isinstance(expected_to, str)
+        or not isinstance(stale_endpoint, str)
+        or not isinstance(new_endpoint, str)
+    ):
+        return _ungraded("oracle_gold_malformed", *findings)
+
+    # No retry-until-lucky: the attempt count and identities must be exactly
+    # the declared schedule, never more. A target that kept trying beyond the
+    # plan (or dropped the cleared attempt) reports a different, unbounded
+    # retry shape.
+    if set(attempts) != {fault_attempt, cleared_attempt} or len(attempts) != max_attempts:
+        findings.append("attempt_count_disagrees_with_plan")
+    for attempt_number, entry in sorted(attempts.items()):
+        # Every key reaching here is already a positive int (attempts that
+        # are not were returned as not-examined above), so this call cannot
+        # raise; the bound on which attempts are legal is the set/len
+        # comparison directly above, not the plan lookup.
+        expected_fault = plan.fault_for_attempt(attempt_number)
+        expected_fault_value = expected_fault.value if expected_fault is not None else "none"
+        declared_fault = entry.get("fault")
+        if declared_fault != expected_fault_value:
+            findings.append(f"attempt_fault_disagrees_with_plan:{attempt_number}")
+        stderr = entry.get("stderr")
+        if not isinstance(stderr, str):
+            findings.append(f"attempt_evidence_not_examined:{attempt_number}")
+        elif stderr != "":
+            # The planted fault is defined to be silent; leaked stderr means
+            # the evidence was not actually produced by the no-stderr
+            # occupied-port/sleep-past-bind-timeout shim.
+            findings.append(f"attempt_leaked_stderr:{attempt_number}")
+        evidence_ref = entry.get("evidence_ref")
+        if not isinstance(evidence_ref, str) or not evidence_ref.startswith(SERVE_PHASE_PREFIX):
+            # A bind attempt is always serve-phase evidence, whichever way it
+            # comes out: this is about what happened when the process tried
+            # to bind and serve, never about the build.
+            findings.append(f"attempt_evidence_ref_not_serve_phase:{attempt_number}")
+        outcome = entry.get("outcome")
+        if expected_fault is not None:
+            if outcome != "bind_failed":
+                findings.append(f"faulted_attempt_did_not_fail_to_bind:{attempt_number}")
+        elif outcome != "served":
+            findings.append(f"cleared_attempt_did_not_serve:{attempt_number}")
 
     # The agent's own diagnosis: the failed attempt must be classified as a
     # transient serving-down problem, distinct from a claim that the build
@@ -240,18 +242,7 @@ def check(
     # -- matching dp_scenarios.knobs.script_restart_and_switch's own
     # contract, never merely narrated.
     switch = target.get("workflow_switch")
-    expected_from = oracle.get("from_workflow") if isinstance(oracle, Mapping) else None
-    expected_to = oracle.get("to_workflow") if isinstance(oracle, Mapping) else None
-    stale_endpoint = oracle.get("stale_endpoint") if isinstance(oracle, Mapping) else None
-    new_endpoint = oracle.get("new_endpoint") if isinstance(oracle, Mapping) else None
-    if (
-        not isinstance(expected_from, str)
-        or not isinstance(expected_to, str)
-        or not isinstance(stale_endpoint, str)
-        or not isinstance(new_endpoint, str)
-    ):
-        findings.append("oracle_gold_malformed")
-    elif not isinstance(switch, Mapping):
+    if not isinstance(switch, Mapping):
         findings.append("workflow_switch_not_examined")
     else:
         from_workflow = switch.get("from_workflow")

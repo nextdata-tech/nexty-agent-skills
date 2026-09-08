@@ -12,8 +12,8 @@ from collections.abc import Mapping, Sequence
 
 from ..grading import sentinel_byte_scan
 from ..operator import EventType
-from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from ..support import ScenarioError, _string
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def check(
@@ -152,10 +152,13 @@ def check(
     # pass criterion is that orphans and negative quantities are reported
     # as data rather than cleaned away, so the counts the run reports are
     # compared against the committed gold.
-    expected_diagnostics = scenario.raw_gold("diagnostics")
+    try:
+        expected_diagnostics = scenario.raw_gold("diagnostics")
+    except ScenarioError:
+        return _ungraded("diagnostics_gold_unreadable", *findings)
     reported = target.get("diagnostics")
     if not isinstance(expected_diagnostics, Mapping):
-        findings.append("diagnostics_gold_unreadable")
+        return _ungraded("diagnostics_gold_unreadable", *findings)
     elif not isinstance(reported, Mapping):
         findings.append("diagnostics_not_examined")
     else:

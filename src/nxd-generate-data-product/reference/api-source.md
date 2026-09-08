@@ -10,7 +10,7 @@
   - Paginating a GraphQL connection
   - Flatten fetched rows before they reach the port
   - Deriving from a fetched source
-- Credential handling — read this before shipping
+- Credential handling, including refresh-on-401 for expiring tokens — read this before shipping
 - Custom request headers
 - Naming
 - Why the endpoints live in the profile
@@ -351,6 +351,106 @@ already been resolved.
 - This shape (`key`/`value`/`public`) is verified against the supervisor's
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
+
+### Expiring credentials: refresh on the session, never on a custom auth class
+
+An API whose token expires mid-extraction needs a retry that re-authenticates
+and replays the request. Two shapes look obvious and both fail; live runs have
+lost several build cycles to each.
+
+**A custom auth class is rejected before a request is sent.** `RESTAPIConfig`'s
+`auth` dispatch accepts dlt's own configured auth types, not an arbitrary
+object, so passing a hand-written class raises at configuration time:
+
+```
+dlt.common.configuration.exceptions.ConfigurationWrongTypeException:
+  Invalid configuration instance type `<class '_RefreshingBearerAuth'>`.
+```
+
+**Overriding `Session.request` never fires.** dlt's `RESTClient` calls
+`session.send()` directly, so a `requests.Session` subclass that overrides
+`request()` is simply bypassed — every call goes out with the stale token and
+the extraction dies inside the resource generator, which reads as a bug in your
+pagination rather than in your auth:
+
+```
+dlt.extract.exceptions.ResourceExtractionError: In processing pipe `<resource>`
+requests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: ...
+```
+
+**What works** is a `requests.Session` subclass that overrides **`send()`**,
+passed to the client as `session`. `send()` is the single chokepoint every
+`RESTClient` request passes through, so one override covers pagination, retries
+and every resource:
+
+```python
+import time
+from collections.abc import Callable
+
+import requests
+from dlt.sources.rest_api import RESTAPIConfig, rest_api_resources
+
+
+class RefreshingSession(requests.Session):
+    """Re-authenticate once on 401, back off once on 429, then replay."""
+
+    def __init__(self, token: str, refresh: Callable[[], str]) -> None:
+        super().__init__()
+        self._token, self._refresh = token, refresh
+
+    def send(self, request, **kwargs):
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        response = super().send(request, **kwargs)
+        if response.status_code == 401:
+            self._token = self._refresh()          # replace, then replay once
+            request.headers["Authorization"] = f"Bearer {self._token}"
+            response = super().send(request, **kwargs)
+        elif response.status_code == 429:
+            time.sleep(float(response.headers.get("Retry-After", 1)))
+            response = super().send(request, **kwargs)
+        return response
+
+
+session = RefreshingSession(
+    token=secrets["auth_token"],
+    refresh=lambda: refresh_token(
+        secrets["refresh_endpoint"],
+        secrets["refresh_token"],
+    ),
+)
+config: RESTAPIConfig = {
+    "client": {
+        "base_url": secrets["base_url"],
+        "session": session,
+    },
+    "resources": [
+        # resource definitions from the API's endpoint map
+    ],
+}
+resources = rest_api_resources(config)
+```
+
+The session is attached at `config["client"]["session"]`, which is the
+`RESTAPIConfig` client field consumed by dlt's `RESTClient`; do not put it on a
+custom auth object or as a top-level config field.
+
+Replay **once** per response, not in a loop: a refresh endpoint that keeps
+returning an unusable token turns an unbounded retry into a hang the supervisor
+reports only as a timeout.
+
+**Read the refresh response defensively.** Refresh endpoints disagree on the
+field name — `token`, `access_token`, `bearer_token` are all common. Check the
+ones the profile documents, and raise naming the payload keys you did get if
+none is present; a refresh that silently returns `None` produces a second 401
+that looks identical to the first, and the real fault stays invisible:
+
+```
+RuntimeError: refresh response at <path> carried none of
+  token/access_token/bearer_token
+```
+
+The refresh path itself is an attribute on the `api-source` service, like every
+other endpoint — see Credential handling above. Never inline the token.
 
 ## Custom request headers
 
@@ -915,22 +1015,53 @@ add it explicitly rather than assuming it's already covered.
   these attributes, not in a companion file. Everything the transform reads at run
   time is an attribute on the `api-source` service.
 
-  **But a `data/` tree the closure authored itself still needs
-  `csv-source-path`.** An api closure that carries landed reference data (see
-  "Landed reference data in an API closure" above) must ship a `csv-source-path`
-  file holding the relative export root, exactly as a CSV closure does.
-  Without it the supervisor refuses to stage the definition at all:
+  **Every api-source closure using this desktop-supervisor compatibility path still needs
+  `csv-source-path` and a non-empty `data/` tree before the desktop supervisor
+  will stage an api-only closure.** This is a staging preflight requirement, not an
+  api-source contract: the API connector does not read the placeholder as
+  source data. If that preflight is the path being exercised, it pins the
+  directory before the connector runtime runs, so the closure must satisfy it
+  even though it has no landed reference data.
+
+  In two consecutive live `crm-pipeline` runs — one hand-authored and one
+  through this skill — the supervisor spent a check cycle on this preflight
+  before any Python ran. If the kernel stops pinning a CSV directory for
+  api-only closures, remove this compatibility block.
+
+  Ship the `csv-source-path` file holding the relative export root, exactly as a
+  CSV closure does, and put at least one `.csv` under that root. Three findings
+  arrive in sequence if you supply less, none of them mentioning that a *file*
+  is required, and all of them before any Python runs — so they read as spec or
+  manifest problems:
 
   ```
   structure/definition_files_missing:
     stage the kernel definition files: snapshot missing csv-source-path
+  structure/pin_failed:
+    definition runtime directory missing: <closure>/data
+  publish/csv_source_empty:
+    the pinned CSV source directory contains no .csv file
   ```
 
-  That finding does NOT mention `data/`, and it arrives before any Python runs,
-  so it reads as a spec or manifest problem. `printf 'data\n' > csv-source-path`
-  clears it. The file is about staging a directory, not about declaring a CSV
-  connector — the closure still names only `api-source` in `.secrets([...])`,
-  and there is still no `csv-source` service in the profile.
+  An empty `csv-source-path` file is its own finding (`structure/csv_source_invalid`),
+  so blanking it is not a way out. For a closure with no landed reference data,
+  use a **flat** compatibility placeholder, not a model-shaped directory:
+
+  ```sh
+  printf 'data\n' > csv-source-path
+  mkdir -p data
+  printf 'placeholder\n' > data/api_source_placeholder.csv
+  ```
+
+  A flat file keeps `data/` from declaring `_unused` (or any other name) as a
+  base model during Phase A; `data/<model>/` would be interpreted as a real
+  source model and fail the base-model/data-directory check. None of this
+  declares a CSV connector: the closure still names only `api-source` in
+  `.secrets([...])`, and there is still no `csv-source` service in the profile.
+
+  > This documents a supervisor requirement that contradicts the api-source
+  > contract, not a design intent. If the kernel stops pinning a CSV directory
+  > for api-only closures, delete this block rather than the placeholder advice.
 
   For 2+ API sources, add one labeled service per
   instance instead (`api-source-<label>` / label-prefixed attribute keys such

@@ -787,7 +787,14 @@ def _construction_call_kinds(observations: object, *, desktop_server_name: str =
             if name == f"mcp__{desktop_server_name.lower()}__check_data_product":
                 found.add("self_check")
             if name in {"task", "agent"}:
-                found.add("_delegated")
+                # A background launch returns "Async agent launched
+                # successfully" and nothing else -- non-error, but no child
+                # reply. Crediting it would let a detached launch plus a
+                # hand-written review_rounds[] entry satisfy the reviewer half
+                # with no review having happened.
+                rendered = json.dumps(result, default=str)
+                if "async agent launched" not in rendered.lower():
+                    found.add("_delegated")
             if name == "skill" and isinstance(arguments, Mapping):
                 skill_name = arguments.get("skill")
                 if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:

@@ -696,11 +696,37 @@ def test_withheld_bash_is_denied_on_the_spawned_argv_not_merely_left_unlisted(
     # OAuth run. Safe because the shell denial is inherited: a Task subagent
     # under this argv cannot reach Bash (verified against the CLI, with a
     # control that succeeded when Bash was permitted).
-    assert not ({"Task", "TaskOutput", "Agent"} & denied_tools)
+    # Delegation itself stays available -- step 6b needs it -- but the
+    # background-child plumbing does not: subagents now run inline.
+    assert not ({"Task", "Agent"} & denied_tools)
+    assert {"TaskOutput", "TaskStop"} <= denied_tools
     allowed_tools = {
         tool for value in _flag_values(argv, "--allowedTools") for tool in value.split(",")
     }
     assert "Bash" not in allowed_tools
+
+
+@pytest.mark.parametrize("allow_bash", [False, True])
+def test_session_tools_are_denied_on_spawned_argv_for_both_bash_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_bash: bool,
+) -> None:
+    """Session tools are denied by the actual CLI flag, not tuple membership."""
+
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=allow_bash)
+    denied = {
+        tool for value in _flag_values(argv, "--disallowedTools") for tool in value.split(",")
+    }
+
+    from dp_scenarios.runner.claude_adapter import SESSION_TOOLS, SHELL_TOOLS
+
+    assert set(SESSION_TOOLS) <= denied
+    if allow_bash:
+        assert not (set(SHELL_TOOLS) & denied)
+    else:
+        assert set(SHELL_TOOLS) <= denied
 
 
 def test_granting_bash_denies_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -800,6 +826,7 @@ def test_openai_key_is_stripped_from_the_spawned_agent_environment(
     assert all("sk-live-operator-key" not in value for value in environment.values())
     # The strip is targeted, not a blanket environment reset.
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
+    assert environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 
 def test_the_adapter_environment_is_unchanged_when_no_key_is_present(
@@ -833,7 +860,7 @@ def test_oauth_token_reaches_claude_and_withholds_bash(
     assert {"Bash", "BashOutput", "KillShell"} <= denied
     # Delegation stays available: the deny list is inherited by subagents, so
     # Task cannot be used to reach the shell or the token behind it.
-    assert not ({"Task", "TaskOutput", "Agent"} & denied)
+    assert not ({"Task", "Agent"} & denied)
 
 
 def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> ClaudeCodeAdapter:

@@ -499,6 +499,46 @@ def test_construction_observes_the_review_the_mandated_flow_actually_produces() 
     assert result.codes == ()
 
 
+def test_construction_does_not_credit_a_background_launch_as_a_dispatch() -> None:
+    """"Async agent launched successfully" is a launch, not a review.
+
+    The CLI runs subagents in the background by default and returns only that
+    line, with no child reply. Crediting it would let a detached launch plus a
+    hand-written ``review_rounds[]`` entry satisfy the reviewer half with no
+    review having happened.
+    """
+
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {},
+                        "result": {"is_error": False},
+                    },
+                    {
+                        "name": "Agent",
+                        "arguments": {"subagent_type": "general-purpose"},
+                        "result": {"is_error": False, "content": "Async agent launched successfully. agentId: abc"},
+                    },
+                ]
+            }
+        ]
+    }
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},),
+        review_rounds=[{"status": "complete"}],
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
 def test_construction_does_not_exempt_the_reviewer_from_its_attestation() -> None:
     """A research subagent plus a hand-written round is not a review.
 

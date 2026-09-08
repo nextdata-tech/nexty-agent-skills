@@ -63,6 +63,23 @@ def test_good_pagination_retry_and_redacted_contract_pass() -> None:
     assert result["passed"]
 
 
+def test_producing_no_evidence_fails_the_run_instead_of_voiding_it() -> None:
+    """An agent that builds nothing must lose, not have its run discarded.
+
+    A live run stalled on a background subagent, produced no evidence artifact,
+    and scored ``ungraded`` — voiding the run under ``score.py`` rather than
+    recording a loss. That is the "dodge a gate by producing nothing" hole the
+    requiredness work exists to close, surviving in the follow-up path.
+    """
+
+    # The plant fired; the agent simply wrote no evidence artifact.
+    result = SCENARIO.check_follow_up(None, fired_plants=["crm_pipeline_pagination"])
+
+    assert result.passed is False
+    assert result.ungraded is False, "a missing artifact is a failure, not a void run"
+    assert "crm_pipeline_not_examined" in result.codes
+
+
 def test_the_governed_query_timestamp_rendering_is_not_a_disagreement() -> None:
     """A live run returns ``2024-01-05 10:00:00+00``; the gold spells it ISO.
 

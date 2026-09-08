@@ -20,7 +20,7 @@ from collections.abc import Mapping
 
 from ..grading import sentinel_byte_scan
 from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 # The closed label vocabulary the committed capability manifest uses. Fixed
 # harness vocabulary, not a per-scenario setting -- see mockrest.capability.
@@ -92,11 +92,7 @@ def check(
     oracle = scenario.raw_gold("capability_manifest")
     oracle_metrics = oracle.get("metrics") if isinstance(oracle, Mapping) else None
     if not isinstance(oracle_metrics, Mapping) or not oracle_metrics:
-        return {
-            "status": "not-examined",
-            "passed": False,
-            "findings": ["capability_oracle_unreadable"],
-        }
+        return _ungraded("capability_oracle_unreadable")
 
     findings: list[str] = []
     delivered_proxy_present = False

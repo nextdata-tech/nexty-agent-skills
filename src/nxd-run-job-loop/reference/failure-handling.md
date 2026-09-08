@@ -81,6 +81,15 @@ The asymmetry is deliberate. Misclassifying a real bug as "the environment" is
 what ships a broken data product flagged green; the cost of the opposite mistake
 is one wasted heal attempt.
 
+**One named instance, because it is common and reads as yours.** A
+`runtime_error` whose supervisor-reported body says `database is locked` is the
+kernel host's own status store contending, typically after consecutive failed
+runs in the same session. It is `retry_environmental`: re-run the closure
+**unchanged** once before changing anything, because editing in response to it
+burns a heal attempt on code that was never at fault. A live run hit this after
+three failed builds and the unchanged retry passed. It qualifies under the test
+above — the lock message is a verbatim supervisor body, not an inference.
+
 ## Typed exits, and caps you count instead of estimate
 
 Every attempt is appended to `build-record.json` `attempts[]` **before** the

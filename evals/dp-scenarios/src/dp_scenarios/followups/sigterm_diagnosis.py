@@ -13,8 +13,8 @@ import re
 from collections.abc import Mapping
 
 from ..knobs import KnobError, PlanShape, TransformWindowSizing
-from ..support import _string
-from . import FollowUpContext, FollowUpKind, register
+from ..support import ScenarioError, _string
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def check(
@@ -78,10 +78,13 @@ def check(
     # trusted merely because it is internally self-consistent: a target
     # could report bounds_hold=True for numbers that do not match what
     # the fixture actually generates.
-    oracle = scenario.raw_gold("diagnostics")
+    try:
+        oracle = scenario.raw_gold("diagnostics")
+    except ScenarioError:
+        return _ungraded("diagnostics_gold_unreadable", *findings)
     plan = target.get("run_plan")
     if not isinstance(oracle, Mapping):
-        findings.append("diagnostics_gold_unreadable")
+        return _ungraded("diagnostics_gold_unreadable", *findings)
     elif not isinstance(plan, Mapping):
         findings.append("run_plan_not_examined")
     else:

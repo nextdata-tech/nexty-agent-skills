@@ -10,9 +10,11 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+  - Agent
+  - Task
 metadata:
   author: nextdata
-  version: 0.45.0
+  version: 0.45.1
 ---
 
 # nxd-generate-data-product skill
@@ -444,17 +446,15 @@ Self-containment is now a **hash-checkable snapshot**, not a copy-never-point
 discipline, and `build-record.json` is **generated, never hand-authored**: outcomes
 — row counts, blockers, review rounds, concessions — are a pure product of the build
 and never go back into the IR. Neither replaces the machine-enforced surfaces:
-rulings still land as data (`nxd_decisions`, carrying both `status` and
-`provenance`) and the Step-3b asserts still run.
+rulings still land as data (`nxd_decisions`, carrying both `status` and `provenance`) and the Step-3b asserts still run.
 
+### Step 6b — Adversarial review, BEFORE the self-check (MANDATORY when `nxd-review-closure` is installed)
+
+**Explicitly dispatch one built-in read-only reviewer** — never a custom/plugin agent definition — with the closure path and verbatim request to return claims only; it never edits, builds, serves, transforms or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs; adjudication is not authorization to mutate the closure. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Contract: [reference/adversarial-review.md](reference/adversarial-review.md), including the authorization rules.
 ### Step 7 — Self-check before handing off (MANDATORY)
+The closure-root self-check is the generator's record gate, distinct from the supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
 
-The closure-root self-check is the generator's record gate, distinct from the
-supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
-
-**Step 6b, only when `nxd-review-closure` is installed**: explicitly dispatch one built-in read-only reviewer — never a custom/plugin agent definition — with the closure path and verbatim request, to return claims only; it never edits, builds, serves, transforms, or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
-Then the self-check. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the naming invariant (`models.py` == required `.promise` plus optional `.model` == `PHYSICAL_MODELS` == `main.<name>`), then confirm only `BASE_MODELS` matches `data/`, allowing an absent directory only for a listed optional-empty base model; derived models and semantic views have no source directory. **When a
-`dp-blueprint.md` governed the build, confirm shipped-matches-approved**: every
+Then the self-check. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the naming invariant (`models.py` == required `.promise` plus optional `.model` == `PHYSICAL_MODELS` == `main.<name>`), then confirm only `BASE_MODELS` matches `data/`, allowing an absent directory only for a listed optional-empty base model; derived models and semantic views have no source directory. **When a `dp-blueprint.md` governed the build, confirm shipped-matches-approved**: every
 promised model, gate, weight, band and `nxd_decisions` row traces to a spec
 section, and none carries a value the spec does not. Confirm the
 supplied export is unchanged, then run BOTH the self-check and the lock verify. **The self-check is shipped as a helper file**: `cp "$JOB_HELPER_DIR/scripts/self_check.py" <closure>/self_check.py`, then run it **from the closure root** (it resolves `models.py`, `spec.py`, `transform/`, ordinary `data/`, and labeled `data-<label>/` roots against its own working directory, so running it elsewhere reports `CANNOT READ`). Skipping this copy leaves nothing to execute, and the reach gate silently never runs. So: `cd <closure> && python3 self_check.py --json --record build-record.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform against a scratch DuckDB; stateful transforms are invoked a second time after a strict JSON state fold, so unchanged reruns must preserve materialization and row counts. **Structurally validates `models.py`/`spec.py` against

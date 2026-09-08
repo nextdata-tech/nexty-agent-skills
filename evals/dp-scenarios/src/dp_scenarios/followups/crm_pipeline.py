@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from ..support import ScenarioError, _string
-from . import FollowUpContext, FollowUpKind, register
+from . import FollowUpContext, FollowUpKind, _ungraded, register
 
 
 def _validate_settings(settings: Mapping[str, object]) -> None:
@@ -92,7 +92,7 @@ def check(
 
     expected = scenario.raw_gold("pipeline")
     if not isinstance(expected, Mapping):
-        return _not_examined("crm_pipeline_gold_unreadable")
+        return _ungraded("crm_pipeline_gold_unreadable")
     findings: list[str] = []
 
     page_rows: list[Mapping[str, object]] = []

@@ -724,12 +724,12 @@ def test_a_metric_absent_from_the_capability_manifest_fails() -> None:
     assert "delivered_metric_not_in_capability_manifest:invented_metric" in result["findings"]
 
 
-def test_capability_oracle_unreadable_is_not_examined() -> None:
+def test_capability_oracle_unreadable_is_ungraded() -> None:
     target = _clean_target()
     settings = SCENARIO.gates["follow-up"].settings
     stub_scenario = SimpleNamespace(raw_gold=lambda name: {"metrics": {}})
     result = capability_shortfall_check(stub_scenario, target, settings, FollowUpContext())
-    assert result["status"] == "not-examined"
+    assert result["status"] == "ungraded"
     assert "capability_oracle_unreadable" in result["findings"]
 
 
