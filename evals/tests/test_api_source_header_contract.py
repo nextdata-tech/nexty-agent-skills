@@ -52,7 +52,7 @@ STUB = FIXTURES / "stub_beacon_api.py"
 
 DLT_PIN = "dlt[duckdb]==1.28.2"
 SUBPROCESS_TIMEOUT_S = 600
-UV = "/opt/homebrew/bin/uv" if Path("/opt/homebrew/bin/uv").is_file() else (shutil.which("uv") or "uv")
+UV = shutil.which("uv") or "uv"
 
 
 # ---------------------------------------------------------------------------

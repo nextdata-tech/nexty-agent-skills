@@ -56,7 +56,7 @@ def recipe_namespace() -> dict:
     namespace: dict = {}
     source = _script_source()
     if _real_requests is not None:
-        exec(compile(source, "<api-source.md>", "exec"), namespace, namespace)
+        exec(compile(source, str(REFRESH_SCRIPT), "exec"), namespace, namespace)
     else:
         # The standalone evals job intentionally installs only pytest, duckdb,
         # and pyyaml. Supply the tiny Request/Session protocol the extracted
@@ -99,7 +99,7 @@ def recipe_namespace() -> dict:
         previous = sys.modules.get("requests")
         sys.modules["requests"] = fake_requests
         try:
-            exec(compile(source, "<api-source.md>", "exec"), namespace, namespace)
+            exec(compile(source, str(REFRESH_SCRIPT), "exec"), namespace, namespace)
         finally:
             if previous is None:
                 sys.modules.pop("requests", None)

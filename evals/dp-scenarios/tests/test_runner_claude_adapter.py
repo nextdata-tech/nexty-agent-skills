@@ -158,7 +158,8 @@ def test_default_prompt_only_describes_the_attestation_channel_not_review_behavi
     collapsed = " ".join(prompt.split())
 
     assert "agent-attestations.json at your workspace root" in collapsed
-    assert "optional, non-authoritative attestation channel" in collapsed
+    assert "a non-authoritative attestation channel" in collapsed
+    assert "optional" not in collapsed
     assert "root JSON array (not an object wrapper)" in collapsed
     assert '"action_kind": "self_check"' in prompt
     assert '"review_round_index": 0' in prompt
