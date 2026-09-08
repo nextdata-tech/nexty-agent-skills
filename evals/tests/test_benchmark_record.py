@@ -360,6 +360,41 @@ class BenchmarkRecordTests(unittest.TestCase):
             with self.assertRaisesRegex(recorder.BenchmarkError, message):
                 recorder.compact_report(payload)
 
+    def test_dp_report_accepts_the_live_redacted_touched_file_envelope(self):
+        payload = dp_report(dp_run())
+        result = payload["scenarios"][0]["runs"][0]["replay_recording"]["turns"][0]["result"]
+        result["files_touched"] = [{
+            "path": "closure/spec.json",
+            "content": {
+                "redacted": True,
+                "sha256": "a" * 64,
+                "size_bytes": 123,
+            },
+        }]
+
+        compact = recorder.compact_report(payload)
+
+        self.assertEqual(
+            "capability-shortfall",
+            compact["scenarios"][0]["runs"][0]["scenario_id"],
+        )
+
+    def test_dp_report_rejects_malformed_redacted_touched_file_envelopes(self):
+        invalid = (
+            ({"redacted": False, "sha256": "a" * 64, "size_bytes": 1}, "redacted"),
+            ({"redacted": True, "sha256": "not-a-hash", "size_bytes": 1}, "sha256"),
+            ({"redacted": True, "sha256": "a" * 64, "size_bytes": -1}, "size_bytes"),
+            ({"redacted": True, "sha256": "a" * 64, "size_bytes": 1, "extra": 1}, "unknown field"),
+        )
+        for content, message in invalid:
+            with self.subTest(content=content):
+                self.assert_dp_rejected(
+                    lambda value, content=content: value["scenarios"][0]["runs"][0]
+                    ["replay_recording"]["turns"][0]["result"].update(
+                        files_touched=[{"path": "closure/spec.json", "content": content}]
+                    ),
+                    message,
+                )
     def test_generated_entry_record_index_and_legacy_stay_unchanged(self):
         legacy = recorder.BENCH_DIR / "ledger.md"
         legacy.parent.mkdir(parents=True)

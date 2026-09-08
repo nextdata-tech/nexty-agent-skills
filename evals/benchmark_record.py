@@ -227,6 +227,7 @@ DP_TURN_RESULT_FIELDS = frozenset({
 })
 DP_TOOL_CALL_FIELDS = frozenset({"name", "arguments", "result"})
 DP_TOUCHED_FILE_FIELDS = frozenset({"path", "content"})
+DP_REDACTED_FILE_CONTENT_FIELDS = frozenset({"redacted", "sha256", "size_bytes"})
 DP_SUPERVISOR_FACT_FIELDS = frozenset({
     "run_id", "artifact_id", "publish_sequence", "per_model_row_counts", "lifecycle_state",
 })
@@ -622,6 +623,24 @@ def _encoded_path(value: Any, path: str) -> None:
         return
     raw = _exact_keys(value, {"__path__"}, path, required={"__path__"})
     _string(raw["__path__"], f"{path}.__path__")
+
+
+def _touched_file_content(value: Any, path: str) -> None:
+    """Validate raw/encoded content or the live runner's redacted envelope."""
+
+    if isinstance(value, dict) and "redacted" in value:
+        raw = _exact_keys(
+            value,
+            DP_REDACTED_FILE_CONTENT_FIELDS,
+            path,
+            required=DP_REDACTED_FILE_CONTENT_FIELDS,
+        )
+        if raw["redacted"] is not True:
+            raise BenchmarkError(f"{path}.redacted must be true")
+        _hash(raw["sha256"], f"{path}.sha256", allow_not_applicable=False)
+        _integer(raw["size_bytes"], f"{path}.size_bytes", minimum=0)
+        return
+    _encoded_bytes(value, path)
 
 
 def _boolean(value: Any, path: str) -> bool:
@@ -1102,7 +1121,7 @@ def _validate_turn_result(value: Any, path: str) -> None:
                               required=DP_TOUCHED_FILE_FIELDS)
         _encoded_path(touched["path"], f"{file_path}.path")
         if touched["content"] is not None:
-            _encoded_bytes(touched["content"], f"{file_path}.content")
+            _touched_file_content(touched["content"], f"{file_path}.content")
     for field in ("build_failed", "reported", "environment_wedged", "turn_timed_out"):
         _boolean(raw[field], f"{path}.{field}")
     _integer(raw["build_failure_count"], f"{path}.build_failure_count", minimum=0)

@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-09 | b-series: genuine completion workflow | FAIL | crm-pipeline, finance-close, inventory-position | [`2026-09-09-b-series-genuine-completion`](entries/2026-09-09-b-series-genuine-completion.md) |
 | 2026-09-07 | clarify generator review guidance and preserve gold-failure triage | NO_EVAL | — | [`2026-09-07-skill-guidance-and-gold-triage`](entries/2026-09-07-skill-guidance-and-gold-triage.md) |
 | 2026-09-07 | run subagents inline, deny the session tools, and fail a run that built nothing | NO_EVAL | — | [`2026-09-07-background-subagents-void-the-run`](entries/2026-09-07-background-subagents-void-the-run.md) |
 | 2026-09-06 | own the build evidence, and stop comparing source tables with built models | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |
