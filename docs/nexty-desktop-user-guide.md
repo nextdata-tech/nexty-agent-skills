@@ -1,10 +1,10 @@
 # Nexty Desktop User Guide
 
-**For analysts working in Claude Cowork.**
+**For analysts working in Claude Desktop or Claude Cowork.**
 
 You already know how to use an agent to get at your data. What you don't have is a way to get the *same* result next month, sliced differently, without redoing the work and without wondering whether last month's version used the same logic.
 
-Nexty turns a job you do by hand into something that does it for you. It finds your data, applies your definitions, runs on your own machine, and costs less than redoing the thinking every time.
+Nexty turns a job you do by hand into something that does it for you. It reads the sources you connect, applies the definitions you agreed, and runs on hardware you control.
 
 ---
 
@@ -15,7 +15,7 @@ Nexty turns a job you do by hand into something that does it for you. It finds y
 - [Phase 1: Bring a job to be done](#phase-1-bring-a-job-to-be-done)
 - [Phase 2: Work the problem](#phase-2-work-the-problem)
 - [Phase 3: Package it](#phase-3-package-it)
-- [Phase 4: Run it forever](#phase-4-run-it-forever)
+- [Phase 4: Reuse it](#phase-4-reuse-it)
 - [Key concepts](#key-concepts)
 - [Prompt cookbook](#prompt-cookbook)
 - [When something goes wrong](#when-something-goes-wrong)
@@ -27,20 +27,27 @@ Nexty turns a job you do by hand into something that does it for you. It finds y
 
 ### Install
 
-**macOS 13 or later, Apple silicon (arm64) or Intel (x86_64).**
+> **Not yet published.** There is no released distribution channel for the
+> desktop installer. This section records the shape of the install so the rest
+> of the guide makes sense, but it cannot be followed until that channel
+> exists. Do not treat the steps below as tested.
 
-Download `nxd-desktop-0.0.0-*-macos-arm64.run` from **TODO**, make it executable and run it:
+The packager produces two artifacts, and there is no Intel macOS build:
 
-```
-chmod +x nxd-desktop-0.0.0-*-macos-arm64.run
-./nxd-desktop-0.0.0-*-macos-arm64.run
-```
+| Artifact | For |
+| --- | --- |
+| `macos-arm64` | Apple silicon Macs, running Claude Desktop. |
+| `linux-aarch64` | The offline bundle Cowork needs. |
 
-Restart Claude and check that Nexty Desktop is installed at **Settings → Connectors → nxd-desktop**.
+Pick the path that matches where you work. They are different installs, not two ways of doing the same one.
+
+**Claude Desktop on Apple silicon.** Download the `macos-arm64` archive, make it executable, and run it. It installs the supervisor runtime and registers an `nxd-desktop` MCP entry in your Claude Desktop configuration. Restart Claude Desktop, then confirm `nxd-desktop` is listed under **Settings → Connectors**.
+
+**Cowork.** Cowork runs in an isolated Linux VM, so a macOS install does not reach it. Stage the `linux-aarch64` offline bundle in a folder connected to the session and install it there.
 
 ### Run
 
-Open a Cowork session and start the job loop by running `/nxd-run-job-loop`. You should see a screen that looks like this:
+Start the job loop by running `/nxd-run-job-loop`. You should see a screen that looks like this:
 
 ![start_screen.png](start_screen.png)
 
@@ -57,40 +64,40 @@ Claude will ask some clarifying questions. Iterate on the plan until you feel it
 
 ## How it works
 
-Nexty has an opinion about the order you do things in, and the order is the point.
+Nexty works in four phases, and the sequence matters: each one depends on the one before it.
 
 ```
    PHASE 1          PHASE 2           PHASE 3           PHASE 4
-   Bring            Work              Package           Run
+   Bring            Work              Package           Reuse
 
-   a job you   →    it with      →    it up        →    it forever
-   already do       Claude            so it can         for almost
-   by hand          until it's        repeat            nothing
+   a job you   →    it with      →    it up        →    it without
+   already do       Claude            so it can         redoing the
+   by hand          until it's        repeat            derivation
                     right
 ```
 
 **[Phase 1](#phase-1-bring-a-job-to-be-done): Bring a job to be done.** Something real you've done at least once manually. You know what the right answer looks like, because you've produced it before.
 
-**[Phase 2](#phase-2-work-the-problem): Work the problem.** Iterate with Claude in a session. Try things, get them wrong, correct definitions, argue about edge cases. This is exploration, and it's computationally expensive (e.g. LLM tokens): every question re-reads your data and re-derives the answer from scratch.
+**[Phase 2](#phase-2-work-the-problem): Work the problem.** Iterate with Claude in a session. Try things, get them wrong, correct definitions, argue about edge cases. Each question in this phase reads your source and derives the answer again, so it is the expensive phase in both time and tokens.
 
-**[Phase 3](#phase-3-package-it): Package it.** When the answer is finally right and you know you'll need it again, Nexty captures the whole thing (your data, your definitions, your rules) as a **data product**.
+**[Phase 3](#phase-3-package-it): Package it.** When the answer is right and you expect to need it again, Nexty records what you settled on, your source, your definitions and your rules, and builds it into a **data product**.
 
-**[Phase 4](#phase-4-run-it-forever): Run it forever.** The same question now costs almost nothing. Claude sends a small structured query, gets back a small table, and answers. It isn't re-reading your data or re-deriving your logic. It's looking it up.
+**[Phase 4](#phase-4-reuse-it): Reuse it.** Asking the packaged product is a bounded operation: Claude sends a structured semantic query and reads back a small result table, rather than re-reading your source and re-deriving the logic. You are no longer paying to work out a definition you already verified.
 
-### Why this saves you money
-
-The gap between phase 2 and phase 4 is the reason Nexty exists.
+### What packaging changes
 
 | | Working the problem | Packaged |
 | --- | --- | --- |
-| What Claude computes | The whole derivation, every time | Nothing. It asks and reads |
-| Token cost | Scales with your data and your logic | Scales with the size of the answer |
-| Consistency | Depends on how you phrased it today | Same question, same number, always |
-| Speed | Seconds to minutes | Immediate |
+| What Claude does | Reads your source and derives the answer | Sends a structured query, reads the result |
+| What drives the cost | The size of your data and the reasoning | The size of the result |
+| Repeatability | Depends on how you phrased it that day | Runs against the definition you verified |
+| Latency | Varies with the derivation | Varies with the query, usually much shorter |
 
-Exploring is the right way to *find* an answer. It's not a great way to *keep getting* one. A monthly report you rebuild by conversation costs you the full derivation twelve times a year, and can drift each time. Packaged, you pay that cost once.
+Build and query time still depend on your data, your environment, and what you ask for. What packaging removes is the re-derivation, not the work.
 
-**The rule:** explore freely, and the moment you catch yourself about to do the same reasoning a second time, stop and package it.
+Exploring is the right way to *find* an answer. It's not a great way to *keep getting* one. A monthly report you rebuild by conversation pays for the full derivation twelve times a year, and can drift each time.
+
+**A rule of thumb:** explore freely, and the moment you catch yourself about to do the same reasoning a second time, consider packaging it.
 
 ---
 
@@ -111,23 +118,25 @@ The single biggest predictor of success is what you bring. Not what data you hav
 - Something you've never done, so you can't tell a right answer from a plausible one.
 - A question with no stable definition, where the answer moves because the question does.
 
-Describe the job, not the plumbing. This is a good brief:
+Describe the job and the rules that govern it. This is a good brief:
 
 > Every month I produce revenue by region and product category with the top 20 customers, excluding refunds and internal test accounts. It takes me half a day. Last month came to $4.2M.
 
-Note what's in it: the outcome, the rules, the cadence, and a number you can check against. Note what isn't: any mention of where the data lives or what format it's in. Nexty works that out.
+Note what's in it: the outcome, the rules, the cadence, and a number you can check against.
 
-### What Nexty can reach
+### Telling Nexty where the data is
 
-Nexty finds and retrieves data for you rather than waiting to be handed a file. It can pull from:
+Nexty does not go looking for data on its own, and it will not assume it can reach a database or an API because a question sounds analytical. You identify the source and supply what is needed to reach it: a connection, a path, an endpoint. From there Nexty inspects the source, profiles its structure, and works out the rest with you.
 
-- **Databases** you already use: Snowflake, Postgres, and others. Give it the connection once.
+It builds against:
+
+- **Databases**: Snowflake, Postgres, and MySQL.
 - **APIs**, including internal services and third-party ones.
-- **Files and exports**, wherever they sit on your machine or in a shared folder.
+- **Files and exports**, given a path the runtime can actually see.
 
-Ask it what it sees:
+In Cowork this last point matters. A file attached to the session lives in Cowork's workspace, which is not where the build runs. For a build, Nexty needs a host-visible path or a connection.
 
-> What data can you get to?
+Once a source is connected, ask what's in it:
 
 > Look at our warehouse and tell me what's in the sales schema.
 
@@ -182,13 +191,13 @@ It's yours to change:
 
 > That's right. Build it.
 
-Approving means you agree with the description read back to you, not that you audited a file. Cowork asks you to confirm before the build actually runs, which is the last cheap moment to change your mind.
+Approving means you agree with the description read back to you, not that you audited a file. You are asked to confirm before the build actually runs, which is the last cheap moment to change your mind.
 
-The build takes a few minutes. Nexty retrieves your data, builds the product, runs it, and checks it. That's not a hang. It's the one-time cost that makes everything after it free.
+The build takes a few minutes. Nexty reads your source, builds the product, runs it, and checks it. That's not a hang. It is the derivation you would otherwise repeat every time you asked.
 
 ---
 
-## Phase 4: Run it forever
+## Phase 4: Reuse it
 
 ### Asking
 
@@ -206,7 +215,7 @@ Close your laptop, come back in three weeks, new session:
 
 > Open my orders product and show me last week's revenue.
 
-Nexty finds the data product and reconnects in seconds. Your terms, rules, and decisions are all still there.
+Nexty finds the data product and reconnects, usually in seconds and without rebuilding. If the built artifact is no longer there, it rebuilds from what it saved, and your terms, rules, and decisions come back either way.
 
 ### Sharing
 
@@ -272,15 +281,15 @@ Be explicit about which you mean:
 
 ### Projects
 
-Each product has a project name. That's your handle for it. Everything else (where the data came from, how it was built, what it decided) Nexty remembers for you.
+Each product has a project name. That's your handle for it. Everything else, where the data came from, how it was built, what it decided, Nexty records for you.
 
 ### Exploring vs. asking
 
 Worth naming, because it's the difference between the phases.
 
-**Exploring** is open-ended: Claude reads your data and reasons about it. Powerful, expensive, and the answer depends partly on how you asked.
+**Exploring** is open-ended: Claude reads your data and reasons about it. Powerful, costly, and the answer depends partly on how you asked.
 
-**Asking a product** is bounded: Claude sends a structured query and reads back a small table. Cheap, fast, and the answer depends only on what you asked for.
+**Asking a product** is bounded: Claude sends a structured query and reads back a small table. The answer depends on what you asked for and the definition already in the product.
 
 Neither is better. Explore to discover; package to repeat.
 
@@ -290,21 +299,21 @@ Neither is better. Explore to discover; package to repeat.
 
 Copy these and change the nouns.
 
-### Finding data
-
-> What data can you get to?
+### Inspecting a source
 
 > Look at our warehouse and tell me what's in the sales schema.
 
-> Is there anything in here that tracks support tickets?
+> Here's the connection for our Postgres reporting replica. What tables are in there?
+
+> Profile that table for me before we decide what the model should be.
 
 ### Working the problem
 
 > I want to explore tickets in our linear.app tracking system to see what open tickets exist for the project pocket. I want to use AI to examine them and prioritize them.
 
 > Help me rank job applicant candidates in Ashby by their resume and cover letter. I want to see which ones are most likely to succeed in the role.
- 
-> Find our support tickets and show me resolution time by team and priority. I want to spot which categories are getting slower. Last quarter's median was 14 hours, so we can check against that.
+
+> Show me resolution time by team and priority from our support tickets. I want to spot which categories are getting slower. Last quarter's median was 14 hours, so we can check against that.
 
 > Pull revenue and pipeline by rep and stage, monthly, from the warehouse.
 
@@ -356,9 +365,9 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 ## When something goes wrong
 
-**Nexty can't find the data you meant.** Ask what it can see: *"what data can you get to?"* If the source isn't listed, it needs a connection or a credential. Tell it where to look and it'll ask for the specific thing it needs.
+**Nexty can't reach the data you meant.** It needs the source identified and a way in. Give it the connection, path, or endpoint, and it'll ask for the specific credential it's missing rather than guessing.
 
-**You attached a file and Nexty ignored it.** Cowork runs its own workspace, separate from your Mac, and Nexty runs on your Mac. An attachment helps Claude understand your data's shape while you work, but for a build, Nexty needs the real source: a connection, or a file path on your own machine.
+**You attached a file and Nexty ignored it.** In Cowork the session workspace is not where the build runs. An attachment helps Claude understand your data's shape while you work, but for a build, Nexty needs a host-visible path or a connection.
 
 **A number looks wrong.** Ask Claude to show its work: *"walk me through how that was calculated."* Nine times out of ten it's the grain or a missing standing rule.
 
@@ -368,21 +377,18 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 > Why can't you answer that? What would you need?
 
-**You're being asked to approve a lot.** Cowork confirms before anything consequential. If a build takes several approvals, approve them. That's the design, not a fault.
-
-**Something looks stuck.** The menu bar dot tells the truth: green healthy, amber working, red means **Settings → Diagnostics**.
+**You're being asked to approve something.** Approval is the boundary for consequential actions: reaching a source, using a connection, running a build. Read each one and continue only when the access or action it describes is the one you intended. If a prompt names a source, a credential, or an action you didn't ask for, cancel it and ask why it was requested.
 
 ---
 
 ## Where things live
 
-|                        |                                                              |
-|------------------------|--------------------------------------------------------------|
-| `~/nxd-jobs/`          | One folder per data product. Everything Nexty built for you. |
-| Menu bar dot           | Green healthy, amber working, red needs attention.           |
-| Settings → Connections | Data connections, and the Claude connection.                 |
+| | |
+| --- | --- |
+| `…/nxd-jobs/<workflow>/` | One folder per workflow, holding the blueprint and the built closure. Nexty tells you both paths when it hands off. |
+| Claude **Settings → Connectors** | Where `nxd-desktop` appears once it's installed. |
 
-Nothing is hidden. Open these folders, read them, back them up. Your data and credentials stay on your machine.
+Nothing is hidden. Open these folders, read them, back them up. Your data and credentials stay on the machine you installed on.
 
 ---
 
@@ -390,7 +396,7 @@ Nothing is hidden. Open these folders, read them, back them up. Your data and cr
 
 1. Pick one job you did by hand this month and will do again next month. Just one.
 2. Work it in a session until the number matches the one you already know.
-3. Package it, and ask again next month for almost nothing.
+3. Package it, and ask it again next month without paying to derive it again.
 4. Then add your terms. That's where a personal tool becomes a team one.
 
 The habit worth building: when you notice yourself about to do the same reasoning a second time, that's the signal. Stop exploring and package it.
