@@ -19,4 +19,4 @@ distinct-row-count shape. This keeps an earlier governed answer observable if
 a later exploratory query has a different result grain while preserving
 latest-wins for same-shaped corrections; the follow-up remains separately
 graded. The retained history is capped at 32 results, with the top-level
-latest ``rows`` value remaining authoritative.
+latest `rows` value remaining authoritative.
