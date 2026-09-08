@@ -20,6 +20,7 @@ Nexty turns a job you do by hand into something that does it for you. It reads t
 - [Prompt cookbook](#prompt-cookbook)
 - [When something goes wrong](#when-something-goes-wrong)
 - [Where things live](#where-things-live)
+- [What to do next](#what-to-do-next)
 
 ---
 
