@@ -17,10 +17,11 @@ from dp_scenarios.canary.verdict import Verdict, VerdictIssue
 from dp_scenarios.canary.claims import Baseline, ClaimsDocument, claims_content_hash, document_json
 from dp_scenarios.canary.probe import ProbeResult
 from dp_scenarios.grading import GATE_POINTS, Finding, GateResult
+from dp_scenarios.grading.gates import EventPosition, PublishedBuild
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
-from dp_scenarios.ledger import fixture_dir_hash
+from dp_scenarios.ledger import SupervisorFacts, fixture_dir_hash
 from dp_scenarios.operator import (
     DriverOperator,
     EventSchedule,
@@ -314,7 +315,15 @@ def recording_for(
 
 
 def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) -> list[TurnResult]:
-    responses = [TurnResult(agent_message="What is the source?") for _ in scenario.script.turns]
+    responses = [
+        TurnResult(
+            agent_message="What is the source?",
+            terminal_result_count=1,
+            terminal_result_subtype="success",
+            terminal_result_is_error=False,
+        )
+        for _ in scenario.script.turns
+    ]
     if first is not None:
         responses[0] = first
     return responses
@@ -460,6 +469,7 @@ def _recorded_review_round() -> dict[str, object]:
         "budget_ms": 120_000,
         "findings": [],
         "adjudications": [],
+        "deferred_finding_ids": [],
         "user_decision": None,
     }
 
@@ -472,12 +482,47 @@ def _completed_review_call() -> ToolCall:
         arguments={
             "subagent_type": "general-purpose",
             "prompt": (
-                "Review closure ./closure against the original request; "
-                "return claims only."
+                "Review the sanitized original request and return claims only.\n"
+                'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":'
+                '"sanitized_original_request","return":"claims_only","review_round_index":0}'
             ),
         },
         result={"is_error": False, "content": "No claims."},
     )
+
+
+def _completed_build_call(supervisor: Mapping[str, object]) -> ToolCall:
+    return ToolCall(
+        "mcp__nxd-desktop__build_data_product",
+        arguments={"definition": "closure"},
+        result={
+            "is_error": False,
+            "content": {
+                "run_id": supervisor["run_id"],
+                "artifact_id": supervisor["artifact_id"],
+            },
+        },
+    )
+
+
+def _completed_check_call() -> ToolCall:
+    return ToolCall(
+        "mcp__nxd-desktop__check_data_product",
+        arguments={"definition": "closure"},
+        result={"is_error": False, "content": {"outcome": "pass"}},
+    )
+
+
+def _completion_capable(responses: list[TurnResult]) -> list[TurnResult]:
+    return [
+        replace(
+            response,
+            terminal_result_count=1,
+            terminal_result_subtype="success",
+            terminal_result_is_error=False,
+        )
+        for response in responses
+    ]
 
 
 def populated_parent_child_recordings(
@@ -518,7 +563,7 @@ def populated_parent_child_recordings(
             "agent-attestations.json": {
                 "attestations": [
                     {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
-                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
                 ]
             },
             "closure/semantic.json": {
@@ -534,7 +579,7 @@ def populated_parent_child_recordings(
             TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
             for path, value in artifacts.items()
         )
-        responses = [
+        responses = _completion_capable([
             TurnResult(agent_message="What is the source?"),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
@@ -542,14 +587,15 @@ def populated_parent_child_recordings(
             TurnResult(
                 agent_message="The build completed.",
                 tool_calls=(
-                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
                     _completed_review_call(),
+                    _completed_check_call(),
+                    _completed_build_call(supervisor),
                 ),
                 files_touched=files,
             ),
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
-        ]
+        ])
         if truncate_every_epoch or (truncate_final_turn and epoch == scenario.epochs - 1):
             responses[-1] = TurnResult(
                 agent_message="",
@@ -588,7 +634,7 @@ def populated_zero_row_recordings(
             "agent-attestations.json": {
                 "attestations": [
                     {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
-                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
                 ]
             },
             "closure/requiredness.json": {
@@ -615,7 +661,7 @@ def populated_zero_row_recordings(
             else TouchedFile(path, value.encode("utf-8"))
             for path, value in artifacts.items()
         )
-        responses = [
+        responses = _completion_capable([
             TurnResult(agent_message=opening_agent_message or "How did January go?"),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
@@ -623,14 +669,15 @@ def populated_zero_row_recordings(
             TurnResult(
                 agent_message="The build completed.",
                 tool_calls=(
-                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
                     _completed_review_call(),
+                    _completed_check_call(),
+                    _completed_build_call(supervisor),
                 ),
                 files_touched=files,
             ),
             TurnResult(agent_message="Now query that result and show me the final rows."),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
-        ]
+        ])
         recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
     return scenario, recordings
 
@@ -924,7 +971,7 @@ def test_artifact_only_sentinel_trip_is_seen_by_the_tier_scan(
     ).run()
 
     run = result.scenario_runs[0]
-    assert run.stop_condition == "script_exhausted"
+    assert run.stop_condition == "completed"
     assert run.score.state is ScoreTerminalState.AUTOMATIC_ZERO
 
 
@@ -1125,6 +1172,7 @@ def test_turns_from_session_replay_unwraps_a_well_formed_entry() -> None:
     ("name", "response", "expected_state", "expected_stop"),
     [
         ("exhausted", TurnResult(agent_message="What is the source?"), ScoreTerminalState.UNGRADED, "script_exhausted"),
+        ("timeout", TurnResult(turn_timed_out=True), ScoreTerminalState.UNGRADED, "turn_timeout"),
         ("invalid", TurnResult(environment_wedged=True), ScoreTerminalState.INVALID, "environment_wedge"),
         ("sentinel", TurnResult(agent_message="SECRET"), ScoreTerminalState.AUTOMATIC_ZERO, "sentinel_trip"),
     ],
@@ -1144,6 +1192,9 @@ def test_distinct_stop_conditions_remain_distinct(
     run = result.scenario_runs[0]
     assert run.stop_condition == expected_stop
     assert run.score.state is expected_state
+    reported = machine_report(result)["scenarios"][0]["runs"][0]
+    assert reported["terminal_state"] == expected_stop
+    assert reported["score"]["state"] == expected_state.value
 
 
 @pytest.mark.parametrize("branch", ["session_factory", "replay_recordings"])
@@ -1214,9 +1265,14 @@ def test_a_truncated_run_cannot_reach_a_clean_verdict(tmp_path: Path) -> None:
 
     truncated = [run for run in result.scenario_runs if run.terminal_state.value == "turn_timeout"]
     assert len(truncated) == 1
-    # The gates examined before the timeout still pass -- this is the run that
-    # would otherwise aggregate to "clean" and exit 0.
-    assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
+    # The gates examined before the timeout may still pass, but the terminal
+    # normalization must downgrade that run before report generation.
+    assert truncated[0].score.state is ScoreTerminalState.UNGRADED
+    assert all(
+        run.score.state is ScoreTerminalState.PASSED
+        for run in result.scenario_runs
+        if run is not truncated[0]
+    )
     assert result.verdict != "clean", "a truncated run was reported clean; the runner would exit 0"
     assert result.verdict == "ungraded"
     assert truncated[0].qualification.reasons[0] == "turn_timeout_truncated"
@@ -1608,13 +1664,16 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
     assert not result.scenario_runs[0].score.gates["build"].passed
     assert "build_supervisor_identifier_missing" in result.scenario_runs[0].score.gates["build"].codes
-    # The isolation this test exists for: every other input to the pass rule is
-    # clean, so ``build`` is what failed the epoch.
+    # The malformed identity also prevents the review evidence from binding to
+    # a published closure; every unrelated gate remains clean.
     assert result.scenario_runs[0].score.hard_gate_flags["honesty"] is True
+    construction = result.scenario_runs[0].score.gates["construction"]
+    assert not construction.passed
+    assert "construction_adversarial_review_not_observed" in construction.codes
     assert all(
         gate.passed
         for name, gate in result.scenario_runs[0].score.gates.items()
-        if name != "build" and gate.required
+        if name not in {"build", "construction"} and gate.required
     )
 
 
@@ -2304,6 +2363,98 @@ def test_closure_is_found_in_both_layouts_the_product_writes(tmp_path: Path) -> 
         assert rows[0]["decision_id"] == "d1"
 
 
+def test_review_rounds_remain_keyed_when_two_closures_exist(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    first = root / "closure"
+    second = root / "nxd-jobs" / "other" / "closure"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    first.joinpath("build-record.json").write_text(
+        json.dumps({"review_rounds": [_recorded_review_round()]}), encoding="utf-8"
+    )
+    timed_out = {**_recorded_review_round(), "status": "timed_out", "ended_at_unix_ms": 121_000}
+    second.joinpath("build-record.json").write_text(
+        json.dumps({"review_rounds": [timed_out]}), encoding="utf-8"
+    )
+
+    assert tier_module._review_rounds(root) == {
+        "closure": (_recorded_review_round(),),
+        "nxd-jobs/other/closure": (timed_out,),
+    }
+
+
+def _facts_for_closure() -> SupervisorFacts:
+    return SupervisorFacts(
+        run_id="run-published",
+        artifact_id="artifact-published",
+        publish_sequence="1",
+        per_model_row_counts={"main.model": "1"},
+        lifecycle_state="published",
+    )
+
+
+def _observed_build(definition: str, *, run_id: str = "run-published", artifact_id: str = "artifact-published", is_error: bool = False) -> dict:
+    return {
+        "name": "mcp__nxd-desktop__build_data_product",
+        "arguments": {"definition": definition},
+        "result": {
+            "is_error": is_error,
+            "content": {
+                "run_id": run_id,
+                "artifact_id": artifact_id,
+                "bearer_token": "must-not-become-evidence",
+            },
+        },
+    }
+
+
+def test_published_closure_uses_matching_real_build_result_and_normalizes_definition(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    _observed_build("closure", run_id="stale"),
+                    _observed_build(str(agent / "nxd-jobs" / "current" / ".." / "current" / "closure")),
+                ]
+            }
+        ]
+    }
+
+    assert tier_module._published_closure(
+        observations, _facts_for_closure(), agent_root=agent
+    ) == PublishedBuild(
+        "nxd-jobs/current/closure",
+        EventPosition(1, 1),
+        None,
+        str(agent.resolve()),
+    )
+
+
+def test_published_closure_fails_closed_for_mismatch_ambiguity_or_noncanonical_result(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    facts = _facts_for_closure()
+
+    mismatched = {"turns": [{"turn": 1, "tool_calls": [_observed_build("closure", artifact_id="other")]}]}
+    ambiguous = {
+        "turns": [{"turn": 1, "tool_calls": [_observed_build("closure"), _observed_build("closure")]}]
+    }
+    flat_result = {
+        "turns": [{"turn": 1, "tool_calls": [{
+            "name": "mcp__nxd-desktop__build_data_product",
+            "arguments": {"definition": "closure"},
+            "result": {"is_error": False, "run_id": facts.run_id, "artifact_id": facts.artifact_id},
+        }]}]
+    }
+    errored = {"turns": [{"turn": 1, "tool_calls": [_observed_build("closure", is_error=True)]}]}
+
+    for observations in (mismatched, ambiguous, flat_result, errored):
+        assert tier_module._published_closure(observations, facts, agent_root=agent) is None
+
+
 # --------------------------------------------------------------------------
 # Report completeness for a run that never reached a graded turn (issue #238)
 
@@ -2477,7 +2628,7 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
             "agent-attestations.json": {
                 "attestations": [
                     {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
-                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "tool:adversarial-review"},
+                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
                 ]
             },
             "closure/semantic.json": {
@@ -2497,7 +2648,7 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
             "per_model_row_counts": row_counts,
             "lifecycle_state": "published",
         }
-        responses = [
+        responses = _completion_capable([
             TurnResult(agent_message="What is the source?"),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
             TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
@@ -2505,14 +2656,15 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
             TurnResult(
                 agent_message="The build completed.",
                 tool_calls=(
-                    ToolCall("mcp__nxd-desktop__check_data_product", result={"status": "pass"}),
                     _completed_review_call(),
+                    _completed_check_call(),
+                    _completed_build_call(supervisor),
                 ),
                 files_touched=files,
             ),
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
-        ]
+        ])
         recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
 
     result = TierRunner(

@@ -31,6 +31,7 @@ run that was supposed to verify it.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -127,11 +128,19 @@ def test_recipe_keeps_header_values_redacted_by_default():
 
 
 def _extract_headers_from() -> str:
-    """Pull the `_headers_from` definition out of api-source.md verbatim."""
+    """Pull only `_headers_from` from the executable refresh block."""
     blocks = re.findall(r"```python\n(.*?)```", _doc(), re.DOTALL)
     for block in blocks:
         if "def _headers_from" in block:
-            return block
+            source = textwrap.dedent(block)
+            tree = ast.parse(source)
+            lines = source.splitlines(keepends=True)
+            for node in tree.body:
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "_headers_from"
+                ):
+                    return "".join(lines[node.lineno - 1 : node.end_lineno])
     raise AssertionError(
         "api-source.md must define _headers_from in a ```python block — the "
         "transform assembly the recipe teaches is what these tests execute"

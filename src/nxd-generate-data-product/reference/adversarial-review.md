@@ -42,8 +42,9 @@ Explicitly dispatch **one built-in read-only subagent**; never add, select, or
 rely on a custom/plugin agent definition. Give it both halves:
 
 1. **The closure path.**
-2. **The original request, verbatim** — every question asked, and any procedure
-   supplied. Not your summary of it.
+2. **The original request, verbatim except credentials**, under the
+   `sanitized_original_request` contract — every question asked and every
+   supplied procedure preserved, with credentials replaced as specified below.
 
 Those are the **only** dispatch inputs. In particular, never pass
 `job_helper_dir`: the reviewer is read-only and does not execute the local desktop
@@ -53,10 +54,26 @@ The second is load-bearing. The defects this round targets are OMISSIONS, so a
 reviewer holding only the artifact will pass a well-formed closure that answers
 the wrong question. Dispatching without the request wastes the round.
 
-The dispatch instruction says **return claims only**. Read-only tools and
-placeholder credentials only — the same credential boundary as the generate
-subagent. The reviewer never edits, builds, serves, runs the transform, or
-starts a user conversation.
+Before dispatch, inventory every value the user designated as a credential and
+every value carried by a non-public credential field. Preserve the rest of the
+request, including every question and procedure, but replace each inventoried
+value with a named placeholder such as `[CREDENTIAL:database_password]`.
+Verify that no inventoried value remains anywhere in the reviewer prompt. If
+the inventory or complete replacement cannot be established, **do not
+delegate**: stop and report that credential-safe review dispatch is blocked.
+No credential may reach the reviewer.
+
+Normalize the closure path relative to the workspace (`closure` or
+`nxd-jobs/<workflow>/closure`) and include exactly one compact marker line with
+the exact keys and constant values shown here:
+
+```text
+NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
+```
+
+Replace only the example `closure_path` value. The dispatch instruction says
+**return claims only**. The reviewer receives read-only tools, never edits,
+builds, serves, runs the transform, or starts a user conversation.
 
 The dispatcher starts a **120000 ms elapsed-time deadline** at dispatch; this
 is never a cap on findings. At the deadline it persists one terminal
@@ -127,6 +144,9 @@ because it looks settled.
 Record the round in `build-record.json` `review_rounds[]`, not `attempts[]`:
 deadline and elapsed time, completeness/status, every original claim,
 adjudication, classification, user decision, proposed effect and applied files.
+Also record `deferred_finding_ids`: it is empty unless the cited user decision
+explicitly continues while leaving accepted behavior-affecting findings
+unapplied, in which case it names those finding IDs exactly.
 Only an explicitly authorized mutation is also recorded as its normal heal
 attempt. This keeps pending, rejected, denied and timed-out findings auditable.
 
@@ -137,3 +157,11 @@ NEXT revision does not re-raise a finding that was already refuted.
 
 A completed round that returned no findings is recorded too. "Reviewed, nothing
 found" is information; a missing or timed-out section is not a clean review.
+The marker is a declaration of the sanitization contract, not proof that the
+delegated request was faithful or credential-free. Number each dispatch from
+zero in array order. The attestation for that dispatch turn carries the same
+`review_round_index` and uses the exact evidence reference
+`<normalized-closure>/build-record.json#review_rounds/<review_round_index>`. Treat the round as
+observed only when that reference, the marker path, the closure-keyed round,
+and the published build's matching supervisor `run_id` and `artifact_id` all
+identify the same closure. Never combine evidence from sibling closures.

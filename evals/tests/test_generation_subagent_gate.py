@@ -20,7 +20,9 @@ gate pins the guidance itself — the only thing that makes the agent behave.
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 from pathlib import Path
 
 from _closure_files import FILE_LIST, collapse
@@ -35,6 +37,12 @@ GENERATE_DP = SRC / "nxd-generate-data-product" / "SKILL.md"
 ADVERSARIAL_REVIEW = SRC / "nxd-generate-data-product" / "reference" / "adversarial-review.md"
 POLICY_GATE = SRC / "nxd-generate-data-product" / "reference" / "policy-gate.md"
 BUILD_RECORD = JOB_LOOP / "reference" / "build-record.md"
+SCRIPTS = JOB_LOOP / "scripts"
+
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from dp_diagnostics import validate_review_round  # noqa: E402
 
 
 def _strip_markdown(text: str) -> str:
@@ -124,6 +132,48 @@ def test_skill_wires_subagent_and_verify_before_build():
     assert "never owns the policy turn and never holds a credential" in text, (
         "SKILL.md must carry the subagent policy-turn / credential invariant"
     )
+
+
+def test_job_loop_declares_reviewer_tools_and_orders_review_before_build():
+    raw = SKILL.read_text()
+    text = _strip_markdown(raw)
+    assert "  - Agent" in raw and "  - Task" in raw
+    assert raw.index("### Step 3b — Review") < raw.index("### Step 4 — Build")
+    assert "refuse check/build" in text
+    assert all(
+        phrase in text
+        for phrase in ("no derived models", "no judgement calls", "exactly one question")
+    )
+    assert "original request verbatim" in text
+    assert "return claims only" in text
+    assert "relay every claim" in text
+    assert "required user decision" in text
+
+
+def test_offloaded_generation_cannot_self_check_before_main_thread_review():
+    raw = SCHEDULING.read_text()
+    generation = raw.index("3. **Generate subagent")
+    awaiting = raw.index('status: "awaiting_review"', generation)
+    review = raw.index("## Main-thread review checkpoint")
+    self_check = raw.index("Then run generator Step 7 self-check", review)
+    assert generation < awaiting < review < self_check
+    assert "does **not** dispatch the" in raw[generation:review]
+
+
+def test_build_record_review_round_example_is_strict_json_and_validated():
+    section = BUILD_RECORD.read_text().split(
+        "## `review_rounds[]` — review claims and user decisions", 1
+    )[1].split("## `attempts[]` — the part that makes claims checkable", 1)[0]
+    match = re.search(
+        r"```json\n(?P<payload>\{\n  \"review_rounds\": \[\n.*?\n  \]\n\}\n)```",
+        section,
+        flags=re.DOTALL,
+    )
+    assert match, "build-record.md must contain the anchored strict JSON example"
+    document = json.loads(match.group("payload"))
+    assert set(document) == {"review_rounds"}
+    assert len(document["review_rounds"]) == 1
+    assert validate_review_round(document["review_rounds"][0]) == []
 
 
 def test_generate_dp_teaches_subagent_gate_contract():

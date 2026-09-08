@@ -9,9 +9,11 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+  - Agent
+  - Task
 metadata:
   author: nextdata
-  version: 0.45.1
+  version: 0.45.2
 ---
 
 # nxd-run-job-loop skill
@@ -199,39 +201,40 @@ separately, carrying labels forward. That skill owns the role grammar.
 
 ### Step 3 — Generate the runnable closure
 
-Invoke the **nxd-generate-data-product** skill: assemble the complete Python-authored
-closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
-`build-record.json`, `README.md`, and the connector-type-specific artifact(s) —
-from the **approved `dp-blueprint.md`** (Step 1b), the inferred model(s), and the
-connector config. Pass the spec's path: it carries the intent, questions, model
-plan and every ruling, so the generator compiles rather than re-derives, and the
-`decisions:` block becomes `nxd_decisions` row for row. **That skill opens with a
-policy read-back gate**: when the request carried a procedure with a gap that changes a score, verdict, gate outcome, or which rows land, it writes nothing
-until the user has replied — the approved spec discharges it, so don't route
-around it. Pass through **every** gathered source with its label
-(or the single unlabeled source) and its per-model provenance from Step 2,
-untouched — one artifact per source, labeled per `nxd-generate-data-product`'s
-`reference/multi-source.md` when there's more than one. **That skill owns the
-exact per-type shape — don't re-derive it here**, along with the local DP shape
-(DuckDB output port, dlt-in-transform, local executor), the naming invariant, and
-the derived models carrying any business ruling the semantic layer can't express
-— its own `reference/` holds the connector-type-specific shape, and that skill's
-`reference/llm-judgments.md` holds how an agent judgement lands as data.
-Pass the bootstrap-resolved absolute `job_helper_dir` too; this is a required
-generator handoff field, not a path it may reconstruct from its own cwd.
-**Never author `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the
-supervisor compiles those from the Python sources when it pins the definition.**
-Include `reference/dlt.md`'s instructions. The output is a **closure directory** —
-the `--definition` argument for Step 4.
+Invoke **nxd-generate-data-product** through its **Step 6a** boundary: assemble
+the complete Python-authored closure — `spec.py`, `models.py`, `infra-profile.yaml`,
+`transform/main.py`, `requirements.txt`, the approved-plan snapshot,
+`build-record.json`, `README.md`, and the connector artifact — from the approved
+`dp-blueprint.md`, inferred model, and connector config. Pass every source, its
+label and provenance, plus the resolved absolute `job_helper_dir`.
+The generator compiles the approved plan; it does not re-derive it, author supervisor
+YAML, or open a new policy turn. Follow its connector references and `reference/dlt.md` for the exact closure shape.
+Generation ends after Step 6a. **Do not run the generator's self-check or build from a
+closure that has not passed this skill's Step 3b checkpoint.** Steps 2–3
+may be split between a built-in profile subagent and a separate generate subagent,
+but policy read-back, review relay, credential injection and host-path
+verification remain on the main thread. A new result-changing gap returns
+`gap_found` and triggers a fresh read-back and generation-only bounce. See [reference/scheduling.md](reference/scheduling.md).
 
-**Steps 2–3 MAY be offloaded to isolated subagents** — a profile subagent and a
-separate generate subagent, split at the inference/authoring seam, never one
-combined unit — but only when generation would otherwise dominate the main
-context. Policy read-back and review relay stay main-thread: show every claim/effect and wait before behavior-affecting change.
-Auto-fix only an evidenced syntax/mechanical/procedural structural correction with approved spec, models, grain, rows, values, aggregation, thresholds, verdicts and asserts unchanged.
-A timeout needs explicit user consent. No live credential enters either subagent. Seam and boundary:
-[reference/scheduling.md](reference/scheduling.md).
+### Step 3b — Review, adjudicate, then self-check
+
+Treat the Step 6a closure as **awaiting review** until the main thread resolves review
+eligibility. Verify all three skip predicates explicitly: no derived models,
+no judgement calls, and exactly one question. Skip review only when all three are
+verified; otherwise dispatch one built-in read-only reviewer with the
+normalized closure path and the original request verbatim except credentials, preserving every question/procedure while replacing every credential with a named placeholder.
+If complete sanitization cannot be established, do not delegate and stop. It must not edit, build, serve, transform, or talk to the user.
+Include the exact `NXD_REVIEW_DISPATCH` marker from the generator contract and tell it to return claims only. Record the dispatch as one exact `build-record.json` `review_rounds[]` object and
+run the shipped validator against it. Adjudicate and relay every claim, including
+rejected claims; resolve any required user decision before proceeding. A valid
+complete round with no unresolved blocker, or an explicitly resolved timeout, is
+the only eligible result. Then run generator Step 7 self-check and lock verify.
+For an ineligible review, verify all three predicates in the current context and
+continue to Step 7 without writing a review round. See [reference/build-record.md](reference/build-record.md).
+
+Auto-fix only an evidenced syntax/mechanical/procedural structural correction
+with approved spec, models, grain, rows, values, aggregation, thresholds,
+verdicts and asserts unchanged. A timeout needs explicit user consent. No credential enters a reviewer.
 
 **Land the closure at a durable, user-visible path — never a temp or scratch
 directory.** Put it under a directory named by the workflow id, with the IR
@@ -260,6 +263,11 @@ A green self-check means the closure is structurally sound and the transform ran
 
 ### Step 4 — Build and serve through MCP
 
+Step 4 starts only after Step 3b. Refuse check/build while review eligibility is
+unresolved, a required round is missing/invalid/blocked, or Step 7 self-check did
+not complete after review. A skipped review is legal only when all three skip
+predicates were verified in Step 3b.
+
 Before build, call `mcp__nxd-desktop__check_data_product` with the same definition and workflow; it is read-only, reports provenance plus structure/runtime/contract/semantic findings, and uses stable finding codes. Treat `skip` as non-pass, stop on `fail`/`skip`, handle warnings, and allow ~330s; on confirmed host-local Darwin use `nxd-desktop-supervisor check --definition <dir> --workflow <workflow> --json` with identical inputs. See [reference/catalog-resources.md](reference/catalog-resources.md).
 Then call `mcp__nxd-desktop__build_data_product` with the host-visible absolute path of the
 `closure/` directory as `definition` and a stable `workflow`; it creates,
@@ -283,14 +291,6 @@ never executes, so a real code fault arrives wearing an environment's clothes.
 Absent a supervisor-reported error body it is yours — heal, record the attempt,
 and never claim an "environment issue" you cannot evidence
 ([reference/failure-handling.md](reference/failure-handling.md)).
-
-#### Host-local direct CLI lifecycle
-
-The confirmed host-local Darwin fallback is one foreground
-`nxd-desktop-supervisor serve` process. Treat its `published=yes` metadata as
-the only publication receipt, then run `status` and `describe` before querying;
-keep the bearer out of narration. For bounded observation, failure handling,
-and stop-on-failure rules, follow [reference/direct-cli-lifecycle.md](reference/direct-cli-lifecycle.md).
 
 ### Step 4a — Render the pinned static artifact
 

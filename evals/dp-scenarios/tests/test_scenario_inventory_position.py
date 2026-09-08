@@ -47,6 +47,90 @@ def test_orphans_negative_stock_and_profile_boundary_pass() -> None:
     assert result["passed"]
 
 
+def _inventory_rows() -> list[dict[str, object]]:
+    gold = SCENARIO.raw_gold("reconciliation")
+    assert isinstance(gold, dict)
+    rows = gold["rows"]
+    assert isinstance(rows, list)
+    return [dict(row) for row in rows]
+
+
+def test_inventory_rows_must_be_a_list_of_exactly_typed_objects() -> None:
+    target = _good_target()
+    target["landed"] = {"rows": tuple(_inventory_rows())}
+
+    result = SCENARIO.follow_up_check(target)
+
+    assert not result["passed"]
+    assert "landed_inventory_rows_not_examined" in result["findings"]
+
+
+@pytest.mark.parametrize("shape", ["missing_key", "extra_key"])
+def test_inventory_rows_reject_missing_and_extra_keys(shape: str) -> None:
+    rows = _inventory_rows()
+    if shape == "missing_key":
+        del rows[0]["sku"]
+    else:
+        rows[0]["unexpected"] = "not part of the row contract"
+    target = _good_target()
+    target["landed"] = {"rows": rows}
+
+    result = SCENARIO.follow_up_check(target)
+
+    assert not result["passed"]
+    assert "landed_inventory_rows_not_examined" in result["findings"]
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("position_id", 7),
+        ("quality", 7),
+        ("quality", "not-a-quality"),
+        ("quantity", True),
+        ("quantity", 1.5),
+        ("region", 7),
+        ("sku", 7),
+        ("warehouse_id", 7),
+    ],
+)
+def test_inventory_rows_reject_wrong_field_types_and_quality_values(
+    field: str, invalid_value: object
+) -> None:
+    rows = _inventory_rows()
+    rows[0][field] = invalid_value
+    target = _good_target()
+    target["landed"] = {"rows": rows}
+
+    result = SCENARIO.follow_up_check(target)
+
+    assert not result["passed"]
+    assert "landed_inventory_rows_not_examined" in result["findings"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_position_count",
+        "negative_quantity_count",
+        "orphan_warehouse_count",
+        "warehouse_count",
+    ],
+)
+def test_inventory_diagnostic_counts_require_non_boolean_integers(field: str) -> None:
+    target = _good_target()
+    diagnostics = dict(target["diagnostics"])
+    expected = diagnostics[field]
+    for invalid_value in (True, float(expected)):
+        diagnostics[field] = invalid_value
+        target["diagnostics"] = diagnostics
+
+        result = SCENARIO.follow_up_check(target)
+
+        assert not result["passed"]
+        assert f"inventory_diagnostics_mismatch:{field}" in result["findings"]
+
+
 def test_identifier_diagnostics_ignore_order_but_preserve_membership() -> None:
     target = _good_target()
     diagnostics = dict(target["diagnostics"])

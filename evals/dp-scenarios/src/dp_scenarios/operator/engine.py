@@ -54,6 +54,7 @@ from .transport import Attachment, OperatorMessage, Transport, TurnResult, Touch
 class TerminalState(str, Enum):
     """The engine's terminal observation, before a separate grading pass."""
 
+    COMPLETED = "completed"
     SCRIPT_EXHAUSTED = "script_exhausted"
     SENTINEL_TRIP = "sentinel_trip"
     ENVIRONMENT_WEDGE = "environment_wedge"
@@ -376,6 +377,9 @@ class TurnRecord:
     driver_skip_reason: str | None = None
     driver_forbidden_terms_in_force: int = 0
     driver_forbidden_terms_exempted: int = 0
+    terminal_result_count: int = 0
+    terminal_result_subtype: str | None = None
+    terminal_result_is_error: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1609,6 +1613,9 @@ class OperatorEngine:
                 driver_skip_reason=driver_skip_reason,
                 driver_forbidden_terms_in_force=driver_forbidden_terms_in_force,
                 driver_forbidden_terms_exempted=driver_forbidden_terms_exempted,
+                terminal_result_count=result.terminal_result_count,
+                terminal_result_subtype=result.terminal_result_subtype,
+                terminal_result_is_error=result.terminal_result_is_error,
             )
             records.append(turn_record)
             self._append_row(
@@ -1659,6 +1666,24 @@ class OperatorEngine:
         elif turn_timed_out:
             terminal_state = TerminalState.TURN_TIMEOUT
             reason = "turn_timeout"
+        elif (
+            len(records) == len(self.script.turns)
+            and bool(records)
+            and "turn_budget_exceeded" not in self.failure_modes
+            and all(
+                record.terminal_result_count == 1
+                and record.terminal_result_subtype == "success"
+                and record.terminal_result_is_error is False
+                for record in records
+            )
+            and bool(
+                records[-1].agent_message.decode("utf-8", errors="replace").strip()
+                if isinstance(records[-1].agent_message, bytes)
+                else str(records[-1].agent_message).strip()
+            )
+        ):
+            terminal_state = TerminalState.COMPLETED
+            reason = "completed"
         else:
             terminal_state = TerminalState.SCRIPT_EXHAUSTED
             reason = "script_exhausted"

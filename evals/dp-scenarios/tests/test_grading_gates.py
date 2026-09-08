@@ -19,6 +19,9 @@ from dp_scenarios.grading.gates import (
     GATE_POINTS,
     Finding,
     GateResult,
+    EventPosition,
+    PublishedBuild,
+    canonical_review_dispatch_marker,
     gate_build,
     gate_capability,
     gate_construction,
@@ -456,6 +459,7 @@ def test_strict_construction_does_not_count_free_text_tool_arguments() -> None:
     observations = {
         "turns": [
             {
+                "turn": 1,
                 "tool_calls": [
                     {"name": "Read", "arguments": {"path": "self_check.py"}, "result": {"is_error": False}},
                     {"name": "Bash", "arguments": {"command": "echo adversarial_review"}, "result": {"is_error": False}},
@@ -504,7 +508,39 @@ def _review_round(status: str = "complete") -> dict:
         "findings": findings,
         "adjudications": adjudications,
         "user_decision": None,
+        "deferred_finding_ids": [],
     }
+
+
+def _review_attestation(
+    outcome: str = "clean",
+    *,
+    turn: int = 1,
+    closure: str = "closure",
+    review_round_index: int = 0,
+) -> dict:
+    return {
+        "action_kind": "adversarial_review",
+        "turn": turn,
+        "outcome": outcome,
+        "evidence_ref": f"{closure}/build-record.json#review_rounds/{review_round_index}",
+        "review_round_index": review_round_index,
+    }
+
+
+def _rounds_for(closure: str = "closure", status: str = "complete") -> dict:
+    return {closure: [_review_round(status)]}
+
+
+def _published_build(
+    closure: str = "closure", *, turn: int = 1, call_index: int = 2
+) -> PublishedBuild:
+    return PublishedBuild(
+        closure,
+        EventPosition(turn, call_index),
+        "workflow",
+        "/workspace",
+    )
 
 
 def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> None:
@@ -525,8 +561,9 @@ def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> N
     result = gate_construction(
         ledger,
         observations=observations,
-        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "two claims, both rejected"},),
-        review_rounds=[_review_round()],
+        attestations=(_review_attestation("two claims, both rejected"),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
         require_observed=True,
     )
 
@@ -538,22 +575,32 @@ def _dispatch_observations(*, tool: str = "Agent", subagent_type: str = "general
     return {
         "turns": [
             {
+                "turn": 1,
                 "tool_calls": [
-                    {
-                        "name": "mcp__nxd-desktop__check_data_product",
-                        "arguments": {"name": "crm-deals"},
-                        "result": {"is_error": False},
-                    },
                     {
                         "name": tool,
                         "arguments": {
                             "subagent_type": subagent_type,
                             "prompt": (
-                                "Review closure ./closure against the original request; "
-                                "return claims only."
+                                "Review the sanitized original request and return claims only.\n"
+                                'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":'
+                                '"sanitized_original_request","return":"claims_only","review_round_index":0}'
                             ),
                         },
                         "result": {"is_error": False, "content": "No claims."},
+                    },
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {"definition": "/workspace/closure", "workflow": "workflow"},
+                        "result": {
+                            "is_error": False,
+                            "content": {"outcome": "pass", "workflow": "workflow"},
+                        },
+                    },
+                    {
+                        "name": "mcp__nxd-desktop__build_data_product",
+                        "arguments": {"definition": "/workspace/closure", "workflow": "workflow"},
+                        "result": {"is_error": False, "content": {}},
                     },
                 ]
             }
@@ -583,8 +630,9 @@ def test_construction_observes_the_review_the_mandated_flow_actually_produces() 
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=_dispatch_observations(),
-        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "one claim, rejected"},),
-        review_rounds=[_review_round()],
+        attestations=(_review_attestation("one claim, rejected"),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
         require_observed=True,
     )
 
@@ -629,8 +677,9 @@ def test_construction_does_not_credit_a_background_launch_as_a_dispatch() -> Non
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=observations,
-        attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},),
-        review_rounds=[_review_round()],
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
         require_observed=True,
     )
 
@@ -649,16 +698,17 @@ def test_construction_does_not_credit_an_unrelated_or_unreturned_helper() -> Non
         ),
     ):
         observations = _dispatch_observations()
-        helper = observations["turns"][0]["tool_calls"][1]
+        helper = observations["turns"][0]["tool_calls"][0]
         helper["arguments"]["prompt"] = prompt
         helper["result"]["content"] = content
         result = gate_construction(
             _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
             observations=observations,
             attestations=(
-                {"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},
+                _review_attestation(),
             ),
-            review_rounds=[_review_round()],
+            review_rounds=_rounds_for(),
+        published_closure=_published_build(),
             require_observed=True,
         )
 
@@ -671,9 +721,10 @@ def test_construction_rejects_a_status_only_review_round() -> None:
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=_dispatch_observations(),
         attestations=(
-            {"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},
+            _review_attestation(),
         ),
-        review_rounds=[{"status": "complete"}],
+        review_rounds={"closure": [{"status": "complete"}]},
+        published_closure=_published_build(),
         require_observed=True,
     )
 
@@ -694,7 +745,8 @@ def test_construction_does_not_exempt_the_reviewer_from_its_attestation() -> Non
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=_dispatch_observations(),
         attestations=(),
-        review_rounds=[_review_round()],
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
         require_observed=True,
     )
 
@@ -713,7 +765,12 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
     ledger = _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}})
 
     dispatch_only = gate_construction(
-        ledger, observations=_dispatch_observations(), attestations=(), review_rounds=[], require_observed=True
+        ledger,
+        observations=_dispatch_observations(),
+        attestations=(),
+        review_rounds={"closure": []},
+        published_closure=_published_build(),
+        require_observed=True,
     )
     assert dispatch_only.passed is False
     assert "construction_adversarial_review_not_observed" in dispatch_only.codes
@@ -725,7 +782,8 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
         ledger,
         observations=no_dispatch,
         attestations=(),
-        review_rounds=[_review_round()],
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
         require_observed=True,
     )
     assert round_only.passed is False
@@ -737,7 +795,8 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
         ledger,
         observations=_dispatch_observations(),
         attestations=(),
-        review_rounds=[{"status": "skipped"}],
+        review_rounds={"closure": [{"status": "skipped"}]},
+        published_closure=_published_build(),
         require_observed=True,
     )
     assert skipped.passed is False
@@ -748,9 +807,34 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
     ("has_dispatch", "has_round", "has_attestation", "expected_codes"),
     [
         (True, True, True, ()),
-        (False, True, True, ("construction_adversarial_review_not_observed",)),
-        (True, False, True, ("construction_adversarial_review_not_observed",)),
-        (True, True, False, ("construction_adversarial_review_attestation_missing",)),
+        (
+            False,
+            True,
+            True,
+            (
+                "construction_self_check_not_observed",
+                "construction_adversarial_review_not_observed",
+            ),
+        ),
+        (
+            True,
+            False,
+            True,
+            (
+                "construction_self_check_not_observed",
+                "construction_adversarial_review_not_observed",
+            ),
+        ),
+        (
+            True,
+            True,
+            False,
+            (
+                "construction_self_check_not_observed",
+                "construction_adversarial_review_not_observed",
+                "construction_adversarial_review_attestation_missing",
+            ),
+        ),
     ],
 )
 def test_construction_requires_dispatch_round_and_attestation_independently(
@@ -759,45 +843,27 @@ def test_construction_requires_dispatch_round_and_attestation_independently(
     has_attestation: bool,
     expected_codes: tuple[str, ...],
 ) -> None:
-    self_check_call = {
-        "name": "mcp__nxd-desktop__check_data_product",
-        "arguments": {},
-        "result": {"is_error": False},
-    }
-    observations = _dispatch_observations() if has_dispatch else {"turns": [{"tool_calls": [self_check_call]}]}
+    observations = _dispatch_observations()
+    published_build = _published_build()
+    if not has_dispatch:
+        observations["turns"][0]["tool_calls"].pop(0)
+        published_build = _published_build(call_index=1)
     attestations = (
-        {"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},
+        _review_attestation(),
     ) if has_attestation else ()
-    review_rounds = [_review_round()] if has_round else []
+    review_rounds = _rounds_for() if has_round else {"closure": []}
 
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=observations,
         attestations=attestations,
         review_rounds=review_rounds,
+        published_closure=published_build,
         require_observed=True,
     )
 
-    expected_findings = tuple(
-        Finding(
-            code,
-            (
-                "adversarial_review was not observed as a successful structured tool call"
-                if code == "construction_adversarial_review_not_observed"
-                else "adversarial_review has no agent attestation"
-            ),
-        )
-        for code in expected_codes
-    )
-    assert result == GateResult(
-        gate="construction",
-        passed=not expected_codes,
-        points=10 if not expected_codes else 0,
-        findings=expected_findings,
-        examined=True,
-        ungraded=False,
-        required=True,
-    )
+    assert result.passed is (not bool(expected_codes))
+    assert set(result.codes) == set(expected_codes)
 
 
 def test_construction_observes_the_reviewer_under_either_delegation_tool_name() -> None:
@@ -810,39 +876,404 @@ def test_construction_observes_the_reviewer_under_either_delegation_tool_name() 
     """
 
     for tool_name in ("Task", "Agent"):
-        observations = {
-            "turns": [
-                {
-                    "tool_calls": [
-                        {
-                            "name": "mcp__nxd-desktop__check_data_product",
-                            "arguments": {"name": "crm-deals"},
-                            "result": {"is_error": False},
-                        },
-                        {
-                            "name": tool_name,
-                            "arguments": {
-                                "subagent_type": "general-purpose",
-                                "prompt": (
-                                    "Review closure ./closure against the original request; "
-                                    "return claims only."
-                                ),
-                            },
-                            "result": {"is_error": False, "content": "No claims."},
-                        },
-                    ]
-                }
-            ]
-        }
+        observations = _dispatch_observations(tool=tool_name)
         result = gate_construction(
             _ledger({"action_kind": "adversarial_review", "claim": {"outcome": "one claim, rejected"}}),
             observations=observations,
-            attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "one claim, rejected"},),
-            review_rounds=[_review_round()],
+            attestations=(_review_attestation("one claim, rejected"),),
+            review_rounds=_rounds_for(),
+            published_closure=_published_build(),
             require_observed=True,
         )
         assert result.passed is True, f"{tool_name} dispatch must be observed"
         assert "construction_adversarial_review_not_observed" not in result.codes
+
+
+def test_construction_keeps_two_closures_separate_and_uses_only_the_published_one() -> None:
+    published = "nxd-jobs/published/closure"
+    observations = _dispatch_observations()
+    prompt = observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"]
+    observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"] = prompt.replace(
+        '"closure_path":"closure"', f'"closure_path":"{published}"'
+    )
+    for call in observations["turns"][0]["tool_calls"][1:]:
+        call["arguments"]["definition"] = f"/workspace/{published}"
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(closure=published),),
+        review_rounds={
+            "closure": [{"status": "complete"}],
+            published: [_review_round()],
+        },
+        published_closure=_published_build(published),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+
+
+@pytest.mark.parametrize("bad_prompt", [
+    'NXD_REVIEW_DISPATCH {"closure_path":"wrong/closure","request_contract":"sanitized_original_request","return":"claims_only"}',
+    'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"original_request","return":"claims_only"}',
+    'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","extra":true}',
+    (
+        'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only"}\n'
+        'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only"}'
+    ),
+])
+def test_construction_rejects_wrong_or_duplicate_dispatch_markers(bad_prompt: str) -> None:
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"] = bad_prompt
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_rejects_a_valid_marker_duplicated_across_dispatches() -> None:
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"].append(
+        dict(observations["turns"][0]["tool_calls"][0])
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def _review_call(index: int, *, closure: str = "closure") -> dict[str, object]:
+    return {
+        "name": "Agent",
+        "arguments": {
+            "subagent_type": "general-purpose",
+            "prompt": "Return claims only.\n"
+            + canonical_review_dispatch_marker(closure, index),
+        },
+        "result": {"is_error": False, "content": "No claims."},
+    }
+
+
+def _check_call(*, closure: str = "closure") -> dict[str, object]:
+    return {
+        "name": "mcp__nxd-desktop__check_data_product",
+        "arguments": {"definition": f"/workspace/{closure}", "workflow": "workflow"},
+        "result": {
+            "is_error": False,
+            "content": {"outcome": "pass", "workflow": "workflow"},
+        },
+    }
+
+
+def _build_call(*, closure: str = "closure") -> dict[str, object]:
+    return {
+        "name": "mcp__nxd-desktop__build_data_product",
+        "arguments": {"definition": f"/workspace/{closure}", "workflow": "workflow"},
+        "result": {"is_error": False, "content": {}},
+    }
+
+
+def test_construction_accepts_two_fully_paired_review_rounds_before_final_check() -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0), _review_call(1), _check_call(), _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(review_round_index=0), _review_attestation(review_round_index=1)),
+        review_rounds={"closure": [_review_round(), _review_round()]},
+        published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_does_not_hide_an_unresolved_earlier_round_with_a_later_one() -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0), _review_call(1), _check_call(), _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(review_round_index=0), _review_attestation(review_round_index=1)),
+        review_rounds={"closure": [_review_round("needs_user"), _review_round()]},
+        published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_unresolved" in result.codes
+
+
+def test_construction_resolves_needs_user_only_with_an_auditable_user_decision() -> None:
+    review = _review_round("needs_user")
+    review["user_decision"] = {
+        "approved_at_unix_ms": 3_000,
+        "citation": "user:continue without applying review-1",
+        "approved_finding_ids": [],
+    }
+    review["deferred_finding_ids"] = ["review-1"]
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0), _check_call(), _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds={"closure": [review]},
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_requires_same_turn_review_check_build_call_order() -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _check_call(), _review_call(0), _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_self_check_not_observed" in result.codes
+
+
+def test_construction_invalidates_a_check_when_the_closure_is_edited_before_build() -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0),
+            _check_call(),
+            {"name": "Edit", "arguments": {"file_path": "/workspace/closure/spec.py"}, "result": {"is_error": False}},
+            _build_call(),
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_self_check_stale" in result.codes
+
+
+@pytest.mark.parametrize("tool_name", ["Agent", "Task", "Bash", "OpaquePluginTool"])
+def test_construction_rejects_opaque_operations_between_check_and_build(
+    tool_name: str,
+) -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0),
+            _check_call(),
+            {
+                "name": tool_name,
+                "arguments": {"prompt": "unverifiable helper", "command": "unknown"},
+                "result": {"is_error": False, "content": "done"},
+            },
+            _build_call(),
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_self_check_stale" in result.codes
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"name": "Read", "arguments": {"file_path": "/workspace/closure/spec.py"}},
+        {
+            "name": "mcp__nxd-desktop__run_semantic_query",
+            "arguments": {"query": "select 1"},
+        },
+        {"name": "Edit", "arguments": {"file_path": "/workspace/notes.txt"}},
+    ],
+)
+def test_construction_permits_operations_proven_not_to_mutate_the_closure(
+    call: dict[str, object],
+) -> None:
+    call["result"] = {"is_error": False, "content": "done"}
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0), _check_call(), call, _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+
+
+def test_construction_requires_dispatch_indices_in_chronological_array_order() -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(1), _review_call(0), _check_call(), _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(
+            _review_attestation(review_round_index=0),
+            _review_attestation(review_round_index=1),
+        ),
+        review_rounds={"closure": [_review_round(), _review_round()]},
+        published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_rejects_out_of_order_turn_records_even_when_indices_look_ordered() -> None:
+    observations = {
+        "turns": [
+            {"turn": 2, "tool_calls": [_review_call(0)]},
+            {"turn": 1, "tool_calls": [_review_call(1)]},
+            {"turn": 3, "tool_calls": [_check_call(), _build_call()]},
+        ]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(
+            _review_attestation(turn=2, review_round_index=0),
+            _review_attestation(turn=1, review_round_index=1),
+        ),
+        review_rounds={"closure": [_review_round(), _review_round()]},
+        published_closure=_published_build(turn=3, call_index=1),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_rejects_review_evidence_for_a_sibling_closure() -> None:
+    observations = {
+        "turns": [{"turn": 1, "tool_calls": [
+            _review_call(0, closure="sibling/closure"), _check_call(), _build_call()
+        ]}]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(closure="sibling/closure"),),
+        review_rounds={"sibling/closure": [_review_round()]},
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_chronology_fails_closed_without_explicit_turn_numbers() -> None:
+    observations = {"turns": [{"tool_calls": [_review_call(0), _check_call(), _build_call()]}]}
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_shipped_review_docs_embed_the_shared_canonical_dispatch_marker() -> None:
+    marker = canonical_review_dispatch_marker("closure", 0)
+    repository_root = Path(__file__).resolve().parents[3]
+    docs = (
+        repository_root / "src/nxd-generate-data-product/reference/adversarial-review.md",
+        repository_root / "src/nxd-run-job-loop/reference/scheduling.md",
+    )
+
+    assert all(marker in path.read_text(encoding="utf-8") for path in docs)
+
+
+@pytest.mark.parametrize("attestations", [
+    (_review_attestation(turn=2),),
+    (_review_attestation(closure="wrong/closure"),),
+    (_review_attestation(), _review_attestation()),
+])
+def test_construction_rejects_wrong_or_ambiguous_review_attestation(attestations: tuple[dict, ...]) -> None:
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=attestations,
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_rejects_a_round_recorded_under_the_wrong_closure() -> None:
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=(_review_attestation(),),
+        review_rounds={"wrong/closure": [_review_round()]},
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
 
 
 def test_construction_does_not_count_inline_review_skill_as_an_independent_review() -> None:
@@ -870,8 +1301,9 @@ def test_construction_does_not_count_inline_review_skill_as_an_independent_revie
         result = gate_construction(
             _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
             observations=observations,
-            attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},),
-            review_rounds=[_review_round()],
+            attestations=(_review_attestation(),),
+            review_rounds=_rounds_for(),
+        published_closure=_published_build(),
             require_observed=True,
         )
 
@@ -886,8 +1318,9 @@ def test_construction_does_not_count_named_subagent_without_a_review_round() -> 
         result = gate_construction(
             _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
             observations=_dispatch_observations(subagent_type=subagent_type),
-            attestations=({"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},),
-            review_rounds=[],
+            attestations=(_review_attestation(),),
+            review_rounds={"closure": []},
+        published_closure=_published_build(),
             require_observed=True,
         )
 
@@ -908,8 +1341,6 @@ def test_construction_still_fails_when_the_check_was_never_called() -> None:
 
     assert quiet.passed is False
     assert "construction_self_check_not_observed" in quiet.codes
-    assert "construction_self_check_outcome_missing" in quiet.codes
-    assert "construction_self_check_attestation_missing" in quiet.codes
 
 
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:

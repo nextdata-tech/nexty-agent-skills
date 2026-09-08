@@ -149,6 +149,9 @@ def turn_result_to_dict(result: TurnResult) -> dict[str, object]:
         "failure_reason": result.failure_reason,
         "last_mcp_call": result.last_mcp_call,
         "session_id": result.session_id,
+        "terminal_result_count": result.terminal_result_count,
+        "terminal_result_subtype": result.terminal_result_subtype,
+        "terminal_result_is_error": result.terminal_result_is_error,
     }
 
 
@@ -159,6 +162,20 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
     unknown = set(value) - allowed
     if unknown:
         raise SessionError("recorded turn has unknown field(s): " + ", ".join(sorted(map(str, unknown))))
+    if "terminal_result_count" in value and (
+        not isinstance(value["terminal_result_count"], int)
+        or isinstance(value["terminal_result_count"], bool)
+        or value["terminal_result_count"] < 0
+    ):
+        raise SessionError("terminal_result_count must be a non-negative integer")
+    if "terminal_result_subtype" in value and value["terminal_result_subtype"] is not None and not isinstance(
+        value["terminal_result_subtype"], str
+    ):
+        raise SessionError("terminal_result_subtype must be a string or null")
+    if "terminal_result_is_error" in value and value["terminal_result_is_error"] is not None and not isinstance(
+        value["terminal_result_is_error"], bool
+    ):
+        raise SessionError("terminal_result_is_error must be a boolean or null")
     raw_calls = value.get("tool_calls", [])
     raw_files = value.get("files_touched", [])
     if not isinstance(raw_calls, Sequence) or isinstance(raw_calls, (str, bytes)):
@@ -197,6 +214,17 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
         failure_reason=value.get("failure_reason") if isinstance(value.get("failure_reason"), str) else None,
         last_mcp_call=value.get("last_mcp_call") if isinstance(value.get("last_mcp_call"), str) else None,
         session_id=value.get("session_id") if isinstance(value.get("session_id"), str) else None,
+        terminal_result_count=value.get("terminal_result_count", 0),
+        terminal_result_subtype=(
+            value.get("terminal_result_subtype")
+            if isinstance(value.get("terminal_result_subtype"), str)
+            else None
+        ),
+        terminal_result_is_error=(
+            value.get("terminal_result_is_error")
+            if isinstance(value.get("terminal_result_is_error"), bool)
+            else None
+        ),
     )
 
 

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Mapping
 
 import pytest
 
@@ -72,6 +73,97 @@ def test_parse_stream_events_keeps_tool_observations_structured() -> None:
     assert observations[0]["tool"] == "build_data_product"
     assert observations[0]["result"]["run_id"] == "run-1"  # type: ignore[index]
     assert result.reported is False
+
+
+def test_parse_stream_events_preserves_exact_terminal_completion_facts() -> None:
+    result, _ = parse_claude_events(
+        [{"type": "result", "result": "done", "subtype": "success", "is_error": False}],
+        redact_json_rpc=_identity,
+        redact_text=lambda value: value,
+        session_id="claude-session",
+    )
+
+    assert result.terminal_result_count == 1
+    assert result.terminal_result_subtype == "success"
+    assert result.terminal_result_is_error is False
+    assert result.agent_message == "done"
+
+
+def test_multiple_terminal_results_are_retained_as_ambiguous_completion_evidence() -> None:
+    result, _ = parse_claude_events(
+        [
+            {"type": "result", "result": "first", "subtype": "success", "is_error": False},
+            {"type": "result", "result": "second", "subtype": "success", "is_error": False},
+        ],
+        redact_json_rpc=_identity,
+        redact_text=lambda value: value,
+        session_id="claude-session",
+    )
+
+    assert result.terminal_result_count == 2
+
+
+def test_real_build_result_shape_keeps_identity_while_redacting_bearer_values() -> None:
+    def redact(value: object, *, key: str = "") -> object:
+        if "bearer" in key.casefold():
+            return "<redacted>"
+        if isinstance(value, Mapping):
+            return {str(name): redact(item, key=str(name)) for name, item in value.items()}
+        if isinstance(value, list):
+            return [redact(item, key=key) for item in value]
+        return value
+
+    events = [
+        {
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "build-1",
+                "name": "mcp__nxd-desktop__build_data_product",
+                "input": {"definition": "./closure"},
+            }]},
+        },
+        {
+            "type": "user",
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "build-1",
+                "content": [{"type": "text", "text": json.dumps({
+                    "run_id": "run-1",
+                    "artifact_id": "artifact-1",
+                    "bearer_token": "secret-value",
+                })}],
+            }]},
+        },
+        {"type": "result", "result": "done", "is_error": False},
+    ]
+
+    result, observations = parse_claude_events(
+        events,
+        redact_json_rpc=redact,
+        redact_text=lambda value: value.replace("secret-value", "<redacted>"),
+        session_id="claude-session",
+    )
+
+    assert observations[0]["result"] == {
+        "run_id": "run-1",
+        "artifact_id": "artifact-1",
+        "bearer_token": "<redacted>",
+    }
+    assert "secret-value" not in json.dumps(turn_result_to_dict(result))
+
+
+def test_default_prompt_only_describes_the_attestation_channel_not_review_behavior() -> None:
+    prompt = adapter_module.DEFAULT_SYSTEM_PROMPT
+    collapsed = " ".join(prompt.split())
+
+    assert "agent-attestations.json at your workspace root" in collapsed
+    assert "follow the installed skills for its format" in collapsed
+    assert "Background execution is disabled" in collapsed
+    assert "NXD_REVIEW_DISPATCH" not in collapsed
+    assert "sanitized_original_request" not in collapsed
+    assert "review_round_index" not in collapsed
+    assert "[CREDENTIAL:" not in collapsed
 
 
 def test_unpaired_mcp_tool_use_is_an_environment_wedge_not_a_build_failure() -> None:

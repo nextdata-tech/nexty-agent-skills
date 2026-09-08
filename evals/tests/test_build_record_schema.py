@@ -23,6 +23,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
+DP_SCENARIOS_SRC = REPO / "evals" / "dp-scenarios" / "src"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 if str(SCRIPTS) not in sys.path:
@@ -132,9 +133,63 @@ def _review_round(**overrides) -> dict:
             }
         ],
         "user_decision": None,
+        "deferred_finding_ids": [],
     }
     base.update(overrides)
     return base
+
+
+def _grading_review_is_valid(review: dict) -> bool:
+    """Load the real grading predicate when the scenario project is present."""
+
+    if str(DP_SCENARIOS_SRC) not in sys.path:
+        sys.path.insert(0, str(DP_SCENARIOS_SRC))
+    try:
+        from dp_scenarios.grading.gates import _valid_review_round
+    except ModuleNotFoundError as exc:
+        if exc.name == "nxd_eval":
+            pytest.skip("the no-project root test environment omits nxd_eval")
+        raise
+    return _valid_review_round(review)
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_message"),
+    [
+        ("started_at_unix_ms", "started_at_unix_ms must be an integer"),
+        ("ended_at_unix_ms", "ended_at_unix_ms must be an integer"),
+        ("budget_ms", "budget_ms must be a positive integer"),
+    ],
+)
+def test_shipped_review_validator_rejects_boolean_integer_fields_in_grading_parity(
+    field: str, expected_message: str
+) -> None:
+    review = _review_round()
+    review[field] = True
+
+    shipped_valid = not dpd.validate_review_round(review)
+
+    assert shipped_valid is False
+    assert _grading_review_is_valid(review) is shipped_valid
+    assert expected_message in dpd.validate_review_round(review)
+
+
+def test_shipped_review_validator_rejects_boolean_user_approval_timestamp_in_grading_parity() -> None:
+    review = _review_round(
+        user_decision={
+            "approved_at_unix_ms": True,
+            "citation": "user:continue",
+            "approved_finding_ids": [],
+        }
+    )
+
+    shipped_valid = not dpd.validate_review_round(review)
+
+    assert shipped_valid is False
+    assert _grading_review_is_valid(review) is shipped_valid
+    assert "user_decision.approved_at_unix_ms must be an integer" in dpd.validate_review_round(
+        review
+    )
 
 
 def test_review_round_adjudicates_every_finding(record):
@@ -163,21 +218,65 @@ def test_review_needing_user_blocks_materialization(record, lock):
     assert any("review round" in reason for reason in state["why"]), state
 
 
-def test_user_decision_cannot_be_fabricated_while_review_needs_user(record):
+def test_needs_user_review_can_be_resolved_by_an_auditable_defer_decision(record):
     review = _review_round(
         status="needs_user",
         user_decision={
             "approved_at_unix_ms": 1769904026000,
             "citation": "user:approval message",
-            "approved_finding_ids": ["R1"],
+            "approved_finding_ids": [],
+        },
+        deferred_finding_ids=["R1"],
+    )
+    review["findings"][0]["state"] = "not_applied"
+    review["adjudications"][0]["disposition"] = "accepted"
+    review["adjudications"][0]["citation"] = "closure:models.py:42"
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+    assert _grading_review_is_valid(review) is True
+
+
+def test_complete_review_cannot_hide_a_needs_user_finding_even_with_a_valid_decision() -> None:
+    review = _review_round(
+        status="complete",
+        user_decision={
+            "approved_at_unix_ms": 1769904026000,
+            "citation": "user:continue",
+            "approved_finding_ids": [],
         },
     )
     review["findings"][0]["state"] = "needs_user"
-    review["adjudications"][0]["disposition"] = "accepted"
-    review["adjudications"][0]["citation"] = None
-    record["review_rounds"] = [review]
-    problems = dpd.validate_build_record(record)
-    assert any("only allowed for a complete review" in p for p in problems)
+
+    problems = dpd.validate_review_round(review)
+
+    assert any("only a needs_user review" in problem for problem in problems)
+    assert _grading_review_is_valid(review) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", []),
+        ("classification", {}),
+        ("state", []),
+        ("disposition", {}),
+    ],
+)
+def test_malformed_review_enum_values_are_findings_in_validator_and_grader_parity(
+    field: str, value: object
+) -> None:
+    review = _review_round()
+    if field == "status":
+        review["status"] = value
+    elif field in {"classification", "state"}:
+        review["findings"][0][field] = value
+    else:
+        review["adjudications"][0][field] = value
+
+    problems = dpd.validate_review_round(review)
+
+    assert problems
+    assert _grading_review_is_valid(review) is False
 
 
 def test_behavior_affecting_review_change_requires_named_user_approval(record):
@@ -309,7 +408,8 @@ def test_auditable_user_decision_unblocks_accepted_behavior_finding(record, lock
             "approved_at_unix_ms": 1769904026000,
             "citation": "user:decline R1 and continue",
             "approved_finding_ids": [],
-        }
+        },
+        deferred_finding_ids=["R1"],
     )
     review["adjudications"][0].update(disposition="accepted", citation="closure:models.py:42")
     record["review_rounds"] = [review]

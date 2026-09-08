@@ -150,17 +150,10 @@ The same defect class as a gate reading a spec the product never writes.
 What the mandated flow *does* produce is a `review_rounds[]` entry in
 `build-record.json`: the dispatcher records every returned claim, or a terminal
 `timed_out` round, and adjudicates it with a citation. The gate now reads that,
-paired with a completed reviewer delegation call. Both halves are required.
-The first implementation treated any synchronous `Agent`/`Task` result as that
-delegation and accepted a status-only round; a documentation helper plus
-fabricated `{"status":"complete"}` and attestation could therefore pass. The
-gate now requires the dispatch prompt to carry the closure, original request
-and `return claims only` contract, a non-empty inline child result, and a round
-that satisfies the shipped build-record structure and cross-field rules. A
-research subagent records no qualifying dispatch, a fabricated round dispatched
-nothing, an async/empty result proves no child returned, and a malformed round
-is not evidence. Run 3's four `Agent` calls (documentation hunting and a file
-deletion) are correctly credited with no review.
+paired with an observed delegation call. Both halves are required, and the
+pairing is what keeps it honest — a research subagent records no round, and a
+fabricated round dispatched nothing. Run 3's four `Agent` calls (documentation
+hunting and a file deletion) are correctly credited with no review.
 
 The round carries the outcome, so *that* is harness-owned. It does **not**
 replace the attestation: unlike (1), where the harness watched the exact event,
@@ -226,11 +219,8 @@ are not comparable with later ones on this gate.
   only precedence — the workspace winning over the fallback — and passes either
   way, so it is not the carrying test.
 - `evals/dp-scenarios/tests/test_grading_gates.py` — a delegation call paired
-  with a schema-valid recorded `review_rounds[]` entry passes; neither half
-  alone counts, an unrelated helper and an empty/async child result do not
-  count, a status-only object is malformed, and a `skipped` status is not a
-  round. The applied-behavior/user-decision discriminator mirrors the shipped
-  `dp_diagnostics.py` validator.
+  with a recorded `review_rounds[]` entry passes; neither half alone counts,
+  and a `skipped` status is not a round.
 - `evals/dp-scenarios/tests/test_runner_environment.py` — no conduct rule names
   a planning skill, a delegated helper, or authoring the closure directly,
   while the anti-stall clause survives.

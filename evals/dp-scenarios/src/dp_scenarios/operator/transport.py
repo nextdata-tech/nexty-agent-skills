@@ -79,6 +79,12 @@ class TurnResult:
     #: incomplete run still says where it stopped rather than only that it did.
     last_mcp_call: str | None = None
     session_id: str | None = None
+    #: Stream-level completion facts. Zero/None are deliberate fail-closed
+    #: defaults for old replays and transports that did not observe a terminal
+    #: provider result.
+    terminal_result_count: int = 0
+    terminal_result_subtype: str | None = None
+    terminal_result_is_error: bool | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tool_calls", tuple(self.tool_calls))
@@ -86,6 +92,20 @@ class TurnResult:
         object.__setattr__(self, "files_touched", tuple(self.files_touched))
         if self.build_failure_count < 0:
             raise ValueError("build_failure_count must be non-negative")
+        if not isinstance(self.terminal_result_count, int) or isinstance(
+            self.terminal_result_count, bool
+        ):
+            raise TypeError("terminal_result_count must be an integer")
+        if self.terminal_result_count < 0:
+            raise ValueError("terminal_result_count must be non-negative")
+        if self.terminal_result_subtype is not None and not isinstance(
+            self.terminal_result_subtype, str
+        ):
+            raise TypeError("terminal_result_subtype must be a string or None")
+        if self.terminal_result_is_error is not None and not isinstance(
+            self.terminal_result_is_error, bool
+        ):
+            raise TypeError("terminal_result_is_error must be a boolean or None")
 
 
 class Transport(Protocol):
