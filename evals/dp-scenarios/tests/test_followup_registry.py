@@ -37,6 +37,8 @@ EXPECTED_CROSS_CHECKS = {
     "crm_pipeline": (False, False),
     "finance_close": (False, False),
     "inventory_position": (False, False),
+    "application_reconciliation": (False, False),
+    "locale_timezone": (False, False),
 }
 
 # Whether each kind's gold is byte-reproducible by regenerating the CSV
@@ -52,6 +54,8 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "crm_pipeline": False,
     "finance_close": True,
     "inventory_position": True,
+    "application_reconciliation": True,
+    "locale_timezone": True,
 }
 
 

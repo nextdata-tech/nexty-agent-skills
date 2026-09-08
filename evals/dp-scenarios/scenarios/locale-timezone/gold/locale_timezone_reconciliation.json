@@ -1,0 +1,133 @@
+{
+  "boundary_shift_fraction": 0.07142857,
+  "boundary_shift_rows": 1,
+  "local_daily": [
+    {
+      "day": "2024-03-01",
+      "row_count": 1,
+      "total_amount": "100.00"
+    },
+    {
+      "day": "2024-03-02",
+      "row_count": 1,
+      "total_amount": "110.00"
+    },
+    {
+      "day": "2024-03-03",
+      "row_count": 1,
+      "total_amount": "120.00"
+    },
+    {
+      "day": "2024-03-04",
+      "row_count": 1,
+      "total_amount": "130.00"
+    },
+    {
+      "day": "2024-03-05",
+      "row_count": 1,
+      "total_amount": "140.00"
+    },
+    {
+      "day": "2024-03-06",
+      "row_count": 1,
+      "total_amount": "150.00"
+    },
+    {
+      "day": "2024-03-07",
+      "row_count": 1,
+      "total_amount": "160.00"
+    },
+    {
+      "day": "2024-03-08",
+      "row_count": 1,
+      "total_amount": "170.00"
+    },
+    {
+      "day": "2024-03-09",
+      "row_count": 1,
+      "total_amount": "180.00"
+    },
+    {
+      "day": "2024-03-10",
+      "row_count": 3,
+      "total_amount": "620.00"
+    },
+    {
+      "day": "2024-03-11",
+      "row_count": 1,
+      "total_amount": "210.00"
+    },
+    {
+      "day": "2024-03-12",
+      "row_count": 1,
+      "total_amount": "220.00"
+    }
+  ],
+  "row_count": 14,
+  "source_local_total": "2310.00",
+  "source_timezone": "America/New_York",
+  "unicode_category": "\u5951\u7d04",
+  "utc_daily": [
+    {
+      "day": "2024-03-01",
+      "row_count": 1,
+      "total_amount": "100.00"
+    },
+    {
+      "day": "2024-03-02",
+      "row_count": 1,
+      "total_amount": "110.00"
+    },
+    {
+      "day": "2024-03-03",
+      "row_count": 1,
+      "total_amount": "120.00"
+    },
+    {
+      "day": "2024-03-04",
+      "row_count": 1,
+      "total_amount": "130.00"
+    },
+    {
+      "day": "2024-03-05",
+      "row_count": 1,
+      "total_amount": "140.00"
+    },
+    {
+      "day": "2024-03-06",
+      "row_count": 1,
+      "total_amount": "150.00"
+    },
+    {
+      "day": "2024-03-07",
+      "row_count": 1,
+      "total_amount": "160.00"
+    },
+    {
+      "day": "2024-03-08",
+      "row_count": 1,
+      "total_amount": "170.00"
+    },
+    {
+      "day": "2024-03-09",
+      "row_count": 1,
+      "total_amount": "180.00"
+    },
+    {
+      "day": "2024-03-10",
+      "row_count": 2,
+      "total_amount": "390.00"
+    },
+    {
+      "day": "2024-03-11",
+      "row_count": 2,
+      "total_amount": "440.00"
+    },
+    {
+      "day": "2024-03-12",
+      "row_count": 1,
+      "total_amount": "220.00"
+    }
+  ],
+  "utc_total": "2310.00"
+}

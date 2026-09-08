@@ -50,6 +50,8 @@ EXPECTED_TIERS = {
     "crm-pipeline": "core",
     "finance-close": "core",
     "inventory-position": "core",
+    "application-reconciliation": "core",
+    "locale-timezone": "core",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -59,7 +61,11 @@ _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
     | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
-    | ({"query"} if scenario_id == "parent-child-grain-trap" else set())
+    | ({"query"} if scenario_id in {
+        "parent-child-grain-trap",
+        "application-reconciliation",
+        "locale-timezone",
+    } else set())
     for scenario_id in EXPECTED_TIERS
 }
 GATES_WITHOUT_A_STAGING_SCENARIO = {"narrowing"}
@@ -470,6 +476,8 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "crm-pipeline")
     shutil.rmtree(root / "finance-close")
     shutil.rmtree(root / "inventory-position")
+    shutil.rmtree(root / "application-reconciliation")
+    shutil.rmtree(root / "locale-timezone")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -498,6 +506,8 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.rmtree(root / "crm-pipeline")
     shutil.rmtree(root / "finance-close")
     shutil.rmtree(root / "inventory-position")
+    shutil.rmtree(root / "application-reconciliation")
+    shutil.rmtree(root / "locale-timezone")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -691,18 +701,21 @@ def test_capability_shortfall_is_the_first_package_to_declare_the_live_tier() ->
     assert {scenario.id for scenario in selected} == live_ids
 
 
-def test_only_the_scenario_declaring_answer_gold_has_a_scoreable_query_gate() -> None:
-    """The other eight grade their rows through the follow-up kind instead.
+def test_only_scenarios_declaring_answer_gold_have_scoreable_query_gates() -> None:
+    """Scenarios with answer row-sets have scoreable query gates.
 
-    Their gold is declared under the follow-up kind's own key
-    (`pipeline`, `reconciliation`), is an object rather than the row list the
-    query oracle requires, and is already compared against the agent's
-    evidence artifact there. Renaming it to `answer` would fail at load --
-    `_parse_gold` requires the key set to equal the kind's `gold_keys` -- and
-    would then double-grade the same rows over a channel nobody pins.
+    Scenarios without an answer row-set keep query optional because their gold
+    is a follow-up-specific object rather than the row list the query oracle
+    requires. The follow-up registry owns both kinds of gold keys, so the
+    query artifact is declared intentionally rather than inferred from an
+    unrelated evidence object.
     """
 
     scenarios = load_scenarios(SCENARIO_ROOT)
     scoreable = {scenario.id for scenario in scenarios if scenario.has_scoreable_answer_gold}
 
-    assert scoreable == {"parent-child-grain-trap"}
+    assert scoreable == {
+        "parent-child-grain-trap",
+        "application-reconciliation",
+        "locale-timezone",
+    }

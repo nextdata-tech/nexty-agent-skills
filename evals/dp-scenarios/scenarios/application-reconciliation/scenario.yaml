@@ -1,0 +1,50 @@
+version: 1
+id: application-reconciliation
+tier: core
+run_order: 10
+fixture:
+  dataset: application_reconciliation
+  seed: 29
+  variant: dashboard-vs-export-lineage
+  plant: application_reconciliation_dispute
+coverage:
+  variant: dashboard-vs-export-lineage
+  untested: This package grades deterministic count reconciliation and governed lineage evidence through a local file fixture; it does not claim a live dashboard, production export, or authenticated agent run.
+turn_budget: 7
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/micromanager.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+required_plants:
+  - application_reconciliation_dispute
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: application_reconciliation
+    decision_id: c2-active-count-reconciliation
+gold:
+  answer: gold/application_reconciliation_answer.json
+  dispute: gold/application_reconciliation_dispute.json
+  lineage: gold/application_reconciliation_lineage.json
+follow_up_artifact: evidence/application_reconciliation.json
+operator:
+  sentinel: null
+  obstacle_terms: []

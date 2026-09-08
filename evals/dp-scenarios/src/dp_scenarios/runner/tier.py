@@ -195,6 +195,14 @@ class ScenarioRun:
                         "examined": result.examined,
                         "ungraded": result.ungraded,
                         "required": result.required,
+                        "diagnostics": [
+                            {
+                                "code": diagnostic.code,
+                                "detail": diagnostic.detail,
+                                "value": diagnostic.value,
+                            }
+                            for diagnostic in result.diagnostics
+                        ],
                     }
                     for name, result in self.score.gates.items()
                 },

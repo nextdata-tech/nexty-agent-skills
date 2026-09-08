@@ -157,7 +157,11 @@ def test_machine_artifacts_require_structured_mcp_facts(tmp_path: Path) -> None:
         "lifecycle_state": "published",
     }
     assert json.loads((artifact_dir / "query-results.json").read_text()) == {
-        "rows": [{"region": "north", "regional_revenue": 10.0}]
+        "rows": [{"region": "north", "regional_revenue": 10.0}],
+        "queries": [{
+            "columns": ["region", "regional_revenue"],
+            "rows": [{"region": "north", "regional_revenue": 10.0}],
+        }],
     }
 
 
@@ -512,6 +516,7 @@ def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstructi
     adapter._last_mcp_call = None
     adapter._lifecycles = {}
     adapter._built_runs = set()
+    adapter._query_history = []
     adapter._state_dir = None
     adapter._session_id = "session-1"
     adapter._stdio = None
@@ -1078,7 +1083,14 @@ def test_positional_query_rows_are_read_through_their_column_header(tmp_path: Pa
         "rows": [
             {"stage": "closed_won", "status": "active", "deal_count": 1, "total_amount": 72300.0},
             {"stage": "prospecting", "status": "active", "deal_count": 1, "total_amount": 9100.0},
-        ]
+        ],
+        "queries": [{
+            "columns": ["stage", "status", "deal_count", "total_amount"],
+            "rows": [
+                {"stage": "closed_won", "status": "active", "deal_count": 1, "total_amount": 72300.0},
+                {"stage": "prospecting", "status": "active", "deal_count": 1, "total_amount": 9100.0},
+            ],
+        }],
     }
 
 
@@ -1088,7 +1100,8 @@ def test_mapping_query_rows_are_still_accepted(tmp_path: Path) -> None:
     _harvest([_observation("run_semantic_query", {"rows": [{"stage": "closed_won", "n": 1}]})], tmp_path)
 
     assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {
-        "rows": [{"stage": "closed_won", "n": 1}]
+        "rows": [{"stage": "closed_won", "n": 1}],
+        "queries": [{"columns": ["stage", "n"], "rows": [{"stage": "closed_won", "n": 1}]}],
     }
 
 
@@ -1200,7 +1213,10 @@ def test_a_query_that_matched_nothing_is_an_answer_not_an_unreadable_payload(tmp
 
     _harvest([_observation("run_semantic_query", {"columns": ["stage"], "rows": [], "row_count": 0})], tmp_path)
 
-    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {"rows": []}
+    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {
+        "rows": [],
+        "queries": [{"columns": ["stage"], "rows": []}],
+    }
 
 
 def test_a_later_empty_query_still_supersedes_an_earlier_one(tmp_path: Path) -> None:
@@ -1214,7 +1230,48 @@ def test_a_later_empty_query_still_supersedes_an_earlier_one(tmp_path: Path) -> 
         tmp_path,
     )
 
-    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {"rows": []}
+    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {
+        "rows": [],
+        "queries": [
+            {"columns": ["stage"], "rows": [{"stage": "closed_won"}]},
+            {"columns": ["stage"], "rows": []},
+        ],
+    }
+
+
+def test_query_history_survives_separate_turn_harvests(tmp_path: Path) -> None:
+    history: list[dict[str, object]] = []
+    facts: dict[str, object] = {}
+    first = [_observation("run_semantic_query", {"rows": [{"category": "契約", "row_count": 7}]})]
+    second = [_observation("run_semantic_query", {"rows": [{"category": "Renovación", "row_count": 7}]})]
+
+    _update_machine_artifacts(first, artifact_dir=tmp_path, facts=facts, build_context={}, query_history=history)
+    _update_machine_artifacts(second, artifact_dir=tmp_path, facts=facts, build_context={}, query_history=history)
+
+    assert json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8")) == {
+        "rows": [{"category": "Renovación", "row_count": 7}],
+        "queries": [
+            {"columns": ["category", "row_count"], "rows": [{"category": "契約", "row_count": 7}]},
+            {"columns": ["category", "row_count"], "rows": [{"category": "Renovación", "row_count": 7}]},
+        ],
+    }
+
+
+def test_query_history_is_capped_without_dropping_the_latest_result(tmp_path: Path) -> None:
+    history: list[dict[str, object]] = []
+    facts: dict[str, object] = {}
+    observations = [
+        _observation("run_semantic_query", {"columns": ["value"], "rows": [{"value": index}]} )
+        for index in range(33)
+    ]
+
+    _update_machine_artifacts(observations, artifact_dir=tmp_path, facts=facts, build_context={}, query_history=history)
+
+    written = json.loads((tmp_path / "query-results.json").read_text(encoding="utf-8"))
+    assert len(written["queries"]) == 32
+    assert written["queries"][0]["rows"] == [{"value": 1}]
+    assert written["queries"][-1]["rows"] == [{"value": 32}]
+    assert written["rows"] == [{"value": 32}]
 
 
 def test_repeated_column_names_are_refused_rather_than_collapsed(tmp_path: Path) -> None:

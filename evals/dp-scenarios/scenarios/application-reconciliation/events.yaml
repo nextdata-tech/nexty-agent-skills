@@ -1,0 +1,12 @@
+- version: 1
+  id: application_reconciliation_dispute
+  trigger_turn: 5
+  type: scope_creep
+  content: >-
+    Before you finish, show the exact lineage for each exclusion cause and
+    record which population definition we approved.
+  outcome: application_reconciliation_lineage_requested
+  plant: true
+  required_terms:
+    - "exact lineage"
+    - "exclusion cause"

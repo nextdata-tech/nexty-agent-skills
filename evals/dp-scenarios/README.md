@@ -161,6 +161,12 @@ never pulled into a smoke run:
   warehouse identifiers and negative stock. The local mock profile preserves
   these as data-quality warnings and documents the retained-run boundary for
   B10.
+- **application-reconciliation** — C2's 391-row export versus 353-row active
+  dashboard dispute, with 30 status exclusions and 8 tombstones reconciled by
+  independent lineage evidence.
+- **locale-timezone** — C6's UTF-8 categories, real America/New_York DST
+  transition, and UTC date-boundary event, where source-local and UTC daily
+  views preserve totals while one of 14 rows shifts.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -194,6 +200,8 @@ scenario.
 | [crm-pipeline](scenarios/crm-pipeline/README.md) | core | 7 | paginated mock CRM source with auth expiry, rate limiting, and PII |
 | [finance-close](scenarios/finance-close/README.md) | core | 8 | mock close entries with hostile decimals and missing FX |
 | [inventory-position](scenarios/inventory-position/README.md) | core | 9 | profile-backed inventory and warehouse lookup with quality warnings |
+| [application-reconciliation](scenarios/application-reconciliation/README.md) | core | 10 | 391-to-353 count dispute with status/tombstone lineage |
+| [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
 
 ## Running
 
@@ -438,8 +446,9 @@ A scenario package is additive: it needs no edit to a shared file, so two
 scenarios can be authored in parallel without conflicting.
 
 1. `scenarios/<name>/` — `scenario.yaml` (unique `run_order`, declared `tier`),
-   `answer-sheet.yaml`, `events.yaml`, `gold/`, and a `README.md` stating the
-   fixture, execution, goal, assertions and limitations.
+   `answer-sheet.yaml`, `events.yaml`, `gold/`, a `.gitattributes` file that
+   protects the committed gold extensions from LFS filtering, and a `README.md`
+   stating the fixture, execution, goal, assertions and limitations.
 2. `src/dp_scenarios/followups/<kind>.py` — the follow-up check. Define
    `check(scenario, target, settings, context)` and `register()` a `FollowUpKind`
    naming its gold keys, any certification gold, and a settings validator.

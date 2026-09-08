@@ -82,7 +82,13 @@ def test_reference_plugins_are_safe_to_discover_during_concurrent_generation() -
 
 
         reference.importlib.import_module = slow_import
-        names = ("crm_pipeline", "finance_close", "inventory_position")
+        names = (
+            "crm_pipeline",
+            "finance_close",
+            "inventory_position",
+            "application_reconciliation",
+            "locale_timezone",
+        )
         start = Barrier(len(names))
 
 

@@ -1,0 +1,17 @@
+{
+  "clauses": [
+    {
+      "excludes": 30,
+      "id": "active_status",
+      "predicate": "status != active"
+    },
+    {
+      "excludes": 8,
+      "id": "tombstone_filter",
+      "predicate": "status = active AND tombstoned = true"
+    }
+  ],
+  "dashboard_table": "dashboard_snapshot",
+  "disjoint_exclusion_total": 38,
+  "source_table": "applications"
+}

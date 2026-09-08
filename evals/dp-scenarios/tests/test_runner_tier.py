@@ -16,7 +16,7 @@ import dp_scenarios.runner.tier as tier_module
 from dp_scenarios.canary.verdict import Verdict, VerdictIssue
 from dp_scenarios.canary.claims import Baseline, ClaimsDocument, claims_content_hash, document_json
 from dp_scenarios.canary.probe import ProbeResult
-from dp_scenarios.grading import GATE_POINTS, GateResult
+from dp_scenarios.grading import GATE_POINTS, Finding, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
@@ -800,6 +800,26 @@ def test_replay_of_recording_has_identical_ledger_and_gate_vector() -> None:
 
     assert first.scenario_runs[0].ledger_bytes == second.scenario_runs[0].ledger_bytes
     assert first.scenario_runs[0].scored_dict()["score"] == second.scenario_runs[0].scored_dict()["score"]
+
+
+def test_scenario_run_scored_dict_serializes_gate_diagnostics() -> None:
+    scenario = make_scenario("diagnostic-report")
+    recording = recording_for(scenario, responses_for(scenario))
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+    run = result.scenario_runs[0]
+    diagnostic = Finding("query_scored_earlier_same_shape_answer", "latest query differed", {"candidate_index": 1})
+    score = replace(run.score, gates={**run.score.gates, "query": GateResult("query", True, GATE_POINTS["query"], diagnostics=(diagnostic,))})
+
+    serialized = replace(run, score=score).scored_dict()
+
+    assert serialized["score"]["gates"]["query"]["diagnostics"] == [
+        {"code": diagnostic.code, "detail": diagnostic.detail, "value": diagnostic.value}
+    ]
 
 
 def test_completed_build_run_lints_clean_with_available_supervisor_facts(monkeypatch: pytest.MonkeyPatch) -> None:
