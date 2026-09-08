@@ -189,7 +189,7 @@ def test_a_stub_that_cannot_start_leaves_no_log_directory(tmp_path):
 
     before = _log_dirs()
     spec = {**run.scenario_needs_http_stub(SUPERVISOR), "start": "no_such_start_fn"}
-    with pytest.raises(AttributeError):
+    with pytest.raises(run.HttpStubSetupError, match="AttributeError: module"):
         with run.http_stub_server(SUPERVISOR, tmp_path, spec, "claude"):
             pass
 

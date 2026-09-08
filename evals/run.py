@@ -788,6 +788,35 @@ def _prepare_stdio_profile(
     output.chmod(0o444)
 
 
+def _desktop_stdio_session(
+    scenario_dir: Path,
+    desktop_spec: dict,
+    workspace: Path,
+    tmp: Path,
+) -> tuple[Path, dict[str, str], str, DesktopStdioSession]:
+    """Build one runner-owned stdio session and its isolated runtime inputs."""
+    bin_dir, env_over, desktop_python = _desktop_runtime(scenario_dir, tmp)
+    profile_path = tmp / "stdio-profile.json"
+    _prepare_stdio_profile(
+        scenario_dir, desktop_spec, workspace, profile_path, desktop_python
+    )
+    state_dir = tmp / "stdio-state"
+    server_args = [
+        "--data-dir", str(state_dir),
+        "mcp", "serve",
+        "--evaluation-profile", str(profile_path),
+    ]
+    session = DesktopStdioSession(
+        [bin_dir / "nxd-desktop-supervisor", *server_args],
+        server_env={**env_over, "NXD_DESKTOP_PYTHON": desktop_python},
+        root=tmp / "stdio-session",
+        server_name=str(desktop_spec.get("server_name", "nxd-desktop")),
+        allowed_tools=desktop_spec.get("allowed_tools"),
+        startup_timeout_s=30.0,
+    )
+    return bin_dir, env_over, desktop_python, session
+
+
 def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
     """Return the HTTP-stub marker when a scenario opts into a runner-started
     local REST fixture. Kept parallel to the MCP/desktop opt-ins for the same
@@ -1241,7 +1270,12 @@ def _private_text_file(
 
 
 def deterministic_check_fact(
-    scenario_dir: Path, ws: Path, cfg: dict, trace: str = ""
+    scenario_dir: Path,
+    ws: Path,
+    cfg: dict,
+    trace: str = "",
+    *,
+    env_overrides: dict[str, str] | None = None,
 ) -> str:
     """Run a scenario's runner-side checker against the landed workspace.
 
@@ -1313,10 +1347,13 @@ def deterministic_check_fact(
             )
             private_files.append(trace_holder)
             cmd += ["--trace", str(trace_file)]
+        checker_env = dict(os.environ)
+        if env_overrides:
+            checker_env.update(env_overrides)
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True,
-                timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
+                timeout=DETERMINISTIC_CHECK_TIMEOUT_S, env=checker_env,
             )
         except subprocess.TimeoutExpired as exc:
             return DETERMINISTIC_CHECK_PREFIX + json.dumps(
@@ -1523,6 +1560,10 @@ class HttpStubSetupError(RuntimeError):
     """
 
 
+class HttpStubTeardownError(RuntimeError):
+    """A fault while stopping or cleaning up the HTTP stub."""
+
+
 @contextlib.contextmanager
 def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
@@ -1551,16 +1592,6 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     if not module_path.is_file():
         raise HttpStubSetupError(f"http_stub module not found: {module_path}")
 
-    import importlib.util
-
-    mod_spec = importlib.util.spec_from_file_location(
-        f"_eval_http_stub_{module_name}", module_path
-    )
-    if mod_spec is None or mod_spec.loader is None:
-        raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
-    module = importlib.util.module_from_spec(mod_spec)
-    mod_spec.loader.exec_module(module)
-
     # A file-backed request log, for scenarios whose verifier is a SEPARATE
     # process and must answer "did the closure the supervisor materialized
     # actually reach this fixture, carrying the required header?". The module's
@@ -1576,15 +1607,28 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     # carried, turning "diagnose an unexplained 403" — the task — into a lookup.
     observations: Path | None = None
     log_holder: tempfile.TemporaryDirectory | None = None
-    if spec.get("observations"):
-        if not hasattr(module, "set_observations_path"):
-            raise HttpStubSetupError(
-                f"{module_path.name} declares observations but defines no "
-                f"set_observations_path(); the runner has no other way to reach "
-                f"one stub instance without affecting the others")
-        log_holder = tempfile.TemporaryDirectory(prefix="eval-stub-observations-")
-
+    module = None
+    setup_complete = False
+    setup_error: Exception | None = None
     try:
+        import importlib.util
+
+        mod_spec = importlib.util.spec_from_file_location(
+            f"_eval_http_stub_{module_name}", module_path
+        )
+        if mod_spec is None or mod_spec.loader is None:
+            raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
+        module = importlib.util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(module)
+
+        if spec.get("observations"):
+            if not hasattr(module, "set_observations_path"):
+                raise HttpStubSetupError(
+                    f"{module_path.name} declares observations but defines no "
+                    f"set_observations_path(); the runner has no other way to reach "
+                    f"one stub instance without affecting the others")
+            log_holder = tempfile.TemporaryDirectory(prefix="eval-stub-observations-")
+
         if log_holder is not None:
             observations = Path(log_holder.name) / "observations.jsonl"
             observations.write_text("", encoding="utf-8")
@@ -1593,51 +1637,124 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         start_fn = getattr(module, str(spec.get("start", "start_server")))
         stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
         server, port, thread = start_fn()
-    except BaseException:
+        setup_complete = True
+    except HttpStubSetupError:
+        raise
+    except Exception as exc:
+        setup_error = exc
+    finally:
         # Anything from here on leaves no server to stop, but the temp dir is
         # already on disk. Without this it survives for the life of the process.
-        if log_holder is not None:
+        # Cleanup is also required when KeyboardInterrupt/SystemExit leaves the
+        # setup block without entering an Exception handler.
+        if not setup_complete and log_holder is not None:
+            if module is not None:
+                with contextlib.suppress(Exception):
+                    module.set_observations_path(None)
             log_holder.cleanup()
-        raise
-    try:
-        base_url = f"http://127.0.0.1:{port}"
-        endpoint_file = ws / str(spec.get("endpoint_file", "ENDPOINT_URL"))
-        endpoint_file.parent.mkdir(parents=True, exist_ok=True)
-        endpoint_file.write_text(base_url + "\n", encoding="utf-8")
 
-        # The stub is useless unless the AGENT can reach it, and the agent's
-        # sandbox is not this process's. Codex's default `workspace-write`
-        # implements isolation with a network namespace, so the agent's curl gets
-        # `Failed to connect to 127.0.0.1` while this process talks to the same
-        # port happily — verified, not theorised.
-        #
-        # Left unchecked, that produces the worst possible outcome: the run
-        # completes, every data-dependent check fails for want of data, and the
-        # report reads as a skill regression. The scenario is unrunnable under
-        # that sandbox, so say so here rather than grading a run that never had
-        # a source. CI already exports EVAL_CODEX_AGENT_SANDBOX=danger-full-access
-        # (`.github/workflows/evals.yml`); a local run needs the same.
-        if agent_backend_name == "codex" and os.environ.get(
-                "EVAL_CODEX_AGENT_SANDBOX", "").strip() in ("", "workspace-write"):
-            raise HttpStubSetupError(
-                f"scenario needs a runner-started HTTP stub at {base_url}, but the "
-                "codex agent sandbox is 'workspace-write', which blocks loopback "
-                "network from the agent's shell. The agent would see connection "
-                "refused and every data-dependent check would fail as though the "
-                "skills regressed. Re-run with "
-                "EVAL_CODEX_AGENT_SANDBOX=danger-full-access (what CI uses), or "
-                "with --agent-backend claude."
-            )
+    if setup_error is not None:
+        raise HttpStubSetupError(
+            f"{type(setup_error).__name__}: {setup_error}"
+        ) from setup_error
+
+    try:
+        try:
+            base_url = f"http://127.0.0.1:{port}"
+            endpoint_file = ws / str(spec.get("endpoint_file", "ENDPOINT_URL"))
+            endpoint_file.parent.mkdir(parents=True, exist_ok=True)
+            endpoint_file.write_text(base_url + "\n", encoding="utf-8")
+
+            # The stub is useless unless the AGENT can reach it, and the agent's
+            # sandbox is not this process's. Codex's default `workspace-write`
+            # implements isolation with a network namespace, so the agent's curl gets
+            # `Failed to connect to 127.0.0.1` while this process talks to the same
+            # port happily — verified, not theorised.
+            #
+            # Left unchecked, that produces the worst possible outcome: the run
+            # completes, every data-dependent check fails for want of data, and the
+            # report reads as a skill regression. The scenario is unrunnable under
+            # that sandbox, so say so here rather than grading a run that never had
+            # a source. CI already exports EVAL_CODEX_AGENT_SANDBOX=danger-full-access
+            # (`.github/workflows/evals.yml`); a local run needs the same.
+            if agent_backend_name == "codex" and os.environ.get(
+                    "EVAL_CODEX_AGENT_SANDBOX", "").strip() in ("", "workspace-write"):
+                raise HttpStubSetupError(
+                    f"scenario needs a runner-started HTTP stub at {base_url}, but the "
+                    "codex agent sandbox is 'workspace-write', which blocks loopback "
+                    "network from the agent's shell. The agent would see connection "
+                    "refused and every data-dependent check would fail as though the "
+                    "skills regressed. Re-run with "
+                    "EVAL_CODEX_AGENT_SANDBOX=danger-full-access (what CI uses), or "
+                    "with --agent-backend claude."
+                )
+        except HttpStubSetupError:
+            raise
+        except Exception as exc:
+            raise HttpStubSetupError(f"{type(exc).__name__}: {exc}") from exc
+
         yield base_url, observations
     finally:
         # Cleanup runs even if stop_fn raises: a stub that failed to shut down
         # cleanly must not also strand its log directory for the whole run.
+        pending = sys.exc_info()[1]
+        teardown_error: HttpStubTeardownError | None = None
         try:
             stop_fn(server, thread)
+        except Exception as exc:
+            teardown_error = HttpStubTeardownError(f"{type(exc).__name__}: {exc}")
         finally:
             if log_holder is not None:
-                module.set_observations_path(None)
-                log_holder.cleanup()
+                try:
+                    module.set_observations_path(None)
+                except Exception as exc:
+                    if teardown_error is None:
+                        teardown_error = HttpStubTeardownError(
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                finally:
+                    try:
+                        log_holder.cleanup()
+                    except Exception as exc:
+                        if teardown_error is None:
+                            teardown_error = HttpStubTeardownError(
+                                f"{type(exc).__name__}: {exc}"
+                            )
+        if teardown_error is not None:
+            if pending is not None:
+                pending.add_note(f"HTTP stub teardown failed: {teardown_error}")
+            else:
+                raise teardown_error
+
+
+@contextlib.contextmanager
+def desktop_stdio_runtime(
+    scenario_dir: Path,
+    workspace: Path,
+    tmp: Path,
+    desktop_spec: dict,
+    http_spec: dict | None = None,
+    agent_backend_name: str = "",
+):
+    """Own one isolated stdio Desktop session, optionally with an HTTP fixture.
+
+    The HTTP fixture is the outer context so its endpoint file exists while a
+    scenario's stdio profile builder runs. It also remains bound until the
+    caller has finished any deterministic verification that needs the request
+    log. The yielded observation path is runner-only and is never put in the
+    agent environment.
+    """
+    stub_ctx: contextlib.AbstractContextManager = (
+        http_stub_server(scenario_dir, workspace, http_spec, agent_backend_name)
+        if http_spec is not None
+        else contextlib.nullcontext((None, None))
+    )
+    with stub_ctx as (_stub_url, stub_observations):
+        bin_dir, env_over, desktop_python, session = _desktop_stdio_session(
+            scenario_dir, desktop_spec, workspace, tmp
+        )
+        with session:
+            yield bin_dir, env_over, desktop_python, session, stub_observations
 
 
 def _write_fake_nxd(bin_dir: Path) -> None:
@@ -2620,28 +2737,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     return res
             elif desktop_stdio_spec is not None:
                 try:
-                    bin_dir, env_over, desktop_python = _desktop_runtime(
-                        scenario_dir, Path(tmp)
-                    )
-                    profile_path = Path(tmp) / "stdio-profile.json"
-                    _prepare_stdio_profile(
-                        scenario_dir, desktop_stdio_spec, ws, profile_path, desktop_python
-                    )
-                    state_dir = Path(tmp) / "stdio-state"
-                    server_args = [
-                        "--data-dir", str(state_dir),
-                        "mcp", "serve",
-                        "--evaluation-profile", str(profile_path),
-                    ]
-                    session = DesktopStdioSession(
-                        [bin_dir / "nxd-desktop-supervisor", *server_args],
-                        server_env={**env_over, "NXD_DESKTOP_PYTHON": desktop_python},
-                        root=Path(tmp) / "stdio-session",
-                        server_name=str(desktop_stdio_spec.get("server_name", "nxd-desktop")),
-                        allowed_tools=desktop_stdio_spec.get("allowed_tools"),
-                        startup_timeout_s=30.0,
-                    )
-                    with session:
+                    with desktop_stdio_runtime(
+                        scenario_dir,
+                        ws,
+                        Path(tmp),
+                        desktop_stdio_spec,
+                        http_stub_spec,
+                        agent_backend.name,
+                    ) as (bin_dir, env_over, desktop_python, session,
+                          stub_observations):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=[], effort=args.agent_effort,
@@ -2658,10 +2762,21 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             [line for line in runner_mcp_trace.splitlines() if line.strip()]
                         )
                         if ok and checks.get("deterministic_check"):
+                            checker_env = (
+                                {STUB_OBSERVATIONS_ENV: str(stub_observations)}
+                                if stub_observations is not None else None
+                            )
                             det_fact = deterministic_check_fact(
                                 scenario_dir, ws, checks["deterministic_check"],
                                 runner_mcp_trace,
+                                env_overrides=checker_env,
                             )
+                except HttpStubSetupError as exc:
+                    res.error = f"http stub setup failed: {exc}"
+                    return res
+                except HttpStubTeardownError as exc:
+                    res.error = f"http stub teardown failed: {exc}"
+                    return res
                 except (RuntimeError, DesktopStdioError, OSError) as exc:
                     res.error = f"desktop stdio setup failed: {redact_text(str(exc))}"
                     return res
@@ -2741,6 +2856,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 except HttpStubSetupError as exc:
                     res.error = f"http stub setup failed: {exc}"
                     return res
+                except HttpStubTeardownError as exc:
+                    res.error = f"http stub teardown failed: {exc}"
+                    return res
             elif http_stub_spec is not None:
                 # A runner-started local REST fixture the agent reaches over a
                 # real socket for the duration of this run — see
@@ -2756,6 +2874,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         )
                 except HttpStubSetupError as exc:
                     res.error = f"http stub setup failed: {exc}"
+                    return res
+                except HttpStubTeardownError as exc:
+                    res.error = f"http stub teardown failed: {exc}"
                     return res
             else:
                 ok, trace, metrics = agent_backend.run_agent(
