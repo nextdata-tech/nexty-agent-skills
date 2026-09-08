@@ -17,6 +17,7 @@ from dp_scenarios.grading.gates import (
     gate_capability_from_decisions,
     G1,
     GATE_POINTS,
+    Finding,
     GateResult,
     gate_build,
     gate_capability,
@@ -301,6 +302,79 @@ def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     assert optional_narrowing.required is False
     assert optional_narrowing.examined is False
     assert optional_narrowing.codes == ("narrowing_change_not_staged",)
+
+
+def test_capability_reports_exact_contract_for_optional_and_missing_evidence() -> None:
+    optional = gate_capability(
+        {"metrics": {"revenue": "supported"}},
+        {"metrics": {"revenue": "supported"}},
+        required=False,
+    )
+    assert optional == GateResult(
+        gate="capability",
+        passed=False,
+        points=0,
+        findings=(Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall"),),
+        examined=False,
+        ungraded=False,
+        required=False,
+    )
+
+    missing_labels = gate_capability(
+        {},
+        {"metrics": {"revenue": "supported"}},
+    )
+    assert missing_labels == GateResult(
+        gate="capability",
+        passed=False,
+        points=0,
+        findings=(Finding("capability_metrics_not_examined", "spec contains no metric labels"),),
+        examined=False,
+        ungraded=False,
+        required=True,
+    )
+
+    missing_snapshot = gate_capability(
+        {"metrics": {"revenue": "supported"}},
+        None,
+    )
+    assert missing_snapshot == GateResult(
+        gate="capability",
+        passed=False,
+        points=0,
+        findings=(Finding("capability_not_examined", "no harness-owned capability snapshot is available"),),
+        examined=False,
+        ungraded=False,
+        required=True,
+    )
+
+
+def test_capability_reports_exact_mismatch_details_for_each_metric() -> None:
+    result = gate_capability(
+        {"metrics": {"revenue": "proxy", "profit": "supported"}},
+        {"metrics": {"revenue": "supported"}},
+    )
+
+    assert result == GateResult(
+        gate="capability",
+        passed=False,
+        points=0,
+        findings=(
+            Finding(
+                "capability_capability_label_mismatch",
+                "capability classification differs for revenue",
+                {"metric": "revenue", "spec": "proxy", "capability": "supported"},
+            ),
+            Finding(
+                "capability_capability_label_mismatch",
+                "capability classification differs for profit",
+                {"metric": "profit", "spec": "supported", "capability": None},
+            ),
+        ),
+        examined=True,
+        ungraded=False,
+        required=True,
+    )
 
 
 def test_optional_capability_gate_preserves_its_non_scoreable_result() -> None:
@@ -600,6 +674,62 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
     )
     assert skipped.passed is False
     assert "construction_adversarial_review_not_observed" in skipped.codes
+
+
+@pytest.mark.parametrize(
+    ("has_dispatch", "has_round", "has_attestation", "expected_codes"),
+    [
+        (True, True, True, ()),
+        (False, True, True, ("construction_adversarial_review_not_observed",)),
+        (True, False, True, ("construction_adversarial_review_not_observed",)),
+        (True, True, False, ("construction_adversarial_review_attestation_missing",)),
+    ],
+)
+def test_construction_requires_dispatch_round_and_attestation_independently(
+    has_dispatch: bool,
+    has_round: bool,
+    has_attestation: bool,
+    expected_codes: tuple[str, ...],
+) -> None:
+    self_check_call = {
+        "name": "mcp__nxd-desktop__check_data_product",
+        "arguments": {},
+        "result": {"is_error": False},
+    }
+    observations = _dispatch_observations() if has_dispatch else {"turns": [{"tool_calls": [self_check_call]}]}
+    attestations = (
+        {"action_kind": "adversarial_review", "turn": 1, "outcome": "clean"},
+    ) if has_attestation else ()
+    review_rounds = [{"status": "complete"}] if has_round else []
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=attestations,
+        review_rounds=review_rounds,
+        require_observed=True,
+    )
+
+    expected_findings = tuple(
+        Finding(
+            code,
+            (
+                "adversarial_review was not observed as a successful structured tool call"
+                if code == "construction_adversarial_review_not_observed"
+                else "adversarial_review has no agent attestation"
+            ),
+        )
+        for code in expected_codes
+    )
+    assert result == GateResult(
+        gate="construction",
+        passed=not expected_codes,
+        points=10 if not expected_codes else 0,
+        findings=expected_findings,
+        examined=True,
+        ungraded=False,
+        required=True,
+    )
 
 
 def test_construction_observes_the_reviewer_under_either_delegation_tool_name() -> None:
@@ -1264,6 +1394,24 @@ def test_review_round_outcome_accepts_only_valid_terminal_statuses() -> None:
     ) == "3 review round(s): complete, needs_user, timed_out"
 
 
+def test_review_round_outcome_counts_duplicate_valid_rounds_but_ignores_invalid_statuses() -> None:
+    assert _review_round_outcome(
+        {
+            "review_rounds": [
+                {"status": "complete"},
+                {"status": " COMPLETE "},
+                {"status": "timed_out"},
+                {"status": "needs_user"},
+                {"status": "NEEDS_USER"},
+                {"status": "skipped"},
+                {"status": "approved"},
+                {"outcome": "complete"},
+                "not-a-round",
+            ]
+        }
+    ) == "5 review round(s): complete, needs_user, timed_out"
+
+
 def test_construction_can_read_a_review_outcome_from_the_recorded_round() -> None:
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
@@ -1272,6 +1420,68 @@ def test_construction_can_read_a_review_outcome_from_the_recorded_round() -> Non
 
     assert result.passed is True
     assert result.codes == ()
+
+
+def test_capability_from_decisions_reports_exact_contract_for_optional_and_missing_evidence() -> None:
+    optional = gate_capability_from_decisions(
+        None,
+        _shortfall_capability(),
+        "stage_age_days = ...\n",
+        required=False,
+    )
+    assert optional == GateResult(
+        gate="capability",
+        passed=False,
+        points=0,
+        findings=(Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall"),),
+        examined=False,
+        ungraded=False,
+        required=False,
+    )
+
+    for capability in ({}, None):
+        missing = gate_capability_from_decisions(
+            None,
+            capability,
+            "stage_age_days = ...\n",
+        )
+        assert missing == GateResult(
+            gate="capability",
+            passed=False,
+            points=0,
+            findings=(Finding("capability_not_examined", "no harness-owned capability snapshot is available"),),
+            examined=False,
+            ungraded=False,
+            required=True,
+        )
+
+
+def test_capability_from_decisions_reports_exact_shortfall_details() -> None:
+    result = gate_capability_from_decisions(
+        None,
+        _shortfall_capability(),
+        "stage_velocity_30d = ...\n",
+    )
+
+    assert result == GateResult(
+        gate="capability",
+        passed=False,
+        points=0,
+        findings=(
+            Finding(
+                "capability_shortfall_not_governed",
+                "stage_velocity_30d is impossible but the build implements it with no governing decision",
+                {
+                    "metric": "stage_velocity_30d",
+                    "label": "impossible",
+                    "terms": ["stage_velocity", "velocity_30d"],
+                },
+            ),
+        ),
+        examined=True,
+        ungraded=False,
+        required=True,
+    )
 
 
 def test_capability_grades_a_governed_shortfall_from_the_decisions_the_product_emits() -> None:

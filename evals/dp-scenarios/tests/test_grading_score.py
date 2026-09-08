@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import ceil
+
 import pytest
 
 from dp_scenarios.grading.gates import GATE_PHASES, GATE_POINTS, Finding, GateResult, gate_follow_up
@@ -270,3 +272,50 @@ def test_pass_threshold_clamps_to_the_supported_score_range() -> None:
 
     assert pass_threshold(capped) == 80
     assert pass_threshold(floor) == 1
+
+
+def test_pass_threshold_rounding_is_stable_for_five_point_scoreable_maxima() -> None:
+    """The one-point pre-ceiling variants are equivalent for these maxima.
+
+    Every declared gate is worth a multiple of five. Therefore subtracting
+    one before applying the 80% ceiling produces the same threshold, so these
+    two surviving mutants remain classified as equivalent rather than
+    changing the scoring policy to make them killable.
+    """
+
+    gate_names = tuple(GATE_PHASES)
+    for mask in range(1 << len(gate_names)):
+        gates = {
+            name: GateResult(name, True, GATE_POINTS[name])
+            for index, name in enumerate(gate_names)
+            if mask & (1 << index)
+        }
+        base_vector = ScoreVector(
+            gates=gates,
+            total=0,
+            hard_gate_flags={"route_fidelity": True},
+            state=TerminalState.FAILED,
+        )
+        maximum = scoreable_max(base_vector)
+        assert maximum % 5 == 0
+        for route_fidelity in (True, None):
+            vector = ScoreVector(
+                gates=gates,
+                total=0,
+                hard_gate_flags={"route_fidelity": route_fidelity},
+                state=TerminalState.FAILED,
+            )
+            route_adjusted_max = maximum - (10 if route_fidelity is None else 0)
+            expected = min(80, max(1, ceil(route_adjusted_max * 0.8)))
+            mutant = min(
+                80,
+                max(
+                    1,
+                    ceil(
+                        (maximum - (11 if route_fidelity is None else 1))
+                        * 0.8
+                    ),
+                ),
+            )
+            assert mutant == expected
+            assert pass_threshold(vector) == expected
