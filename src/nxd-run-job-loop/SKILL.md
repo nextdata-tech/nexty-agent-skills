@@ -224,13 +224,13 @@ no judgement calls, and exactly one question. Skip review only when all three ar
 verified; otherwise dispatch one built-in read-only reviewer with the
 normalized closure path and the original request verbatim except credentials, preserving every question/procedure while replacing every credential with a named placeholder.
 If complete sanitization cannot be established, do not delegate and stop. It must not edit, build, serve, transform, or talk to the user.
-Include the exact `NXD_REVIEW_DISPATCH` marker from the generator contract and tell it to return claims only. Record the dispatch as one exact `build-record.json` `review_rounds[]` object and
+Include exactly one marker line: `NXD_REVIEW_DISPATCH {"closure_path":"nxd-jobs/<workflow>/closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}`; substitute only `closure_path` and `review_round_index`, keep every other key/value unchanged, and add no colon, slug or prose prefix. Tell the reviewer to return claims only. Record the dispatch as one exact `build-record.json` `review_rounds[]` object and
 run the shipped validator against it. Adjudicate and relay every claim, including
 rejected claims; resolve any required user decision before proceeding. A valid
 complete round with no unresolved blocker, or an explicitly resolved timeout, is
 the only eligible result. Then run generator Step 7 self-check and lock verify.
 For an ineligible review, verify all three predicates in the current context and
-continue to Step 7 without writing a review round. See [reference/build-record.md](reference/build-record.md).
+continue to Step 7 without writing a review round. See [reference/scheduling.md](reference/scheduling.md#main-thread-review-checkpoint) and [reference/build-record.md](reference/build-record.md).
 
 Auto-fix only an evidenced syntax/mechanical/procedural structural correction
 with approved spec, models, grain, rows, values, aggregation, thresholds,

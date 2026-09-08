@@ -797,10 +797,10 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
     agent = tmp_path / "agent"
     agent.mkdir()
     example = adapter_module.DEFAULT_SYSTEM_PROMPT.split("for example:\n", 1)[1]
-    example = example.split("\nThe self_check object", 1)[0]
+    example = example.split("\nThe live self_check object", 1)[0]
     documented = json.loads(example)
-    turn = documented[0]["turn"]
-    assert documented[1]["turn"] == turn
+    assert all("turn" not in value for value in documented)
+    turn = 5
     closure = documented[0]["evidence_ref"].removesuffix(
         "/build-record.json#self_check"
     )
@@ -865,7 +865,7 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
     replay_root.mkdir()
     replay_artifacts = tmp_path / "replay-artifacts"
     replay_artifacts.mkdir()
-    legacy = [dict(value) for value in documented]
+    legacy = [{**value, "turn": 7} for value in documented]
     legacy[0]["evidence_ref"] = "tool:self-check"
     (replay_artifacts / "agent-attestations.json").write_text(
         json.dumps({"attestations": legacy}), encoding="utf-8"
@@ -896,6 +896,9 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
         [{"action_kind": "self_check", "turn": 1, "outcome": "pass", "evidence_ref": "tool:self-check"}],
         [{"action_kind": "self_check", "turn": 1, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check", "extra": "no"}],
         [{"action_kind": "self_check", "turn": True, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
+        [{"action_kind": "self_check", "turn": 0, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
+        [{"action_kind": "self_check", "turn": -1, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
+        [{"action_kind": "self_check", "turn": "1", "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
         [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": True}],
         [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "closure/build-record.json#review_rounds/-1", "review_round_index": -1}],
     ],

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +22,7 @@ from dp_scenarios.grading.gates import (
     GateResult,
     EventPosition,
     PublishedBuild,
+    _review_dispatch_marker,
     canonical_review_dispatch_marker,
     gate_build,
     gate_capability,
@@ -640,6 +642,26 @@ def test_construction_observes_the_review_the_mandated_flow_actually_produces() 
     assert result.codes == ()
 
 
+def test_construction_uses_harness_chronology_not_attestation_turn() -> None:
+    """A legacy or omitted turn must not override observed event order."""
+
+    for attestation in (
+        _review_attestation(turn=99),
+        {key: value for key, value in _review_attestation().items() if key != "turn"},
+    ):
+        result = gate_construction(
+            _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+            observations=_dispatch_observations(),
+            attestations=(attestation,),
+            review_rounds=_rounds_for(),
+            published_closure=_published_build(),
+            require_observed=True,
+        )
+
+        assert result.passed is True
+        assert result.codes == ()
+
+
 def test_construction_does_not_credit_a_background_launch_as_a_dispatch() -> None:
     """"Async agent launched successfully" is a launch, not a review.
 
@@ -1235,18 +1257,85 @@ def test_construction_chronology_fails_closed_without_explicit_turn_numbers() ->
 
 
 def test_shipped_review_docs_embed_the_shared_canonical_dispatch_marker() -> None:
-    marker = canonical_review_dispatch_marker("closure", 0)
     repository_root = Path(__file__).resolve().parents[3]
     docs = (
-        repository_root / "src/nxd-generate-data-product/reference/adversarial-review.md",
-        repository_root / "src/nxd-run-job-loop/reference/scheduling.md",
+        (
+            repository_root / "src/nxd-generate-data-product/reference/adversarial-review.md",
+            "closure",
+        ),
+        (
+            repository_root / "src/nxd-run-job-loop/reference/scheduling.md",
+            "nxd-jobs/<workflow>/closure",
+        ),
     )
 
-    assert all(marker in path.read_text(encoding="utf-8") for path in docs)
+    assert all(
+        canonical_review_dispatch_marker(closure, 0) in path.read_text(encoding="utf-8")
+        for path, closure in docs
+    )
+
+
+def _documented_review_marker(path: Path) -> str:
+    markers = re.findall(r"NXD_REVIEW_DISPATCH \{[^\n`]+\}", path.read_text(encoding="utf-8"))
+    assert len(markers) == 1
+    return markers[0]
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "template_closure", "concrete_closure"),
+    (
+        (
+            "src/nxd-run-job-loop/SKILL.md",
+            "nxd-jobs/<workflow>/closure",
+            "nxd-jobs/crm-deals-pipeline/closure",
+        ),
+        (
+            "src/nxd-generate-data-product/SKILL.md",
+            "closure",
+            "nxd-jobs/finance-close/closure",
+        ),
+    ),
+)
+def test_top_level_review_marker_examples_parse_after_allowed_substitution(
+    relative_path: str, template_closure: str, concrete_closure: str
+) -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    marker = _documented_review_marker(repository_root / relative_path)
+
+    assert _review_dispatch_marker(marker) == (template_closure, 0)
+    substituted = marker.replace(
+        f'"closure_path":"{template_closure}"',
+        f'"closure_path":"{concrete_closure}"',
+    ).replace('"review_round_index":0', '"review_round_index":2')
+    assert _review_dispatch_marker(substituted) == (concrete_closure, 2)
+
+
+def test_top_level_review_marker_examples_keep_strict_malformed_rejection() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    for relative_path in (
+        "src/nxd-run-job-loop/SKILL.md",
+        "src/nxd-generate-data-product/SKILL.md",
+    ):
+        marker = _documented_review_marker(repository_root / relative_path)
+        malformed = (
+            marker.replace("NXD_REVIEW_DISPATCH ", "NXD_REVIEW_DISPATCH: ", 1),
+            marker.replace(
+                '"request_contract":"sanitized_original_request"',
+                '"request_contract":"original_request"',
+                1,
+            ),
+            marker.replace(
+                '"return":"claims_only"',
+                '"return":"claims_only","extra":true',
+                1,
+            ),
+            marker.replace('"review_round_index":0', '"review_round_index":"2"', 1),
+        )
+        assert all(_review_dispatch_marker(value) is None for value in malformed)
 
 
 @pytest.mark.parametrize("attestations", [
-    (_review_attestation(turn=2),),
+    (_review_attestation(review_round_index=1),),
     (_review_attestation(closure="wrong/closure"),),
     (_review_attestation(), _review_attestation()),
 ])

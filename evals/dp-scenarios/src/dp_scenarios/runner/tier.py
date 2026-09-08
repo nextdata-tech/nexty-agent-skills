@@ -1024,7 +1024,12 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
                 findings=(Finding("agent_attestations_invalid", "agent attestation has an invalid shape"),)
             )
         action_kind = value.get("action_kind")
-        allowed = {"action_kind", "turn", "outcome", "evidence_ref"}
+        allowed = {"action_kind", "outcome", "evidence_ref"}
+        if "turn" in value:
+            # Older live recordings included the agent's guessed operator-turn
+            # number. Keep accepting it as informational metadata, but never
+            # use it to bind an attestation to harness-observed chronology.
+            allowed.add("turn")
         if action_kind == "adversarial_review":
             allowed.add("review_round_index")
         if set(value) != allowed:
@@ -1035,7 +1040,11 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "agent attestation action_kind is not allowed"),)
             )
-        if isinstance(value.get("turn"), bool) or not isinstance(value.get("turn"), int) or value["turn"] < 1:
+        if "turn" in value and (
+            isinstance(value.get("turn"), bool)
+            or not isinstance(value.get("turn"), int)
+            or value["turn"] < 1
+        ):
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "agent attestation turn must be a positive integer"),)
             )

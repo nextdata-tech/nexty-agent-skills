@@ -301,11 +301,14 @@ stop the workflow and report the credential-safety blocker. No credential may
 reach the reviewer.
 
 Include exactly one marker line in the prompt, with compact JSON, exact keys,
-and the actual normalized closure path:
+and the normalized closure path:
 
 ```text
-NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
+NXD_REVIEW_DISPATCH {"closure_path":"nxd-jobs/<workflow>/closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
 ```
+
+Substitute only `closure_path` and `review_round_index`; keep every other
+key/value unchanged and add no colon, slug or prose prefix.
 
 Ask for claims only. The reviewer never edits, builds, serves, transforms or
 talks to the user. Bound the dispatch at 120 seconds. A background launch with
@@ -324,7 +327,9 @@ no review round. Then run generator Step 7 self-check and lock verification.
 Step 4 must refuse `check_data_product` and `build_data_product` until review
 eligibility is resolved, every required round is valid and unblocked, and the
 self-check completed **after** that resolution. This ordering is a workflow
-contract. The grader binds the exact marker, dispatch turn, canonical
-`<normalized-closure>/build-record.json#review_rounds/<review_round_index>` attestation, closure-keyed
-rounds, and the closure identified by matching supervisor `run_id` and
-`artifact_id`; evidence from sibling or abandoned closures never combines.
+contract. Bind the review to the exact marker, the canonical
+`<normalized-closure>/build-record.json#review_rounds/<review_round_index>` attestation,
+closure-keyed rounds, and the closure identified by matching supervisor
+`run_id` and `artifact_id`. Use observed dispatch, self-check, and build order
+for chronology; do not add or infer a dispatch turn. Evidence from sibling
+or abandoned closures never combines.

@@ -71,7 +71,8 @@ the exact keys and constant values shown here:
 NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
 ```
 
-Replace only the example `closure_path` value. The dispatch instruction says
+Replace only the example `closure_path` and `review_round_index` values. Keep
+every other key/value unchanged and add no colon, slug or prose prefix. The dispatch instruction says
 **return claims only**. The reviewer receives read-only tools, never edits,
 builds, serves, runs the transform, or starts a user conversation.
 
@@ -159,9 +160,12 @@ A completed round that returned no findings is recorded too. "Reviewed, nothing
 found" is information; a missing or timed-out section is not a clean review.
 The marker is a declaration of the sanitization contract, not proof that the
 delegated request was faithful or credential-free. Number each dispatch from
-zero in array order. The attestation for that dispatch turn carries the same
+zero in array order. The live attestation for that review carries the same
 `review_round_index` and uses the exact evidence reference
-`<normalized-closure>/build-record.json#review_rounds/<review_round_index>`. Treat the round as
-observed only when that reference, the marker path, the closure-keyed round,
-and the published build's matching supervisor `run_id` and `artifact_id` all
-identify the same closure. Never combine evidence from sibling closures.
+`<normalized-closure>/build-record.json#review_rounds/<review_round_index>`;
+it does not need a `turn` field. If an older recording carries `turn`, it is
+informational only: chronology comes from the harness-observed dispatch,
+self-check, and build events. Treat the round as observed only when that
+reference, the marker path, the closure-keyed round, and the published build's
+matching supervisor `run_id` and `artifact_id` all identify the same closure.
+Never combine evidence from sibling closures.

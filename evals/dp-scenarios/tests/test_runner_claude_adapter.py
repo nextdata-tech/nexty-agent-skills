@@ -163,7 +163,11 @@ def test_default_prompt_only_describes_the_attestation_channel_not_review_behavi
     assert "root JSON array (not an object wrapper)" in collapsed
     assert '"action_kind": "self_check"' in prompt
     assert '"review_round_index": 0' in prompt
-    assert "turn and review_round_index are JSON integers, never booleans" in collapsed
+    example = prompt.split("for example:\n", 1)[1].split("\nThe live self_check object", 1)[0]
+    documented = json.loads(example)
+    assert all("turn" not in value for value in documented)
+    assert "legacy turn field may be included as informational metadata" in collapsed
+    assert "review_round_index is a non-negative JSON integer, never a boolean" in collapsed
     assert "#self_check" in collapsed
     assert "#review_rounds/<review_round_index>" in collapsed
     assert "Background execution is disabled" in collapsed

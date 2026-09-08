@@ -1413,10 +1413,7 @@ def gate_construction(
                 expected_ref = (
                     f"{build.closure_path}/build-record.json#review_rounds/{index}"
                 )
-                if (
-                    attestation.get("turn") != dispatch.position.turn
-                    or attestation.get("evidence_ref") != expected_ref
-                ):
+                if attestation.get("evidence_ref") != expected_ref:
                     paired = False
                     break
             if paired:
