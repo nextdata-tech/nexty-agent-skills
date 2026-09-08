@@ -3113,11 +3113,18 @@ def validate_review_round(review_round: Any) -> list[str]:
                 + ", ".join(sorted(deferred_applied_ids))
             )
         if isinstance(user_decision, dict):
-            unresolved_ids = accepted_behavior_ids - applied_behavior_ids - deferred_ids
+            resolved_ids = applied_behavior_ids | deferred_ids
+            unresolved_ids = accepted_behavior_ids - resolved_ids
             if unresolved_ids:
                 problems.append(
                     "accepted behavior-affecting findings must be applied or explicitly deferred: "
                     + ", ".join(sorted(unresolved_ids))
+                )
+            unexpected_ids = resolved_ids - accepted_behavior_ids
+            if unexpected_ids:
+                problems.append(
+                    "user decision may only resolve accepted behavior-affecting findings: "
+                    + ", ".join(sorted(unexpected_ids))
                 )
     return problems
 

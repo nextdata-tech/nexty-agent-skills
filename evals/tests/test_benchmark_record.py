@@ -12,6 +12,11 @@ from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
+DP_SCENARIOS_SRC = REPO / "evals" / "dp-scenarios" / "src"
+if str(DP_SCENARIOS_SRC) not in sys.path:
+    # The root static-check job intentionally runs without installing the
+    # dp-scenarios project; producer-drift tests still need its source tree.
+    sys.path.insert(0, str(DP_SCENARIOS_SRC))
 RECORDER_PATH = REPO / "evals" / "benchmark_record.py"
 spec = importlib.util.spec_from_file_location("benchmark_record_test_target", RECORDER_PATH)
 recorder = importlib.util.module_from_spec(spec)
@@ -268,6 +273,47 @@ def valid_supervisor_facts(manifest):
 
 
 class BenchmarkRecordTests(unittest.TestCase):
+    def _nxd_eval_is_installed(self):
+        """Distinguish the root test namespace from the installed package."""
+
+        try:
+            package = importlib.util.find_spec("nxd_eval")
+        except ModuleNotFoundError:
+            return False
+        if package is None:
+            return False
+        locations = {
+            Path(location).resolve()
+            for location in (package.submodule_search_locations or ())
+        }
+        root_namespace = (REPO / "evals" / "nxd_eval").resolve()
+        return bool(locations - {root_namespace})
+
+    def require_dp_runtime(self, *modules):
+        """Run producer-drift checks only where their optional stack is present.
+
+        The root static-check job intentionally installs only the benchmark
+        recorder's small dependency set.  The dedicated dp-scenarios project
+        installs the real runner and grading dependencies, and the focused
+        project test run below is the coverage authority for these producers.
+        Keep the boundary explicit: an installed-but-broken module is not
+        converted into a skip by this availability check.
+        """
+
+        missing = []
+        for module in modules:
+            if module == "nxd_eval":
+                if not self._nxd_eval_is_installed():
+                    missing.append(module)
+                continue
+            if importlib.util.find_spec(module) is None:
+                missing.append(module)
+        if missing:
+            self.skipTest(
+                "dp-scenarios producer dependencies are not installed in the root "
+                "static-check environment: " + ", ".join(missing)
+            )
+
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
@@ -475,6 +521,7 @@ class BenchmarkRecordTests(unittest.TestCase):
         self.assertEqual("PASS", recorder.cell_rows("", compact)[0]["status"])
 
     def test_dp_shapes_track_manifest_and_runtime_producers(self):
+        self.require_dp_runtime("aiohttp")
         from dp_scenarios.ledger import Manifest
         from dp_scenarios.operator.transport import OperatorMessage, TurnResult
         from dp_scenarios.runner.session import RecordedTurn, ReplayRecording
@@ -500,6 +547,7 @@ class BenchmarkRecordTests(unittest.TestCase):
         )
 
     def test_dp_sampling_shapes_track_live_replay_and_driver_producers(self):
+        self.require_dp_runtime("aiohttp")
         from dp_scenarios.ledger import Manifest
         from dp_scenarios.runner.environment import PinnedVersions
 
@@ -542,6 +590,7 @@ class BenchmarkRecordTests(unittest.TestCase):
     def test_dp_real_credential_rotation_producer_identifier_is_importable(self):
         """The real scenario declaration may contain credential vocabulary."""
 
+        self.require_dp_runtime("nxd_eval")
         from dp_scenarios.ledger import Manifest
         from dp_scenarios.scenario import load_scenario
 
@@ -568,6 +617,7 @@ class BenchmarkRecordTests(unittest.TestCase):
     def test_dp_retained_manifest_and_sampling_strings_reject_synthetic_secrets_and_paths(self):
         """Every retained string boundary rejects synthetic unsafe material."""
 
+        self.require_dp_runtime("aiohttp")
         manifest_fields = sorted(set(recorder.DP_MANIFEST_STRING_FIELDS) | {"driver_model_id"})
         for field in manifest_fields:
             for sentinel in (
@@ -722,6 +772,8 @@ class BenchmarkRecordTests(unittest.TestCase):
 
     def test_dp_real_tier_report_drifts_through_machine_report_compaction_and_rows(self):
         """Use producer dataclasses and all three pin modes as a report fixture."""
+
+        self.require_dp_runtime("aiohttp", "nxd_eval")
 
         from dp_scenarios.canary.verdict import Verdict
         from dp_scenarios.grading.gates import GATE_POINTS, GateResult
@@ -891,6 +943,7 @@ class BenchmarkRecordTests(unittest.TestCase):
         self.assertNotIn("publish_sequence", json.dumps(compact))
 
     def test_dp_unknown_fields_are_rejected_at_each_structured_boundary(self):
+        self.require_dp_runtime("aiohttp")
         def set_probe(payload):
             run = payload["scenarios"][0]["runs"][0]
             run["replay_recording"]["turns"][0]["result"]["tool_calls"] = [{
@@ -1016,6 +1069,7 @@ class BenchmarkRecordTests(unittest.TestCase):
                 self.assert_dp_rejected(mutate, "unknown field")
 
     def test_dp_nested_types_and_ranges_are_rejected(self):
+        self.require_dp_runtime("aiohttp")
         def set_enabled(payload):
             payload["scenarios"][0]["runs"][0]["manifest"]["runtime_knobs"] = enabled_runtime_knobs()
 

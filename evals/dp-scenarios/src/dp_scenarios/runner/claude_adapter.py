@@ -61,8 +61,31 @@ files or ledger-extra.json.
 If you perform the self-check and adversarial review, write only their short
 outcomes to agent-attestations.json at your workspace root -- the same file
 NXD_EVAL_ATTESTATIONS_PATH names, given here by name because a run without Bash
-has no way to expand that variable. This is an attestation channel, not a
-ledger and not proof by itself; follow the installed skills for its format.
+has no way to expand that variable. This is an optional, non-authoritative
+attestation channel, not a ledger and not proof by itself. Its canonical form
+is a root JSON array (not an object wrapper), for example:
+[
+  {
+    "action_kind": "self_check",
+    "turn": 7,
+    "outcome": "pass",
+    "evidence_ref": "nxd-jobs/current/closure/build-record.json#self_check"
+  },
+  {
+    "action_kind": "adversarial_review",
+    "turn": 7,
+    "outcome": "complete",
+    "evidence_ref": "nxd-jobs/current/closure/build-record.json#review_rounds/0",
+    "review_round_index": 0
+  }
+]
+The self_check object has exactly action_kind, turn, outcome, and evidence_ref;
+the adversarial_review object has exactly those keys plus
+review_round_index. turn and review_round_index are JSON integers, never
+booleans. outcome is non-empty text. evidence_ref is the exact normalized
+relative closure/build-record reference: use the closure path bound to the
+published build, with #self_check or #review_rounds/<review_round_index> as
+shown. Do not add keys, use an object wrapper, or use a different reference.
 
 If scenario-evidence-contract.json exists at the workspace root, read it and
 write the requested JSON object at its artifact_path, and follow every entry in

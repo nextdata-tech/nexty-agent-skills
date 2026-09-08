@@ -147,7 +147,9 @@ def _grading_review_is_valid(review: dict) -> bool:
     try:
         from dp_scenarios.grading.gates import _valid_review_round
     except ModuleNotFoundError as exc:
-        if exc.name == "nxd_eval":
+        if exc.name == "nxd_eval" or (
+            isinstance(exc.name, str) and exc.name.startswith("nxd_eval.")
+        ):
             pytest.skip("the no-project root test environment omits nxd_eval")
         raise
     return _valid_review_round(review)
@@ -302,8 +304,64 @@ def test_named_user_approval_allows_the_corresponding_behavior_change(record):
         state="applied",
         applied_files=["transform/main.py"],
     )
+    review["adjudications"][0].update(
+        disposition="accepted", citation="review:accepted claim"
+    )
     record["review_rounds"] = [review]
     assert dpd.validate_build_record(record) == []
+
+
+@pytest.mark.parametrize(
+    ("disposition", "state", "approved_ids", "deferred_ids", "expected"),
+    [
+        ("accepted", "applied", ["R1"], [], True),
+        ("accepted", "not_applied", [], ["R1"], True),
+        ("accepted", "not_applied", [], [], False),
+        ("rejected", "applied", ["R1"], [], False),
+        ("out_of_scope", "applied", ["R1"], [], False),
+        ("rejected", "not_applied", [], [], True),
+    ],
+)
+def test_shipped_review_validator_matches_grader_for_user_decision_state_machine(
+    disposition: str,
+    state: str,
+    approved_ids: list[str],
+    deferred_ids: list[str],
+    expected: bool,
+) -> None:
+    """Keep the installed validator and live grader on the same boundary."""
+    review = _review_round(
+        user_decision={
+            "approved_at_unix_ms": 1769904026000,
+            "citation": "user:review decision",
+            "approved_finding_ids": approved_ids,
+        },
+        deferred_finding_ids=deferred_ids,
+    )
+    review["findings"][0]["state"] = state
+    review["findings"][0]["applied_files"] = ["transform/main.py"] if state == "applied" else []
+    review["adjudications"][0].update(
+        disposition=disposition,
+        citation="review:decision" if disposition != "out_of_scope" else "review:scope",
+    )
+
+    shipped_valid = not dpd.validate_review_round(review)
+
+    assert shipped_valid is expected
+    assert _grading_review_is_valid(review) is expected
+
+
+def test_shipped_review_validator_preserves_unresolved_accepted_finding_without_user_decision() -> None:
+    """An unresolved accepted claim remains valid evidence but blocks materialization."""
+    review = _review_round()
+    review["adjudications"][0].update(
+        disposition="accepted", citation="review:accepted claim"
+    )
+
+    shipped_valid = not dpd.validate_review_round(review)
+
+    assert shipped_valid is True
+    assert _grading_review_is_valid(review) is shipped_valid
 
 
 def test_structural_note_can_record_an_evidenced_mechanical_fix(record):

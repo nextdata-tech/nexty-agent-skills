@@ -46,6 +46,7 @@ HELPERS = (
     "dp_spec_v2.py",
     "self_check.py",
 )
+API_REFRESH_SCRIPT = "api_source_refresh_session.py"
 VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
@@ -79,6 +80,31 @@ def test_the_spec_scripts_live_in_the_job_loop_skill():
         assert not (REPO / "scripts" / name).exists(), (
             f"{name} is back at the repo root, where no installer copies it"
         )
+
+
+def test_api_refresh_script_is_installable_in_the_generator_skill(tmp_path: Path):
+    """The API recipe must reach a direct Claude Code skill installation."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-generate-data-product",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    installed = (
+        tmp_path
+        / ".claude"
+        / "skills"
+        / "nxd-generate-data-product"
+        / "scripts"
+        / API_REFRESH_SCRIPT
+    )
+    assert installed.is_file()
+    assert installed.read_bytes() == (
+        SRC / "nxd-generate-data-product" / "scripts" / API_REFRESH_SCRIPT
+    ).read_bytes()
 
 
 def test_a_cross_skill_call_names_the_owning_skill():
@@ -692,6 +718,51 @@ def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
     _assert_helpers_run(skill_dir)
+
+
+def _assert_api_refresh_script_in_archive(archive: Path, member: str) -> None:
+    assert archive.is_file(), archive
+    with zipfile.ZipFile(archive) as zf:
+        assert member in zf.namelist(), f"{member} missing from {archive}"
+        assert zf.read(member) == (
+            SRC / "nxd-generate-data-product" / "scripts" / API_REFRESH_SCRIPT
+        ).read_bytes()
+
+
+def test_api_refresh_script_is_in_every_distributed_generator_package(tmp_path: Path):
+    """Cover the individual, named Desktop, compatibility, and Code plugin paths."""
+    subprocess.run(
+        ["bash", "build-skills.sh"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    _assert_api_refresh_script_in_archive(
+        REPO / "build" / "nxd-generate-data-product.zip",
+        f"scripts/{API_REFRESH_SCRIPT}",
+    )
+    _assert_api_refresh_script_in_archive(
+        REPO / "build" / f"nexty-desktop-v{version}.zip",
+        f"skills/nxd-generate-data-product/scripts/{API_REFRESH_SCRIPT}",
+    )
+    _assert_api_refresh_script_in_archive(
+        REPO / "build" / f"nexty-agent-skills-v{version}.zip",
+        f"skills/nxd-generate-data-product/scripts/{API_REFRESH_SCRIPT}",
+    )
+
+    subprocess.run(
+        ["bash", "build-plugin.sh"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    _assert_api_refresh_script_in_archive(
+        REPO / "build" / "plugin" / f"nexty-agent-skills-plugin-v{version}.zip",
+        f"src/nxd-generate-data-product/scripts/{API_REFRESH_SCRIPT}",
+    )
 
 
 @pytest.mark.parametrize(

@@ -13,10 +13,10 @@ Three layers, because each can rot independently:
 1. **The doc contract** — ``api-source.md`` must teach the ``header_`` prefix,
    the ``client["headers"]`` assembly, and the ``public: true`` classification.
    Pure text assertions, no dependencies.
-2. **The doc's own code** — ``_headers_from`` is EXTRACTED from the reference
-   and executed here, so the snippet an author copies is the snippet under
-   test. A copy in this file would drift from the doc silently, which is the
-   failure this layer exists to prevent.
+2. **The shipped script** — ``_headers_from`` is EXTRACTED from the installed
+   helper and executed here, so the source an author copies is the source under
+   test. A copy in this file would drift from the shipped helper silently,
+   which is the failure this layer exists to prevent.
 3. **The wire** — the pinned ``dlt==1.28.2`` really does forward
    ``client["headers"]``, proved against the scenario's own header-gated stub.
    This is the layer that catches a dlt bump renaming or dropping the field:
@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -43,12 +44,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_SOURCE = (REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" /
               "api-source.md")
+REFRESH_SCRIPT = (REPO_ROOT / "src" / "nxd-generate-data-product" / "scripts" /
+                  "api_source_refresh_session.py")
 FIXTURES = (REPO_ROOT / "evals" / "public" / "authenticated-api-source-build" /
             "fixtures")
 STUB = FIXTURES / "stub_beacon_api.py"
 
 DLT_PIN = "dlt[duckdb]==1.28.2"
 SUBPROCESS_TIMEOUT_S = 600
+UV = "/opt/homebrew/bin/uv" if Path("/opt/homebrew/bin/uv").is_file() else (shutil.which("uv") or "uv")
 
 
 # ---------------------------------------------------------------------------
@@ -128,23 +132,17 @@ def test_recipe_keeps_header_values_redacted_by_default():
 
 
 def _extract_headers_from() -> str:
-    """Pull only `_headers_from` from the executable refresh block."""
-    blocks = re.findall(r"```python\n(.*?)```", _doc(), re.DOTALL)
-    for block in blocks:
-        if "def _headers_from" in block:
-            source = textwrap.dedent(block)
-            tree = ast.parse(source)
-            lines = source.splitlines(keepends=True)
-            for node in tree.body:
-                if (
-                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and node.name == "_headers_from"
-                ):
-                    return "".join(lines[node.lineno - 1 : node.end_lineno])
-    raise AssertionError(
-        "api-source.md must define _headers_from in a ```python block — the "
-        "transform assembly the recipe teaches is what these tests execute"
-    )
+    """Pull only `_headers_from` from the shipped executable script."""
+    source = textwrap.dedent(REFRESH_SCRIPT.read_text(encoding="utf-8"))
+    tree = ast.parse(source)
+    lines = source.splitlines(keepends=True)
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_headers_from"
+        ):
+            return "".join(lines[node.lineno - 1 : node.end_lineno])
+    raise AssertionError("the shipped refresh script must define _headers_from")
 
 
 def _load_headers_from():
@@ -153,7 +151,7 @@ def _load_headers_from():
     return namespace["_headers_from"]
 
 
-def test_doc_snippet_maps_prefix_to_header_names():
+def test_shipped_script_maps_prefix_to_header_names():
     headers_from = _load_headers_from()
     assert headers_from({"header_user_agent": "acme/1.0"}) == {"User-Agent": "acme/1.0"}
     assert headers_from({"header_x_trace_id": "abc"}) == {"X-Trace-Id": "abc"}
@@ -162,7 +160,7 @@ def test_doc_snippet_maps_prefix_to_header_names():
     }
 
 
-def test_doc_snippet_ignores_non_header_secrets():
+def test_shipped_script_ignores_non_header_secrets():
     # The flat secrets map carries base_url, auth_*, and any co-located
     # service's fields. Only header_* may reach the wire as a header — an
     # over-broad scan would put the bearer token in a header named Auth-Token.
@@ -175,14 +173,14 @@ def test_doc_snippet_ignores_non_header_secrets():
     }) == {}
 
 
-def test_doc_snippet_skips_empty_values():
+def test_shipped_script_skips_empty_values():
     # An attribute present but blank must not send an empty header, which some
     # servers treat differently from an absent one.
     headers_from = _load_headers_from()
     assert headers_from({"header_user_agent": "", "header_accept": None}) == {}
 
 
-def test_doc_snippet_stringifies_values():
+def test_shipped_script_stringifies_values():
     # Supervisor-delivered values are always strings, but a hand-built dict in
     # a self-check probe may not be; dlt requires Dict[str, str].
     headers_from = _load_headers_from()
@@ -264,7 +262,7 @@ def wire_proof(tmp_path_factory) -> dict:
     script.write_text(textwrap.dedent(_WIRE_PROOF), encoding="utf-8")
     try:
         proc = subprocess.run(
-            ["uv", "run", "--no-project", "--with", DLT_PIN,
+            [UV, "run", "--no-project", "--with", DLT_PIN,
              "python", str(script), str(STUB)],
             capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S,
         )

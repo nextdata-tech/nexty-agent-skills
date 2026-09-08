@@ -1,16 +1,15 @@
-"""Executable contract for the expiring-credential api-source recipe.
+"""Executable contract for the shipped expiring-credential api-source recipe.
 
-The implementation under test is extracted verbatim from ``api-source.md``.
-The fake transport replaces ``requests.Session.send`` only, so these tests do
-not make network requests and do not carry a second implementation of the
-refresh state machine.
+The implementation under test is executed verbatim from the installed skill
+script. The fake transport replaces ``requests.Session.send`` only, so these
+tests do not make network requests and do not carry a second implementation of
+the refresh state machine.
 """
 
 from __future__ import annotations
 
 import io
 import json
-import re
 import sys
 import types
 from pathlib import Path
@@ -30,8 +29,13 @@ API_SOURCE = (
     / "reference"
     / "api-source.md"
 )
-START_MARKER = "# BEGIN API_SOURCE_REFRESH_SESSION"
-END_MARKER = "# END API_SOURCE_REFRESH_SESSION"
+REFRESH_SCRIPT = (
+    REPO_ROOT
+    / "src"
+    / "nxd-generate-data-product"
+    / "scripts"
+    / "api_source_refresh_session.py"
+)
 BASE_URL = "https://api.example.test/v1/"
 AUTH_REFRESH_PATH = "/auth/refresh"
 REFRESH_URL = "https://api.example.test/auth/refresh"
@@ -42,30 +46,15 @@ def _doc() -> str:
     return API_SOURCE.read_text(encoding="utf-8")
 
 
-def _extract_refresh_snippet() -> str:
-    """Extract the one anchored code block that is executed by these tests."""
-    blocks = re.findall(r"```python\n(.*?)```", _doc(), re.DOTALL)
-    matches = [
-        block
-        for block in blocks
-        if START_MARKER in block or END_MARKER in block
-    ]
-    assert len(matches) == 1, (
-        "api-source.md must contain exactly one anchored refresh-session "
-        "python block"
-    )
-    block = matches[0]
-    assert block.count(START_MARKER) == 1
-    assert block.count(END_MARKER) == 1
-    assert block.index(START_MARKER) < block.index(END_MARKER)
-    return block
+def _script_source() -> str:
+    return REFRESH_SCRIPT.read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
 def recipe_namespace() -> dict:
-    """Execute the exact fenced recipe, including its imports and anchors."""
+    """Execute the exact shipped script, including its imports."""
     namespace: dict = {}
-    source = _extract_refresh_snippet()
+    source = _script_source()
     if _real_requests is not None:
         exec(compile(source, "<api-source.md>", "exec"), namespace, namespace)
     else:
@@ -195,8 +184,10 @@ def _install_transport(namespace, monkeypatch, plans, body_reads=None):
     return calls
 
 
-def test_refresh_recipe_has_one_anchored_extractable_block(recipe_namespace):
-    source = _extract_refresh_snippet()
+def test_refresh_recipe_is_the_shipped_script_and_markdown_has_no_duplicate(
+    recipe_namespace,
+):
+    source = _script_source()
     assert "class RefreshingSession(requests.Session)" in source
     assert "def send(self, request, **kwargs):" in source
     assert "super().send(" in source
@@ -207,6 +198,11 @@ def test_refresh_recipe_has_one_anchored_extractable_block(recipe_namespace):
     assert "import logging" not in source
     assert "print(" not in source
     assert callable(recipe_namespace["make_rest_api_config"])
+    doc = _doc()
+    assert "../scripts/api_source_refresh_session.py" in doc
+    assert "class RefreshingSession(requests.Session)" not in doc
+    assert "def _headers_from(" not in doc
+    assert "def make_rest_api_config(" not in doc
 
 
 def test_extracted_recipe_builds_config_from_the_three_flat_profile_keys(

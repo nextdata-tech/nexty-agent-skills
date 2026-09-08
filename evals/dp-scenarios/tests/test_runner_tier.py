@@ -560,12 +560,10 @@ def populated_parent_child_recordings(
             "spec.json": {"metrics": {"regional_revenue": "supported"}},
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
-            "agent-attestations.json": {
-                "attestations": [
-                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
-                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
-                ]
-            },
+            "agent-attestations.json": [
+                {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"},
+                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
+            ],
             "closure/semantic.json": {
                 "semantic": {
                     "grain": "order",
@@ -631,12 +629,10 @@ def populated_zero_row_recordings(
         }
         artifacts: dict[str, object] = {
             "spec.json": {"metrics": {"primary": "supported"}},
-            "agent-attestations.json": {
-                "attestations": [
-                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
-                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
-                ]
-            },
+            "agent-attestations.json": [
+                {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"},
+                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
+            ],
             "closure/requiredness.json": {
                 "requiredness": {"optional_events": False, "primary": True}
             },
@@ -765,7 +761,7 @@ def test_malformed_agent_attestation_is_a_grade_finding_not_a_tier_abort(tmp_pat
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
     (artifact_root / "agent-attestations.json").write_text(
-        '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass","unexpected":true}]}\n',
+        '[{"action_kind":"self_check","turn":1,"outcome":"pass","unexpected":true}]\n',
         encoding="utf-8",
     )
 
@@ -777,19 +773,181 @@ def test_malformed_agent_attestation_is_a_grade_finding_not_a_tier_abort(tmp_pat
     agent_root = tmp_path / "agent"
     agent_root.mkdir()
     (agent_root / "agent-attestations.json").write_text(
-        '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass","evidence_ref":"tool:self-check"}]}\n',
+        '[{"action_kind":"self_check","turn":1,"outcome":"pass","evidence_ref":"closure/build-record.json#self_check"}]\n',
         encoding="utf-8",
     )
     from_agent_workspace = tier_module._agent_attestations(agent_root, fallback_root=artifact_root)
     assert len(from_agent_workspace.values) == 1
 
     (artifact_root / "agent-attestations.json").write_text(
-        '{"attestations":[{"action_kind":"self_check","turn":1,"outcome":"pass"}]}\n',
+        '[{"action_kind":"self_check","turn":1,"outcome":"pass"}]\n',
         encoding="utf-8",
     )
     missing_required_key = tier_module._agent_attestations(artifact_root)
     assert missing_required_key.values == ()
     assert missing_required_key.findings[0].code == "agent_attestations_invalid"
+
+
+def test_documented_agent_attestations_parse_and_pair_with_the_published_closure(tmp_path: Path) -> None:
+    """The prompt examples must be the values the construction gate can pair."""
+
+    from dp_scenarios.grading.gates import canonical_review_dispatch_marker, gate_construction
+
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    closure = "nxd-jobs/current/closure"
+    documented = [
+        {
+            "action_kind": "self_check",
+            "turn": 1,
+            "outcome": "pass",
+            "evidence_ref": f"{closure}/build-record.json#self_check",
+        },
+        {
+            "action_kind": "adversarial_review",
+            "turn": 1,
+            "outcome": "complete",
+            "evidence_ref": f"{closure}/build-record.json#review_rounds/0",
+            "review_round_index": 0,
+        },
+    ]
+    (agent / "agent-attestations.json").write_text(json.dumps(documented), encoding="utf-8")
+
+    parsed = tier_module._agent_attestations(agent)
+    assert not parsed.findings
+    assert list(parsed.values) == documented
+
+    observations = {
+        "turns": [{
+            "turn": 1,
+            "tool_calls": [
+                {
+                    "name": "Agent",
+                    "arguments": {
+                        "prompt": "Return claims only.\n"
+                        + canonical_review_dispatch_marker(closure, 0),
+                    },
+                    "result": {"is_error": False, "content": "No claims."},
+                },
+                {
+                    "name": "mcp__nxd-desktop__check_data_product",
+                    "arguments": {"definition": str(agent / closure), "workflow": "workflow"},
+                    "result": {"is_error": False, "content": {"outcome": "pass", "workflow": "workflow"}},
+                },
+                {
+                    "name": "mcp__nxd-desktop__build_data_product",
+                    "arguments": {"definition": str(agent / closure), "workflow": "workflow"},
+                    "result": {
+                        "is_error": False,
+                        "content": {
+                            "run_id": "run-published",
+                            "artifact_id": "artifact-published",
+                        },
+                    },
+                },
+            ],
+        }]
+    }
+    published = tier_module._published_closure(
+        observations,
+        _facts_for_closure(),
+        agent_root=agent,
+    )
+    assert published is not None
+    result = gate_construction(
+        [{"record_type": "run_manifest"}, {"action_kind": "self_check", "claim": {"outcome": "pass"}}],
+        observations=observations,
+        attestations=parsed.values,
+        review_rounds={closure: [_recorded_review_round()]},
+        published_closure=published,
+        require_observed=True,
+    )
+    assert result.passed is True
+    assert result.codes == ()
+
+    replay_root = tmp_path / "replay-agent"
+    replay_root.mkdir()
+    replay_artifacts = tmp_path / "replay-artifacts"
+    replay_artifacts.mkdir()
+    legacy = [dict(value) for value in documented]
+    legacy[0]["evidence_ref"] = "tool:self-check"
+    (replay_artifacts / "agent-attestations.json").write_text(
+        json.dumps({"attestations": legacy}), encoding="utf-8"
+    )
+    replay_parsed = tier_module._agent_attestations(
+        replay_root, fallback_root=replay_artifacts
+    )
+    assert not replay_parsed.findings
+    replay_result = gate_construction(
+        [
+            {"record_type": "run_manifest"},
+            {"action_kind": "self_check", "claim": {"outcome": "pass"}},
+        ],
+        observations=observations,
+        attestations=replay_parsed.values,
+        review_rounds={closure: [_recorded_review_round()]},
+        published_closure=published,
+        require_observed=True,
+    )
+    assert replay_result.passed is True
+    assert replay_result.codes == ()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"attestations": []},
+        [{"action_kind": "self_check", "turn": 1, "outcome": "pass", "evidence_ref": "tool:self-check"}],
+        [{"action_kind": "self_check", "turn": 1, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check", "extra": "no"}],
+        [{"action_kind": "self_check", "turn": True, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
+        [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": True}],
+        [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "closure/build-record.json#review_rounds/-1", "review_round_index": -1}],
+    ],
+)
+def test_agent_attestation_parser_rejects_extra_keys_bools_and_negative_indices(
+    tmp_path: Path, payload: object
+) -> None:
+    path = tmp_path / "agent-attestations.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    parsed = tier_module._agent_attestations(tmp_path)
+
+    assert parsed.values == ()
+    assert parsed.findings[0].code == "agent_attestations_invalid"
+
+
+def test_construction_rejects_a_parsed_attestation_for_the_wrong_evidence_ref(tmp_path: Path) -> None:
+    """A syntactically valid sibling reference must not pair with this build."""
+
+    from dp_scenarios.grading.gates import gate_construction
+
+    (tmp_path / "agent-attestations.json").write_text(
+        json.dumps([
+            {
+                "action_kind": "adversarial_review",
+                "turn": 1,
+                "outcome": "complete",
+                "evidence_ref": "other-job/closure/build-record.json#review_rounds/0",
+                "review_round_index": 0,
+            }
+        ]),
+        encoding="utf-8",
+    )
+    parsed = tier_module._agent_attestations(tmp_path)
+    assert not parsed.findings
+
+    from test_grading_gates import _dispatch_observations, _ledger, _published_build, _rounds_for
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=parsed.values,
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
 
 
 def test_empty_tier_is_failed_instead_of_clean() -> None:
@@ -2393,9 +2551,16 @@ def _facts_for_closure() -> SupervisorFacts:
     )
 
 
-def _observed_build(definition: str, *, run_id: str = "run-published", artifact_id: str = "artifact-published", is_error: bool = False) -> dict:
+def _observed_build(
+    definition: str,
+    *,
+    run_id: str = "run-published",
+    artifact_id: str = "artifact-published",
+    is_error: bool = False,
+    tool_name: str = "mcp__nxd-desktop__build_data_product",
+) -> dict:
     return {
-        "name": "mcp__nxd-desktop__build_data_product",
+        "name": tool_name,
         "arguments": {"definition": definition},
         "result": {
             "is_error": is_error,
@@ -2453,6 +2618,55 @@ def test_published_closure_fails_closed_for_mismatch_ambiguity_or_noncanonical_r
 
     for observations in (mismatched, ambiguous, flat_result, errored):
         assert tier_module._published_closure(observations, facts, agent_root=agent) is None
+
+
+def test_published_closure_matches_a_custom_mixed_case_desktop_server(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    observations = {
+        "turns": [{
+            "turn": 1,
+            "tool_calls": [
+                _observed_build(
+                    "closure",
+                    tool_name="mcp__Nxd-Desktop-Custom__build_data_product",
+                )
+            ],
+        }]
+    }
+
+    published = tier_module._published_closure(
+        observations,
+        _facts_for_closure(),
+        agent_root=agent,
+        desktop_server_name="nXd-DeSkToP-cUsToM",
+    )
+
+    assert published is not None
+    assert published.closure_path == "closure"
+
+
+def test_published_closure_rejects_a_build_from_the_wrong_desktop_server(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    observations = {
+        "turns": [{
+            "turn": 1,
+            "tool_calls": [
+                _observed_build(
+                    "closure",
+                    tool_name="mcp__nxd-desktop-other__build_data_product",
+                )
+            ],
+        }]
+    }
+
+    assert tier_module._published_closure(
+        observations,
+        _facts_for_closure(),
+        agent_root=agent,
+        desktop_server_name="nxd-desktop-custom",
+    ) is None
 
 
 # --------------------------------------------------------------------------
@@ -2625,12 +2839,10 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
             "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
-            "agent-attestations.json": {
-                "attestations": [
-                    {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "tool:self-check"},
-                    {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
-                ]
-            },
+            "agent-attestations.json": [
+                {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"},
+                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
+            ],
             "closure/semantic.json": {
                 "semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}
             },

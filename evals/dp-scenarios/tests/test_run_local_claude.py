@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,6 +76,145 @@ def test_local_runner_leaves_timeout_budget_for_the_adapter() -> None:
 
     assert module._adapter_timeout(10.0) == pytest.approx(9.0)
     assert module._adapter_timeout(0.1) < 0.1
+
+
+def test_skill_pack_root_defaults_to_and_validates_the_current_checkout(tmp_path: Path) -> None:
+    module = _load_runner_module()
+
+    assert module.build_parser().parse_args([]).skill_pack_root is None
+    assert module._validated_skill_pack_root(None) == module.REPO_ROOT
+
+    incomplete = tmp_path / "incomplete-skill-pack"
+    incomplete.mkdir()
+    with pytest.raises(TierError, match="skill-pack root is incomplete"):
+        module._validated_skill_pack_root(incomplete)
+
+
+def test_skill_pack_root_rejects_a_malformed_or_empty_pack(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    root = tmp_path / "skill-pack"
+    (root / "src" / "fixture").mkdir(parents=True)
+    (root / "src" / "fixture" / "SKILL.md").write_text("skill\n", encoding="utf-8")
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir()
+
+    manifest.write_text("not-json\n", encoding="utf-8")
+    with pytest.raises(TierError, match="skill-pack manifest is unreadable"):
+        module._validated_skill_pack_root(root)
+
+    manifest.write_text(json.dumps({"version": ""}), encoding="utf-8")
+    with pytest.raises(TierError, match="skill-pack root is incomplete"):
+        module._validated_skill_pack_root(root)
+
+
+def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only skill identity, staging, and canary extraction use the override."""
+
+    module = _load_runner_module()
+    skill_root = tmp_path / "selected-skill-pack"
+    (skill_root / "src" / "selected").mkdir(parents=True)
+    (skill_root / "src" / "selected" / "SKILL.md").write_text("selected\n", encoding="utf-8")
+    manifest_path = skill_root / ".claude-plugin" / "plugin.json"
+    manifest_path.parent.mkdir()
+    manifest_path.write_text(json.dumps({"name": "selected", "version": "selected-version"}), encoding="utf-8")
+    output_dir = tmp_path / "report"
+    captured: dict[str, object] = {}
+    original_load_scenarios = module.load_scenarios
+
+    def fake_load_scenarios(path: Path):
+        captured["scenario_root"] = path
+        return original_load_scenarios(path)
+
+    def fake_canary(canary_root: Path, *, skills_root: Path, supervisor: Path):
+        captured["canary_root"] = canary_root
+        captured["canary_skills_root"] = skills_root
+        captured["canary_supervisor"] = supervisor
+        return SimpleNamespace(verdict="clean")
+
+    class FakeTierRunner:
+        def __init__(self, scenarios, **kwargs):
+            captured["scenarios"] = scenarios
+            captured.update(kwargs)
+
+        def run(self):
+            captured["staged_plugin_manifest"] = json.loads(
+                (Path(captured["live_command"][captured["live_command"].index("--plugin-dir") + 1]) / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+            )
+            captured["staged_skill"] = (
+                Path(captured["live_command"][captured["live_command"].index("--plugin-dir") + 1]) / "src" / "selected" / "SKILL.md"
+            ).read_text(encoding="utf-8")
+            captured["canary_result"] = captured["canary"]()
+            return SimpleNamespace(verdict="clean")
+
+    def fake_tier_runner(scenarios, **kwargs):
+        captured["live_command"] = kwargs["live_command"]
+        return FakeTierRunner(scenarios, **kwargs)
+
+    monkeypatch.setattr(module, "load_scenarios", fake_load_scenarios)
+    monkeypatch.setattr(module, "run_drift_canary", fake_canary)
+    monkeypatch.setattr(module, "TierRunner", fake_tier_runner)
+    monkeypatch.setattr(module, "write_report", lambda *args, **kwargs: (None, None, ()))
+
+    assert module.main([
+        "--skill-pack-root", str(skill_root),
+        "--claude", "/usr/bin/true",
+        "--supervisor", "/usr/bin/true",
+        "--desktop-python", "/usr/bin/true",
+        "--output-dir", str(output_dir),
+    ]) == 0
+
+    assert captured["scenario_root"] == module.SCENARIO_ROOT
+    assert captured["canary_root"] == module.CANARY_ROOT
+    assert captured["canary_skills_root"] == skill_root / "src"
+    assert captured["staged_plugin_manifest"]["version"] == "selected-version"
+    assert captured["staged_skill"] == "selected\n"
+    command = captured["live_command"]
+    assert command[command.index("--repo-root") + 1] == str(module.REPO_ROOT)
+
+
+def test_identical_skill_pack_sources_produce_identical_canary_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The override changes the source root, not canary semantics."""
+
+    from dp_scenarios.runner.tier import run_drift_canary
+    from dp_scenarios.runner import tier as tier_module
+    from dp_scenarios.canary import Verdict
+
+    module = _load_runner_module()
+    selected = tmp_path / "selected-skill-pack"
+    shutil.copytree(module.REPO_ROOT / "src", selected / "src")
+    (selected / ".claude-plugin").mkdir()
+    shutil.copy2(
+        module.REPO_ROOT / ".claude-plugin" / "plugin.json",
+        selected / ".claude-plugin" / "plugin.json",
+    )
+    replay_probe = {"returncode": 0, "report": {"probe_id": "kitchen-sink"}}
+    replay_build = {"returncode": 0}
+    monkeypatch.setattr(
+        tier_module,
+        "aggregate_verdict",
+        lambda *_args, **_kwargs: Verdict("clean", (), ()),
+    )
+
+    current = run_drift_canary(
+        module.CANARY_ROOT,
+        skills_root=module.REPO_ROOT / "src",
+        probe=replay_probe,
+        build=replay_build,
+    )
+    overridden = run_drift_canary(
+        module.CANARY_ROOT,
+        skills_root=selected / "src",
+        probe=replay_probe,
+        build=replay_build,
+    )
+
+    assert overridden.verdict == current.verdict
+    assert overridden.claims_hash == current.claims_hash
+    assert overridden.package == current.package
 
 
 def test_local_runner_host_home_flag_and_bash_require_a_second_opt_in() -> None:

@@ -158,11 +158,16 @@ def test_default_prompt_only_describes_the_attestation_channel_not_review_behavi
     collapsed = " ".join(prompt.split())
 
     assert "agent-attestations.json at your workspace root" in collapsed
-    assert "follow the installed skills for its format" in collapsed
+    assert "optional, non-authoritative attestation channel" in collapsed
+    assert "root JSON array (not an object wrapper)" in collapsed
+    assert '"action_kind": "self_check"' in prompt
+    assert '"review_round_index": 0' in prompt
+    assert "turn and review_round_index are JSON integers, never booleans" in collapsed
+    assert "#self_check" in collapsed
+    assert "#review_rounds/<review_round_index>" in collapsed
     assert "Background execution is disabled" in collapsed
     assert "NXD_REVIEW_DISPATCH" not in collapsed
     assert "sanitized_original_request" not in collapsed
-    assert "review_round_index" not in collapsed
     assert "[CREDENTIAL:" not in collapsed
 
 

@@ -16,7 +16,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tempfile
 import time
 import shutil
@@ -176,6 +176,7 @@ class ScenarioRun:
         """Return whether this run is excluded from scoring rates."""
 
         return self.score.state is ScoreTerminalState.INVALID
+
     def scored_dict(self) -> dict[str, object]:
         """Serialize only scored fields; efficiency is intentionally separate."""
 
@@ -842,6 +843,7 @@ def _published_closure(
     supervisor_facts: SupervisorFacts | None,
     *,
     agent_root: Path,
+    desktop_server_name: str = "nxd-desktop",
 ) -> PublishedBuild | None:
     """Bind the published release to exactly one observed build definition.
 
@@ -850,8 +852,16 @@ def _published_closure(
     payloads, error results, partial identifiers, and ambiguous paths.
     """
 
-    if not isinstance(observations, Mapping) or supervisor_facts is None:
+    if (
+        not isinstance(observations, Mapping)
+        or supervisor_facts is None
+        or not isinstance(desktop_server_name, str)
+        or not desktop_server_name.strip()
+    ):
         return None
+    expected_tool_name = (
+        f"mcp__{desktop_server_name.strip()}__build_data_product"
+    ).casefold()
     run_id = supervisor_facts.run_id
     artifact_id = supervisor_facts.artifact_id
     if not isinstance(run_id, str) or not run_id or not isinstance(artifact_id, str) or not artifact_id:
@@ -874,7 +884,8 @@ def _published_closure(
         if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
             continue
         for call_index, call in enumerate(calls):
-            if not isinstance(call, Mapping) or call.get("name") != "mcp__nxd-desktop__build_data_product":
+            name = call.get("name") if isinstance(call, Mapping) else None
+            if not isinstance(name, str) or name.casefold() != expected_tool_name:
                 continue
             result = call.get("result")
             if not isinstance(result, Mapping) or result.get("is_error") is not False:
@@ -932,6 +943,39 @@ def _review_rounds(artifact_root: Path) -> Mapping[str, tuple[Mapping[str, objec
     return rounds
 
 
+def _canonical_attestation_evidence_ref(
+    value: object,
+    *,
+    action_kind: object,
+    review_round_index: object,
+) -> bool:
+    """Accept only the documented normalized closure/build-record reference."""
+
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    path_text, separator, fragment = value.partition("#")
+    if (
+        separator != "#"
+        or not path_text
+        or not fragment
+        or "\\" in path_text
+        or "\x00" in value
+    ):
+        return False
+    path = PurePosixPath(path_text)
+    if (
+        path.is_absolute()
+        or path.as_posix() != path_text
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or len(path.parts) < 2
+        or path.parts[-2:] != ("closure", "build-record.json")
+    ):
+        return False
+    if action_kind == "self_check":
+        return fragment == "self_check"
+    return fragment == f"review_rounds/{review_round_index}"
+
+
 def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
     """Read the narrow, non-authoritative attestation channel from the agent.
 
@@ -945,8 +989,10 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
     """
 
     path = root / "agent-attestations.json"
+    replay_fallback = False
     if not path.is_file() and fallback_root is not None:
         path = fallback_root / "agent-attestations.json"
+        replay_fallback = path.is_file()
     if not path.is_file():
         return _AttestationRead()
     try:
@@ -955,10 +1001,21 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
         return _AttestationRead(
             findings=(Finding("agent_attestations_invalid", f"agent-attestations.json could not be read: {type(exc).__name__}"),)
         )
-    values = raw.get("attestations") if isinstance(raw, Mapping) else raw
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+    if isinstance(raw, list):
+        values = raw
+    elif (
+        replay_fallback
+        and isinstance(raw, Mapping)
+        and set(raw) == {"attestations"}
+        and isinstance(raw.get("attestations"), list)
+    ):
+        # Recordings made before the canonical live format used this envelope.
+        # Keep it replay-only: accepting it from a live workspace would make
+        # the documented closed schema optional again.
+        values = raw["attestations"]
+    else:
         return _AttestationRead(
-            findings=(Finding("agent_attestations_invalid", "agent-attestations.json must contain an attestation list"),)
+            findings=(Finding("agent_attestations_invalid", "agent-attestations.json must be a root JSON array"),)
         )
     result: list[Mapping[str, object]] = []
     for value in values:
@@ -997,6 +1054,20 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
         ):
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "review_round_index must be a non-negative integer"),)
+            )
+        canonical_reference = _canonical_attestation_evidence_ref(
+            value.get("evidence_ref"),
+            action_kind=action_kind,
+            review_round_index=value.get("review_round_index"),
+        )
+        legacy_self_check_reference = (
+            replay_fallback
+            and action_kind == "self_check"
+            and value.get("evidence_ref") == "tool:self-check"
+        )
+        if not canonical_reference and not legacy_self_check_reference:
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation evidence_ref must bind the normalized closure build record"),)
             )
         result.append(dict(value))
     return _AttestationRead(tuple(result))
@@ -2068,6 +2139,7 @@ class TierRunner:
                 observations,
                 facts,
                 agent_root=environment.base_dir / "agent",
+                desktop_server_name=environment.desktop_server_name,
             ),
             require_observed=True,
             desktop_server_name=environment.desktop_server_name,
