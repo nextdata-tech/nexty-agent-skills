@@ -11,6 +11,7 @@ from typing import Mapping
 from types import SimpleNamespace
 
 import pytest
+import dp_scenarios.runner.claude_adapter as adapter_module
 import dp_scenarios.runner.tier as tier_module
 
 from dp_scenarios.canary.verdict import Verdict, VerdictIssue
@@ -795,22 +796,17 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
 
     agent = tmp_path / "agent"
     agent.mkdir()
-    closure = "nxd-jobs/current/closure"
-    documented = [
-        {
-            "action_kind": "self_check",
-            "turn": 1,
-            "outcome": "pass",
-            "evidence_ref": f"{closure}/build-record.json#self_check",
-        },
-        {
-            "action_kind": "adversarial_review",
-            "turn": 1,
-            "outcome": "complete",
-            "evidence_ref": f"{closure}/build-record.json#review_rounds/0",
-            "review_round_index": 0,
-        },
-    ]
+    example = adapter_module.DEFAULT_SYSTEM_PROMPT.split("for example:\n", 1)[1]
+    example = example.split("\nThe self_check object", 1)[0]
+    documented = json.loads(example)
+    turn = documented[0]["turn"]
+    assert documented[1]["turn"] == turn
+    closure = documented[0]["evidence_ref"].removesuffix(
+        "/build-record.json#self_check"
+    )
+    assert documented[1]["evidence_ref"] == (
+        f"{closure}/build-record.json#review_rounds/0"
+    )
     (agent / "agent-attestations.json").write_text(json.dumps(documented), encoding="utf-8")
 
     parsed = tier_module._agent_attestations(agent)
@@ -819,7 +815,7 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
 
     observations = {
         "turns": [{
-            "turn": 1,
+            "turn": turn,
             "tool_calls": [
                 {
                     "name": "Agent",
