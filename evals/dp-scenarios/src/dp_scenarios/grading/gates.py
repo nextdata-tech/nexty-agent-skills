@@ -1057,7 +1057,7 @@ def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bo
 
 def _query_shape(
     rows: Sequence[Mapping[str, object]],
-) -> tuple[frozenset[int], int] | None:
+) -> tuple[frozenset[int], int]:
     """Return the EX-necessary shape used for history matching.
 
     The shape mirrors the invariants required before the deterministic EX
@@ -1067,8 +1067,6 @@ def _query_shape(
     headerless empty results take different grading paths.
     """
 
-    if any(not isinstance(row, Mapping) for row in rows):
-        return None
     from nxd_eval.scoring import _norm_rowset
 
     return (frozenset(len(row) for row in rows), len(_norm_rowset(list(rows))))
@@ -1078,21 +1076,24 @@ def _query_candidates(
     value: object,
     latest_rows: list[dict[str, object]],
     gold_rows: list[object],
-) -> tuple[list[list[dict[str, object]]], tuple[Finding, ...]]:
+) -> tuple[list[dict[str, object]], tuple[Finding, ...]]:
     """Select the newest retained answer with the gold result shape.
 
     The latest result remains authoritative among answers with the same shape.
     A different-shaped exploratory query cannot erase an earlier governed
     answer, but a same-shaped correction must still win. History is trusted
     only when its last entry is the result stored under ``rows``; otherwise a
-    hand-edited or stale history falls back to that latest result.
+    hand-edited or stale history falls back to that latest result. An empty
+    result has shape ``(frozenset(), 0)``: it matches empty gold, but remains
+    exploratory against non-empty gold so an unscoped empty query cannot erase
+    an earlier governed answer.
     """
 
     if not isinstance(value, Mapping):
-        return [latest_rows], ()
+        return latest_rows, ()
     raw_history = value.get("queries")
     if not isinstance(raw_history, list) or not raw_history:
-        return [latest_rows], ()
+        return latest_rows, ()
 
     entries: list[list[dict[str, object]]] = []
     for raw_entry in raw_history:
@@ -1103,7 +1104,7 @@ def _query_candidates(
         else:
             raw_rows = None
         if not isinstance(raw_rows, list) or any(not isinstance(row, Mapping) for row in raw_rows):
-            return [latest_rows], (
+            return latest_rows, (
                 Finding(
                     "query_history_ignored",
                     "retained semantic-query history was malformed or disagreed with the latest rows",
@@ -1112,16 +1113,17 @@ def _query_candidates(
         entries.append([dict(row) for row in raw_rows])
 
     if entries[-1] != latest_rows:
-        return [latest_rows], (
+        return latest_rows, (
             Finding(
                 "query_history_ignored",
                 "retained semantic-query history was malformed or disagreed with the latest rows",
             ),
         )
 
-    gold_shape = _query_shape([row for row in gold_rows if isinstance(row, Mapping)])
-    if gold_shape is None or len([row for row in gold_rows if isinstance(row, Mapping)]) != len(gold_rows):
-        return [latest_rows], ()
+    gold_mappings = [row for row in gold_rows if isinstance(row, Mapping)]
+    if len(gold_mappings) != len(gold_rows):
+        return latest_rows, ()
+    gold_shape = _query_shape(gold_mappings)
 
     newest_first = list(reversed(entries))
     compatible = [
@@ -1130,15 +1132,15 @@ def _query_candidates(
         if _query_shape(rows) == gold_shape
     ]
     if not compatible:
-        return [latest_rows], ()
+        return latest_rows, ()
 
     selected_index, selected_rows = compatible[0]
     if selected_index == 0:
         # ``rows`` is the authoritative latest result; history is only a
         # selection aid.  Avoid scoring a separately parsed copy when it is
         # already the newest compatible entry.
-        return [latest_rows], ()
-    return [selected_rows], (
+        return latest_rows, ()
+    return selected_rows, (
         Finding(
             "query_scored_earlier_same_shape_answer",
             "an earlier retained semantic-query row-set was the newest result with the gold result shape",
@@ -1172,16 +1174,12 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
         return _result("query", False, [Finding("query_gold_not_examined", "gold row-set is absent")], examined=False, required=required)
     # Set-mode is intentional for distinct-key aggregates; the row-count
     # pairing still catches fan-out that duplicates rows without changing values.
-    candidates, diagnostics = _query_candidates(actual, actual_rows, gold_rows)
-    verdicts = [
-        score_one(
-            {"rows": candidate, "abstained": abstained, "errored": errored},
-            {"rows": gold_rows, "equality_mode": "set"},
-        )
-        for candidate in candidates
-    ]
-    if "PASS" not in verdicts:
-        verdict = verdicts[0]
+    candidate, diagnostics = _query_candidates(actual, actual_rows, gold_rows)
+    verdict = score_one(
+        {"rows": candidate, "abstained": abstained, "errored": errored},
+        {"rows": gold_rows, "equality_mode": "set"},
+    )
+    if verdict != "PASS":
         return _result(
             "query",
             False,
