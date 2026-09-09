@@ -2,9 +2,9 @@
 
 **For analysts working in Claude Desktop or Claude Cowork.**
 
-You already know how to use an agent to get at your data. What you don't have is a way to get the *same* result next month, sliced differently, without redoing the work and without wondering whether last month's version used the same logic.
+Nexty Desktop builds a data product from an analysis you already do by hand. You connect a source, work through the definitions with Claude until the numbers are right, then package that as something you can query again later.
 
-Nexty turns a job you do by hand into something that does it for you. It reads the sources you connect, applies the definitions you agreed, and runs on hardware you control.
+Asking the packaged data product uses the definitions you already agreed to, so the same question returns the same result.
 
 ---
 
@@ -28,36 +28,42 @@ Nexty turns a job you do by hand into something that does it for you. It reads t
 
 ### Install
 
-> **Not yet published.** There is no released distribution channel for the
-> desktop installer. This section records the shape of the install so the rest
-> of the guide makes sense, but it cannot be followed until that channel
-> exists. Do not treat the steps below as tested.
+Nexty Desktop ships two builds: `macos-arm64` for Apple silicon Macs, and
+`linux-aarch64` for ARM64 Linux, which is the one Cowork's environment needs.
+Neither is an Intel build.
 
-Nexty desktop is available for the following platforms:
+The steps below are the Mac install, Linux is similar.
 
-| Artifact | Platform                                    |
-| --- |---------------------------------------------|
-| `macos-arm64` | Apple silicon Macs. |
-| `linux-aarch64` | Linux ARM64 systems.            |
+1. **Download the Nexty Desktop distribution.**
+2. **Right-click the downloaded file and choose Open**, then confirm when macOS
+   asks. Do this instead of double-clicking: macOS blocks apps it hasn't seen
+   before, and right-click then Open is what gets past that. You only need to do
+   it this once.
+3. **Wait.** A terminal window opens and runs the install by itself. You do not
+   have to type anything into it.
 
-Pick the path that matches where you work. They are different installs, not two ways of doing the same one.
+When it finishes, that window tells you what is left to do:
 
-**Claude Desktop on Apple silicon.** Download the `macos-arm64` archive, make it executable, and run it. It installs the supervisor runtime and registers an `nxd-desktop` MCP entry in your Claude Desktop configuration. Restart Claude Desktop, then confirm `nxd-desktop` is listed under **Settings → Connectors**.
+1. Check that the nxd-desktop connector is in Claude.
+2. Add the plugin (e.g., nexty-desktop-vx.y.z.zip) to Claude.
+3. Restart Claude.
 
-**Cowork.** Cowork runs in an isolated Linux VM, so a macOS install does not reach it. Stage the `linux-aarch64` offline bundle in a folder connected to the session and install it there.
+The version number in the filename matches the release you installed.
+
+The connector and the plugin do different jobs, which is why you need both. The
+connector is how Claude reaches the engine on your Mac. The plugin is what
+teaches Claude how to build a data product.
 
 ### Run
 
-The installer copies the skill trees into `~/.nxd-desktop/skills` and registers the MCP
-server. How those skills are loaded into Claude is not settled yet, so
-`/nxd-run-job-loop` may not be available to you as a command. Describing the job in
-your own words reaches the same place.
+Quit Claude and open it again after adding the plugin, then start a new chat.
+Ask for what you want in your own words, or run `/nxd-run-job-loop`.
 
 Once the job loop starts, you should see a screen that looks like this:
 
 ![start_screen.png](start_screen.png)
 
-Not all questions are required, give as much guidance as you can. The more you give, the faster it will be to get a correct answer.
+Not all questions are required. Give as much guidance as you can. The more you give, the faster it will be to get a correct answer.
 
 For example, if you want to analyze weather data, you might say the data product is about `Weather analysis` and the question to answer is:
 
@@ -78,7 +84,7 @@ Nexty works in four phases, and the sequence matters: each one depends on the on
 
    a job you   →    it with      →    it up        →    it without
    already do       Claude            so it can         redoing the
-   by hand          until it's        repeat            derivation
+   by hand          until it's        repeat            work again
                     right
 ```
 
@@ -88,7 +94,7 @@ Nexty works in four phases, and the sequence matters: each one depends on the on
 
 **[Phase 3](#phase-3-package-it): Package it.** When the answer is right and you expect to need it again, Nexty records what you settled on, your source, your definitions and your rules, and builds it into a **data product**.
 
-**[Phase 4](#phase-4-reuse-it): Reuse it.** Asking the packaged data product is a bounded operation: Claude sends a structured semantic query and reads back a small result table, rather than re-reading your source and re-deriving the logic. You are no longer paying to work out a definition you already verified.
+**[Phase 4](#phase-4-reuse-it): Reuse it.** Claude asks the packaged data product a specific question and reads back a small table of results. It does not read your source again or work the logic out again, so you are no longer paying to settle a definition you already checked.
 
 ### What packaging changes
 
@@ -97,11 +103,11 @@ Nexty works in four phases, and the sequence matters: each one depends on the on
 | What Claude does | Reads your source and derives the answer | Sends a structured query, reads the result |
 | What drives the cost | The size of your data and the reasoning | The size of the result |
 | Repeatability | Depends on how you phrased it that day | Runs against the definition you verified |
-| Latency | Varies with the derivation | Varies with the query, usually much shorter |
+| How long it takes | Varies with how much has to be worked out | Varies with the question, usually much shorter |
 
-Build and query time still depend on your data, your environment, and what you ask for. What packaging removes is the re-derivation, not the work.
+Build and query time still depend on your data, your machine, and what you ask for. Packaging saves you from working the answer out again. It does not make asking free.
 
-Exploring is the right way to *find* an answer. It's not a great way to *keep getting* one. A monthly report you rebuild by conversation pays for the full derivation twelve times a year, and can drift each time.
+Exploring is the right way to *find* an answer. It's not a great way to *keep getting* one. A monthly report you rebuild by conversation works the whole answer out twelve times a year, and can drift each time.
 
 **A rule of thumb:** explore freely, and the moment you catch yourself about to do the same reasoning a second time, consider packaging it.
 
@@ -132,15 +138,15 @@ Note what's in it: the outcome, the rules, the cadence, and a number you can che
 
 ### Telling Nexty where the data is
 
-Nexty does not go looking for data on its own, and it will not assume it can reach a database or an API because a question sounds analytical. You identify the source and supply what is needed to reach it: a connection, a path, an endpoint. From there Nexty inspects the source, profiles its structure, and works out the rest with you.
+Nexty does not go looking for data on its own, and it will not assume it can reach a database or an API because a question sounds analytical. You identify the source and supply what is needed to reach it: a connection, a file path, an API address. From there Nexty inspects the source, profiles its structure, and works out the rest with you.
 
 It builds against:
 
 - **Databases**: Snowflake, Postgres, and MySQL.
 - **APIs**, including internal services and third-party ones.
-- **Files and exports**, given a path the runtime can actually see.
+- **Files and exports**, as long as they sit on the machine Nexty runs on.
 
-In Cowork this last point matters. A file attached to the session lives in Cowork's workspace, which is not where the build runs. For a build, Nexty needs a host-visible path or a connection.
+In Cowork this last point matters. A file attached to the session lives in Cowork's workspace, which is not where the build runs. For a build, Nexty needs a file on your own machine, or a connection.
 
 Once a source is connected, ask what's in it:
 
@@ -152,7 +158,7 @@ If it needs a credential or a connection detail, it asks for that specific thing
 
 ## Phase 2: Work the problem
 
-This is the phase where being picky pays, because every correction here is one you'd otherwise make forever.
+Every correction you make here is one you would otherwise make every time you ran the job.
 
 Talk to Claude the way you'd brief a colleague. Give it the target you already know. Then push back on what comes out:
 
@@ -166,9 +172,9 @@ Ask it to show its reasoning when a number surprises you:
 
 > Walk me through what that's counting.
 
-**Don't skip ahead to packaging.** A packaged data product built on a definition you hadn't finished arguing about is worse than none at all. It makes a wrong number repeatable and gives it an official-looking home.
+**Don't skip ahead to packaging.** A packaged data product built on a definition you hadn't finished hashing out is worse than none at all. It makes a wrong number repeatable.
 
-You'll notice this phase is slow and each question costs real tokens. That's expected. You're paying for discovery, once.
+You'll notice this phase can be slow and each question costs real tokens. That's expected. The work you do here is what packaging saves you from repeating.
 
 ---
 
@@ -197,9 +203,9 @@ It's yours to change:
 
 > That's right. Build it.
 
-Approving means you agree with the description read back to you, not that you audited a file. You are asked to confirm before the build actually runs, which is the last cheap moment to change your mind.
+Approving means you agree with the description read back to you, not that you audited a file. You are asked to confirm before the build actually runs, before anything is built.
 
-The build takes a few minutes. Nexty reads your source, builds the data product, runs it, and checks it. That's not a hang. It is the derivation you would otherwise repeat every time you asked.
+The build takes a few minutes. Nexty reads your source, builds the data product, runs it, and checks it. It is the work you would otherwise repeat every time you asked.
 
 ---
 
@@ -225,7 +231,7 @@ Nexty finds the data product and reconnects, usually in seconds and without rebu
 
 ### Sharing
 
-The blueprint you approved in phase 3 is saved with the data product, as markdown, in the workflow's own folder. That is the document to hand someone: what the data product is for, the questions it answers, what your terms mean, the rules that always apply, and what it promises.
+The blueprint you approved in phase 3 is saved with the data product, as markdown, in the data product's own folder. That is the document to hand someone: what the data product is for, the questions it answers, what your terms mean, the rules that always apply, and what it promises.
 
 > Give me the blueprint for this data product.
 
@@ -251,7 +257,7 @@ A **measure** is a number: revenue, order count, average basket size, days to cl
 
 A **dimension** is a way of slicing it: region, month, product category, rep, segment.
 
-Every question is some measures cut by some dimensions. "Revenue by region last quarter" is one measure, one dimension, one filter. Nexty builds this vocabulary from your data and your questions, and then the data product speaks it.
+Every question is some measures cut by some dimensions. "Revenue by region last quarter" is one measure, one dimension, one filter. Nexty builds this vocabulary from your data and your questions, and the data product answers in those terms.
 
 > What can I ask this data product about?
 
@@ -267,11 +273,11 @@ Your definitions, written into the data product.
 
 > An "active customer" ordered in the last 90 days. A "qualified lead" scores above 70 **and** has a booked meeting.
 
-Once a term is in the data product, everyone asking gets your definition instead of inventing their own. This is most of the value, and it's the part people skip.
+Once a term is in the data product, everyone asking gets your definition instead of inventing their own.
 
 ### Standing rules vs. filters
 
-Where consistency is won or lost.
+Two ways to leave data out of a number, with different consequences.
 
 A **filter** scopes one question. *"Just Q3."* *"Just the Northeast."* You choose it each time.
 
@@ -279,7 +285,7 @@ A **standing rule** always applies. *"Refunds never count as revenue."* *"Intern
 
 The test: **imagine a colleague who never heard the rule, asking with no filters.** If their number would be *wrong*, not merely broader but wrong, it's a standing rule and belongs inside the data product. If their number would just be *bigger*, it's a filter.
 
-Get this right and the data product is safe to hand to anyone. Get it wrong and it's a trap only you know how to avoid.
+Get this right and the data product is safe to hand to anyone. Get it wrong and someone else gets a wrong number with nothing to warn them.
 
 Be explicit about which you mean:
 
@@ -309,9 +315,9 @@ Copy these and change the nouns.
 
 > Look at our warehouse and tell me what's in the sales schema.
 
-> Here's the connection for our Postgres reporting replica. What tables are in there?
+> Here's the connection for our Postgres reporting database. What tables are in there?
 
-> Profile that table for me before we decide what the model should be.
+> Show me what's in that table before we decide how to organize it.
 
 ### Working the problem
 
@@ -351,7 +357,7 @@ Copy these and change the nouns.
 
 > What did you assume when you built this?
 
-That last one is a good monthly habit. It surfaces decisions made on your behalf while you weren't watching.
+That last one is a good monthly habit. It surfaces the decisions Nexty made on its own.
 
 ### Fixing and changing
 
@@ -371,9 +377,9 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 ## When something goes wrong
 
-**Nexty can't reach the data you meant.** It needs the source identified and a way in. Give it the connection, path, or endpoint, and it'll ask for the specific credential it's missing rather than guessing.
+**Nexty can't reach the data you meant.** It needs the source identified and a way in. Give it the connection, file path, or API address, and it'll ask for the specific credential it's missing rather than guessing.
 
-**You attached a file and Nexty ignored it.** In Cowork the session workspace is not where the build runs. An attachment helps Claude understand your data's shape while you work, but for a build, Nexty needs a host-visible path or a connection.
+**You attached a file and Nexty ignored it.** In Cowork the session workspace is not where the build runs. An attachment helps Claude understand your data's shape while you work, but for a build, Nexty needs a file on your own machine, or a connection.
 
 **A number looks wrong.** Ask Claude to show its work: *"walk me through how that was calculated."* The common causes are the grain and a missing standing rule.
 
@@ -391,10 +397,10 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 | | |
 | --- | --- |
-| `…/nxd-jobs/<workflow>/` | One folder per workflow, holding the blueprint and the built closure. Nexty tells you both paths when it hands off. |
+| `…/nxd-jobs/<project>/` | One folder per data product, named for its project. It holds the blueprint and the files Nexty generated. Nexty tells you the paths when it finishes. |
 | Claude **Settings → Connectors** | Where `nxd-desktop` appears once it's installed. |
 
-The blueprint and the closure are plain files you can open, read, and back up. Your data and credentials stay on the machine you installed on.
+The blueprint and the generated files are plain text you can open, read, and back up. Your data and credentials stay on the machine you installed on.
 
 ---
 
@@ -402,7 +408,6 @@ The blueprint and the closure are plain files you can open, read, and back up. Y
 
 1. Pick one job you did by hand this month and will do again next month. Just one.
 2. Work it in a session until the number matches the one you already know.
-3. Package it, and ask it again next month without paying to derive it again.
-4. Then add your terms. That's where a personal tool becomes a team one.
+3. Package it, and ask it again next month without working it out from scratch.
+4. Then add your terms. Shared definitions are what let someone else ask the same question and get your numbers.
 
-The habit worth building: when you notice yourself about to do the same reasoning a second time, that's the signal. Stop exploring and package it.
