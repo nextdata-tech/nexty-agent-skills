@@ -1,0 +1,63 @@
+name: doc-renderer
+
+# Guards `scripts/render_doc_html.py`, which renders the docs in this pack as
+# self-contained HTML pages.
+#
+# WHY IT HAS ITS OWN WORKFLOW. Its only consumer is in another repository: the
+# NXD desktop packager stages both forms of a doc into its offline installer and
+# hashes the rendered page into the bundle manifest, reaching this file across a
+# submodule pin. A rendering regression committed here is therefore invisible
+# until someone bumps that pin, where it surfaces as a packaging or install
+# failure with nothing pointing back at this commit.
+#
+# It is a separate workflow rather than a step in ci.yml so the `paths:` filter
+# below can apply: GitHub supports path filtering per workflow, not per step, and
+# nothing here needs running when a skill or an eval changes. Same shape as
+# evals.yml and tag-on-version.yml.
+#
+# `docs/**` is in the filter because the tests render EVERY doc in the pack and
+# assert that no in-page `#link` dangles — so a doc edit, not just a renderer
+# edit, can fail this. That sweep is the point: a fixture only pins the cases
+# someone thought of.
+#
+# NOTE: a path-filtered workflow reports no status when it is filtered out, so do
+# not add this as a required status check on a branch — a PR touching neither the
+# renderer nor the docs would wait forever for a run that never starts.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/render_doc_html.py'
+      - 'scripts/tests/**'
+      - 'docs/**'
+      - '.github/workflows/doc-renderer.yml'
+  pull_request:
+    paths:
+      - 'scripts/render_doc_html.py'
+      - 'scripts/tests/**'
+      - 'docs/**'
+      - '.github/workflows/doc-renderer.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doc-renderer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-tests:
+    runs-on: ubuntu-latest
+    steps:
+      # No submodules: the tests read this pack's own docs and the renderer is
+      # stdlib-only, so nothing here needs nextdata-public-examples.
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Doc renderer tests
+        run: uv run --no-project --with pytest python -m pytest scripts/tests -q

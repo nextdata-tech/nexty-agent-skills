@@ -250,6 +250,24 @@ or one line:
 npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx skills add ./src --all -y
 ```
 
+### Doc renderer (`scripts/render_doc_html.py`)
+
+Renders a doc in `docs/` as a self-contained HTML page, styled after
+nextdata.com. Stdlib only - no install, no dependencies.
+
+```bash
+# nexty-desktop-user-guide/ plus nexty-desktop-user-guide.tar.gz beside it
+python3 scripts/render_doc_html.py docs/nexty-desktop-user-guide.md -z
+
+# same page and assets, written somewhere you choose
+python3 scripts/render_doc_html.py docs/nexty-desktop-user-guide.md output
+```
+
+Its consumer is the NXD CI that renders these docs and pushes to S3 to serve
+the site. The output must be reproducible - hence no timestamp in the page
+and a hand-built gzip header in the tarball. `.github/workflows/doc-renderer.yml`
+runs `scripts/tests/` whenever the renderer, its tests, or `docs/` change.
+
 ## Uninstall
 
 With the first-party installer:
