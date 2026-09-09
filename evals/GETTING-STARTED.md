@@ -14,7 +14,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Cross-DP joins** | `evals/cross-dp-joins/harness/run_eval.py` | local only | Compiler-strategy and agent trials for cross-data-product join fan-out safety. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 20 of the 40 public scenarios.**
+installs and covers 20 of the 41 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -112,8 +112,9 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-20 of 40 public scenarios. The remaining 20 declare `ci_skip` in their
-`checks.json`. Sixteen need a Tier 2 or Tier 3 install; three are gated on the agent
+20 of 41 public scenarios. The remaining 21 declare `ci_skip` in their
+`checks.json`. Seventeen need a Tier 2 or Tier 3 install; three are gated on the agent
+backend; and one requires an operator-provided source-isolation wrapper:
 backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
@@ -131,6 +132,7 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `multi-source-labeled-roots-supervisor` | compatible live desktop supervisor (Tier 3) |
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
 | `terminal-self-check-provenance` | authenticated Claude CLI + live desktop supervisor and NXD runtime (Tier 3) |
+| `terminal-authenticated-dlt-api-ingestion` | authenticated Claude CLI + live desktop supervisor and NXD runtime (Tier 3) |
 | `terminal-timeout-lifecycle` | authenticated Claude CLI + live desktop supervisor and NXD runtime (Tier 3) |
 | `terminal-field-mapper-adapter-contract` | live desktop supervisor over stdio MCP (Tier 3) |
 | `optional-empty-output-aggregate-desktop` | compatible live desktop supervisor (Tier 3) |

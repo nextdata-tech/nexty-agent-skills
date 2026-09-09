@@ -1,0 +1,8 @@
+{
+  "module": "stub_dlt_api.py",
+  "start": "start_server",
+  "stop": "stop_server",
+  "endpoint_file": "ENDPOINT_URL",
+  "observations": true,
+  "description": "Runner-owned synthetic authenticated paginated DLT API fixture."
+}

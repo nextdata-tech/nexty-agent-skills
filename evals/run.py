@@ -233,6 +233,10 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
         "stub_slow_paginated_api.py",
         "check_terminal_timeout_lifecycle.py",
     }),
+    "terminal-authenticated-dlt-api-ingestion": frozenset({
+        "stub_dlt_api.py",
+        "check_dlt_api.py",
+    }),
     "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
     # The terminal mapper checker is withheld from the agent; it is runner-side
     # oracle material and is passed directly to the deterministic subprocess.

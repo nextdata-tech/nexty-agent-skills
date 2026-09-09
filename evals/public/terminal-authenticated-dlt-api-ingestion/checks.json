@@ -1,0 +1,20 @@
+{
+  "name": "Terminal authenticated DLT API ingestion",
+  "skills": ["nxd-generate-data-product", "nxd-run-job-loop"],
+  "ci_skip": "needs an authenticated Claude CLI plus a provisioned nxd-desktop-supervisor runtime (EVAL_DESKTOP_SUPERVISOR_DIR, EVAL_DESKTOP_PYTHON, and EVAL_NXD_REPO_ROOT); run explicitly on a host with those components or via workflow_dispatch",
+  "wants_trace": true,
+  "deterministic_check": {
+    "script": "check_dlt_api.py",
+    "deps": [],
+    "redaction_markers": ["nex890-opaque-synthetic-secret-9a3c"],
+    "wants_trace": true,
+    "trace_source": "runner_mcp"
+  },
+  "checks": [
+    {"id": "public-mcp-trace", "check": "The runner-authored trace shows the public MCP lifecycle and does not rely on direct supervisor CLI calls."},
+    {"id": "dlt-profile-architecture", "check": "The landed closure uses the DLT REST connector, flat api-source profile attributes, and profile-derived endpoint/auth/header values; a hand-written HTTP loop or endpoint companion is rejected."},
+    {"id": "positive-pagination", "check": "The positive closure preserves all 23 synthetic rows from the three-page envelope and supports the governed filtered query."},
+    {"id": "negative-matrix", "check": "401, 403, 404, malformed profile, omitted profile, retired companion, and hard-coded endpoint cases each record a distinct structured failure phase/code."},
+    {"id": "redaction-and-cleanup", "check": "The synthetic credential is absent from the runner trace, diagnostics, generated source, and export evidence, and the workflow is stopped through the public tools."}
+  ]
+}
