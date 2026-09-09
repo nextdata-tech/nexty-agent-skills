@@ -48,7 +48,12 @@ Pick the path that matches where you work. They are different installs, not two 
 
 ### Run
 
-Start the job loop by running `/nxd-run-job-loop`. You should see a screen that looks like this:
+The installer copies the skill trees into `~/.nxd-desktop/skills` and registers the MCP
+server. How those skills are loaded into Claude is not settled yet, so
+`/nxd-run-job-loop` may not be available to you as a command. Describing the job in
+your own words reaches the same place.
+
+Once the job loop starts, you should see a screen that looks like this:
 
 ![start_screen.png](start_screen.png)
 
@@ -83,7 +88,7 @@ Nexty works in four phases, and the sequence matters: each one depends on the on
 
 **[Phase 3](#phase-3-package-it): Package it.** When the answer is right and you expect to need it again, Nexty records what you settled on, your source, your definitions and your rules, and builds it into a **data product**.
 
-**[Phase 4](#phase-4-reuse-it): Reuse it.** Asking the packaged product is a bounded operation: Claude sends a structured semantic query and reads back a small result table, rather than re-reading your source and re-deriving the logic. You are no longer paying to work out a definition you already verified.
+**[Phase 4](#phase-4-reuse-it): Reuse it.** Asking the packaged data product is a bounded operation: Claude sends a structured semantic query and reads back a small result table, rather than re-reading your source and re-deriving the logic. You are no longer paying to work out a definition you already verified.
 
 ### What packaging changes
 
@@ -104,7 +109,7 @@ Exploring is the right way to *find* an answer. It's not a great way to *keep ge
 
 ## Phase 1: Bring a job to be done
 
-The single biggest predictor of success is what you bring. Not what data you have, but what job you want done.
+What you bring matters more than what data you have. A repeatable job with a known expected result is a strong candidate.
 
 **A good candidate:**
 
@@ -161,7 +166,7 @@ Ask it to show its reasoning when a number surprises you:
 
 > Walk me through what that's counting.
 
-**Don't skip ahead to packaging.** A packaged product built on a definition you hadn't finished arguing about is worse than no product. It makes a wrong number repeatable and gives it an official-looking home.
+**Don't skip ahead to packaging.** A packaged data product built on a definition you hadn't finished arguing about is worse than none at all. It makes a wrong number repeatable and gives it an official-looking home.
 
 You'll notice this phase is slow and each question costs real tokens. That's expected. You're paying for discovery, once.
 
@@ -175,7 +180,7 @@ When the answer is right:
 
 ### The blueprint
 
-Before building anything, Nexty writes out the plan it intends to follow. We call it the **data product blueprint**: plain English, your job written down. It covers what the product is for, what questions it answers, what your terms mean, what rules always apply, and anything Nexty couldn't work out without you.
+Before building anything, Nexty writes out the plan it intends to follow. We call it the **data product blueprint**: plain English, your job written down. It covers what the data product is for, what questions it answers, what your terms mean, what rules always apply, and anything Nexty couldn't work out without you.
 
 You don't need to understand its structure, but if you're curious about the details, you can review the blueprint at any time. You can check two things:
 
@@ -194,7 +199,7 @@ It's yours to change:
 
 Approving means you agree with the description read back to you, not that you audited a file. You are asked to confirm before the build actually runs, which is the last cheap moment to change your mind.
 
-The build takes a few minutes. Nexty reads your source, builds the product, runs it, and checks it. That's not a hang. It is the derivation you would otherwise repeat every time you asked.
+The build takes a few minutes. Nexty reads your source, builds the data product, runs it, and checks it. That's not a hang. It is the derivation you would otherwise repeat every time you asked.
 
 ---
 
@@ -208,19 +213,19 @@ The build takes a few minutes. Nexty reads your source, builds the product, runs
 
 > Northeast versus Southwest, month by month.
 
-Claude shows you what it actually asked the product alongside the answer. **Read that part.** If your question and its query don't match, say so and it'll correct.
+Claude shows you what it actually asked the data product alongside the answer. **Read that part.** If your question and its query don't match, say so and it'll correct.
 
 ### Coming back later
 
 Close your laptop, come back in three weeks, new session:
 
-> Open my orders product and show me last week's revenue.
+> Open my orders data product and show me last week's revenue.
 
 Nexty finds the data product and reconnects, usually in seconds and without rebuilding. If the built artifact is no longer there, it rebuilds from what it saved, and your terms, rules, and decisions come back either way.
 
 ### Sharing
 
-The blueprint you approved in phase 3 is saved with the product, as markdown, in the workflow's own folder. That is the document to hand someone: what the product is for, the questions it answers, what your terms mean, the rules that always apply, and what it promises.
+The blueprint you approved in phase 3 is saved with the data product, as markdown, in the workflow's own folder. That is the document to hand someone: what the data product is for, the questions it answers, what your terms mean, the rules that always apply, and what it promises.
 
 > Give me the blueprint for this data product.
 
@@ -230,7 +235,7 @@ Email it, post it, attach it to a deck. It answers "where does this number come 
 
 It will. Revenue gets redefined, a region splits, a new product line appears. Drop back to phase 2 for the bit that changed:
 
-> Marketplace revenue needs to be reported separately from direct now. Update the product.
+> Marketplace revenue needs to be reported separately from direct now. Update the data product.
 
 Nexty amends the blueprint, shows you what changed, and rebuilds. You are not starting over.
 
@@ -238,7 +243,7 @@ Nexty amends the blueprint, shows you what changed, and rebuilds. You are not st
 
 ## Key concepts
 
-Six ideas. Once these land, the rest is obvious.
+Six ideas worth knowing when you review a data product.
 
 ### Measures and dimensions
 
@@ -246,9 +251,9 @@ A **measure** is a number: revenue, order count, average basket size, days to cl
 
 A **dimension** is a way of slicing it: region, month, product category, rep, segment.
 
-Every question is some measures cut by some dimensions. "Revenue by region last quarter" is one measure, one dimension, one filter. Nexty builds this vocabulary from your data and your questions, and then the product speaks it.
+Every question is some measures cut by some dimensions. "Revenue by region last quarter" is one measure, one dimension, one filter. Nexty builds this vocabulary from your data and your questions, and then the data product speaks it.
 
-> What can I ask this product about?
+> What can I ask this data product about?
 
 ### Grain
 
@@ -258,11 +263,11 @@ This is the most common source of a wrong number that still looks completely pla
 
 ### Terms
 
-Your definitions, written into the product.
+Your definitions, written into the data product.
 
 > An "active customer" ordered in the last 90 days. A "qualified lead" scores above 70 **and** has a booked meeting.
 
-Once a term is in the product, everyone asking gets your definition instead of inventing their own. This is most of the value, and it's the part people skip.
+Once a term is in the data product, everyone asking gets your definition instead of inventing their own. This is most of the value, and it's the part people skip.
 
 ### Standing rules vs. filters
 
@@ -272,9 +277,9 @@ A **filter** scopes one question. *"Just Q3."* *"Just the Northeast."* You choos
 
 A **standing rule** always applies. *"Refunds never count as revenue."* *"Internal test orders are not orders."*
 
-The test: **imagine a colleague who never heard the rule, asking with no filters.** If their number would be *wrong*, not merely broader but wrong, it's a standing rule and belongs inside the product. If their number would just be *bigger*, it's a filter.
+The test: **imagine a colleague who never heard the rule, asking with no filters.** If their number would be *wrong*, not merely broader but wrong, it's a standing rule and belongs inside the data product. If their number would just be *bigger*, it's a filter.
 
-Get this right and the product is safe to hand to anyone. Get it wrong and it's a trap only you know how to avoid.
+Get this right and the data product is safe to hand to anyone. Get it wrong and it's a trap only you know how to avoid.
 
 Be explicit about which you mean:
 
@@ -282,7 +287,7 @@ Be explicit about which you mean:
 
 ### Projects
 
-Each product has a project name. That's your handle for it. Everything else, where the data came from, how it was built, what it decided, Nexty records for you.
+Each data product has a project name. That's your handle for it. Everything else, where the data came from, how it was built, what it decided, Nexty records for you.
 
 ### Exploring vs. asking
 
@@ -290,7 +295,7 @@ Worth naming, because it's the difference between the phases.
 
 **Exploring** is open-ended: Claude reads your data and reasons about it. Powerful, costly, and the answer depends partly on how you asked.
 
-**Asking a product** is bounded: Claude sends a structured query and reads back a small table. The answer depends on what you asked for and the definition already in the product.
+**Asking a data product** is bounded: Claude sends a structured query and reads back a small table. The answer depends on what you asked for and the definition already in the data product.
 
 Neither is better. Explore to discover; package to repeat.
 
@@ -326,7 +331,7 @@ Copy these and change the nouns.
 
 ### Packaging
 
-> This is right. Turn it into a reusable product.
+> This is right. Turn it into a reusable data product.
 
 > Show me the blueprint again. I want to check the definitions.
 
@@ -340,7 +345,7 @@ Copy these and change the nouns.
 
 > Top 10 customers by revenue, this year versus last.
 
-> What questions can this product answer?
+> What questions can this data product answer?
 
 > What terms are defined in here?
 
@@ -352,15 +357,15 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 > That revenue figure looks too high. Walk me through what it's counting.
 
-> Marketplace revenue should be reported separately from direct now. Update the product.
+> Marketplace revenue should be reported separately from direct now. Update the data product.
 
 > Exclude intercompany transfers permanently, not just in this query.
 
 ### Sharing
 
-> Where is the blueprint for this product? I want to send it to someone.
+> Where is the blueprint for this data product? I want to send it to someone.
 
-> Export this product so I can send it to a colleague.
+> Export this data product so I can send it to a colleague.
 
 ---
 
@@ -370,11 +375,11 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 
 **You attached a file and Nexty ignored it.** In Cowork the session workspace is not where the build runs. An attachment helps Claude understand your data's shape while you work, but for a build, Nexty needs a host-visible path or a connection.
 
-**A number looks wrong.** Ask Claude to show its work: *"walk me through how that was calculated."* Nine times out of ten it's the grain or a missing standing rule.
+**A number looks wrong.** Ask Claude to show its work: *"walk me through how that was calculated."* The common causes are the grain and a missing standing rule.
 
 **The build failed.** Nexty reports what broke and what it's doing about it. Most failures are a data surprise: a column that's text where numbers were expected, a date format that changes halfway through. Tell it what you know about your data and it'll adjust.
 
-**It won't answer a question.** That's deliberate. If the product can't answer honestly, Nexty says so rather than guessing. Ask what's missing:
+**It won't answer a question.** That's deliberate. If the data product can't answer honestly, Nexty says so rather than guessing. Ask what's missing:
 
 > Why can't you answer that? What would you need?
 
@@ -389,7 +394,7 @@ That last one is a good monthly habit. It surfaces decisions made on your behalf
 | `…/nxd-jobs/<workflow>/` | One folder per workflow, holding the blueprint and the built closure. Nexty tells you both paths when it hands off. |
 | Claude **Settings → Connectors** | Where `nxd-desktop` appears once it's installed. |
 
-Nothing is hidden. Open these folders, read them, back them up. Your data and credentials stay on the machine you installed on.
+The blueprint and the closure are plain files you can open, read, and back up. Your data and credentials stay on the machine you installed on.
 
 ---
 
