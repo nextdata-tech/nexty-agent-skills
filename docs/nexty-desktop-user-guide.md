@@ -34,13 +34,19 @@ Neither is an Intel build.
 
 The steps below are the Mac install, Linux is similar.
 
-1. **Download the Nexty Desktop distribution.**
-2. **Right-click the downloaded file and choose Open**, then confirm when macOS
-   asks. Do this instead of double-clicking: macOS blocks apps it hasn't seen
-   before, and right-click then Open is what gets past that. You only need to do
-   it this once.
-3. **Wait.** A terminal window opens and runs the install by itself. You do not
+1. **Download the Nexty Desktop distribution** from [the releases page](https://github.com/nextdata-tech/nexty-agent-skills/releases#release-v0.48.g0cb20a504).
+2. **Double-click it.** macOS refuses to open it and warns that it cannot verify
+   the developer. That is expected: the installer is not signed yet. Dismiss the
+   warning.
+3. **Open System Settings, then Privacy & Security.** Scroll down to the Security
+   section. There is a line saying the file was blocked, with an **Open Anyway**
+   button beside it. Click that, confirm with your password or Touch ID, then
+   click **Open** in the dialog that follows.
+4. **Wait.** A terminal window opens and runs the install by itself. You do not
    have to type anything into it.
+
+Steps 2 and 3 are only for the first install. macOS remembers the file after
+that, and this goes away entirely once the installer is signed.
 
 When it finishes, that window tells you what is left to do:
 
