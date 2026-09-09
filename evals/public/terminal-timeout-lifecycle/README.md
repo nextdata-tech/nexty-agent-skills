@@ -8,9 +8,10 @@ and captures a redacted JSON-RPC trace. The withheld checker treats durable
 `inspect_run` records and published-product listings as the authority rather
 than trusting the agent's narration.
 
-The scenario covers a caller-configured timeout, a larger-budget retry after
-that run is terminal, a bounded plan using the runtime default, publication
-atomicity, and resume-first recovery. It deliberately does not claim a live
+The scenario covers a caller-configured timeout, a bounded retry only when the
+timed-out run is not already published, publication atomicity, and resume-first
+recovery when it is. The paginated fixture fixes its page size so a single
+request cannot collapse the source evidence. It deliberately does not claim a live
 Desktop UI/provider run. The current public MCP catalog has no cancellation
 operation; cancellation is therefore kept as a runner/process-lifecycle
 boundary and is covered by the shared stdio cleanup tests, rather than being

@@ -48,6 +48,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Mapping
 
 from eval_backends import (
     AGENT_BACKENDS,
@@ -1596,6 +1597,121 @@ def _redacted_exception_detail(exc: BaseException) -> str:
     return detail
 
 
+def _redact_runtime_secrets(value: Any, secrets_to_redact: tuple[str, ...]) -> Any:
+    """Remove runner-injected fixture credentials from persisted agent output.
+
+    A credential can legitimately be present in the agent environment so a
+    closure can be authored, but it must never survive in the transcript,
+    metrics, cache, or judge prompt. Backend-level key-name redaction cannot
+    catch a literal printed from a generated profile, so replace the exact
+    runner-owned values at the eval boundary as a second line of defense.
+    """
+    if isinstance(value, str):
+        for secret in sorted(set(secrets_to_redact), key=len, reverse=True):
+            if secret:
+                value = value.replace(secret, "<redacted>")
+        return value
+    if isinstance(value, dict):
+        return {
+            key: _redact_runtime_secrets(item, secrets_to_redact)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_runtime_secrets(item, secrets_to_redact) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_runtime_secrets(item, secrets_to_redact) for item in value)
+    return value
+
+
+def _redact_agent_artifacts(
+    trace: str, metrics: dict, secrets_to_redact: tuple[str, ...]
+) -> tuple[str, dict, bool]:
+    """Redact agent artifacts and report whether a literal was observed."""
+    if not secrets_to_redact:
+        return trace, metrics, False
+    raw_metrics = json.dumps(metrics, ensure_ascii=False, default=str)
+    leaked = any(
+        secret and (secret in trace or secret in raw_metrics)
+        for secret in secrets_to_redact
+    )
+    return (
+        _redact_runtime_secrets(trace, secrets_to_redact),
+        _redact_runtime_secrets(metrics, secrets_to_redact),
+        leaked,
+    )
+
+
+def _runtime_secret_values(
+    spec: Mapping[str, Any] | None, env_overrides: Mapping[str, str] | None
+) -> tuple[str, ...]:
+    """Return values explicitly injected into an agent by an HTTP fixture."""
+    if not spec or not isinstance(spec.get("agent_env"), Mapping):
+        return ()
+    env = env_overrides or {}
+    return tuple(
+        str(env[name])
+        for name in spec["agent_env"]
+        if isinstance(name, str) and env.get(name)
+    )
+
+
+def _http_stub_fixture_path(scenario_dir: Path, spec: Mapping[str, Any]) -> Path:
+    """Resolve the runner-owned HTTP fixture module named by a scenario."""
+    borrowed = str(spec.get("fixtures_from", "")).strip()
+    fixtures_dir = scenario_dir / "fixtures"
+    if borrowed:
+        fixtures_dir = scenario_dir.parent / borrowed / "fixtures"
+        if not fixtures_dir.is_dir():
+            raise HttpStubSetupError(
+                f"http_stub fixtures_from names no such scenario: {borrowed}"
+            )
+    module_name = str(spec.get("module", "")).removesuffix(".py")
+    module_path = fixtures_dir / f"{module_name}.py"
+    if not module_path.is_file():
+        raise HttpStubSetupError(f"http_stub module not found: {module_path}")
+    return module_path
+
+
+def _http_stub_agent_env(scenario_dir: Path, spec: Mapping[str, Any]) -> dict[str, str]:
+    """Resolve explicitly requested fixture secrets for the agent environment.
+
+    The fixture module remains runner-side and the spec maps an environment
+    variable to an attribute on that module, rather than placing a credential
+    literal in the agent-visible brief or command transcript. This is opt-in so
+    ordinary HTTP fixtures never expose module constants to an agent.
+    """
+    raw = spec.get("agent_env")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise HttpStubSetupError("http_stub agent_env must be an object")
+    module_path = _http_stub_fixture_path(scenario_dir, spec)
+    import importlib.util
+
+    module_name = f"_eval_http_stub_env_{module_path.stem}"
+    mod_spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if mod_spec is None or mod_spec.loader is None:
+        raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
+    module = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(module)
+    resolved: dict[str, str] = {}
+    for env_name, attribute in raw.items():
+        if not isinstance(env_name, str) or not env_name:
+            raise HttpStubSetupError("http_stub agent_env names must be non-empty strings")
+        if not isinstance(attribute, str) or not attribute:
+            raise HttpStubSetupError(
+                f"http_stub agent_env[{env_name!r}] must name a module attribute"
+            )
+        value = getattr(module, attribute, None)
+        if not isinstance(value, str) or not value:
+            raise HttpStubSetupError(
+                f"http_stub agent_env[{env_name!r}] attribute {attribute!r} "
+                "must be a non-empty string"
+            )
+        resolved[env_name] = value
+    return resolved
+
+
 @contextlib.contextmanager
 def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
@@ -1612,17 +1728,8 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     # scenarios ingesting from the same fixture must serve the SAME payload,
     # auth and header gate, or the pair stops being comparable — and a copy
     # drifts silently, which is worse than either scenario having no stub.
-    borrowed = str(spec.get("fixtures_from", "")).strip()
-    fixtures_dir = scenario_dir / "fixtures"
-    if borrowed:
-        fixtures_dir = scenario_dir.parent / borrowed / "fixtures"
-        if not fixtures_dir.is_dir():
-            raise HttpStubSetupError(
-                f"http_stub fixtures_from names no such scenario: {borrowed}")
-    module_name = str(spec.get("module", "")).removesuffix(".py")
-    module_path = fixtures_dir / f"{module_name}.py"
-    if not module_path.is_file():
-        raise HttpStubSetupError(f"http_stub module not found: {module_path}")
+    module_path = _http_stub_fixture_path(scenario_dir, spec)
+    module_name = module_path.stem
 
     # A file-backed request log, for scenarios whose verifier is a SEPARATE
     # process and must answer "did the closure the supervisor materialized
@@ -1841,6 +1948,11 @@ def desktop_stdio_runtime(
         bin_dir, env_over, desktop_python, session = _desktop_stdio_session(
             scenario_dir, desktop_spec, workspace, tmp
         )
+        if http_spec is not None:
+            env_over = {
+                **env_over,
+                **_http_stub_agent_env(scenario_dir, http_spec),
+            }
         with session:
             yield bin_dir, env_over, desktop_python, session, stub_observations
 
@@ -2632,6 +2744,23 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     desktop_spec = scenario_needs_desktop(scenario_dir)
     desktop_stdio_spec = scenario_needs_desktop_stdio(scenario_dir)
     http_stub_spec = scenario_needs_http_stub(scenario_dir)
+    fixture_runtime_secrets: tuple[str, ...] = ()
+    if desktop_stdio_spec is not None and http_stub_spec is not None:
+        try:
+            fixture_runtime_secrets = tuple(
+                _http_stub_agent_env(scenario_dir, http_stub_spec).values()
+            )
+        except HttpStubSetupError as exc:
+            res.error = f"http stub setup failed: {_redacted_exception_detail(exc)}"
+            return res
+    deterministic_cfg = checks.get("deterministic_check") or {}
+    configured_redaction_markers = deterministic_cfg.get("redaction_markers", [])
+    redaction_values = tuple(
+        dict.fromkeys(
+            [*fixture_runtime_secrets]
+            + [str(marker) for marker in configured_redaction_markers if str(marker)]
+        )
+    )
     # desktop cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
     # --add-dir, or it wastes turns hunting for it.
@@ -2727,6 +2856,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     facts: list[str] = []
     ws_fact: str | None = None
     det_fact: str | None = None
+    agent_runtime_secret_leak = False
     http_stub_teardown_error: str | None = None
     if cache_file and cache_file.exists():
         try:
@@ -2750,6 +2880,14 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     if cached:
         trace = cached["trace"]
         metrics = {**cached["metrics"], **preflight_metrics, "cached": True}
+        trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
+            trace, metrics, redaction_values
+        )
+        if agent_runtime_secret_leak and cache_file:
+            # Do not leave a previously cached raw credential on disk after it
+            # has been discovered in a transcript.
+            with contextlib.suppress(OSError):
+                cache_file.unlink()
         facts = list(cached.get("facts", []))
         ok = True
     else:
@@ -2844,6 +2982,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                                 "agent_allowed_tools", "mcp__nxd-desktop__*"
                             )),
                             stdio_session=session, **source_audit_kwargs, **turn_kwargs,
+                        )
+                        runtime_secrets = redaction_values or _runtime_secret_values(
+                            http_stub_spec, env_over
+                        )
+                        trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
+                            trace, metrics, runtime_secrets
                         )
                         runner_mcp_trace = session.trace_path.read_text(encoding="utf-8")
                         metrics["stdio_mcp_trace_source"] = "runner"
@@ -3035,6 +3179,14 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # on a later cache hit would describe a closure that was never checked.
         if det_fact:
             facts.append(det_fact)
+
+    if agent_runtime_secret_leak:
+        facts.append(
+            "AGENT FIXTURE REDACTION: FAIL — the runner redacted a protected "
+            "fixture credential or response marker from the agent transcript or "
+            "metrics before grading. Treat the redaction-and-cleanup check as "
+            "failed."
+        )
 
     if cached and checks.get("workspace_files"):
         # A cached transcript has no workspace behind it, so the files cannot be

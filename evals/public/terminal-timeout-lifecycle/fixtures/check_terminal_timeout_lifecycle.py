@@ -15,6 +15,11 @@ SECRET_MARKERS = {
 }
 
 
+def _marker_labels(markers: list[str]) -> dict[str, str]:
+    """Give redaction failures stable names without echoing secret values."""
+    return {marker: f"marker-{index + 1}" for index, marker in enumerate(markers)}
+
+
 def _records(path: Path) -> list[dict[str, Any]]:
     return [
         json.loads(line)
@@ -124,8 +129,15 @@ def _failed_response(records: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _has_available_publication(objects: Iterable[dict[str, Any]]) -> bool:
-    text = json.dumps(list(objects), sort_keys=True).casefold()
+def _has_available_publication(
+    objects: Iterable[dict[str, Any]], workflow: str | None = None
+) -> bool:
+    materialized = list(objects)
+    if workflow is not None and not any(
+        obj.get("workflow") == workflow for obj in materialized
+    ):
+        return False
+    text = json.dumps(materialized, sort_keys=True).casefold()
     return (
         '"artifact_status": "available"' in text
         or '"status": "published"' in text
@@ -133,20 +145,41 @@ def _has_available_publication(objects: Iterable[dict[str, Any]]) -> bool:
     )
 
 
+def _call_workflow(call: dict[str, Any]) -> str:
+    arguments = call.get("message", {}).get("params", {}).get("arguments", {})
+    workflow = arguments.get("workflow") if isinstance(arguments, dict) else None
+    return workflow if isinstance(workflow, str) else ""
+
+
+def _call_objects(trace: list[dict[str, Any]], call: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        obj
+        for record in _response_records(trace, call)
+        for obj in _response_objects(record)
+    ]
+
+
+def _call_has_published_primary(
+    trace: list[dict[str, Any]], call: dict[str, Any], workflow: str
+) -> bool:
+    return _has_available_publication(_call_objects(trace, call), workflow)
+
+
 def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list[str]:
     failures: list[str] = []
     trace = _records(trace_path)
     trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
-    markers = set(SECRET_MARKERS)
+    markers = sorted(SECRET_MARKERS)
     if marker_file is not None and marker_file.is_file():
-        markers = {
+        markers = [
             line.strip()
             for line in marker_file.read_text(encoding="utf-8").splitlines()
             if line.strip()
-        }
+        ]
+    marker_labels = _marker_labels(markers)
     for marker in markers:
         if marker in trace_text:
-            failures.append(f"redaction/{marker}")
+            failures.append(f"redaction/{marker_labels[marker]}")
     for candidate in root.rglob("*") if root.is_dir() else ():
         if not candidate.is_file():
             continue
@@ -163,7 +196,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
             continue
         for marker in markers:
             if marker in candidate_text:
-                failures.append(f"redaction/{marker}")
+                failures.append(f"redaction/{marker_labels[marker]}")
 
     if not all(
         record.get("source") == "runner" and record.get("protocol") == "mcp"
@@ -215,6 +248,15 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     elif inspect_trace_position < timeout_trace_position:
         failures.append("lifecycle/inspect-run-not-after-client-timeout")
 
+    calls = _tool_calls(trace)
+    build_calls = [call for call in calls if call["name"] == "build_data_product"]
+    primary_workflow = _call_workflow(build_calls[0]) if build_calls else ""
+    primary_build_calls = [
+        call for call in build_calls
+        if _call_workflow(call) == primary_workflow
+    ]
+    published_primary_from_inspect = False
+
     inspect_ids = {
         record.get("message", {}).get("id")
         for record in trace
@@ -232,47 +274,74 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     else:
         inspect_objects = [obj for record in inspect_responses for obj in _response_objects(record)]
         joined = "\n".join(_message_text(record) for record in inspect_responses)
-        if "duplicate_builds" not in joined or "run_id" not in joined:
+        primary_inspect_objects = [
+            obj for obj in inspect_objects
+            if obj.get("workflow") == primary_workflow
+        ] if primary_workflow else inspect_objects
+        published_primary_from_inspect = any(
+            str(obj.get("status", "")).casefold() == "published"
+            for obj in primary_inspect_objects
+        )
+        if "run_id" not in joined or (
+            not published_primary_from_inspect and "duplicate_builds" not in joined
+        ):
             failures.append("lifecycle/run-identity-or-duplicate-count-missing")
-        duplicate_counts = _values(inspect_objects, {"duplicate_builds"})
-        if not any(value in {0, "0"} for value in duplicate_counts):
+        duplicate_counts = _values(primary_inspect_objects, {"duplicate_builds"})
+        if (
+            not published_primary_from_inspect
+            and not any(value in {0, "0"} for value in duplicate_counts)
+        ):
             failures.append("retry/duplicate-build-count-not-zero")
         states = [
-            str(value).casefold()
-            for value in _values(inspect_objects, {"state", "lifecycle_state", "status"})
+            str(value).casefold() for value in _values(
+                primary_inspect_objects, {"state", "lifecycle_state", "status"}
+            )
         ]
-        if not any(value in {"continued", "terminal"} for value in states):
+        if not any(value in {"continued", "terminal", "published"} for value in states):
             failures.append("lifecycle/continued-or-terminal-state-missing")
-        required_fields = {
-            "budget": {
-                "configured_budget_ms", "budget_ms", "transform_budget_ms",
-                "execution_budget_ms", "budget_s", "transform_budget_s",
-            },
-            "elapsed": {"elapsed_ms", "elapsed_s", "duration_ms", "duration_s"},
-            "active-stage": {"active_stage", "current_stage", "stage"},
-            "resource-or-model": {"resource", "resource_name", "model", "model_name"},
-            "retry-count": {"retry_count", "retries", "attempt_count"},
-            "request-or-page-count": {
-                "request_count", "requests", "page_count", "pages", "pages_fetched",
-            },
-        }
-        for label, field_names in required_fields.items():
-            if not _contains_key(inspect_objects, field_names):
-                failures.append(f"timeout/{label}-missing-from-inspect")
+        if not published_primary_from_inspect:
+            required_fields = {
+                "budget": {
+                    "configured_budget_ms", "budget_ms", "transform_budget_ms",
+                    "execution_budget_ms", "budget_s", "transform_budget_s",
+                },
+                "elapsed": {"elapsed_ms", "elapsed_s", "duration_ms", "duration_s"},
+                "active-stage": {"active_stage", "current_stage", "stage"},
+                "resource-or-model": {"resource", "resource_name", "model", "model_name"},
+                "retry-count": {"retry_count", "retries", "attempt_count"},
+                "request-or-page-count": {
+                    "request_count", "requests", "page_count", "pages", "pages_fetched",
+                },
+            }
+            for label, field_names in required_fields.items():
+                if not _contains_key(primary_inspect_objects, field_names):
+                    failures.append(f"timeout/{label}-missing-from-inspect")
 
-    calls = _tool_calls(trace)
-    build_calls = [call for call in calls if call["name"] == "build_data_product"]
-    if len(build_calls) < 2:
+    published_primary = published_primary_from_inspect or any(
+        _call_has_published_primary(trace, call, primary_workflow)
+        for call in calls
+        if call["name"] == "list_data_products"
+        and call["index"] > timeout_trace_position
+        and (
+            len(primary_build_calls) < 2
+            or call["index"] < primary_build_calls[1]["index"]
+        )
+    ) if primary_workflow else published_primary_from_inspect
+    if published_primary:
+        if len(primary_build_calls) > 1:
+            failures.append("retry/duplicate-build-count-not-zero")
+    elif len(primary_build_calls) < 2:
         failures.append("retry/second-build-request-missing")
     else:
-        retry_call = build_calls[1]
+        retry_call = primary_build_calls[1]
         retry_records = _response_records(trace, retry_call)
         if not _successful_response(retry_records):
             failures.append("retry/larger-budget-build-success-missing")
 
     failed_probe_calls = [
-        call for call in build_calls[2:]
-        if _failed_response(_response_records(trace, call))
+        call for call in build_calls[1:]
+        if _call_workflow(call) != primary_workflow
+        and _failed_response(_response_records(trace, call))
     ]
     if not failed_probe_calls:
         failures.append("failure/deterministic-failed-build-missing")
@@ -300,47 +369,58 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
 
     list_calls = [call for call in calls if call["name"] == "list_data_products"]
     successful_retry_index = -1
-    if len(build_calls) >= 2:
-        retry_records = _response_records(trace, build_calls[1])
+    if not published_primary and len(primary_build_calls) >= 2:
+        retry_records = _response_records(trace, primary_build_calls[1])
         successful_retry_index = next(
             (
                 index for index, record in enumerate(trace)
-                if record in retry_records and index > build_calls[1]["index"]
+                if record in retry_records and index > primary_build_calls[1]["index"]
             ),
             -1,
         )
-    pre_publish_lists = [
-        call
-        for call in list_calls
-        if timeout_trace_position < call["index"] < successful_retry_index
-    ]
-    post_publish_lists = [call for call in list_calls if call["index"] > successful_retry_index]
-    if not pre_publish_lists:
+
+    if published_primary:
+        publication_lists = [
+            call for call in list_calls
+            if call["index"] > timeout_trace_position
+            and _call_has_published_primary(trace, call, primary_workflow)
+        ]
+        first_publication_index = min(
+            (call["index"] for call in publication_lists), default=-1
+        )
+        pre_publish_lists = [
+            call for call in list_calls
+            if timeout_trace_position < call["index"] < first_publication_index
+        ]
+        post_publish_lists = [
+            call for call in list_calls if call["index"] >= first_publication_index
+        ]
+    else:
+        pre_publish_lists = [
+            call for call in list_calls
+            if timeout_trace_position < call["index"] < successful_retry_index
+        ]
+        post_publish_lists = [
+            call for call in list_calls if call["index"] > successful_retry_index
+        ]
+
+    if not published_primary and not pre_publish_lists:
         failures.append("publish/pre-publish-listing-missing")
     elif any(
-        _has_available_publication(
-            obj
-            for record in _response_records(trace, call)
-            for obj in _response_objects(record)
-        )
+        _has_available_publication(_call_objects(trace, call), primary_workflow or None)
         for call in pre_publish_lists
     ):
         failures.append("publish/partial-publication-visible-before-success")
     if not post_publish_lists:
         failures.append("publish/post-success-listing-missing")
     elif not any(
-        _has_available_publication(
-            obj
-            for record in _response_records(trace, call)
-            for obj in _response_objects(record)
-        )
+        _has_available_publication(_call_objects(trace, call), primary_workflow or None)
         for call in post_publish_lists
     ):
         failures.append("publish/available-artifact-not-observed")
     if not any(
         _contains_key(
-            [obj for record in _response_records(trace, call) for obj in _response_objects(record)],
-            {"publish_seq", "publish_sequence"},
+            _call_objects(trace, call), {"publish_seq", "publish_sequence"}
         )
         for call in post_publish_lists
     ):
@@ -383,11 +463,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         if any(
             call["index"] > resume["index"]
             and call["name"] == "build_data_product"
-            and not str(
-                call["message"].get("params", {})
-                .get("arguments", {})
-                .get("workflow", "")
-            ).endswith("-failed")
+            and _call_workflow(call) == primary_workflow
             for call in calls
         ):
             failures.append("resume/rebuild-used-instead-of-resume")
@@ -398,9 +474,28 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         if observations_path and Path(observations_path).is_file()
         else []
     )
-    pages = [item for item in observations if item.get("status") == 200]
-    if len(pages) < 3 or sum(int(item.get("rows", 0)) for item in pages) != 23:
-        failures.append("source/three-pages-and-23-rows-not-proven")
+    page_rows: dict[int, set[int]] = {}
+    for item in observations:
+        if (
+            item.get("status") == 200
+            and item.get("authorized") is True
+            and item.get("path", "").split("?", 1)[0] == "/v1/events"
+        ):
+            page = int(item.get("page", 0))
+            page_rows.setdefault(page, set()).add(int(item.get("rows", 0)))
+    expected_page_rows = {1: {10}, 2: {10}, 3: {3}}
+    if (
+        set(page_rows) != set(expected_page_rows)
+        or any(page_rows.get(page) != rows for page, rows in expected_page_rows.items())
+    ):
+        observed = ", ".join(
+            f"status={item.get('status')} page={item.get('page')} rows={item.get('rows')}"
+            for item in observations
+        ) or "none"
+        failures.append(
+            "source/three-pages-and-23-rows-not-proven "
+            f"(observed: {observed})"
+        )
 
     if not failures:
         print("ALL CHECKS PASSED")

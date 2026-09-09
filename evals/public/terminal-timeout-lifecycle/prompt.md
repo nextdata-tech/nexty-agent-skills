@@ -18,11 +18,15 @@ returned timeout as a client result, not as proof that the supervisor stopped.
 Immediately call `inspect_run` and record the durable run id, terminal/continued
 state, active stage, configured budget, request/page count, and retry count.
 
-Then retry the same closure with a larger allowed budget or an explicitly
-bounded source plan. Prove from `inspect_run` and the published listing that
-the retry did not launch a duplicate build, that publication is atomic, and
-that the same source semantics were preserved. Exercise and record distinct
-public-MCP outcomes for timeout and failed build, and record the cleanup and
+After inspecting the first run, branch on the durable state. If the timed-out
+request already produced a published artifact, do not call `build_data_product`
+again for the same workflow: that operation intentionally creates a new run.
+Use the existing run and `resume_data_product` to prove resume-first behavior.
+Only if the first run is not published may you retry the same closure with a
+larger allowed budget or an explicitly bounded source plan; prove that retry
+did not create a duplicate and that publication is atomic. In either branch,
+preserve the same source semantics. Exercise and record distinct public-MCP
+outcomes for timeout and failed build, and record the cleanup and
 resume-first-versus-rebuild boundaries. The current public MCP catalog has no
 cancellation operation, so do not invent one or substitute a private
 supervisor command; runner/process cancellation is covered by the shared
@@ -30,6 +34,15 @@ stdio lifecycle harness. For the failed-build outcome, use a separate
 deterministically broken copy/workflow, call `inspect_run` once, and show that
 it never appears as published. Do not call a failed or unpublished run
 successful.
+
+The runner provides `$NXD_EVAL_SOURCE_TOKEN` for the sensitive REST profile.
+When authoring `infra-profile.yaml`, read that variable from Python or another
+process without printing it. Never put the bearer literal in a shell command,
+source file, diagnostic, or final response. After writing the profile, never
+use `cat`, `sed`, `awk`, or an unreviewed Python loop to inspect its contents;
+use `check_data_product` and `stat`/mode checks, or a deliberately key-only
+parser that cannot print values. The guarded profile must remain available to
+the supervisor until the workflow is complete.
 
 All diagnostics must omit credentials and raw response bodies. Stop the
 workflow through the public MCP surface and leave no process or temporary

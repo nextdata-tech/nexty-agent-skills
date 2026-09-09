@@ -30,6 +30,7 @@ def _record(item: dict[str, object]) -> None:
 
 
 EVENTS = [{"event_id": index, "value": index * 7} for index in range(1, 24)]
+PAGE_SIZE = 10
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -58,7 +59,10 @@ class _Handler(BaseHTTPRequestHandler):
         time.sleep(0.04)
         query = parse_qs(parsed.query)
         page = max(1, int(query.get("page", ["1"])[0]))
-        per_page = max(1, int(query.get("per_page", ["10"])[0]))
+        # Keep the fixture's page contract fixed. A caller asking for
+        # ``per_page=23`` must not be able to collapse the evidence into one
+        # response while still claiming it saw the advertised three pages.
+        per_page = PAGE_SIZE
         start = (page - 1) * per_page
         data = EVENTS[start:start + per_page]
         _record({"path": self.path, "status": 200, "authorized": True, "page": page, "rows": len(data), "total": len(EVENTS)})
