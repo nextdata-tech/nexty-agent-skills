@@ -1029,23 +1029,41 @@ add it explicitly rather than assuming it's already covered.
 
 ## Self-check (connectivity smoke test)
 
-A REST API connector needs live credentials to dry-run at all. When
-credentials are available in the authoring session: run one bounded request per
-configured resource (respecting any stated pagination/rate limit), assert a
-parseable response matching the expected shape — not an exact fixture
-count, since remote data isn't static. When credentials are not available
-in-session, report the connectivity self-check as **not run** — do not
-claim it passed. Structural checks (naming invariant, no
-`.semantic_tools()`, import correctness) still run regardless.
+A REST API connector has two separate checks; keep their results separate:
+
+1. The shipped `self_check.py` provides offline closure checks. Its Phase B
+   cannot authenticate an API source, because the harness invokes `ingest()`
+   with an empty secrets map.
+2. The authenticated connectivity smoke test is a real authoring-time probe.
+   Always write it as `connectivity_check.py` at the closure root, beside
+   `infra-profile.yaml` and `transform/`. Keep this script dependency-light
+   and independent of NXD, dlt, DuckDB, and the generated transform — prefer
+   Python's standard library for its bounded HTTP request and response parsing.
+
+When credentials are available in the authoring session, execute
+`python3 connectivity_check.py` (or the equivalent available interpreter)
+before the first build. The execution must make one bounded request per
+configured resource (respecting any stated pagination/rate limit) and assert a
+parseable response matching the expected shape — not an exact fixture count,
+since remote data isn't static. A manually issued `curl` or other exploratory
+fetch is useful for diagnosis but does **not** substitute for executing the
+closure-local probe. Supply credentials to the probe only through the
+authoring session's runtime secret input; never embed or print them, and apply
+the redaction rules below to every failure message.
+
+When credentials are not available in-session, write the probe but report the
+connectivity self-check as **not run** — do not claim it passed. Structural
+checks (naming invariant, no `.semantic_tools()`, import correctness) still run
+regardless.
 
 **Phase B of `self_check.py` cannot pass for this connector, and that is not a
-defect to code around.** The harness calls `ingest()` with an empty `secrets`
-map, so the first `secrets["base_url"]` raises. Do not add a profile-reading
-fallback to make it green — that reintroduces the sidecar channel this file
-spends a section rejecting. Report Phase B as **not runnable**, and verify the
-closure with `check_data_product` instead: it pins and compiles the real
-closure under the supervisor's own interpreter, which is stronger evidence than
-the dry run it replaces.
+defect to code around.** Do not confuse that offline limitation with the
+authenticated `connectivity_check.py` above. Do not add a profile-reading
+fallback to `self_check.py` to make Phase B green — that reintroduces the
+sidecar channel this file spends a section rejecting. Report Phase B as **not runnable**,
+and verify the closure with `check_data_product` instead: it pins
+and compiles the real closure under the supervisor's own interpreter, which is
+stronger evidence than the dry run it replaces.
 
 ### Two ways a probe lies
 
