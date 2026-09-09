@@ -27,6 +27,18 @@ file export. "No `data/`" is about the *connector*: this type brings no
 export of its own. A closure may still carry `data/` for landed reference
 data it authored — see § "Landed reference data in an API closure".
 
+## Closure root
+
+Before authoring, resolve exactly one absolute `<closure-root>`: the directory
+passed to the supervisor as the closure. Normalize existing artifacts into it
+before creating or checking any other artifact. Keep `infra-profile.yaml`,
+`connectivity_check.py`, `spec.py`, `models.py`, `transform/`, and
+`requirements.txt` inside that root: root-level artifacts are direct children,
+and nested artifacts are descendants. Credentialed closures also keep
+`.gitignore` and `SENSITIVE` inside that root. Do not place credentials,
+those sensitivity artifacts, or the profile beside or outside the root. Use the
+same root for the self-check, lock, and build.
+
 ## Scope
 
 An **off-mesh** REST API the user names directly — not an upstream
@@ -296,7 +308,7 @@ already been resolved.
 
   | `auth_type` | additional attributes |
   |---|---|
-  | `bearer` | `auth_token` |
+  | `bearer` | `auth_token`; optional `auth_refresh_path` (`public: true`) |
   | `http_basic` | `auth_username`, `auth_password` |
   | `api_key` | `auth_api_key`, `auth_key_name`, `auth_key_location` (optional, defaults to `header`) |
   | `oauth2_client_credentials` | `auth_client_id`, `auth_client_secret`, `auth_token_url` |
@@ -322,7 +334,7 @@ already been resolved.
   `auth_token`, `auth_username`, `auth_password`, `auth_api_key`,
   `auth_client_id`, `auth_client_secret` — are `public: false` (redacted
   fail-closed on export). Non-secret topology/config — `base_url`, `auth_type`,
-  `auth_key_name`, `auth_key_location`, `region`, and every `header_*` — is `public: true` so it
+  `auth_refresh_path`, `auth_key_name`, `auth_key_location`, `region`, and every `header_*` — is `public: true` so it
   survives an export and the recipient only refills the credentials. **Never
   mark a credential `public: true`.** If the user explicitly designates an
   attribute's sensitivity, honor their choice over this default.
@@ -378,79 +390,40 @@ dlt.extract.exceptions.ResourceExtractionError: In processing pipe `<resource>`
 requests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: ...
 ```
 
-**What works** is a `requests.Session` subclass that overrides **`send()`**,
-passed to the client as `session`. `send()` is the single chokepoint every
-`RESTClient` request passes through, so one override covers pagination, retries
-and every resource:
+**What works** is the complete refresh-aware session in [`../scripts/api_source_refresh_session.py`](../scripts/api_source_refresh_session.py). It overrides `send()`, the single chokepoint used by dlt `RESTClient`, and supports the flat `base_url`, `auth_refresh_path`, and `auth_token` profile attributes described above.
 
-```python
-import time
-from collections.abc import Callable
-
-import requests
-from dlt.sources.rest_api import RESTAPIConfig, rest_api_resources
-
-
-class RefreshingSession(requests.Session):
-    """Re-authenticate once on 401, back off once on 429, then replay."""
-
-    def __init__(self, token: str, refresh: Callable[[], str]) -> None:
-        super().__init__()
-        self._token, self._refresh = token, refresh
-
-    def send(self, request, **kwargs):
-        request.headers["Authorization"] = f"Bearer {self._token}"
-        response = super().send(request, **kwargs)
-        if response.status_code == 401:
-            self._token = self._refresh()          # replace, then replay once
-            request.headers["Authorization"] = f"Bearer {self._token}"
-            response = super().send(request, **kwargs)
-        elif response.status_code == 429:
-            time.sleep(float(response.headers.get("Retry-After", 1)))
-            response = super().send(request, **kwargs)
-        return response
-
-
-session = RefreshingSession(
-    token=secrets["auth_token"],
-    refresh=lambda: refresh_token(
-        secrets["refresh_endpoint"],
-        secrets["refresh_token"],
-    ),
-)
-config: RESTAPIConfig = {
-    "client": {
-        "base_url": secrets["base_url"],
-        "session": session,
-    },
-    "resources": [
-        # resource definitions from the API's endpoint map
-    ],
-}
-resources = rest_api_resources(config)
-```
+The script is shipped as a source recipe, not as a runtime dependency of a generated closure. Copy its source into the generated self-contained transform, or copy and adapt its `_headers_from`, `RefreshingSession`, and `make_rest_api_config` definitions there. Do not import it from the installed skill tree: the closure must still work after handoff to the supervisor. Keep the generated transform resource list and auth/profile wiring around the copied implementation.
 
 The session is attached at `config["client"]["session"]`, which is the
-`RESTAPIConfig` client field consumed by dlt's `RESTClient`; do not put it on a
-custom auth object or as a top-level config field.
+`RESTAPIConfig` client field consumed by dlt `RESTClient`; do not put it on a
+custom auth object or as a top-level config field. Use
+`make_rest_api_config(secrets, resources_config)` and pass the result to
+`rest_api_resources`.
 
-Replay **once** per response, not in a loop: a refresh endpoint that keeps
-returning an unusable token turns an unbounded retry into a hang the supervisor
-reports only as a timeout.
+The state machine allows at most one refresh after a 401 and at most one
+capped delay after a 429 for each original request. It is deliberately not
+recursive: a second 401 raises immediately, and a second 429 is returned to
+dlt. The prior response is closed before every replay, and a non-rewindable
+POST/GraphQL body is rejected before the first send. The timeout is always
+explicit; `Retry-After` accepts finite numeric seconds only, with malformed or
+negative values becoming an immediate retry and excessive values capped by
+`max_retry_after_s`.
 
-**Read the refresh response defensively.** Refresh endpoints disagree on the
-field name — `token`, `access_token`, `bearer_token` are all common. Check the
-ones the profile documents, and raise naming the payload keys you did get if
-none is present; a refresh that silently returns `None` produces a second 401
-that looks identical to the first, and the real fault stays invisible:
-
-```
-RuntimeError: refresh response at <path> carried none of
-  token/access_token/bearer_token
-```
+The refresh request is a same-origin `POST` resolved from the
+`auth_refresh_path` attribute; both `auth/refresh` and the profile
+root-relative `/auth/refresh` shape are valid. Query strings, fragments,
+credentials in URLs, absolute URLs, network paths, and redirects are rejected
+or returned without following them. A successful refresh may return any one of `token`,
+`access_token`, `bearer_token`, `new_token`, `accessToken`, or `bearerToken`;
+if none of those keys is present, the current bearer is retained. If a
+recognized key is present, its value must be a non-empty string; recognized
+empty, non-string, or conflicting values fail without including the value in
+the exception. Non-2xx refresh responses and a second 401 fail immediately.
 
 The refresh path itself is an attribute on the `api-source` service, like every
-other endpoint — see Credential handling above. Never inline the token.
+other endpoint — see Credential handling above. Add `auth_refresh_path` beside
+`auth_token` only when the bearer flow supports refresh, mark it `public: true`,
+and never inline a token or put a credential in a URL, error, or log.
 
 ## Custom request headers
 
@@ -501,23 +474,17 @@ mistake this convention must not invite.
 
 ### Transform assembly
 
-```python
-def _headers_from(secrets: dict) -> dict:
-    """Flat `header_<name>` secrets -> the dict dlt's client.headers wants.
+The [shipped refresh script](../scripts/api_source_refresh_session.py) defines
+`_headers_from`; copy that helper with the session into the generated transform
+when using refresh. It reconstructs the flat `header_*`
+attributes once. Pass the same mapping to dlt's `client["headers"]` and to
+`RefreshingSession(headers=...)`: dlt carries it on ordinary requests, while
+the session carries it onto the refresh request and writes its own
+`Authorization` afterward. Any `Authorization` spelling supplied by a caller
+or filed under `header_*` is rejected case-insensitively before transport.
 
-    `header_user_agent` -> `User-Agent`. Header names are case-insensitive
-    (RFC 7230 §3.2), so title-casing each part is safe.
-    """
-    headers = {}
-    for key, value in secrets.items():
-        if not key.startswith("header_") or value in (None, ""):
-            continue
-        name = "-".join(part.title() for part in key[len("header_"):].split("_"))
-        headers[name] = str(value)
-    return headers
-```
-
-Then, in the `client_config` build (after the `auth_type` dispatch, so a
+For a non-refresh transform, the same one-time assembly is in the
+`client_config` build (after the `auth_type` dispatch, so a
 malformed profile fails on the credential first):
 
 ```python
@@ -994,6 +961,10 @@ add it explicitly rather than assuming it's already covered.
         - key: auth_token
           value: <the live bearer token the user supplied>
           public: false
+        # Optional: include only when this bearer flow supports refresh.
+        - key: auth_refresh_path
+          value: /auth/refresh
+          public: true
   ```
 
   When the API also requires a non-secret header, add one `header_*` attribute
@@ -1070,23 +1041,41 @@ add it explicitly rather than assuming it's already covered.
 
 ## Self-check (connectivity smoke test)
 
-A REST API connector needs live credentials to dry-run at all. When
-credentials are available in the authoring session: run one bounded request per
-configured resource (respecting any stated pagination/rate limit), assert a
-parseable response matching the expected shape — not an exact fixture
-count, since remote data isn't static. When credentials are not available
-in-session, report the connectivity self-check as **not run** — do not
-claim it passed. Structural checks (naming invariant, no
-`.semantic_tools()`, import correctness) still run regardless.
+A REST API connector has two separate checks; keep their results separate:
+
+1. The shipped `self_check.py` provides offline closure checks. Its Phase B
+   cannot authenticate an API source, because the harness invokes `ingest()`
+   with an empty secrets map.
+2. The authenticated connectivity smoke test is a real authoring-time probe.
+   Always write it as `connectivity_check.py` at the closure root, beside
+   `infra-profile.yaml` and `transform/`. Keep this script dependency-light
+   and independent of NXD, dlt, DuckDB, and the generated transform — prefer
+   Python's standard library for its bounded HTTP request and response parsing.
+
+When credentials are available in the authoring session, execute
+`python3 connectivity_check.py` (or the equivalent available interpreter)
+before the first build. The execution must make one bounded request per
+configured resource (respecting any stated pagination/rate limit) and assert a
+parseable response matching the expected shape — not an exact fixture count,
+since remote data isn't static. A manually issued `curl` or other exploratory
+fetch is useful for diagnosis but does **not** substitute for executing the
+closure-local probe. Supply credentials to the probe only through the
+authoring session's runtime secret input; never embed or print them, and apply
+the redaction rules below to every failure message.
+
+When credentials are not available in-session, write the probe but report the
+connectivity self-check as **not run** — do not claim it passed. Structural
+checks (naming invariant, no `.semantic_tools()`, import correctness) still run
+regardless.
 
 **Phase B of `self_check.py` cannot pass for this connector, and that is not a
-defect to code around.** The harness calls `ingest()` with an empty `secrets`
-map, so the first `secrets["base_url"]` raises. Do not add a profile-reading
-fallback to make it green — that reintroduces the sidecar channel this file
-spends a section rejecting. Report Phase B as **not runnable**, and verify the
-closure with `check_data_product` instead: it pins and compiles the real
-closure under the supervisor's own interpreter, which is stronger evidence than
-the dry run it replaces.
+defect to code around.** Do not confuse that offline limitation with the
+authenticated `connectivity_check.py` above. Do not add a profile-reading
+fallback to `self_check.py` to make Phase B green — that reintroduces the
+sidecar channel this file spends a section rejecting. Report Phase B as **not runnable**,
+and verify the closure with `check_data_product` instead: it pins
+and compiles the real closure under the supervisor's own interpreter, which is
+stronger evidence than the dry run it replaces.
 
 ### Two ways a probe lies
 

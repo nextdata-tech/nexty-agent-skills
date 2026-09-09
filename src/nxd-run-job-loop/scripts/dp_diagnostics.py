@@ -2886,6 +2886,7 @@ def validate_review_round(review_round: Any) -> list[str]:
         "findings",
         "adjudications",
         "user_decision",
+        "deferred_finding_ids",
     }
     problems: list[str] = []
     for key in required - set(review_round):
@@ -2894,21 +2895,26 @@ def validate_review_round(review_round: Any) -> list[str]:
         problems.append(f"unknown key {key!r}")
 
     status = review_round.get("status")
-    if status not in REVIEW_STATUSES:
+    if not isinstance(status, str) or status not in REVIEW_STATUSES:
         problems.append(f"status {status!r} is unknown")
+
+    def is_integer(value: object) -> bool:
+        """Match JSON integer semantics rather than Python's bool subtype."""
+
+        return isinstance(value, int) and not isinstance(value, bool)
 
     started = review_round.get("started_at_unix_ms")
     ended = review_round.get("ended_at_unix_ms")
     budget = review_round.get("budget_ms")
-    if not isinstance(started, int):
+    if not is_integer(started):
         problems.append("started_at_unix_ms must be an integer")
-    if not isinstance(ended, int):
+    if not is_integer(ended):
         problems.append("ended_at_unix_ms must be an integer")
-    if not isinstance(budget, int) or budget <= 0:
+    if not is_integer(budget) or budget <= 0:
         problems.append("budget_ms must be a positive integer")
-    if isinstance(started, int) and isinstance(ended, int) and ended < started:
+    if is_integer(started) and is_integer(ended) and ended < started:
         problems.append("ended_at_unix_ms must not precede started_at_unix_ms")
-    if isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int) and budget > 0:
+    if is_integer(started) and is_integer(ended) and is_integer(budget) and budget > 0:
         elapsed = ended - started
         if status == "timed_out" and elapsed < budget:
             problems.append("timed_out review ended before budget_ms")
@@ -2952,7 +2958,11 @@ def validate_review_round(review_round: Any) -> list[str]:
                 problems.append(f"{prefix}.evidence must be a non-empty array")
             elif any(not isinstance(citation, str) or not citation for citation in evidence):
                 problems.append(f"{prefix}.evidence entries must be non-empty strings")
-            if finding.get("classification") not in REVIEW_CLASSIFICATIONS:
+            classification = finding.get("classification")
+            if (
+                not isinstance(classification, str)
+                or classification not in REVIEW_CLASSIFICATIONS
+            ):
                 problems.append(
                     f"{prefix}.classification {finding.get('classification')!r} is unknown"
                 )
@@ -2964,7 +2974,10 @@ def validate_review_round(review_round: Any) -> list[str]:
             elif any(not isinstance(path, str) or not path for path in applied_files):
                 problems.append(f"{prefix}.applied_files entries must be non-empty strings")
             finding_state = finding.get("state")
-            if finding_state not in REVIEW_FINDING_STATES:
+            if (
+                not isinstance(finding_state, str)
+                or finding_state not in REVIEW_FINDING_STATES
+            ):
                 problems.append(f"{prefix}.state {finding_state!r} is unknown")
             elif finding_state == "applied" and not applied_files:
                 problems.append(f"{prefix}.applied state requires applied_files")
@@ -2994,7 +3007,10 @@ def validate_review_round(review_round: Any) -> list[str]:
             else:
                 adjudicated_ids.add(finding_id)
             disposition = adjudication.get("disposition")
-            if disposition not in REVIEW_DISPOSITIONS:
+            if (
+                not isinstance(disposition, str)
+                or disposition not in REVIEW_DISPOSITIONS
+            ):
                 problems.append(f"{prefix}.disposition {disposition!r} is unknown")
             citation = adjudication.get("citation")
             if citation is not None and (not isinstance(citation, str) or not citation):
@@ -3020,7 +3036,7 @@ def validate_review_round(review_round: Any) -> list[str]:
                 problems.append(f"user_decision missing required key {key!r}")
             for key in set(user_decision) - decision_required:
                 problems.append(f"user_decision unknown key {key!r}")
-            if not isinstance(user_decision.get("approved_at_unix_ms"), int):
+            if not is_integer(user_decision.get("approved_at_unix_ms")):
                 problems.append("user_decision.approved_at_unix_ms must be an integer")
             if not isinstance(user_decision.get("citation"), str) or not user_decision.get("citation"):
                 problems.append("user_decision.citation must be a non-empty string")
@@ -3034,15 +3050,21 @@ def validate_review_round(review_round: Any) -> list[str]:
                 problems.append("user_decision.approved_finding_ids must not contain duplicates")
             elif not set(approved_ids).issubset(finding_ids):
                 problems.append("user_decision.approved_finding_ids reference unknown finding ids")
-        if status not in ("complete", "timed_out"):
-            problems.append(
-                "user_decision is only allowed for a complete review or an "
-                "auditable decision to continue after a timed_out review"
-            )
-    elif status == "needs_user":
-        # This makes the handoff explicit: a user decision is still needed and
-        # cannot be fabricated by an agent as a silent status transition.
-        pass
+    deferred = review_round.get("deferred_finding_ids")
+    deferred_ids: set[str] = set()
+    if not isinstance(deferred, list) or any(
+        not isinstance(finding_id, str) or not finding_id
+        for finding_id in deferred
+    ):
+        problems.append("deferred_finding_ids must be an array of non-empty strings")
+    else:
+        deferred_ids = set(deferred)
+        if len(deferred) != len(deferred_ids):
+            problems.append("deferred_finding_ids must not contain duplicates")
+        if not deferred_ids.issubset(finding_ids):
+            problems.append("deferred_finding_ids reference unknown finding ids")
+        if deferred_ids and user_decision is None:
+            problems.append("deferred_finding_ids require an auditable user_decision")
 
     if isinstance(findings, list):
         states_by_id = {
@@ -3063,7 +3085,7 @@ def validate_review_round(review_round: Any) -> list[str]:
             and finding.get("state") == "applied"
             and isinstance(finding.get("id"), str)
         }
-        if status == "needs_user" and not needs_user_ids:
+        if status == "needs_user" and user_decision is None and not needs_user_ids:
             problems.append("needs_user review must carry a finding in needs_user state")
         if status != "needs_user" and needs_user_ids:
             problems.append("only a needs_user review may carry a finding in needs_user state")
@@ -3074,6 +3096,36 @@ def validate_review_round(review_round: Any) -> list[str]:
                 "behavior_affecting applied findings require explicit user approval: "
                 + ", ".join(sorted(applied_behavior_ids - approved_ids))
             )
+        accepted_behavior_ids = _accepted_behavior_finding_ids(review_round)
+        if deferred_ids - accepted_behavior_ids:
+            problems.append(
+                "deferred findings must be accepted behavior-affecting findings: "
+                + ", ".join(sorted(deferred_ids - accepted_behavior_ids))
+            )
+        deferred_applied_ids = {
+            finding_id
+            for finding_id in deferred_ids
+            if states_by_id.get(finding_id) == "applied"
+        }
+        if deferred_applied_ids:
+            problems.append(
+                "deferred findings must remain unapplied: "
+                + ", ".join(sorted(deferred_applied_ids))
+            )
+        if isinstance(user_decision, dict):
+            resolved_ids = applied_behavior_ids | deferred_ids
+            unresolved_ids = accepted_behavior_ids - resolved_ids
+            if unresolved_ids:
+                problems.append(
+                    "accepted behavior-affecting findings must be applied or explicitly deferred: "
+                    + ", ".join(sorted(unresolved_ids))
+                )
+            unexpected_ids = resolved_ids - accepted_behavior_ids
+            if unexpected_ids:
+                problems.append(
+                    "user decision may only resolve accepted behavior-affecting findings: "
+                    + ", ".join(sorted(unexpected_ids))
+                )
     return problems
 
 
@@ -3112,7 +3164,7 @@ def _review_user_decision_blockers(review_round: object) -> list[str]:
     status = review_round.get("status")
     decision = review_round.get("user_decision")
     blockers: list[str] = []
-    if status == "needs_user":
+    if status == "needs_user" and decision is None:
         blockers.append("review round is marked needs_user")
     if status == "timed_out" and decision is None:
         blockers.append("timed_out review has no auditable user decision to continue")
@@ -3124,6 +3176,7 @@ def _review_user_decision_blockers(review_round: object) -> list[str]:
         )
     if isinstance(decision, dict):
         approved_ids = set(decision.get("approved_finding_ids") or [])
+        deferred_ids = set(review_round.get("deferred_finding_ids") or [])
         applied_ids = {
             finding.get("id")
             for finding in review_round.get("findings") or []
@@ -3137,6 +3190,12 @@ def _review_user_decision_blockers(review_round: object) -> list[str]:
             blockers.append(
                 "applied behavior-affecting finding(s) lack user approval: "
                 + ", ".join(sorted(unapproved_applied))
+            )
+        unresolved_ids = accepted_behavior_ids - applied_ids - deferred_ids
+        if unresolved_ids:
+            blockers.append(
+                "accepted behavior-affecting finding(s) were neither applied nor deferred: "
+                + ", ".join(sorted(unresolved_ids))
             )
     return blockers
 
@@ -3631,6 +3690,7 @@ BUILD_RECORD_SCHEMA = {
                     "budget_ms",
                     "findings",
                     "adjudications",
+                    "deferred_finding_ids",
                     "user_decision",
                 ],
                 "properties": {
@@ -3691,6 +3751,11 @@ BUILD_RECORD_SCHEMA = {
                             ],
                         },
                     },
+                    "deferred_finding_ids": {
+                        "type": "array",
+                        "uniqueItems": True,
+                        "items": {"type": "string", "minLength": 1},
+                    },
                     "user_decision": {
                         "type": ["object", "null"],
                         "additionalProperties": False,
@@ -3710,16 +3775,6 @@ BUILD_RECORD_SCHEMA = {
                         },
                     },
                 },
-                "allOf": [
-                    {
-                        "if": {"properties": {"status": {"const": "needs_user"}}},
-                        "then": {"properties": {"user_decision": {"type": "null"}}},
-                    },
-                    {
-                        "if": {"properties": {"user_decision": {"type": "object"}}},
-                        "then": {"properties": {"status": {"enum": ["complete", "timed_out"]}}},
-                    },
-                ],
             },
         },
         "concessions": {

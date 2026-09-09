@@ -488,9 +488,53 @@ only a proved behavior-preserving structural note may be applied automatically.
 Likewise, a `timed_out` round blocks materialization until an auditable
 `user_decision` cites the user's choice to continue; keep the round status
 `timed_out` and use an empty `approved_finding_ids` list when that choice
-approves no finding. A user decision on `complete` or `timed_out` is the only
-unblock representation; `needs_user` deliberately carries null while awaiting
-the decision.
+approves no finding. When the user explicitly continues without applying an
+accepted behavior-affecting finding, list that still-unapplied ID in
+`deferred_finding_ids`; the list is empty otherwise. Every accepted
+behavior-affecting finding in a resolved round is therefore either applied
+with approval or explicitly deferred by the cited user decision.
+
+The following is the canonical strict-JSON shape for a completed review with one
+rejected, non-applied behavior finding. Keep the fence and keys exact; validate
+each emitted round with `dp_diagnostics.validate_review_round` before recording
+it. A rejected claim needs a citation, but does not need a user decision because
+it authorizes no change.
+
+```json
+{
+  "review_rounds": [
+    {
+      "status": "complete",
+      "started_at_unix_ms": 1769904000000,
+      "ended_at_unix_ms": 1769904010000,
+      "budget_ms": 120000,
+      "findings": [
+        {
+          "id": "review-001",
+          "claim": "The closure drops records required by the approved plan.",
+          "evidence": [
+            "closure:transform/main.py",
+            "closure:dp-blueprint.approved.md#models"
+          ],
+          "classification": "behavior_affecting",
+          "proposed_effect": "Change the transform to retain the dropped records.",
+          "applied_files": [],
+          "state": "not_applied"
+        }
+      ],
+      "adjudications": [
+        {
+          "finding_id": "review-001",
+          "disposition": "rejected",
+          "citation": "The approved plan explicitly excludes those records."
+        }
+      ],
+      "user_decision": null,
+      "deferred_finding_ids": []
+    }
+  ]
+}
+```
 
 ## `attempts[]` — the part that makes claims checkable
 

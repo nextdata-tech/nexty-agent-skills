@@ -8,6 +8,7 @@
 - [One data product in flight](#one-data-product-in-flight)
 - [Subagent fan-out](#subagent-fan-out)
 - [Offloading generation to a subagent](#offloading-generation-to-a-subagent)
+- [Main-thread review checkpoint](#main-thread-review-checkpoint)
 
 This is the **task-scheduling** half of the job loop: which path a request
 takes, the order the steps run in, what forces a re-run, how many times the loop
@@ -186,14 +187,16 @@ expensive profiling on every bounce:
    orchestrator's; it never happens inside a subagent.
 3. **Generate subagent (Step 3).** Receives the already-computed model and the
    **verbatim approved policy** — never re-profiles, never re-opens the gate as a
-   user turn. It authors the closure and runs the self-check. If it finds a
-   result-changing gap the approved policy does not resolve — either a policy
-   element the enumeration never covered, or a profiling finding that makes an
-   approved element ambiguous or conditional — it stops and returns `gap_found`
-   rather than guessing; the main thread does a fresh read-back and re-dispatches
-   **generation only**, against the **same** workflow id and closure directory.
-   It also receives `job_helper_dir`, the main thread's resolved absolute
-   desktop helper directory; it does not rediscover that path.
+   user turn. It authors through generator **Step 6a**, then stops and returns an
+   explicit `status: "awaiting_review"` handoff. It does **not** dispatch the
+   reviewer or run generator Step 7 self-check. If it finds a result-changing gap
+   the approved policy does not resolve — either a policy element the enumeration never covered,
+   or a profiling finding that makes an approved element ambiguous or conditional
+   — it stops and returns `gap_found` instead; the main thread does
+   a fresh read-back and re-dispatches **generation only**, against the **same**
+   workflow id and closure directory. It also receives `job_helper_dir`, the
+   main thread's resolved absolute desktop helper directory; it does not
+   rediscover that path.
 
 Scope each subagent's context to the work at hand: the dispatch names the
 connector type(s) in play so the generate subagent loads only the matching
@@ -205,9 +208,25 @@ offload the step rather than run it inline.
 
 Because the generate subagent hands back a record instead of leaving its work in
 the main thread's context, that record must carry everything the main thread
-needs to narrate honestly and build **without re-reading the closure** (re-reading
-would re-inflate the context this split exists to save). Its return is
-**structured, not prose**:
+needs to narrate honestly and reach Step 3b **without re-reading the closure**.
+Its return is **structured, not prose**, and must begin with this handoff state:
+
+```json
+{
+  "status": "awaiting_review",
+  "closure_path": "/host-visible/nxd-jobs/<workflow>/closure",
+  "surface": "host_absolute",
+  "promised_models": ["base_model"],
+  "policy_fingerprint": {},
+  "credential_slots": [],
+  "gap_found": null,
+  "self_check": {"status": "not_started"}
+}
+```
+
+`self_check.status` is deliberately pending; the subagent must not claim a
+result it has not run. The main thread changes it only after Step 3b review.
+The remaining fields carry the following:
 
 - `closure_path` **plus a surface tag** (`host_absolute` or `workspace_relative`)
   — a subagent writes to its own session surface and cannot itself guarantee the
@@ -216,13 +235,14 @@ would re-inflate the context this split exists to save). Its return is
   without opening `spec.py`;
 - `policy_fingerprint` — the bands / anchors / precedence **as encoded** — so the
   main thread can confirm what shipped matches what the user approved;
-- `self_check` as fields, not prose: Phase-C / Phase-D pass·fail, the transform
-  dry-run result, and the `distributions` / `unverified` / `absent` read-back
-  arrays verbatim (relay them unchanged — do not re-summarize; `UNIFORM` still
-  means a value you supplied, not one the data produced);
 - `credential_slots` for a db/API source — the credential **key names only**,
   never a value (see the credential boundary below);
 - `gap_found` (or null) as a first-class field distinct from success.
+
+After Step 3b, the main thread appends the self-check fields — Phase-C / Phase-D
+pass/fail, transform dry-run result, and the `distributions` / `unverified` /
+`absent` arrays verbatim. Relay them unchanged; `UNIFORM` still means a value
+supplied by the plan, not one produced by the data.
 
 **The main thread verifies before it builds.** Never pass a subagent-returned
 path to `build_data_product` unverified: confirm the path resolves on the
@@ -259,3 +279,57 @@ the subagent — expected, not a defect, because it holds no credential. The liv
 connectivity check runs host-side after injection **instead, and must run
 there** — a `not_run` after injection is a real gap, not the subagent's benign
 one.
+
+## Main-thread review checkpoint
+
+Step 3b belongs to the main thread for both inline and offloaded generation. Treat
+every Step 6a handoff as `awaiting_review` until eligibility is explicitly
+resolved. Verify these three skip predicates separately: no derived models, no
+judgement calls, and exactly one question. Review is skipped only when **all
+three** are verified; otherwise it is required. If the reviewer is unavailable,
+stop with a blocker — do not reinterpret that as eligibility to skip.
+
+For a required review, dispatch exactly one built-in read-only `Agent` or `Task`
+with the normalized host-visible closure path and a
+`sanitized_original_request`. Preserve every user question and supplied
+procedure, but replace every value the user designated as a credential and
+every value from a non-public credential field with a named placeholder such as
+`[CREDENTIAL:database_password]`. Inventory and replace before dispatch, then
+verify that no known credential value remains anywhere in the child prompt. If
+the inventory or complete sanitization cannot be established, do not delegate:
+stop the workflow and report the credential-safety blocker. No credential may
+reach the reviewer.
+
+Include exactly one marker line in the prompt, with compact JSON, exact keys,
+and the normalized closure path:
+
+```text
+NXD_REVIEW_DISPATCH {"closure_path":"nxd-jobs/<workflow>/closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
+```
+
+Substitute only `closure_path` and `review_round_index`; keep every other
+key/value unchanged and add no colon, slug or prose prefix.
+
+Ask for claims only. The reviewer never edits, builds, serves, transforms or
+talks to the user. Bound the dispatch at 120 seconds. A background launch with
+no returned claims is not a completed review.
+
+Record one `review_rounds[]` object in `build-record.json` for every dispatched
+round and run the shipped `dp_diagnostics.validate_review_round` validator before
+using it. Include every claim and exactly one adjudication/citation per claim.
+Relay every claim, including rejected or out-of-scope claims, and resolve any
+required user decision. Before self-check, every round must be valid and either
+`complete`, or carry `needs_user`/`timed_out` together with an auditable user
+decision to continue. A `needs_user` status remains truthful after that choice;
+the cited decision is what resolves it. For a verified ineligible review, write
+no review round. Then run generator Step 7 self-check and lock verification.
+
+Step 4 must refuse `check_data_product` and `build_data_product` until review
+eligibility is resolved, every required round is valid and unblocked, and the
+self-check completed **after** that resolution. This ordering is a workflow
+contract. Bind the review to the exact marker, the canonical
+`<normalized-closure>/build-record.json#review_rounds/<review_round_index>` attestation,
+closure-keyed rounds, and the closure identified by matching supervisor
+`run_id` and `artifact_id`. Use observed dispatch, self-check, and build order
+for chronology; do not add or infer a dispatch turn. Evidence from sibling
+or abandoned closures never combines.

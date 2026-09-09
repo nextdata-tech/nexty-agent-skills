@@ -15,10 +15,51 @@ from dp_scenarios.runner.session import (
     ReplayMismatch,
     ReplayRecording,
     ReplaySession,
+    SessionError,
     turn_result_from_dict,
     turn_result_to_dict,
 )
 from dp_scenarios.operator.transport import InMemoryTransport, OperatorMessage
+
+
+@pytest.mark.parametrize("count", [True, 1.5, "1"])
+def test_turn_result_rejects_non_integer_terminal_result_counts(count: object) -> None:
+    with pytest.raises(TypeError, match="terminal_result_count must be an integer"):
+        TurnResult(terminal_result_count=count)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("terminal_result_count", True),
+        ("terminal_result_count", "1"),
+        ("terminal_result_count", -1),
+        ("terminal_result_subtype", []),
+        ("terminal_result_is_error", 0),
+    ],
+)
+def test_replay_rejects_malformed_terminal_result_facts(field: str, value: object) -> None:
+    encoded = turn_result_to_dict(TurnResult())
+    encoded[field] = value
+
+    with pytest.raises(SessionError, match=field):
+        turn_result_from_dict(encoded)
+
+
+def test_replay_missing_terminal_facts_remains_completion_incapable() -> None:
+    encoded = turn_result_to_dict(TurnResult(agent_message="done"))
+    for field in (
+        "terminal_result_count",
+        "terminal_result_subtype",
+        "terminal_result_is_error",
+    ):
+        encoded.pop(field)
+
+    decoded = turn_result_from_dict(encoded)
+
+    assert decoded.terminal_result_count == 0
+    assert decoded.terminal_result_subtype is None
+    assert decoded.terminal_result_is_error is None
 
 
 def test_recording_round_trip_preserves_structured_observations_and_files(tmp_path: Path) -> None:
@@ -145,6 +186,17 @@ def test_live_timeout_returns_a_recordable_turn_timeout() -> None:
     legacy = dict(encoded)
     legacy.pop("turn_timed_out")
     assert turn_result_from_dict(legacy).turn_timed_out is False
+
+    for field in (
+        "terminal_result_count",
+        "terminal_result_subtype",
+        "terminal_result_is_error",
+    ):
+        legacy.pop(field, None)
+    decoded_legacy = turn_result_from_dict(legacy)
+    assert decoded_legacy.terminal_result_count == 0
+    assert decoded_legacy.terminal_result_subtype is None
+    assert decoded_legacy.terminal_result_is_error is None
 
 
 def test_live_fresh_session_restarts_a_persistent_child() -> None:

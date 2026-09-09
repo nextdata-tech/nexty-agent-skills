@@ -77,6 +77,15 @@ jobs:
         working-directory: evals/dp-scenarios
         run: uv run --locked pytest -q -m "not integration and not field_mapper"
 
+      # The root static-check job deliberately runs without the dp-scenarios
+      # project installed, so the shared benchmark tests keep an explicit
+      # root-only dependency boundary. Run them here as well: this is the
+      # authoritative path for their real producer-drift and grading-parity
+      # coverage, and prevents those checks from becoming skips in CI.
+      - name: dp-scenarios shared producer-parity tests
+        working-directory: evals/dp-scenarios
+        run: uv run --locked pytest -q ../tests/test_benchmark_record.py ../tests/test_build_record_schema.py
+
       # The semantic MCP contract checker. Stdlib-only by design, so its tests
       # run here with no NXD wheels installed — a checker whose own tests needed
       # the artifact could only be exercised inside the job it exists to guard,

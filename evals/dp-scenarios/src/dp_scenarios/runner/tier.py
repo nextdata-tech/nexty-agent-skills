@@ -15,8 +15,8 @@ import inspect
 import json
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, is_dataclass, replace
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 import tempfile
 import time
 import shutil
@@ -44,6 +44,7 @@ from dp_scenarios.grading import (
     score_run,
 )
 from dp_scenarios.grading.oracles import marker_values
+from dp_scenarios.grading.gates import EventPosition, PublishedBuild
 from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
 from dp_scenarios.grading.score import (
     EfficiencyReport,
@@ -260,6 +261,15 @@ class ScenarioRun:
             "last_mcp_call": self.last_mcp_call,
         }
         return result
+
+
+def _is_truncated_terminal(state: EngineTerminalState) -> bool:
+    """Return whether the engine stopped without a proved clean completion."""
+
+    return state in {
+        EngineTerminalState.SCRIPT_EXHAUSTED,
+        EngineTerminalState.TURN_TIMEOUT,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -573,7 +583,7 @@ def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
         repeatability_certified=True,
         validation_mode=run.manifest.validation_mode,
         operator_mode=run.qualification.operator_mode,
-        truncated=run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
+        truncated=_is_truncated_terminal(run.terminal_state),
     )
     if qualification.disposition is not QualificationDisposition.CERTIFIED:
         return run
@@ -761,6 +771,9 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 "driver_skip_reason": getattr(turn, "driver_skip_reason", None),
                 "driver_forbidden_terms_in_force": getattr(turn, "driver_forbidden_terms_in_force", 0),
                 "driver_forbidden_terms_exempted": getattr(turn, "driver_forbidden_terms_exempted", 0),
+                "terminal_result_count": getattr(turn, "terminal_result_count", 0),
+                "terminal_result_subtype": getattr(turn, "terminal_result_subtype", None),
+                "terminal_result_is_error": getattr(turn, "terminal_result_is_error", None),
             }
         )
     identity = getattr(run_result, "driver_identity", None)
@@ -807,8 +820,110 @@ def _append_artifact_rows(artifact_root: Path) -> None:
     raise TierError("agent-owned ledger artifact is forbidden; evidence rows are harness-owned")
 
 
-def _review_rounds(artifact_root: Path) -> tuple[Mapping[str, object], ...]:
-    """Return the adversarial-review rounds the build recorded, across closures.
+def _normalized_definition_path(definition: object, *, agent_root: Path) -> str | None:
+    """Return one replay-portable closure path contained by the agent root."""
+
+    if not isinstance(definition, str) or not definition.strip() or "\x00" in definition:
+        return None
+    root = agent_root.resolve()
+    candidate = Path(definition)
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return None
+    normalized = relative.as_posix()
+    if not normalized or normalized == "." or relative.name != "closure":
+        return None
+    return normalized
+
+
+def _published_closure(
+    observations: object,
+    supervisor_facts: SupervisorFacts | None,
+    *,
+    agent_root: Path,
+    desktop_server_name: str = "nxd-desktop",
+) -> PublishedBuild | None:
+    """Bind the published release to exactly one observed build definition.
+
+    The build result is the only structured event that joins a definition path
+    to the supervisor-owned release identifiers.  Ignore direct/flattened
+    payloads, error results, partial identifiers, and ambiguous paths.
+    """
+
+    if (
+        not isinstance(observations, Mapping)
+        or supervisor_facts is None
+        or not isinstance(desktop_server_name, str)
+        or not desktop_server_name.strip()
+    ):
+        return None
+    expected_tool_name = (
+        f"mcp__{desktop_server_name.strip()}__build_data_product"
+    ).casefold()
+    run_id = supervisor_facts.run_id
+    artifact_id = supervisor_facts.artifact_id
+    if not isinstance(run_id, str) or not run_id or not isinstance(artifact_id, str) or not artifact_id:
+        return None
+    turns = observations.get("turns")
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return None
+    matches: list[PublishedBuild] = []
+    for turn in turns:
+        if not isinstance(turn, Mapping):
+            continue
+        turn_number = turn.get("turn")
+        if (
+            not isinstance(turn_number, int)
+            or isinstance(turn_number, bool)
+            or turn_number < 1
+        ):
+            return None
+        calls = turn.get("tool_calls")
+        if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
+            continue
+        for call_index, call in enumerate(calls):
+            name = call.get("name") if isinstance(call, Mapping) else None
+            if not isinstance(name, str) or name.casefold() != expected_tool_name:
+                continue
+            result = call.get("result")
+            if not isinstance(result, Mapping) or result.get("is_error") is not False:
+                continue
+            content = result.get("content")
+            if not isinstance(content, Mapping):
+                continue
+            if content.get("run_id") != run_id or content.get("artifact_id") != artifact_id:
+                continue
+            arguments = call.get("arguments")
+            definition = arguments.get("definition") if isinstance(arguments, Mapping) else None
+            normalized = _normalized_definition_path(definition, agent_root=agent_root)
+            workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+            normalized_workflow = workflow.strip() if isinstance(workflow, str) and workflow.strip() else None
+            result_workflow = content.get("workflow")
+            if (
+                normalized is not None
+                and (
+                    result_workflow is None
+                    or (
+                        isinstance(result_workflow, str)
+                        and result_workflow.strip() == normalized_workflow
+                    )
+                )
+            ):
+                matches.append(
+                    PublishedBuild(
+                        normalized,
+                        EventPosition(turn_number, call_index),
+                        normalized_workflow,
+                        str(agent_root.resolve()),
+                    )
+                )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _review_rounds(artifact_root: Path) -> Mapping[str, tuple[Mapping[str, object], ...]]:
+    """Return recorded adversarial-review rounds keyed by closure path.
 
     ``build-record.json`` ``review_rounds[]`` is the durable product of the
     dispatch that ``nxd-generate-data-product`` step 6b mandates. It exists
@@ -816,15 +931,49 @@ def _review_rounds(artifact_root: Path) -> tuple[Mapping[str, object], ...]:
     records none.
     """
 
-    rounds: list[Mapping[str, object]] = []
+    rounds: dict[str, tuple[Mapping[str, object], ...]] = {}
     for closure in _closure_dirs(artifact_root):
         record = _load_json(closure / "build-record.json")
         if not isinstance(record, Mapping):
             continue
         entries = record.get("review_rounds")
         if isinstance(entries, (list, tuple)):
-            rounds.extend(entry for entry in entries if isinstance(entry, Mapping))
-    return tuple(rounds)
+            key = closure.relative_to(artifact_root).as_posix()
+            rounds[key] = tuple(entry for entry in entries if isinstance(entry, Mapping))
+    return rounds
+
+
+def _canonical_attestation_evidence_ref(
+    value: object,
+    *,
+    action_kind: object,
+    review_round_index: object,
+) -> bool:
+    """Accept only the documented normalized closure/build-record reference."""
+
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    path_text, separator, fragment = value.partition("#")
+    if (
+        separator != "#"
+        or not path_text
+        or not fragment
+        or "\\" in path_text
+        or "\x00" in value
+    ):
+        return False
+    path = PurePosixPath(path_text)
+    if (
+        path.is_absolute()
+        or path.as_posix() != path_text
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or len(path.parts) < 2
+        or path.parts[-2:] != ("closure", "build-record.json")
+    ):
+        return False
+    if action_kind == "self_check":
+        return fragment == "self_check"
+    return fragment == f"review_rounds/{review_round_index}"
 
 
 def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
@@ -840,8 +989,10 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
     """
 
     path = root / "agent-attestations.json"
+    replay_fallback = False
     if not path.is_file() and fallback_root is not None:
         path = fallback_root / "agent-attestations.json"
+        replay_fallback = path.is_file()
     if not path.is_file():
         return _AttestationRead()
     try:
@@ -850,23 +1001,50 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
         return _AttestationRead(
             findings=(Finding("agent_attestations_invalid", f"agent-attestations.json could not be read: {type(exc).__name__}"),)
         )
-    values = raw.get("attestations") if isinstance(raw, Mapping) else raw
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+    if isinstance(raw, list):
+        values = raw
+    elif (
+        replay_fallback
+        and isinstance(raw, Mapping)
+        and set(raw) == {"attestations"}
+        and isinstance(raw.get("attestations"), list)
+    ):
+        # Recordings made before the canonical live format used this envelope.
+        # Keep it replay-only: accepting it from a live workspace would make
+        # the documented closed schema optional again.
+        values = raw["attestations"]
+    else:
         return _AttestationRead(
-            findings=(Finding("agent_attestations_invalid", "agent-attestations.json must contain an attestation list"),)
+            findings=(Finding("agent_attestations_invalid", "agent-attestations.json must be a root JSON array"),)
         )
-    allowed = {"action_kind", "turn", "outcome", "evidence_ref"}
     result: list[Mapping[str, object]] = []
     for value in values:
-        if not isinstance(value, Mapping) or set(value) != allowed:
+        if not isinstance(value, Mapping):
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "agent attestation has an invalid shape"),)
             )
-        if value.get("action_kind") not in {"self_check", "adversarial_review"}:
+        action_kind = value.get("action_kind")
+        allowed = {"action_kind", "outcome", "evidence_ref"}
+        if "turn" in value:
+            # Older live recordings included the agent's guessed operator-turn
+            # number. Keep accepting it as informational metadata, but never
+            # use it to bind an attestation to harness-observed chronology.
+            allowed.add("turn")
+        if action_kind == "adversarial_review":
+            allowed.add("review_round_index")
+        if set(value) != allowed:
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation has an invalid shape"),)
+            )
+        if action_kind not in {"self_check", "adversarial_review"}:
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "agent attestation action_kind is not allowed"),)
             )
-        if isinstance(value.get("turn"), bool) or not isinstance(value.get("turn"), int) or value["turn"] < 1:
+        if "turn" in value and (
+            isinstance(value.get("turn"), bool)
+            or not isinstance(value.get("turn"), int)
+            or value["turn"] < 1
+        ):
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "agent attestation turn must be a positive integer"),)
             )
@@ -877,6 +1055,28 @@ def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _At
         if not isinstance(value.get("evidence_ref"), str) or not value["evidence_ref"].strip():
             return _AttestationRead(
                 findings=(Finding("agent_attestations_invalid", "agent attestation evidence_ref must be non-empty text"),)
+            )
+        if action_kind == "adversarial_review" and (
+            not isinstance(value.get("review_round_index"), int)
+            or isinstance(value.get("review_round_index"), bool)
+            or value["review_round_index"] < 0
+        ):
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "review_round_index must be a non-negative integer"),)
+            )
+        canonical_reference = _canonical_attestation_evidence_ref(
+            value.get("evidence_ref"),
+            action_kind=action_kind,
+            review_round_index=value.get("review_round_index"),
+        )
+        legacy_self_check_reference = (
+            replay_fallback
+            and action_kind == "self_check"
+            and value.get("evidence_ref") == "tool:self-check"
+        )
+        if not canonical_reference and not legacy_self_check_reference:
+            return _AttestationRead(
+                findings=(Finding("agent_attestations_invalid", "agent attestation evidence_ref must bind the normalized closure build record"),)
             )
         result.append(dict(value))
     return _AttestationRead(tuple(result))
@@ -1481,7 +1681,7 @@ class TierRunner:
                 # never finished its script. ``score.state`` alone cannot
                 # say it any more: since the TURN_TIMEOUT split a truncated
                 # run scores PASSED.
-                "truncated": run.terminal_state is EngineTerminalState.TURN_TIMEOUT,
+                "truncated": _is_truncated_terminal(run.terminal_state),
             }
             for run in runs
         ]
@@ -1613,7 +1813,7 @@ class TierRunner:
         # restores the pre-split exit code while keeping the timeout and the
         # wedge distinguishable in the evidence.
         truncated = any(
-            run.terminal_state is EngineTerminalState.TURN_TIMEOUT
+            _is_truncated_terminal(run.terminal_state)
             for summary in summaries
             for run in summary.runs
         )
@@ -1832,7 +2032,7 @@ class TierRunner:
                     driver=driver_operator is not None,
                     validation_mode=environment.manifest.validation_mode,
                     operator_mode=getattr(run_result, "operator_mode", "scripted"),
-                    truncated=run_result.terminal_state is EngineTerminalState.TURN_TIMEOUT,
+                    truncated=_is_truncated_terminal(run_result.terminal_state),
                 )
                 bundle_dir: Path | None = None
                 bundle_digest: str | None = None
@@ -1944,6 +2144,12 @@ class TierRunner:
             observations=observations,
             attestations=attestations,
             review_rounds=_review_rounds(artifact_root),
+            published_closure=_published_closure(
+                observations,
+                facts,
+                agent_root=environment.base_dir / "agent",
+                desktop_server_name=environment.desktop_server_name,
+            ),
             require_observed=True,
             desktop_server_name=environment.desktop_server_name,
         )
@@ -2112,6 +2318,18 @@ class TierRunner:
             invalid=invalid,
             efficiency=efficiency,
         )
+        if (
+            terminal_state != EngineTerminalState.COMPLETED.value
+            and score.state not in {
+                ScoreTerminalState.INVALID,
+                ScoreTerminalState.AUTOMATIC_ZERO,
+            }
+        ):
+            # Every non-completed engine terminal is incomplete evidence, even
+            # when gates observed before the stop happen to satisfy the pass
+            # rule. Keep sentinel and invalid classifications intact; only
+            # ordinary pass/fail scoring becomes ungraded.
+            score = replace(score, state=ScoreTerminalState.UNGRADED)
         return score, facts, calls, route_status, route_reason
 
 

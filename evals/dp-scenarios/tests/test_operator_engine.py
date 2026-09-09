@@ -335,6 +335,38 @@ def test_terminal_state_failure_modes_and_ungraded_criteria_are_separate() -> No
     assert sentinel.gradeable
 
 
+def test_engine_completes_only_when_every_scripted_turn_has_one_clean_terminal_result() -> None:
+    script = make_script(turns=("Improve weekly visibility.", "Please continue."))
+
+    def completed(message: str) -> TurnResult:
+        return TurnResult(
+            agent_message=message,
+            terminal_result_count=1,
+            terminal_result_subtype="success",
+            terminal_result_is_error=False,
+        )
+
+    clean = OperatorEngine(
+        script,
+        InMemoryTransport([completed(""), completed("Done.")]),
+    ).run()
+    ambiguous = OperatorEngine(
+        script,
+        InMemoryTransport([
+            completed("Which source is authoritative?"),
+            replace(completed("Done."), terminal_result_count=2),
+        ]),
+    ).run()
+    empty_final = OperatorEngine(
+        script,
+        InMemoryTransport([completed("Which source is authoritative?"), completed("")]),
+    ).run()
+
+    assert clean.terminal_state is TerminalState.COMPLETED
+    assert ambiguous.terminal_state is TerminalState.SCRIPT_EXHAUSTED
+    assert empty_final.terminal_state is TerminalState.SCRIPT_EXHAUSTED
+
+
 def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() -> None:
     script = make_script(
         turns=("Improve weekly visibility.", "Please continue.", "Approve this."),
@@ -1139,6 +1171,23 @@ def test_sentinel_scan_covers_tool_results_arguments_and_touched_file_bytes(resu
     outcome = OperatorEngine(script, InMemoryTransport([result])).run()
 
     assert outcome.terminal_state is TerminalState.SENTINEL_TRIP
+
+
+@pytest.mark.parametrize("tool_name", ["Agent", "Task"])
+def test_sentinel_in_review_dispatch_prompt_is_an_automatic_zero(tool_name: str) -> None:
+    script = make_script(turns=("Improve weekly visibility.",), sentinel=b"SECRET")
+    result = TurnResult(
+        agent_message="Review dispatched.",
+        tool_calls=(ToolCall(tool_name, {"prompt": "Review closure SECRET"}),),
+        terminal_result_count=1,
+        terminal_result_subtype="success",
+        terminal_result_is_error=False,
+    )
+
+    outcome = OperatorEngine(script, InMemoryTransport([result])).run()
+
+    assert outcome.terminal_state is TerminalState.SENTINEL_TRIP
+    assert "sentinel_trip" in outcome.failure_modes
 
 
 def test_every_transmitted_script_and_event_string_obeys_declared_obstacle_terms() -> None:

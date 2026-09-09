@@ -48,6 +48,33 @@ class GateResult:
         return tuple(finding.code for finding in self.findings)
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class EventPosition:
+    """One structured tool call: one-based turn, zero-based call index."""
+
+    turn: int
+    call_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedBuild:
+    """The unique observed build joined to supervisor-owned release facts."""
+
+    closure_path: str
+    position: EventPosition
+    workflow: str | None
+    agent_root: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewDispatch:
+    """One completed marker-bearing reviewer dispatch."""
+
+    position: EventPosition
+    closure_path: str
+    review_round_index: int
+
+
 # The protocol phase each gate is graded in.  This used to be implicit in the
 # gate's own name, which meant a rename could silently break reachability
 # checking; naming it makes the coupling checkable.
@@ -761,67 +788,458 @@ def _outcome_value(value: object) -> object:
     return value
 
 
-def _construction_call_kinds(observations: object, *, desktop_server_name: str = "nxd-desktop") -> set[str]:
-    """Return construction checks observed at the structured session boundary."""
-
-    if not isinstance(observations, Mapping):
-        return set()
-    turns = observations.get("turns")
-    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
-        return set()
-    found: set[str] = set()
-    for turn in turns:
-        if not isinstance(turn, Mapping):
-            continue
-        calls = turn.get("tool_calls")
-        if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
-            continue
-        for call in calls:
-            if not isinstance(call, Mapping):
-                continue
-            result = call.get("result")
-            if not isinstance(result, Mapping) or result.get("is_error") is True:
-                continue
-            name = call.get("name")
-            if not isinstance(name, str):
-                continue
-            name = name.lower()
-            arguments = call.get("arguments")
-            if name == f"mcp__{desktop_server_name.lower()}__check_data_product":
-                found.add("self_check")
-            if name in {"task", "agent"}:
-                # A background launch returns "Async agent launched
-                # successfully" and nothing else -- non-error, but no child
-                # reply. Crediting it would let a detached launch plus a
-                # hand-written review_rounds[] entry satisfy the reviewer half
-                # with no review having happened.
-                rendered = json.dumps(result, default=str)
-                if "async agent launched" not in rendered.lower():
-                    found.add("_delegated")
-            if name == "skill" and isinstance(arguments, Mapping):
-                skill_name = arguments.get("skill")
-                if skill_name in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
-                    found.add("adversarial_review")
-            # Both names, because the delegation tool is not called the same
-            # thing in every Claude Code build: a live crm-pipeline run made
-            # four ``Agent`` calls and zero ``Task`` calls, so matching only
-            # ``task`` made the reviewer dispatch unobservable by name -- the
-            # gate would have failed an agent that did exactly what step 6b
-            # mandates.
-            if name in {"task", "agent"} and isinstance(arguments, Mapping):
-                subagent_type = arguments.get("subagent_type")
-                if subagent_type in {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}:
-                    found.add("adversarial_review")
-    return found
-
-
 #: A dispatched review round has exactly one of these; ``skipped`` is
 #: deliberately not a review status (`reference/adversarial-review.md`), and a
 #: non-eligible review produces no entry at all.
 _REVIEW_ROUND_STATUS = frozenset({"complete", "timed_out", "needs_user"})
+_REVIEW_CLASSIFICATIONS = frozenset({"behavior_affecting", "structural_note"})
+_REVIEW_FINDING_STATES = frozenset({"not_applied", "needs_user", "applied"})
+_REVIEW_DISPOSITIONS = frozenset({"accepted", "rejected", "out_of_scope"})
+_REVIEW_DISPATCH_PREFIX = "NXD_REVIEW_DISPATCH "
+_REVIEW_DISPATCH_KEYS = frozenset(
+    {"closure_path", "request_contract", "return", "review_round_index"}
+)
 
 
-def _review_round_outcome(review_rounds: object) -> str | None:
+def _normalized_closure_path(value: object) -> str | None:
+    """Accept only canonical, relative closure paths used by persisted evidence."""
+
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        return None
+    path = PurePosixPath(value)
+    if path.is_absolute() or path.name != CLOSURE_DIR or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    normalized = path.as_posix()
+    return normalized if normalized == value else None
+
+
+def canonical_review_dispatch_marker(closure_path: str, review_round_index: int) -> str:
+    """Return the canonical declaration marker shared by docs and grading."""
+
+    normalized = _normalized_closure_path(closure_path)
+    if normalized is None:
+        raise ValueError("closure_path must be a canonical relative closure path")
+    if not _is_int(review_round_index) or review_round_index < 0:
+        raise ValueError("review_round_index must be a non-negative integer")
+    payload = {
+        "closure_path": normalized,
+        "request_contract": "sanitized_original_request",
+        "return": "claims_only",
+        "review_round_index": review_round_index,
+    }
+    return _REVIEW_DISPATCH_PREFIX + json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    )
+
+
+def _review_dispatch_marker(prompt: object) -> tuple[str, int] | None:
+    """Parse the one exact marker declaration; it is not fidelity proof."""
+
+    if not isinstance(prompt, str):
+        return None
+    marker_lines = [line for line in prompt.splitlines() if line.startswith("NXD_REVIEW_DISPATCH")]
+    if len(marker_lines) != 1 or not marker_lines[0].startswith(_REVIEW_DISPATCH_PREFIX):
+        return None
+    line = marker_lines[0]
+    try:
+        payload = json.loads(line.removeprefix(_REVIEW_DISPATCH_PREFIX))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, Mapping) or set(payload) != _REVIEW_DISPATCH_KEYS:
+        return None
+    closure_path = _normalized_closure_path(payload.get("closure_path"))
+    review_round_index = payload.get("review_round_index")
+    if (
+        closure_path is None
+        or not _is_int(review_round_index)
+        or review_round_index < 0
+    ):
+        return None
+    canonical = canonical_review_dispatch_marker(closure_path, review_round_index)
+    return (closure_path, review_round_index) if line == canonical else None
+
+
+def _completed_review_delegation(
+    call: Mapping[str, object], position: EventPosition
+) -> ReviewDispatch | None:
+    """Return the marked closure when a reviewer completed inline.
+
+    A non-empty inline result proves the child returned in this turn; the exact
+    marker replaces the former prose heuristic and binds the request contract
+    and return shape without retaining the request itself as evidence.
+    """
+
+    arguments = call.get("arguments")
+    result = call.get("result")
+    if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
+        return None
+    marker = _review_dispatch_marker(arguments.get("prompt"))
+    if marker is None or result.get("is_error") is not False:
+        return None
+    content = result.get("content")
+    if isinstance(content, str):
+        rendered = content.strip()
+    elif isinstance(content, (Mapping, Sequence)) and not isinstance(content, (bytes, bytearray)):
+        rendered = json.dumps(content, default=str).strip()
+        if rendered in {"{}", "[]", '""'}:
+            return None
+    else:
+        return None
+    if not rendered or "async agent launched" in rendered.casefold():
+        return None
+    closure_path, review_round_index = marker
+    return ReviewDispatch(position, closure_path, review_round_index)
+
+
+def _positioned_calls(
+    observations: object,
+) -> tuple[tuple[EventPosition, Mapping[str, object]], ...]:
+    """Return calls only when every carrying turn has a valid explicit index."""
+
+    if not isinstance(observations, Mapping):
+        return ()
+    turns = observations.get("turns")
+    if not isinstance(turns, Sequence) or isinstance(
+        turns, (str, bytes, bytearray)
+    ):
+        return ()
+    positioned: list[tuple[EventPosition, Mapping[str, object]]] = []
+    previous_turn = 0
+    for turn in turns:
+        if not isinstance(turn, Mapping) or not _is_int(turn.get("turn")):
+            return ()
+        turn_number = int(turn["turn"])
+        if turn_number <= previous_turn:
+            return ()
+        previous_turn = turn_number
+        calls = turn.get("tool_calls")
+        if not isinstance(calls, Sequence) or isinstance(
+            calls, (str, bytes, bytearray)
+        ):
+            return ()
+        for call_index, call in enumerate(calls):
+            if not isinstance(call, Mapping):
+                return ()
+            positioned.append((EventPosition(turn_number, call_index), call))
+    return tuple(positioned)
+
+
+def _review_dispatches(observations: object) -> tuple[ReviewDispatch, ...]:
+    """Return completed marker-bearing dispatches in exact event order."""
+
+    found: list[ReviewDispatch] = []
+    for position, call in _positioned_calls(observations):
+        name = call.get("name")
+        if not isinstance(name, str) or name.casefold() not in {"task", "agent"}:
+            continue
+        dispatch = _completed_review_delegation(call, position)
+        if dispatch is not None:
+            found.append(dispatch)
+    return tuple(found)
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _normalized_workflow(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _normalized_definition_for_build(
+    value: object, build: PublishedBuild
+) -> str | None:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        return None
+    root = Path(build.agent_root).resolve()
+    candidate = Path(value)
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return None
+    return relative.as_posix()
+
+
+def _successful_check_positions(
+    observations: object,
+    build: PublishedBuild,
+    *,
+    desktop_server_name: str,
+) -> tuple[EventPosition, ...]:
+    expected_name = f"mcp__{desktop_server_name.casefold()}__check_data_product"
+    positions: list[EventPosition] = []
+    for position, call in _positioned_calls(observations):
+        name = call.get("name")
+        if not isinstance(name, str) or name.casefold() != expected_name:
+            continue
+        arguments = call.get("arguments")
+        result = call.get("result")
+        if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
+            continue
+        content = result.get("content")
+        if (
+            result.get("is_error") is not False
+            or not isinstance(content, Mapping)
+            or str(content.get("outcome", "")).strip().casefold() != "pass"
+            or _normalized_definition_for_build(arguments.get("definition"), build)
+            != build.closure_path
+            or _normalized_workflow(arguments.get("workflow")) != build.workflow
+        ):
+            continue
+        result_workflow = content.get("workflow")
+        if result_workflow is not None and _normalized_workflow(result_workflow) != build.workflow:
+            continue
+        positions.append(position)
+    return tuple(positions)
+
+
+_CLOSURE_EDIT_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit"})
+_KNOWN_READ_ONLY_TOOLS = frozenset(
+    {"read", "glob", "grep", "webfetch", "websearch", "toolsearch"}
+)
+_KNOWN_READ_ONLY_DESKTOP_ACTIONS = frozenset(
+    {
+        "read",
+        "list_data_products",
+        "inspect_run",
+        "read_data_product_resource",
+        "run_semantic_query",
+    }
+)
+
+
+def _edit_touches_published_closure(
+    call: Mapping[str, object], build: PublishedBuild
+) -> bool:
+    name = call.get("name")
+    if not isinstance(name, str) or name.casefold() not in _CLOSURE_EDIT_TOOLS:
+        return False
+    arguments = call.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return False
+    for key in ("file_path", "path", "notebook_path"):
+        normalized = _normalized_definition_for_build(arguments.get(key), build)
+        if normalized is not None and (
+            normalized == build.closure_path
+            or normalized.startswith(build.closure_path + "/")
+        ):
+            return True
+    return False
+
+
+def _operation_preserves_published_closure(
+    call: Mapping[str, object],
+    build: PublishedBuild,
+    *,
+    desktop_server_name: str,
+) -> bool:
+    """Prove that one intervening call could not mutate the built closure."""
+
+    name = call.get("name")
+    if not isinstance(name, str):
+        return False
+    folded = name.casefold()
+    if folded in _KNOWN_READ_ONLY_TOOLS:
+        return True
+    desktop_prefix = f"mcp__{desktop_server_name.casefold()}__"
+    if folded.startswith(desktop_prefix):
+        return folded.removeprefix(desktop_prefix) in _KNOWN_READ_ONLY_DESKTOP_ACTIONS
+    if folded not in _CLOSURE_EDIT_TOOLS:
+        # Agent/Task/Bash and unknown tools are opaque at this boundary. Their
+        # result text cannot prove the closure stayed immutable.
+        return False
+    arguments = call.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return False
+    paths = [
+        arguments.get(key)
+        for key in ("file_path", "path", "notebook_path")
+        if key in arguments
+    ]
+    if not paths:
+        return False
+    normalized = [
+        _normalized_definition_for_build(path, build)
+        for path in paths
+    ]
+    if any(path is None for path in normalized):
+        return False
+    return not _edit_touches_published_closure(call, build)
+
+
+def _valid_review_round(entry: object) -> bool:
+    """Validate the review evidence shape the shipped job-loop enforces.
+
+    This mirrors ``validate_review_round`` in
+    ``src/nxd-run-job-loop/scripts/dp_diagnostics.py``.  The eval package
+    cannot import that shipped standalone helper, so keep this deliberately
+    closed and structural: a status token by itself is not a review round.
+    """
+
+    if not isinstance(entry, Mapping):
+        return False
+    required = {
+        "status",
+        "started_at_unix_ms",
+        "ended_at_unix_ms",
+        "budget_ms",
+        "findings",
+        "adjudications",
+        "user_decision",
+        "deferred_finding_ids",
+    }
+    if set(entry) != required:
+        return False
+    status = entry.get("status")
+    started = entry.get("started_at_unix_ms")
+    ended = entry.get("ended_at_unix_ms")
+    budget = entry.get("budget_ms")
+    if not isinstance(status, str) or status not in _REVIEW_ROUND_STATUS:
+        return False
+    if not (_is_int(started) and _is_int(ended) and _is_int(budget) and budget > 0):
+        return False
+    assert isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int)
+    elapsed = ended - started
+    if elapsed < 0:
+        return False
+    if status == "timed_out" and elapsed < budget:
+        return False
+    if status in {"complete", "needs_user"} and elapsed > budget:
+        return False
+
+    findings = entry.get("findings")
+    adjudications = entry.get("adjudications")
+    if not isinstance(findings, list) or not isinstance(adjudications, list):
+        return False
+    finding_ids: set[str] = set()
+    states_by_id: dict[str, object] = {}
+    classifications_by_id: dict[str, object] = {}
+    for finding in findings:
+        if not isinstance(finding, Mapping) or set(finding) != {
+            "id", "claim", "evidence", "classification", "proposed_effect", "applied_files", "state"
+        }:
+            return False
+        finding_id = finding.get("id")
+        evidence = finding.get("evidence")
+        applied_files = finding.get("applied_files")
+        if not isinstance(finding_id, str) or not finding_id or finding_id in finding_ids:
+            return False
+        if not isinstance(finding.get("claim"), str) or not finding.get("claim"):
+            return False
+        if not isinstance(evidence, list) or not evidence or any(
+            not isinstance(citation, str) or not citation for citation in evidence
+        ):
+            return False
+        classification = finding.get("classification")
+        if (
+            not isinstance(classification, str)
+            or classification not in _REVIEW_CLASSIFICATIONS
+        ):
+            return False
+        if not isinstance(finding.get("proposed_effect"), str) or not finding.get("proposed_effect"):
+            return False
+        if not isinstance(applied_files, list) or any(
+            not isinstance(path, str) or not path for path in applied_files
+        ):
+            return False
+        state = finding.get("state")
+        if not isinstance(state, str) or state not in _REVIEW_FINDING_STATES:
+            return False
+        if (state == "applied") != bool(applied_files):
+            return False
+        finding_ids.add(finding_id)
+        states_by_id[finding_id] = state
+        classifications_by_id[finding_id] = finding.get("classification")
+
+    adjudicated_ids: set[str] = set()
+    dispositions_by_id: dict[str, object] = {}
+    for adjudication in adjudications:
+        if not isinstance(adjudication, Mapping) or set(adjudication) != {
+            "finding_id", "disposition", "citation"
+        }:
+            return False
+        finding_id = adjudication.get("finding_id")
+        disposition = adjudication.get("disposition")
+        citation = adjudication.get("citation")
+        if not isinstance(finding_id, str) or not finding_id or finding_id in adjudicated_ids:
+            return False
+        if (
+            not isinstance(disposition, str)
+            or disposition not in _REVIEW_DISPOSITIONS
+        ):
+            return False
+        if citation is not None and (not isinstance(citation, str) or not citation):
+            return False
+        if disposition == "rejected" and not citation:
+            return False
+        adjudicated_ids.add(finding_id)
+        dispositions_by_id[finding_id] = disposition
+    if finding_ids != adjudicated_ids:
+        return False
+
+    user_decision = entry.get("user_decision")
+    approved_ids: set[str] = set()
+    if user_decision is not None:
+        if not isinstance(user_decision, Mapping) or set(user_decision) != {
+            "approved_at_unix_ms", "citation", "approved_finding_ids"
+        }:
+            return False
+        approved = user_decision.get("approved_finding_ids")
+        if not _is_int(user_decision.get("approved_at_unix_ms")):
+            return False
+        if not isinstance(user_decision.get("citation"), str) or not user_decision.get("citation"):
+            return False
+        if not isinstance(approved, list) or any(
+            not isinstance(finding_id, str) or not finding_id for finding_id in approved
+        ):
+            return False
+        if len(approved) != len(set(approved)) or not set(approved).issubset(finding_ids):
+            return False
+        approved_ids = set(approved)
+
+    deferred = entry.get("deferred_finding_ids")
+    if not isinstance(deferred, list) or any(
+        not isinstance(finding_id, str) or not finding_id for finding_id in deferred
+    ):
+        return False
+    deferred_ids = set(deferred)
+    if len(deferred) != len(deferred_ids) or not deferred_ids.issubset(finding_ids):
+        return False
+    if deferred_ids and user_decision is None:
+        return False
+
+    needs_user_ids = {key for key, value in states_by_id.items() if value == "needs_user"}
+    if status != "needs_user" and needs_user_ids:
+        return False
+    if status == "needs_user" and user_decision is None and not needs_user_ids:
+        return False
+    applied_behavior_ids = {
+        finding_id
+        for finding_id, state in states_by_id.items()
+        if state == "applied"
+        and classifications_by_id.get(finding_id) == "behavior_affecting"
+    }
+    accepted_behavior_ids = {
+        finding_id
+        for finding_id in finding_ids
+        if dispositions_by_id.get(finding_id) == "accepted"
+        and classifications_by_id.get(finding_id) == "behavior_affecting"
+    }
+    if not deferred_ids.issubset(accepted_behavior_ids):
+        return False
+    if any(states_by_id.get(finding_id) == "applied" for finding_id in deferred_ids):
+        return False
+    if not applied_behavior_ids.issubset(approved_ids):
+        return False
+    if user_decision is not None and accepted_behavior_ids != (
+        applied_behavior_ids | deferred_ids
+    ):
+        return False
+    return True
+
+
+def _review_round_outcome(review_rounds: object, *, closure_path: str | None = None) -> str | None:
     """Summarize a recorded adversarial-review round, if the build has one.
 
     ``build-record.json`` ``review_rounds[]`` is what the mandated flow
@@ -832,18 +1250,57 @@ def _review_round_outcome(review_rounds: object) -> str | None:
     """
 
     if isinstance(review_rounds, Mapping):
-        review_rounds = review_rounds.get("review_rounds")
+        if closure_path is not None:
+            review_rounds = review_rounds.get(closure_path)
+        else:
+            review_rounds = review_rounds.get("review_rounds")
     if not isinstance(review_rounds, Sequence) or isinstance(review_rounds, (str, bytes, bytearray)):
         return None
-    statuses = [
-        str(entry.get("status", "")).strip().lower()
-        for entry in review_rounds
-        if isinstance(entry, Mapping)
-    ]
-    valid = [status for status in statuses if status in _REVIEW_ROUND_STATUS]
+    valid = [str(entry["status"]) for entry in review_rounds if _valid_review_round(entry)]
     if not valid:
         return None
     return f"{len(valid)} review round(s): {', '.join(sorted(set(valid)))}"
+
+
+def _closure_review_rounds(
+    review_rounds: object, closure_path: str
+) -> tuple[Mapping[str, object], ...] | None:
+    if not isinstance(review_rounds, Mapping):
+        return None
+    values = review_rounds.get(closure_path)
+    if not isinstance(values, Sequence) or isinstance(
+        values, (str, bytes, bytearray)
+    ):
+        return None
+    if any(not isinstance(value, Mapping) for value in values):
+        return None
+    return tuple(value for value in values if isinstance(value, Mapping))
+
+
+def _review_round_resolved(entry: Mapping[str, object]) -> bool:
+    """Return whether a valid round permits the workflow to continue."""
+
+    if not _valid_review_round(entry):
+        return False
+    status = entry.get("status")
+    decision = entry.get("user_decision")
+    if status in {"needs_user", "timed_out"} and decision is None:
+        return False
+    accepted_behavior_ids = {
+        finding.get("id")
+        for finding in entry.get("findings", [])
+        if isinstance(finding, Mapping)
+        and finding.get("classification") == "behavior_affecting"
+        and any(
+            isinstance(adjudication, Mapping)
+            and adjudication.get("finding_id") == finding.get("id")
+            and adjudication.get("disposition") == "accepted"
+            for adjudication in entry.get("adjudications", [])
+        )
+    }
+    if accepted_behavior_ids and decision is None:
+        return False
+    return True
 
 
 def gate_construction(
@@ -852,14 +1309,11 @@ def gate_construction(
     observations: object | None = None,
     attestations: object | None = None,
     review_rounds: object | None = None,
+    published_closure: PublishedBuild | str | None = None,
     require_observed: bool = False,
     desktop_server_name: str = "nxd-desktop",
 ) -> GateResult:
-    """construction: require explicit outcomes for both construction checks.
-
-    The literal outcome ``could not run`` is deliberately accepted.  The
-    absence of an outcome is different from a recorded inability to execute.
-    """
+    """Construction proof bound to one reviewed, checked, published closure."""
 
     rows = _rows(ledger)
     if not rows:
@@ -876,80 +1330,160 @@ def gate_construction(
             value = _outcome_value(row.get("claim"))
             if value is not None:
                 observed[str(kind)] = value
-    attested: dict[str, object] = {}
-    if require_observed:
-        values = attestations if isinstance(attestations, Sequence) and not isinstance(attestations, (str, bytes, bytearray)) else (attestations,)
-        for value in values:
-            if isinstance(value, Mapping) and value.get("action_kind") in {"self_check", "adversarial_review"}:
-                attested[str(value["action_kind"])] = value.get("outcome")
-        for kind, outcome in attested.items():
-            if kind not in observed and outcome is not None:
-                observed[kind] = outcome
-    observed_calls = (
-        _construction_call_kinds(observations, desktop_server_name=desktop_server_name)
-        if require_observed
-        else set()
+    values = (
+        attestations
+        if isinstance(attestations, Sequence)
+        and not isinstance(attestations, (str, bytes, bytearray))
+        else (attestations,)
     )
-    # ``_delegated`` is a marker, not a construction kind; take it out before
-    # the per-kind loops so it can never read as one.
-    delegated = "_delegated" in observed_calls
-    observed_calls.discard("_delegated")
-    # The reviewer dispatch cannot be recognised by ``subagent_type``. The
-    # skill mandates "one built-in read-only subagent -- never a custom/plugin
-    # agent definition", this plugin registers no agents, and the CLI rejects
-    # an unknown type outright, so ``subagent_type="nxd-review-closure"`` is a
-    # token a compliant agent can never emit. Keying the gate on it made
-    # ``construction`` unpassable by an agent doing exactly what the skill says.
-    #
-    # What the mandated flow does produce is a ``review_rounds[]`` entry in
-    # build-record.json. Requiring it *together with* an observed delegation
-    # call keeps both halves honest: a research subagent alone records no
-    # round, and a fabricated round alone dispatched nothing. That pairing is
-    # the behaviour, where ``subagent_type`` was only ever a proxy for it.
-    round_outcome = _review_round_outcome(review_rounds)
-    if round_outcome is not None and delegated:
-        observed_calls.add("adversarial_review")
-    # A check the harness *watched* succeed needs no agent testimony about it.
-    # ``_construction_call_kinds`` records ``self_check`` only for a
-    # non-error ``check_data_product`` call at the structured session
-    # boundary, which is harness-owned evidence of the same event the
-    # attestation would describe.  Demanding both failed a live run for not
-    # re-telling the harness what it had just seen -- the pattern already
-    # removed from the build gate, where whether a gate could be examined
-    # depended on which artifacts the agent volunteered.
-    #
-    # This is not a gate that cannot fail: an agent that never calls the tool
-    # still gets ``not_observed``, and the kinds with no observable call --
-    # ``adversarial_review``, whose outcome is a set of claims and
-    # adjudications that no tool call reveals -- still require an outcome and
-    # an attestation.
-    if round_outcome is not None and "adversarial_review" not in observed:
-        observed["adversarial_review"] = round_outcome
-    findings = [
-        Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome")
-        for kind in ("self_check", "adversarial_review")
-        if not (kind == "self_check" and kind in observed_calls)
-        and (kind not in observed or observed[kind] is None)
-    ]
-    if require_observed:
-        for kind in ("self_check", "adversarial_review"):
-            if kind not in observed_calls:
-                findings.append(Finding(f"construction_{kind}_not_observed", f"{kind} was not observed as a successful structured tool call"))
-        for kind in ("self_check", "adversarial_review"):
-            # The attestation exemption is scoped to ``self_check`` alone. It
-            # exists because the harness *watched that exact event*: a
-            # non-error ``check_data_product`` is the self-check happening.
-            # Nothing equivalent is true of the reviewer. A delegation call is
-            # only evidence that *a* subagent ran -- a documentation-hunting
-            # one looks identical at this boundary -- and a ``review_rounds[]``
-            # entry is agent-written. Exempting it too meant a research
-            # subagent plus a hand-written ``{"status": "complete"}`` passed
-            # ``construction`` with no attestation at all, which is a weaker
-            # gate than the one this branch started with.
-            if kind == "self_check" and kind in observed_calls:
-                continue
-            if kind not in attested:
-                findings.append(Finding(f"construction_{kind}_attestation_missing", f"{kind} has no agent attestation"))
+    attestation_values = tuple(value for value in values if isinstance(value, Mapping))
+    if not require_observed:
+        for value in attestation_values:
+            kind = value.get("action_kind")
+            outcome = value.get("outcome")
+            if kind in {"self_check", "adversarial_review"} and outcome is not None:
+                observed[str(kind)] = outcome
+        round_outcome = _review_round_outcome(review_rounds)
+        if round_outcome is not None and "adversarial_review" not in observed:
+            observed["adversarial_review"] = round_outcome
+        findings = [
+            Finding(
+                f"construction_{kind}_outcome_missing",
+                f"{kind} has no recorded outcome",
+            )
+            for kind in ("self_check", "adversarial_review")
+            if kind not in observed or observed[kind] is None
+        ]
+        return _result("construction", not findings, findings)
+
+    build = published_closure if isinstance(published_closure, PublishedBuild) else None
+    positioned_calls = _positioned_calls(observations)
+    dispatches = _review_dispatches(observations)
+    review_attestations = tuple(
+        value
+        for value in attestation_values
+        if value.get("action_kind") == "adversarial_review"
+    )
+    review_observed = False
+    unresolved = False
+    final_dispatch: EventPosition | None = None
+
+    if build is not None:
+        rounds = _closure_review_rounds(review_rounds, build.closure_path)
+        all_closure_dispatches = tuple(
+            dispatch
+            for dispatch in dispatches
+            if dispatch.closure_path == build.closure_path
+        )
+        closure_dispatches = tuple(
+            dispatch
+            for dispatch in all_closure_dispatches
+            if dispatch.position < build.position
+        )
+        valid_rounds = rounds is not None and all(
+            _valid_review_round(round_) for round_ in rounds
+        )
+        expected_indices = tuple(range(len(rounds or ())))
+        dispatch_by_index = {
+            dispatch.review_round_index: dispatch for dispatch in closure_dispatches
+        }
+        attestations_by_index = {
+            value.get("review_round_index"): value
+            for value in review_attestations
+            if _is_int(value.get("review_round_index"))
+        }
+        paired = (
+            valid_rounds
+            and bool(rounds)
+            and len(all_closure_dispatches) == len(rounds)
+            and len(closure_dispatches) == len(rounds)
+            and len(dispatch_by_index) == len(rounds)
+            and tuple(sorted(dispatch_by_index)) == expected_indices
+            and len(review_attestations) == len(rounds)
+            and len(attestations_by_index) == len(rounds)
+            and tuple(sorted(attestations_by_index)) == expected_indices
+            and tuple(
+                dispatch.review_round_index for dispatch in closure_dispatches
+            ) == expected_indices
+        )
+        if paired and rounds is not None:
+            for index, _round in enumerate(rounds):
+                dispatch = dispatch_by_index[index]
+                attestation = attestations_by_index[index]
+                expected_ref = (
+                    f"{build.closure_path}/build-record.json#review_rounds/{index}"
+                )
+                if attestation.get("evidence_ref") != expected_ref:
+                    paired = False
+                    break
+            if paired:
+                final_dispatch = max(
+                    dispatch.position for dispatch in closure_dispatches
+                )
+                unresolved = any(
+                    not _review_round_resolved(round_) for round_ in rounds
+                )
+                review_observed = not unresolved
+
+    check_observed = False
+    stale_after_check = False
+    if build is not None and final_dispatch is not None:
+        candidates = tuple(
+            position
+            for position in _successful_check_positions(
+                observations, build, desktop_server_name=desktop_server_name
+            )
+            if final_dispatch < position < build.position
+        )
+        if candidates:
+            credited_check = max(candidates)
+            stale_after_check = any(
+                credited_check < position < build.position
+                and not _operation_preserves_published_closure(
+                    call,
+                    build,
+                    desktop_server_name=desktop_server_name,
+                )
+                for position, call in positioned_calls
+            )
+            check_observed = not stale_after_check
+
+    findings: list[Finding] = []
+    if not check_observed:
+        findings.append(
+            Finding(
+                "construction_self_check_not_observed",
+                "no final successful same-closure self-check precedes the published build",
+            )
+        )
+    if stale_after_check:
+        findings.append(
+            Finding(
+                "construction_self_check_stale",
+                "an intervening operation could not prove the published closure remained immutable",
+            )
+        )
+    if unresolved:
+        findings.append(
+            Finding(
+                "construction_adversarial_review_unresolved",
+                "at least one pre-build review round lacks an explicit resolution",
+            )
+        )
+    elif not review_observed:
+        findings.append(
+            Finding(
+                "construction_adversarial_review_not_observed",
+                "review dispatches, rounds, and indexed attestations did not pair one-to-one",
+            )
+        )
+    if not review_attestations:
+        findings.append(
+            Finding(
+                "construction_adversarial_review_attestation_missing",
+                "adversarial_review has no indexed agent attestation",
+            )
+        )
     return _result("construction", not findings, findings)
 
 
@@ -1304,6 +1838,9 @@ check_g7 = g7_follow_up
 __all__ = [
     "Finding",
     "GateResult",
+    "EventPosition",
+    "PublishedBuild",
+    "canonical_review_dispatch_marker",
     "GATE_PHASES",
     "GATE_POINTS",
     "NOT_STAGED_CODES",

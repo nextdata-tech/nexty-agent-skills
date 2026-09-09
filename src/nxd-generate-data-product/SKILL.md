@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.45.1
+  version: 0.46.0
 ---
 
 # nxd-generate-data-product skill
@@ -50,6 +50,9 @@ time**, runs the transform, verifies staging, and stands up the semantic MCP
 endpoint over it.
 
 ## The closure layout
+
+Choose and normalize one absolute `<dp-root>` — the exact directory passed to the desktop supervisor — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`.
+Never place credentials, `SENSITIVE`, `.gitignore`, or the profile beside/above `<dp-root>`; split artifacts must be consolidated first. Use this same root for self-check, lock, and build.
 
 The author emits **Python and prerequisite config only**:
 
@@ -96,8 +99,7 @@ and the `model_tables` identity map from these — you do not author them):
 | the physical table | what dlt writes: `main.<name>` | yes | yes |
 | the connector's per-model reference | `data/<name>/` for a file connector (CSV/JSON/JSONL/Parquet); a `db-source-tables` entry for a database connector; an `endpoint_<name>` infra-profile attribute for a REST API connector | yes — **except** reference data the closure lands itself on a `db-source`/`api-source` connector, which has none: do NOT invent one (`reference/api-source.md` § "Landed reference data in an API closure") | **no** |
 
-`PHYSICAL_MODELS` is the set of **landed-table identities**, not data
-directories: base models (`data/<name>/`) **plus** derived models (Step 3a).
+`PHYSICAL_MODELS` is the set of **landed-table identities**, not data directories: base models (`data/<name>/`) **plus** derived models (Step 3a).
 Required physical models use `.promise(...)`; optional-empty physical models use
 `.model(...)`; both appear in `model_tables`. `OPTIONAL_EMPTY_MODELS` is a
 literal subset whose dlt resource may yield zero rows and leave no table.
@@ -108,9 +110,7 @@ keys.
 
 ## Workflow
 
-The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value;
-if it is absent, return to nxd-run-job-loop — never reconstruct it from the
-closure or this skill's cwd.
+The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value; if it is absent, return to nxd-run-job-loop — never reconstruct it from the closure or this skill's cwd.
 
 **Selective-install dependency:** this skill needs **nxd-run-job-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-data-product` alone is not a supported substitute for that handoff.
 
@@ -450,7 +450,7 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and `provena
 
 ### Step 6b — Adversarial review, BEFORE the self-check (MANDATORY when `nxd-review-closure` is installed)
 
-**Explicitly dispatch one built-in read-only reviewer** — never a custom/plugin agent definition — with the closure path and verbatim request to return claims only; it never edits, builds, serves, transforms or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs; adjudication is not authorization to mutate the closure. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Contract: [reference/adversarial-review.md](reference/adversarial-review.md), including the authorization rules.
+**Explicitly dispatch one built-in read-only reviewer** — never a custom/plugin agent definition — with the normalized closure path and verbatim request content under the `sanitized_original_request` contract, preserving every question/procedure while replacing every known user-designated or non-public credential with a named placeholder; if complete sanitization cannot be established, do not delegate and stop. Include exactly one marker line: `NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}`; substitute only `closure_path` and `review_round_index`, keep every other key/value unchanged, and add no colon, slug or prose prefix. Tell the reviewer to return claims only; no credential may reach it, and it never edits, builds, serves, transforms or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs; adjudication is not authorization to mutate the closure. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Contract: [reference/adversarial-review.md](reference/adversarial-review.md), including the authorization rules.
 ### Step 7 — Self-check before handing off (MANDATORY)
 The closure-root self-check is the generator's record gate, distinct from the supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
 

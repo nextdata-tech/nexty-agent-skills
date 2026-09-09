@@ -216,7 +216,8 @@
       "budget_ms": 120000,
       "findings": [],
       "adjudications": [],
-      "user_decision": null
+      "user_decision": null,
+      "deferred_finding_ids": []
     }
   ],
   "concessions": [

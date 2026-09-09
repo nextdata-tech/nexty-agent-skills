@@ -202,6 +202,30 @@ def _configure_scenarios(
     )
 
 
+def _validated_skill_pack_root(selected: Path | None) -> Path:
+    """Resolve the skill source without moving the harness or scenario root."""
+
+    root = (selected or REPO_ROOT).expanduser().resolve()
+    if not root.is_dir():
+        raise TierError(f"skill-pack root is not a directory: {root}")
+    src = root / "src"
+    manifest_path = root / ".claude-plugin" / "plugin.json"
+    if not src.is_dir() or not manifest_path.is_file():
+        raise TierError(f"skill-pack root is incomplete: {root}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise TierError(f"skill-pack manifest is unreadable: {root}") from exc
+    if (
+        not isinstance(manifest, dict)
+        or not isinstance(manifest.get("version"), str)
+        or not manifest["version"].strip()
+        or not any(path.is_file() for path in src.glob("*/SKILL.md"))
+    ):
+        raise TierError(f"skill-pack root is incomplete: {root}")
+    return root
+
+
 DriverFactory = Callable[[Any, Any, int], DriverOperator]
 
 
@@ -329,6 +353,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
+    parser.add_argument(
+        "--skill-pack-root",
+        type=Path,
+        default=None,
+        help="validated skill-pack checkout used for the staged plugin and drift canary (default: this repo)",
+    )
     parser.add_argument("--claude-config-dir", type=Path, help="host Claude Code config directory used for local authentication")
     parser.add_argument(
         "--allow-host-home",
@@ -383,6 +413,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.allow_host_home_bash and not args.allow_host_home:
         raise TierError("--allow-host-home-bash requires --allow-host-home")
     repo_root = REPO_ROOT
+    skill_pack_root = _validated_skill_pack_root(args.skill_pack_root)
     scenarios = _configure_scenarios(
         _scenarios_in_scope(load_scenarios(SCENARIO_ROOT), args.scenario, args.tier),
         args.scenario,
@@ -401,7 +432,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if claude_config_dir is not None and not claude_config_dir.is_dir():
         raise TierError(f"Claude config directory is not a directory: {claude_config_dir}")
 
-    plugin_manifest = json.loads((repo_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    plugin_manifest = json.loads((skill_pack_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     skill_pack_version = plugin_manifest.get("version")
     if not isinstance(skill_pack_version, str) or not skill_pack_version:
         raise TierError(".claude-plugin/plugin.json has no non-empty version")
@@ -435,7 +466,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         report_dir.mkdir(parents=True, exist_ok=True)
 
-    plugin_owner, plugin_dir = temporary_plugin(repo_root)
+    plugin_owner, plugin_dir = temporary_plugin(skill_pack_root)
     adapter_kwargs = {
         "claude": str(claude),
         "model": args.model,
@@ -467,7 +498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = TierRunner(
             scenarios,
             pins=pins,
-            canary=lambda: run_drift_canary(CANARY_ROOT, skills_root=repo_root / "src", supervisor=supervisor),
+            canary=lambda: run_drift_canary(CANARY_ROOT, skills_root=skill_pack_root / "src", supervisor=supervisor),
             session_factory=session_factory,
             environment_root=report_dir,
             evidence_root=report_dir / "evidence",
