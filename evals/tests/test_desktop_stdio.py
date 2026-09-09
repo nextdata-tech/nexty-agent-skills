@@ -40,10 +40,13 @@ import json, sys, threading, time
 
 def respond(message):
     method = message.get("method")
-    if method == "build_data_product":
+    operation = method
+    if method == "tools/call":
+        operation = message.get("params", {}).get("name")
+    if operation == "build_data_product":
         time.sleep(0.25)
         result = {"state": "terminal", "run_id": "run-1"}
-    elif method == "inspect_run":
+    elif operation == "inspect_run":
         result = {"state": "terminal", "run_id": "run-1", "duplicate_builds": 0}
     else:
         result = {"method": method}
@@ -212,6 +215,61 @@ def test_proxy_timeout_fault_allows_followup_and_suppresses_late_response(tmp_pa
             for record in records
             if record.get("forwarded")
         )
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_proxy_timeout_fault_targets_mcp_tool_and_workflow(tmp_path):
+    child = _script(tmp_path / "timeout-server.py", TIMEOUT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        request_timeout_faults={
+            "build_data_product": {
+                "after_ms": 50,
+                "once": True,
+                "workflow": "target-workflow",
+            }
+        },
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdin is not None and proxy.stdout is not None
+        unrelated = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "build_data_product", "arguments": {"workflow": "other-workflow"}},
+        }
+        proxy.stdin.write(json.dumps(unrelated) + "\n")
+        proxy.stdin.flush()
+        response = json.loads(proxy.stdout.readline())
+        assert response["id"] == 1
+        assert "error" not in response
+
+        targeted = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "build_data_product", "arguments": {"workflow": "target-workflow"}},
+        }
+        proxy.stdin.write(json.dumps(targeted) + "\n")
+        proxy.stdin.flush()
+        timeout = json.loads(proxy.stdout.readline())
+        assert timeout["id"] == 2
+        assert timeout["error"]["code"] == -32098
+        assert timeout["error"]["data"]["method"] == "build_data_product"
+        proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
     finally:
         if proxy.poll() is None:
             proxy.kill()

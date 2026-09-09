@@ -6,6 +6,11 @@ Use only the connected `mcp__nxd-desktop__*` tools for this terminal-only
 workflow. The runner provides `ENDPOINT_URL` for a deterministic local REST
 fixture with three pages; do not use a real provider or external network.
 
+Use `terminal-timeout-lifecycle` as the workflow name for the product and all
+of its lifecycle calls. Keep the same workflow and closure for the timeout,
+inspection, retry, publication, resume, and cleanup evidence; use a distinct
+workflow only for the intentionally broken failed-build copy.
+
 Create a small closure that reads the fixture through the supported local
 source path and run it through the public MCP lifecycle. The runner injects a
 single client deadline for the first `build_data_product` request. Treat the

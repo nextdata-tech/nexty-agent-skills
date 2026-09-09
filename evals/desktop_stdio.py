@@ -126,6 +126,7 @@ class _PendingRequest:
 class _TimeoutFault:
     after_ms: int
     remaining: int | None = None
+    workflow: str | None = None
 
 
 def _rpc_id_key(value: Any) -> str | None:
@@ -140,7 +141,7 @@ def _rpc_id_key(value: Any) -> str | None:
 
 
 def _timeout_faults(raw: Any) -> dict[str, _TimeoutFault]:
-    """Validate the opt-in method -> deadline configuration from server-spec."""
+    """Validate the opt-in operation -> deadline configuration from server-spec."""
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):
@@ -150,8 +151,16 @@ def _timeout_faults(raw: Any) -> dict[str, _TimeoutFault]:
         if not isinstance(method, str) or not method:
             raise ValueError("request_timeout_faults method names must be non-empty strings")
         once = False
+        workflow: str | None = None
         if isinstance(value, Mapping):
             once = value.get("once", False)
+            workflow_value = value.get("workflow")
+            if workflow_value is not None:
+                if not isinstance(workflow_value, str) or not workflow_value:
+                    raise ValueError(
+                        f"request_timeout_faults[{method!r}] workflow must be a non-empty string"
+                    )
+                workflow = workflow_value
             value = value.get("after_ms")
         if not isinstance(once, bool):
             raise ValueError(f"request_timeout_faults[{method!r}] once must be boolean")
@@ -159,8 +168,40 @@ def _timeout_faults(raw: Any) -> dict[str, _TimeoutFault]:
             raise ValueError(f"request_timeout_faults[{method!r}] must contain after_ms")
         if not math.isfinite(float(value)) or value <= 0 or value > 600_000:
             raise ValueError(f"request_timeout_faults[{method!r}] after_ms is out of bounds")
-        faults[method] = _TimeoutFault(int(value), remaining=1 if once else None)
+        faults[method] = _TimeoutFault(
+            int(value), remaining=1 if once else None, workflow=workflow
+        )
     return faults
+
+
+def _request_operation(request: Mapping[str, Any]) -> str | None:
+    """Return the operation name used by timeout-fault configuration.
+
+    Direct JSON-RPC test servers use the request method as their operation
+    name. MCP tool calls carry the operation in ``params.name`` instead.
+    Keeping this normalization in the runner makes a fault target the public
+    tool regardless of which JSON-RPC envelope the child receives.
+    """
+    method = request.get("method")
+    if method == "tools/call":
+        params = request.get("params")
+        if isinstance(params, Mapping):
+            name = params.get("name")
+            if isinstance(name, str) and name:
+                return name
+    return method if isinstance(method, str) else None
+
+
+def _request_workflow(request: Mapping[str, Any]) -> str | None:
+    """Return an MCP tool call's workflow argument, when present."""
+    params = request.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    arguments = params.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return None
+    workflow = arguments.get("workflow")
+    return workflow if isinstance(workflow, str) else None
 
 
 class DesktopStdioSession:
@@ -485,10 +526,12 @@ def run_stdio_proxy(spec_path: Path) -> int:
         closing = threading.Event()
         shutting_down = False
 
-        def next_timeout_ms(method: str) -> int | None:
+        def next_timeout_ms(operation: str, request: Mapping[str, Any]) -> int | None:
             with fault_lock:
-                fault = timeout_faults.get(method)
+                fault = timeout_faults.get(operation)
                 if fault is None:
+                    return None
+                if fault.workflow is not None and _request_workflow(request) != fault.workflow:
                     return None
                 if fault.remaining == 0:
                     return None
@@ -698,13 +741,17 @@ def run_stdio_proxy(spec_path: Path) -> int:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
             if isinstance(request, Mapping):
-                method = request.get("method")
+                operation = _request_operation(request)
                 request_key = (
                     _rpc_id_key(request.get("id"))
-                    if "id" in request and isinstance(method, str)
+                    if "id" in request and operation is not None
                     else None
                 )
-                timeout_ms = next_timeout_ms(method) if isinstance(method, str) else None
+                timeout_ms = (
+                    next_timeout_ms(operation, request)
+                    if operation is not None
+                    else None
+                )
                 if request_key is not None and timeout_ms is not None:
                     with state_lock:
                         duplicate = request_key in pending
@@ -712,7 +759,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
                             state = _PendingRequest(
                                 request_key=request_key,
                                 request_id=request.get("id"),
-                                method=method,
+                                method=operation,
                                 timeout_ms=timeout_ms,
                                 started_at=time.monotonic(),
                             )

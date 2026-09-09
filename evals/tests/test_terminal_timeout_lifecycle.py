@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIO = ROOT / "evals/public/terminal-timeout-lifecycle"
 CHECKER = SCENARIO / "fixtures/check_terminal_timeout_lifecycle.py"
+PROFILE_BUILDER = SCENARIO / "fixtures/prepare_stdio_profile.py"
 
 
 def _record(direction: str, message: dict, **metadata: object) -> dict:
@@ -193,9 +195,39 @@ def test_scenario_wires_one_shot_timeout_fault_and_withheld_checker() -> None:
     stdio = json.loads((SCENARIO / "fixtures/desktop_stdio.json").read_text(encoding="utf-8"))
     run_text = (ROOT / "evals/run.py").read_text(encoding="utf-8")
     assert checks["deterministic_check"]["trace_source"] == "runner_mcp"
-    assert stdio["request_timeout_faults"]["build_data_product"] == {"after_ms": 80, "once": True}
+    assert stdio["request_timeout_faults"]["build_data_product"] == {
+        "after_ms": 80,
+        "once": True,
+        "workflow": "terminal-timeout-lifecycle",
+    }
+    assert stdio["profile_builder"] == "prepare_stdio_profile.py"
     assert "terminal-timeout-lifecycle" in run_text
     assert (SCENARIO / "fixtures/check_terminal_timeout_lifecycle.py").is_file()
+
+
+def test_profile_builder_does_not_stage_mapper_reference_closure(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = tmp_path / "stdio-profile.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROFILE_BUILDER),
+            "--workspace",
+            str(workspace),
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert list(workspace.iterdir()) == []
+    profile = json.loads(output.read_text(encoding="utf-8"))
+    assert profile["schema"] == "nxd-synthetic-evaluation-profile-v1"
+    assert stat.S_IMODE(output.stat().st_mode) == 0o444
+    assert "reference-closure" not in PROFILE_BUILDER.read_text(encoding="utf-8")
 
 
 def test_checker_accepts_timeout_then_authoritative_inspect(tmp_path: Path) -> None:
