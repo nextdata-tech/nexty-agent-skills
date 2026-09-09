@@ -3155,9 +3155,14 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # a cache hit the workspace no longer exists, and replaying quoted file
         # contents as authoritative ground truth would describe a run that never
         # happened.
+        # A run whose transcript carried a protected literal is never cached.
+        # The cached copy is the REDACTED one, so replaying it would report a
+        # clean transcript and silently drop the redaction failure that this
+        # run actually earned.
         if (
             ok
             and cache_file
+            and not agent_runtime_secret_leak
             and http_stub_teardown_error is None
             and desktop_facts_infrastructure_error(facts) is None
         ):

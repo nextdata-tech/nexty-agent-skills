@@ -747,27 +747,36 @@ def run_stdio_proxy(spec_path: Path) -> int:
                     if "id" in request and operation is not None
                     else None
                 )
-                timeout_ms = (
-                    next_timeout_ms(operation, request)
-                    if operation is not None
-                    else None
-                )
-                if request_key is not None and timeout_ms is not None:
+                # Only a request that can actually carry a deadline may consume
+                # the fault budget, and a duplicate is settled before that
+                # budget is touched. Consuming it earlier lets a notification
+                # or a re-used id silently burn a ``once`` deadline that then
+                # never fires, and the scenario reports a missing timeout
+                # instead of the reason there was none. Screening duplicates
+                # first also keeps them rejected once the budget is spent,
+                # rather than forwarding one whose reply is then swallowed as
+                # the pending request's suppressed late response.
+                if request_key is not None:
                     with state_lock:
                         duplicate = request_key in pending
-                        if not duplicate:
-                            state = _PendingRequest(
-                                request_key=request_key,
-                                request_id=request.get("id"),
-                                method=operation,
-                                timeout_ms=timeout_ms,
-                                started_at=time.monotonic(),
-                            )
-                            pending[request_key] = state
                     if duplicate:
                         reject_duplicate(request)
                         continue
-                    schedule_timeout(state)
+                    timeout_ms = next_timeout_ms(operation, request)
+                    if timeout_ms is not None:
+                        state = _PendingRequest(
+                            request_key=request_key,
+                            request_id=request.get("id"),
+                            method=operation,
+                            timeout_ms=timeout_ms,
+                            started_at=time.monotonic(),
+                        )
+                        # Only this thread inserts into ``pending``; the reader
+                        # thread only pops, so the check above cannot go stale
+                        # in the direction that would admit a duplicate.
+                        with state_lock:
+                            pending[request_key] = state
+                        schedule_timeout(state)
             try:
                 child.stdin.write(line)
                 child.stdin.flush()

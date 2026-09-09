@@ -418,6 +418,38 @@ def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: 
     assert "ALL CHECKS PASSED" in result.stdout
 
 
+def test_checker_marker_list_matches_the_scenario_configuration() -> None:
+    checks = json.loads((SCENARIO / "checks.json").read_text(encoding="utf-8"))
+    configured = checks["deterministic_check"]["redaction_markers"]
+    checker = CHECKER.read_text(encoding="utf-8")
+    # The checker's hardcoded set is only a standalone fallback; if it drifts
+    # from checks.json a local invocation scans for the wrong literal.
+    for marker in configured:
+        assert marker in checker
+    stub = (SCENARIO / "fixtures/stub_slow_paginated_api.py").read_text(encoding="utf-8")
+    # Every configured marker must be a literal the fixture can actually put
+    # in front of the agent, or the scan reports a clean result from a check
+    # that could never fail.
+    for marker in configured:
+        assert marker in stub
+
+
+def test_checker_fails_closed_on_an_empty_marker_file(tmp_path: Path) -> None:
+    marker_file = tmp_path / "markers.txt"
+    marker_file.write_text("\n", encoding="utf-8")
+    trace = _trace(tmp_path)
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--fixtures", str(SCENARIO / "fixtures"),
+         "--root", str(tmp_path), "--trace", str(trace),
+         "--secret-marker-file", str(marker_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "redaction/marker-file-unusable" in result.stdout
+
+
 def test_checker_rejects_missing_late_response_evidence(tmp_path: Path) -> None:
     result = _run_checker(tmp_path, include_late=False)
     assert result.returncode != 0

@@ -6,7 +6,7 @@
   "deterministic_check": {
     "script": "check_terminal_timeout_lifecycle.py",
     "deps": [],
-    "redaction_markers": ["nex888-opaque-synthetic-secret-2d4c", "nex888-response-body-should-not-appear"],
+    "redaction_markers": ["nex888-opaque-synthetic-secret-2d4c"],
     "wants_trace": true,
     "trace_source": "runner_mcp"
   },

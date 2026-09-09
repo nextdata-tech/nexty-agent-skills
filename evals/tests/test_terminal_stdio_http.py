@@ -501,6 +501,65 @@ def test_run_one_combined_runtime_passes_http_marker_and_checks_in_context(
     }
 
 
+def test_a_leaked_fixture_literal_is_reported_and_never_cached(tmp_path, monkeypatch):
+    """A redaction failure must not be laundered by the agent cache.
+
+    What lands in the cache is the REDACTED transcript, so a later cache hit
+    finds no literal and would replay the run as clean — turning a real
+    redaction failure into a pass on the second run.
+    """
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    (scenario / "prompt.md").write_text("Do the thing.\n", encoding="utf-8")
+    (scenario / "checks.json").write_text(
+        json.dumps({
+            "deterministic_check": {
+                "script": "unused.py",
+                "deps": [],
+                "redaction_markers": ["synthetic-secret-marker"],
+            }
+        }),
+        encoding="utf-8",
+    )
+    (fixtures / "desktop_stdio.json").write_text("{}\n", encoding="utf-8")
+
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text("{}\n", encoding="utf-8")
+    session = SimpleNamespace(trace_path=trace_path)
+
+    class FakeBackend:
+        name = "fake"
+        supports_multi_turn = False
+
+        def run_agent(self, *_args, **_kwargs):
+            return True, "echoed synthetic-secret-marker", {"final_answer": "done"}
+
+    @contextlib.contextmanager
+    def fake_runtime(_scenario, _workspace, _tmp, _desktop_spec, _http_spec, _backend):
+        yield tmp_path / "bin", {}, sys.executable, session, None
+
+    monkeypatch.setattr(run, "get_agent_backend", lambda _name: FakeBackend())
+    monkeypatch.setattr(run, "get_judge_backend", lambda _name: object())
+    monkeypatch.setattr(run, "desktop_stdio_runtime", fake_runtime)
+    monkeypatch.setattr(
+        run, "deterministic_check_fact",
+        lambda *_args, **_kwargs: run.DETERMINISTIC_CHECK_PREFIX + json.dumps({"passed": True}),
+    )
+    monkeypatch.setattr(run, "run_judge", lambda *_args, **_kwargs: {"overall_pass": True})
+
+    cache_dir = tmp_path / "cache"
+    args = _run_one_args()
+    args.cache_dir = str(cache_dir)
+
+    result = run.run_one(run.SkillSet("none", "", []), scenario, args)
+
+    assert "synthetic-secret-marker" not in result.transcript
+    assert "<redacted>" in result.transcript
+    assert any("AGENT FIXTURE REDACTION: FAIL" in fact for fact in result.facts)
+    assert not cache_dir.exists() or not list(cache_dir.glob("agent-*.json"))
+
+
 def test_run_one_combined_http_teardown_is_not_desktop_setup(tmp_path, monkeypatch):
     scenario = tmp_path / "scenario"
     fixtures = scenario / "fixtures"

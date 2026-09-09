@@ -18,3 +18,10 @@ boundary and is covered by the shared stdio cleanup tests, rather than being
 invented as a private supervisor command. A client-abandonment race still needs
 a second concurrent MCP client, which the current per-cell harness does not
 expose.
+
+One deliberate limit in `redaction-and-cleanup`: only the injected credential
+is marker-scanned. A raw-response-body canary is not, because the scan cannot
+separate a legitimately materialized payload — an API source may land the raw
+envelope by design — or a passively observed tool result from a real leak, so
+it could only manufacture false failures. That half of the check is graded from
+the trace and structured evidence by the judge.

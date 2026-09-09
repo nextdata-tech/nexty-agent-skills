@@ -9,8 +9,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+# The one literal this fixture injects into the agent's environment. It is the
+# only string a marker scan can attribute unambiguously: it must never appear
+# in an artifact, a diagnostic, or the transcript, and no legitimate closure
+# has a reason to materialize it.
 VALID_TOKEN = "nex888-opaque-synthetic-secret-2d4c"
-RESPONSE_BODY_MARKER = "nex888-response-body-should-not-appear"
 OBSERVED: list[dict[str, object]] = []
 _LOCK = threading.Lock()
 _OBSERVATIONS_PATH: Path | None = None
