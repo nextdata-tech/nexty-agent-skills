@@ -228,6 +228,10 @@ EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
 # independently block that path. This is intentionally scenario-local; another
 # scenario may use the same filename as an ordinary fixture and must keep it.
 SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
+    "terminal-timeout-lifecycle": frozenset({
+        "stub_slow_paginated_api.py",
+        "check_terminal_timeout_lifecycle.py",
+    }),
     "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
     # The terminal mapper checker is withheld from the agent; it is runner-side
     # oracle material and is passed directly to the deterministic subprocess.
@@ -812,6 +816,7 @@ def _desktop_stdio_session(
         root=tmp / "stdio-session",
         server_name=str(desktop_spec.get("server_name", "nxd-desktop")),
         allowed_tools=desktop_spec.get("allowed_tools"),
+        request_timeout_faults=desktop_spec.get("request_timeout_faults"),
         startup_timeout_s=30.0,
     )
     return bin_dir, env_over, desktop_python, session

@@ -1,0 +1,8 @@
+{
+  "module": "stub_slow_paginated_api.py",
+  "start": "start_server",
+  "stop": "stop_server",
+  "endpoint_file": "ENDPOINT_URL",
+  "observations": true,
+  "description": "Runner-owned slow paginated local REST fixture for lifecycle evidence."
+}

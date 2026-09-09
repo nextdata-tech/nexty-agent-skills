@@ -1,0 +1,20 @@
+{
+  "name": "Terminal timeout and lifecycle truth",
+  "skills": ["nxd-generate-data-product", "nxd-run-job-loop"],
+  "ci_skip": "needs an authenticated Claude CLI plus a provisioned nxd-desktop-supervisor runtime (EVAL_DESKTOP_SUPERVISOR_DIR, EVAL_DESKTOP_PYTHON, and EVAL_NXD_REPO_ROOT); run explicitly on a host with those components or via workflow_dispatch",
+  "wants_trace": true,
+  "deterministic_check": {
+    "script": "check_terminal_timeout_lifecycle.py",
+    "deps": [],
+    "redaction_markers": ["nex888-opaque-synthetic-secret-2d4c", "nex888-response-body-should-not-appear"],
+    "wants_trace": true,
+    "trace_source": "runner_mcp"
+  },
+  "checks": [
+    {"id": "client-timeout", "check": "The first build receives the runner's structured client deadline error, including method and configured timeout, while the child server remains available."},
+    {"id": "authoritative-lifecycle", "check": "A following inspect_run MCP call proves the durable run state, active/terminal stage, retry count, page count, and run identity; narration alone is insufficient."},
+    {"id": "retry-no-duplicate", "check": "A larger-budget or bounded-plan retry succeeds without a duplicate build and preserves the same fixture semantics."},
+    {"id": "lifecycle-boundaries", "check": "Timeout, failed build, publication atomicity, cleanup, and resume-first versus rebuild remain distinguishable in structured evidence; cancellation is covered at the runner/process boundary because the current public MCP catalog exposes no cancellation operation."},
+    {"id": "redaction-and-cleanup", "check": "Credentials and raw response bodies are absent from diagnostics and the workflow leaves no live process or temporary state."}
+  ]
+}
