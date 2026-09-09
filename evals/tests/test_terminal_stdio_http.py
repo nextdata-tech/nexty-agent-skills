@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import traceback
 from types import SimpleNamespace
 import urllib.error
 import urllib.request
@@ -215,15 +216,151 @@ def test_http_stub_wraps_stop_failure_as_teardown(tmp_path):
         "    return object(), 43210, object()\n"
         "\n"
         "def stop_server(_server, _thread):\n"
-        "    raise RuntimeError('stop boom')\n",
+        "    raise RuntimeError('authorization=stop-secret')\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(run.HttpStubTeardownError, match="RuntimeError: stop boom"):
+    with pytest.raises(run.HttpStubTeardownError, match="RuntimeError: authorization=<redacted>") as caught:
         with run.http_stub_server(
             scenario, workspace, {"module": "broken"}, "claude"
         ):
             pass
+    assert "stop-secret" not in "".join(traceback.format_exception(caught.value))
+
+
+def test_http_stub_does_not_use_stale_outer_exception_for_teardown(tmp_path):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (fixtures / "broken.py").write_text(
+        "def start_server():\n"
+        "    return object(), 43210, object()\n"
+        "\n"
+        "def stop_server(_server, _thread):\n"
+        "    raise RuntimeError('stop boom')\n",
+        encoding="utf-8",
+    )
+
+    # Keep an unrelated exception active in an outer handler while the context
+    # exits. The context must track its own body exception state rather than
+    # consulting the ambient sys.exc_info().
+    try:
+        raise ValueError("unrelated")
+    except ValueError:
+        with pytest.raises(run.HttpStubTeardownError, match="stop boom"):
+            with run.http_stub_server(
+                scenario, workspace, {"module": "broken"}, "claude"
+            ):
+                pass
+
+
+def test_http_stub_endpoint_setup_failure_keeps_teardown_failure_attached(tmp_path):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    endpoint_target = workspace / "ENDPOINT_URL"
+    endpoint_target.mkdir()
+    (fixtures / "broken.py").write_text(
+        "def start_server():\n"
+        "    return object(), 43210, object()\n"
+        "\n"
+        "def stop_server(_server, _thread):\n"
+        "    raise RuntimeError('stop boom')\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(run.HttpStubSetupError, match="IsADirectoryError") as caught:
+        with run.http_stub_server(
+            scenario, workspace, {"module": "broken"}, "claude"
+        ):
+            pass
+
+    assert any("stop boom" in note for note in caught.value.__notes__)
+
+
+def test_http_stub_setup_cleanup_does_not_mask_original_failure(tmp_path, monkeypatch):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (fixtures / "broken.py").write_text(
+        "def set_observations_path(_path):\n"
+        "    pass\n"
+        "\n"
+        "def start_server():\n"
+        "    raise RuntimeError('authorization=setup-secret')\n"
+        "\n"
+        "def stop_server(_server, _thread):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    class BrokenTemporaryDirectory:
+        def __init__(self, **_kwargs):
+            self.name = str(tmp_path / "observations")
+            Path(self.name).mkdir()
+
+        def cleanup(self):
+            raise RuntimeError("authorization=cleanup-secret")
+
+    monkeypatch.setattr(run.tempfile, "TemporaryDirectory", BrokenTemporaryDirectory)
+
+    with pytest.raises(run.HttpStubSetupError) as caught:
+        with run.http_stub_server(
+            scenario,
+            workspace,
+            {"module": "broken", "observations": True},
+            "claude",
+            ):
+                pass
+    assert "setup-secret" not in str(caught.value)
+    assert "authorization=<redacted>" in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert "cleanup-secret" not in "".join(traceback.format_exception(caught.value))
+    assert any("cleanup failed" in note for note in caught.value.__notes__)
+
+
+def test_http_stub_control_flow_keeps_cleanup_failure_note(tmp_path, monkeypatch):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (fixtures / "broken.py").write_text(
+        "def set_observations_path(_path):\n"
+        "    pass\n"
+        "\n"
+        "def start_server():\n"
+        "    raise GeneratorExit('setup exit')\n"
+        "\n"
+        "def stop_server(_server, _thread):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    class BrokenTemporaryDirectory:
+        def __init__(self, **_kwargs):
+            self.name = str(tmp_path / "observations")
+            Path(self.name).mkdir()
+
+        def cleanup(self):
+            raise RuntimeError("authorization=cleanup-secret")
+
+    monkeypatch.setattr(run.tempfile, "TemporaryDirectory", BrokenTemporaryDirectory)
+
+    with pytest.raises(GeneratorExit) as caught:
+        with run.http_stub_server(
+            scenario, workspace, {"module": "broken", "observations": True}, "claude"
+        ):
+            pass
+
+    assert any("cleanup failed" in note for note in caught.value.__notes__)
+    assert "cleanup-secret" not in "".join(traceback.format_exception(caught.value))
 
 
 @pytest.mark.parametrize(
@@ -380,7 +517,7 @@ def test_run_one_combined_http_teardown_is_not_desktop_setup(tmp_path, monkeypat
         "    return object(), 43211, object()\n"
         "\n"
         "def stop_server(_server, _thread):\n"
-        "    raise RuntimeError('stop boom')\n",
+        "    raise RuntimeError('authorization=stop-secret')\n",
         encoding="utf-8",
     )
     trace_path = tmp_path / "trace.jsonl"
@@ -415,7 +552,10 @@ def test_run_one_combined_http_teardown_is_not_desktop_setup(tmp_path, monkeypat
     result = run.run_one(run.SkillSet("none", "", []), scenario, _run_one_args())
 
     assert result.ok is False
-    assert result.error == "http stub teardown failed: RuntimeError: stop boom"
+    assert result.error == (
+        "http stub teardown failed: RuntimeError: authorization=<redacted>"
+    )
+    assert "stop-secret" not in result.error
 
 
 def test_deterministic_checker_receives_observations_without_process_leak(tmp_path):
@@ -450,3 +590,152 @@ def test_deterministic_checker_receives_observations_without_process_leak(tmp_pa
 
     assert run.deterministic_check_passed([fact])
     assert os.environ.get(run.STUB_OBSERVATIONS_ENV) == before
+
+
+def test_no_log_deterministic_checker_does_not_inherit_parent_observations(
+    tmp_path, monkeypatch
+):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    (fixtures / "check.py").write_text(
+        "import os\n"
+        f"if os.environ.get({run.STUB_OBSERVATIONS_ENV!r}):\n"
+        "    print('FAIL inherited observation path')\n"
+        "    raise SystemExit(1)\n"
+        "print('ALL CHECKS PASSED')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(run.STUB_OBSERVATIONS_ENV, str(tmp_path / "parent.jsonl"))
+
+    fact = run.deterministic_check_fact(
+        scenario, tmp_path / "workspace", {"script": "check.py", "deps": []}
+    )
+
+    assert run.deterministic_check_passed([fact])
+
+
+def test_no_log_desktop_verifier_does_not_inherit_parent_observations(
+    tmp_path, monkeypatch
+):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    (fixtures / "check.py").write_text("", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class _Proc:
+        returncode, stdout, stderr = 0, '{"passed": true}\n', ""
+
+    def fake_run(_cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _Proc()
+
+    monkeypatch.setenv(run.STUB_OBSERVATIONS_ENV, str(tmp_path / "parent.jsonl"))
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+
+    fact = run.desktop_harness_fact(
+        scenario, tmp_path / "workspace", sys.executable, "workflow", tmp_path, {},
+        verifier="check.py",
+    )
+
+    assert json.loads(fact.split(": ", 1)[1])["passed"] is True
+    assert run.STUB_OBSERVATIONS_ENV not in captured["env"]
+
+
+def test_http_only_deterministic_check_runs_after_stub_teardown(tmp_path, monkeypatch):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    (scenario / "prompt.md").write_text("Do the thing.\n", encoding="utf-8")
+    (scenario / "checks.json").write_text(
+        json.dumps({"deterministic_check": {"script": "unused.py", "deps": []}}),
+        encoding="utf-8",
+    )
+    (fixtures / "http_stub.json").write_text(
+        json.dumps({"module": "stub", "endpoint_file": "ENDPOINT_URL"}),
+        encoding="utf-8",
+    )
+    (fixtures / "stub.py").write_text("", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    @contextlib.contextmanager
+    def fake_http_stub(*_args, **_kwargs):
+        seen["active"] = True
+        try:
+            yield "http://127.0.0.1:1", None
+        finally:
+            seen["active"] = False
+            seen["teardown"] = True
+
+    class FakeBackend:
+        name = "fake"
+        supports_multi_turn = False
+
+        def run_agent(self, *_args, **_kwargs):
+            return True, "agent trace", {"final_answer": "done"}
+
+    def fake_deterministic_check(*_args, **_kwargs):
+        assert seen == {"active": False, "teardown": True}
+        return run.DETERMINISTIC_CHECK_PREFIX + json.dumps({"passed": True})
+
+    monkeypatch.setattr(run, "get_agent_backend", lambda _name: FakeBackend())
+    monkeypatch.setattr(run, "get_judge_backend", lambda _name: object())
+    monkeypatch.setattr(run, "http_stub_server", fake_http_stub)
+    monkeypatch.setattr(run, "deterministic_check_fact", fake_deterministic_check)
+    monkeypatch.setattr(run, "run_judge", lambda *_args, **_kwargs: {"overall_pass": True})
+
+    result = run.run_one(run.SkillSet("none", "", []), scenario, _run_one_args())
+
+    assert result.ok is True
+    assert result.metrics["deterministic_check"] == "passed"
+
+
+def test_http_teardown_failure_preserves_evidence_and_skips_cache(tmp_path, monkeypatch):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    (scenario / "prompt.md").write_text("Do the thing.\n", encoding="utf-8")
+    (scenario / "checks.json").write_text(
+        json.dumps({"workspace_files": {"files": []}}), encoding="utf-8"
+    )
+    (fixtures / "http_stub.json").write_text(
+        json.dumps({"module": "stub", "endpoint_file": "ENDPOINT_URL"}),
+        encoding="utf-8",
+    )
+    (fixtures / "stub.py").write_text("", encoding="utf-8")
+
+    @contextlib.contextmanager
+    def failing_http_stub(*_args, **_kwargs):
+        yield "http://127.0.0.1:1", None
+        raise run.HttpStubTeardownError("authorization=teardown-secret")
+
+    class FakeBackend:
+        name = "fake"
+        supports_multi_turn = False
+
+        def run_agent(self, *_args, **_kwargs):
+            return True, "agent trace", {"final_answer": "done", "kept": 7}
+
+    monkeypatch.setattr(run, "get_agent_backend", lambda _name: FakeBackend())
+    monkeypatch.setattr(run, "get_judge_backend", lambda _name: object())
+    monkeypatch.setattr(run, "http_stub_server", failing_http_stub)
+    monkeypatch.setattr(run, "workspace_files_fact", lambda *_args: "WORKSPACE FACT")
+    monkeypatch.setattr(
+        run, "run_judge", lambda *_args, **_kwargs: {"overall_pass": True, "summary": "graded"}
+    )
+    cache_dir = tmp_path / "cache"
+    args = _run_one_args()
+    args.cache_dir = str(cache_dir)
+
+    result = run.run_one(run.SkillSet("none", "", []), scenario, args)
+
+    assert result.ok is False
+    assert result.error == (
+        "http stub teardown failed: authorization=<redacted>"
+    )
+    assert result.transcript == "agent trace"
+    assert result.metrics["kept"] == 7
+    assert result.facts == ["WORKSPACE FACT"]
+    assert result.verdict == {"overall_pass": True, "summary": "graded"}
+    assert not cache_dir.exists() or not list(cache_dir.glob("agent-*.json"))

@@ -847,6 +847,11 @@ def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
         through ``os.environ``, because cells share a process and a global
         would cross-wire concurrent runs. The runner sets the env var for the
         verifier subprocess only, never for the agent.
+
+    Lifecycle contract: a combined stdio+HTTP run performs its deterministic
+    check while this runner-owned stub is still alive. An HTTP-only run performs
+    its deterministic check after this context exits, so that checker must
+    create its own fixture if it needs a live HTTP service.
     """
     marker = scenario_dir / "fixtures" / "http_stub.json"
     if not marker.exists():
@@ -1152,6 +1157,10 @@ def desktop_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: st
             sort_keys=True,
         )
     env = dict(os.environ)
+    # A runner-owned observation path is meaningful only when this verifier was
+    # explicitly given one. Never let a parent process point the checker at a
+    # different cell's log (or at a stale log from an earlier run).
+    env.pop(STUB_OBSERVATIONS_ENV, None)
     env.update(env_overrides)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     # Snapshot re-serves must be visible to desktop_process_guard even if this
@@ -1289,6 +1298,10 @@ def deterministic_check_fact(
     the first write cannot be graded from disk alone. The trace file lands in
     its own temp dir, never inside ``ws``: a file in the workspace would be
     visible to the agent and would perturb any workspace-files assertion.
+
+    For combined stdio+HTTP scenarios this is called while the runner-owned
+    HTTP stub is alive. HTTP-only scenarios call it after the stub context has
+    exited; such a checker must start its own fixture if it needs live HTTP.
     """
     fixtures = scenario_dir / "fixtures"
     script = fixtures / str(cfg.get("script", ""))
@@ -1348,6 +1361,9 @@ def deterministic_check_fact(
             private_files.append(trace_holder)
             cmd += ["--trace", str(trace_file)]
         checker_env = dict(os.environ)
+        # The observation path is a per-run capability. Inheriting it from the
+        # parent would let a no-log checker read or truncate an unrelated log.
+        checker_env.pop(STUB_OBSERVATIONS_ENV, None)
         if env_overrides:
             checker_env.update(env_overrides)
         try:
@@ -1564,6 +1580,17 @@ class HttpStubTeardownError(RuntimeError):
     """A fault while stopping or cleaning up the HTTP stub."""
 
 
+def _redacted_exception_detail(exc: BaseException) -> str:
+    """Format an exception and its notes without exposing fixture secrets."""
+    detail = redact_text(str(exc))
+    if not isinstance(exc, (HttpStubSetupError, HttpStubTeardownError)):
+        detail = f"{type(exc).__name__}: {detail}"
+    notes = getattr(exc, "__notes__", ())
+    if notes:
+        detail += " (" + "; ".join(redact_text(str(note)) for note in notes) + ")"
+    return detail
+
+
 @contextlib.contextmanager
 def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
@@ -1609,7 +1636,8 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     log_holder: tempfile.TemporaryDirectory | None = None
     module = None
     setup_complete = False
-    setup_error: Exception | None = None
+    setup_error: BaseException | None = None
+    setup_cleanup_errors: list[BaseException] = []
     try:
         import importlib.util
 
@@ -1638,9 +1666,7 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
         server, port, thread = start_fn()
         setup_complete = True
-    except HttpStubSetupError:
-        raise
-    except Exception as exc:
+    except BaseException as exc:
         setup_error = exc
     finally:
         # Anything from here on leaves no server to stop, but the temp dir is
@@ -1649,15 +1675,56 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         # setup block without entering an Exception handler.
         if not setup_complete and log_holder is not None:
             if module is not None:
-                with contextlib.suppress(Exception):
+                try:
                     module.set_observations_path(None)
-            log_holder.cleanup()
+                except BaseException as exc:
+                    setup_cleanup_errors.append(exc)
+            try:
+                log_holder.cleanup()
+            except BaseException as exc:
+                setup_cleanup_errors.append(exc)
 
     if setup_error is not None:
-        raise HttpStubSetupError(
-            f"{type(setup_error).__name__}: {setup_error}"
-        ) from setup_error
+        control_flow = next(
+            (error for error in [setup_error, *setup_cleanup_errors]
+             if not isinstance(error, Exception)),
+            None,
+        )
+        if control_flow is not None:
+            if control_flow is not setup_error:
+                control_flow.add_note(
+                    "HTTP stub setup also failed: "
+                    f"{_redacted_exception_detail(setup_error)}"
+                )
+            for cleanup_error in setup_cleanup_errors:
+                if cleanup_error is not control_flow:
+                    control_flow.add_note(
+                        "HTTP stub setup cleanup failed: "
+                        f"{_redacted_exception_detail(cleanup_error)}"
+                    )
+            raise control_flow
+        wrapped = HttpStubSetupError(_redacted_exception_detail(setup_error))
+        for cleanup_error in setup_cleanup_errors:
+            wrapped.add_note(
+                "HTTP stub setup cleanup failed: "
+                f"{_redacted_exception_detail(cleanup_error)}"
+            )
+        raise wrapped from None
+    if setup_cleanup_errors:
+        control_flow = next(
+            (error for error in setup_cleanup_errors if not isinstance(error, Exception)),
+            None,
+        )
+        if control_flow is not None:
+            raise control_flow
+        wrapped = HttpStubSetupError(
+            "setup cleanup failed: "
+            + "; ".join(_redacted_exception_detail(error)
+                         for error in setup_cleanup_errors)
+        )
+        raise wrapped from None
 
+    pending: BaseException | None = None
     try:
         try:
             base_url = f"http://127.0.0.1:{port}"
@@ -1688,43 +1755,58 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
                     "EVAL_CODEX_AGENT_SANDBOX=danger-full-access (what CI uses), or "
                     "with --agent-backend claude."
                 )
-        except HttpStubSetupError:
-            raise
+        except HttpStubSetupError as exc:
+            raise HttpStubSetupError(redact_text(str(exc))) from None
         except Exception as exc:
-            raise HttpStubSetupError(f"{type(exc).__name__}: {exc}") from exc
+            raise HttpStubSetupError(_redacted_exception_detail(exc)) from None
 
         yield base_url, observations
+    except BaseException as exc:
+        # Capture the exception actually propagating from the whole post-start
+        # region, including endpoint-file setup. `sys.exc_info()` in a finally
+        # block can refer to an unrelated exception handled by an outer frame,
+        # causing a teardown failure to disappear.
+        pending = exc
+        raise
     finally:
         # Cleanup runs even if stop_fn raises: a stub that failed to shut down
         # cleanly must not also strand its log directory for the whole run.
-        pending = sys.exc_info()[1]
-        teardown_error: HttpStubTeardownError | None = None
+        teardown_errors: list[BaseException] = []
         try:
             stop_fn(server, thread)
-        except Exception as exc:
-            teardown_error = HttpStubTeardownError(f"{type(exc).__name__}: {exc}")
+        except BaseException as exc:
+            teardown_errors.append(exc)
         finally:
             if log_holder is not None:
                 try:
                     module.set_observations_path(None)
-                except Exception as exc:
-                    if teardown_error is None:
-                        teardown_error = HttpStubTeardownError(
-                            f"{type(exc).__name__}: {exc}"
-                        )
+                except BaseException as exc:
+                    teardown_errors.append(exc)
                 finally:
                     try:
                         log_holder.cleanup()
-                    except Exception as exc:
-                        if teardown_error is None:
-                            teardown_error = HttpStubTeardownError(
-                                f"{type(exc).__name__}: {exc}"
-                            )
-        if teardown_error is not None:
+                    except BaseException as exc:
+                        teardown_errors.append(exc)
+        if teardown_errors:
+            control_flow = next(
+                (error for error in teardown_errors if not isinstance(error, Exception)),
+                None,
+            )
+            if control_flow is not None and isinstance(pending, Exception):
+                control_flow.add_note(
+                    "HTTP stub body failed: "
+                    f"{_redacted_exception_detail(pending)}"
+                )
+                raise control_flow
+            details = "; ".join(
+                _redacted_exception_detail(error) for error in teardown_errors
+            )
             if pending is not None:
-                pending.add_note(f"HTTP stub teardown failed: {teardown_error}")
+                pending.add_note(f"HTTP stub teardown failed: {details}")
+            elif control_flow is not None:
+                raise control_flow
             else:
-                raise teardown_error
+                raise HttpStubTeardownError(details) from None
 
 
 @contextlib.contextmanager
@@ -1742,7 +1824,8 @@ def desktop_stdio_runtime(
     scenario's stdio profile builder runs. It also remains bound until the
     caller has finished any deterministic verification that needs the request
     log. The yielded observation path is runner-only and is never put in the
-    agent environment.
+    agent environment. This is the combined stdio+HTTP lifecycle; HTTP-only
+    deterministic checks run after their stub context exits.
     """
     stub_ctx: contextlib.AbstractContextManager = (
         http_stub_server(scenario_dir, workspace, http_spec, agent_backend_name)
@@ -2639,6 +2722,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     facts: list[str] = []
     ws_fact: str | None = None
     det_fact: str | None = None
+    http_stub_teardown_error: str | None = None
     if cache_file and cache_file.exists():
         try:
             loaded = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -2772,11 +2856,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                                 env_overrides=checker_env,
                             )
                 except HttpStubSetupError as exc:
-                    res.error = f"http stub setup failed: {exc}"
+                    res.error = f"http stub setup failed: {_redacted_exception_detail(exc)}"
                     return res
                 except HttpStubTeardownError as exc:
-                    res.error = f"http stub teardown failed: {exc}"
-                    return res
+                    http_stub_teardown_error = (
+                        f"http stub teardown failed: {_redacted_exception_detail(exc)}"
+                    )
                 except (RuntimeError, DesktopStdioError, OSError) as exc:
                     res.error = f"desktop stdio setup failed: {redact_text(str(exc))}"
                     return res
@@ -2854,11 +2939,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                                     "verifier", "check_job_loop.py")),
                             ))
                 except HttpStubSetupError as exc:
-                    res.error = f"http stub setup failed: {exc}"
+                    res.error = f"http stub setup failed: {_redacted_exception_detail(exc)}"
                     return res
                 except HttpStubTeardownError as exc:
-                    res.error = f"http stub teardown failed: {exc}"
-                    return res
+                    http_stub_teardown_error = (
+                        f"http stub teardown failed: {_redacted_exception_detail(exc)}"
+                    )
             elif http_stub_spec is not None:
                 # A runner-started local REST fixture the agent reaches over a
                 # real socket for the duration of this run — see
@@ -2873,11 +2959,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             skill_pack_dir=plugin_dir, **turn_kwargs,
                         )
                 except HttpStubSetupError as exc:
-                    res.error = f"http stub setup failed: {exc}"
+                    res.error = f"http stub setup failed: {_redacted_exception_detail(exc)}"
                     return res
                 except HttpStubTeardownError as exc:
-                    res.error = f"http stub teardown failed: {exc}"
-                    return res
+                    http_stub_teardown_error = (
+                        f"http stub teardown failed: {_redacted_exception_detail(exc)}"
+                    )
             else:
                 ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,
@@ -2919,7 +3006,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # a cache hit the workspace no longer exists, and replaying quoted file
         # contents as authoritative ground truth would describe a run that never
         # happened.
-        if ok and cache_file and desktop_facts_infrastructure_error(facts) is None:
+        if (
+            ok
+            and cache_file
+            and http_stub_teardown_error is None
+            and desktop_facts_infrastructure_error(facts) is None
+        ):
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
                 json.dumps({
@@ -2968,13 +3060,19 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     res.transcript = trace
     res.metrics = {**preflight_metrics, **metrics, "agent_model": agent_model}
+    if http_stub_teardown_error is not None:
+        # Keep the completed run's evidence available to the caller, but mark
+        # the cell as infrastructure-failed and make sure it cannot be cached.
+        res.metrics["http_stub_teardown_error"] = http_stub_teardown_error
     if det_status:
         res.metrics["deterministic_check"] = det_status
         if det_status == "failed":
             res.metrics["deterministic_check_detail"] = deterministic_check_detail(facts)
     res.facts = facts
     if not ok:
-        res.error = str(metrics.get("error", "agent run failed"))
+        res.error = http_stub_teardown_error or str(
+            metrics.get("error", "agent run failed")
+        )
         return res
 
     verifier_infrastructure_error = desktop_facts_infrastructure_error(facts)
@@ -3014,6 +3112,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             f"{res.metrics['deterministic_check_detail']}"
         ).strip()
     res.ok = True
+    if http_stub_teardown_error is not None:
+        res.ok = False
+        res.error = http_stub_teardown_error
     return res
 
 
