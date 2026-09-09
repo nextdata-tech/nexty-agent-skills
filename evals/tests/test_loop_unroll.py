@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,7 +34,9 @@ import pytest
 EVALS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(EVALS / "tools"))
 
+import loop_unroll  # noqa: E402
 from loop_unroll import unroll_literal_loops  # noqa: E402
+from loop_unroll import MAX_EXPANDED_NODES  # noqa: E402
 
 
 def _load(name: str, path: Path):
@@ -136,12 +140,262 @@ def test_a_partially_pinned_loop_is_rejected(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# unroll_literal_loops itself
+# DictComp normalization and unroll_literal_loops
 # ---------------------------------------------------------------------------
 
 
 def _unparse(src: str) -> str:
     return ast.unparse(unroll_literal_loops(ast.parse(src)))
+
+
+DICT_COMP_SOURCE = '''
+import os
+from pathlib import Path
+from dlt.sources.filesystem import filesystem
+
+_LABELED_ROOTS = (("orders", "csv-source-orders-path"),
+                  ("users", "csv-source-users-path"))
+
+def _relative_root(root, path_file, data_root):
+    relative = (root / path_file).read_text("utf-8").strip()
+    return root / relative
+
+def ingest():
+    root = Path(os.environ["NXD_TRANSFORM_ROOT"])
+    source_roots = {
+        label: _relative_root(root, path_file, f"data-{label}")
+        for label, path_file in _LABELED_ROOTS
+    }
+    for label, model in _LABELED_ROOTS:
+        filesystem(bucket_url=str(source_roots[label] / model), file_glob="*.csv")
+'''
+
+
+def _dict_comps(tree: ast.AST) -> list[ast.DictComp]:
+    return [node for node in ast.walk(tree) if isinstance(node, ast.DictComp)]
+
+
+def test_labeled_root_dict_comprehension_is_expanded_and_inlined():
+    tree = unroll_literal_loops(ast.parse(DICT_COMP_SOURCE))
+    assert not _dict_comps(tree)
+
+    source_roots = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "source_roots"
+                for target in node.targets)
+    )
+    assert isinstance(source_roots, ast.Dict)
+    assert [key.value for key in source_roots.keys] == ["orders", "users"]
+    assert all(
+        not any(isinstance(name, ast.Name) and name.id in {"label", "path_file"}
+                and isinstance(name.ctx, ast.Load)
+                for name in ast.walk(value))
+        for value in source_roots.values
+    )
+
+
+def test_public_checker_accepts_the_live_labeled_root_shape(tmp_path: Path):
+    root = tmp_path / "closure"
+    (root / "transform").mkdir(parents=True)
+    for name, content in {
+        "spec.py": "",
+        "models.py": "",
+        "infra-profile.yaml": "services:\n  - name: csv-source-orders\n  - name: csv-source-users\n",
+        "requirements.txt": "",
+        "companion-files": "data-orders\ndata-users\n",
+        "README.md": "directory-companion supervisor\n",
+    }.items():
+        (root / name).write_text(content, encoding="utf-8")
+    (root / "transform/main.py").write_text(DICT_COMP_SOURCE, encoding="utf-8")
+
+    fixture_root = EVALS / "public/multi-source-labeled-roots/fixtures"
+    for label in ("orders", "users"):
+        source = fixture_root / f"source-{label}" / label / f"{label}.csv"
+        destination = root / f"data-{label}" / label / f"{label}.csv"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        (root / f"csv-source-{label}-path").write_text(
+            f"data-{label}\n", encoding="utf-8"
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(fixture_root / "check_labeled_multi_source.py"),
+            "--fixtures",
+            str(fixture_root),
+            "--root",
+            str(root),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "FAIL" not in result.stdout
+
+
+def test_supervisor_checker_accepts_the_live_labeled_root_shape(tmp_path: Path):
+    path = tmp_path / "main.py"
+    path.write_text(DICT_COMP_SOURCE, encoding="utf-8")
+    assert SUPERVISOR.transform_uses_pinned_roots(path)
+
+
+def test_unsafe_same_shape_expands_but_fails_provenance(tmp_path: Path):
+    source = DICT_COMP_SOURCE.replace(
+        'source_roots = {\n'
+        '        label: _relative_root(root, path_file, f"data-{label}")\n',
+        'source_roots = {\n'
+        '        label: Path.cwd() / path_file\n',
+    )
+    tree = unroll_literal_loops(ast.parse(source))
+    assert not _dict_comps(tree), "the checker must inspect the expanded shape"
+    path = tmp_path / "main.py"
+    path.write_text(source, encoding="utf-8")
+    assert not SUPERVISOR.transform_uses_pinned_roots(path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "result = {label: path for label, path in get_rows()}",
+        "result = {label: path for label, path in ((\"orders\", \"x\"),) if label}",
+        "result = {left: right for left in (\"a\",) for right in (\"b\",)}",
+        "result = {label: path for label, path in ((\"same\", \"x\"), (\"same\", \"y\"))}",
+        "result = {(seen := label): path for label, path in ((\"orders\", \"x\"),)}",
+        "result = {label: (lambda: label)() for label in (\"orders\",)}",
+        "result = {label: [item for item in (1,)] for label in (\"orders\",)}",
+        "result = {label: path for label, path in ((\"orders\",),)}",
+        "result = {label: path for label, *rest in ((\"orders\", \"x\"),)}",
+        "result = {label: path for label, path in ((root, \"x\"),)}",
+        "async def build():\n    return {label: path async for label, path in ((\"orders\", \"x\"),)}",
+    ],
+)
+def test_unsafe_dict_comprehensions_are_left_unchanged(source: str):
+    tree = unroll_literal_loops(ast.parse(source))
+    assert _dict_comps(tree), source
+
+
+def test_inline_list_iterable_remains_eligible():
+    source = (
+        'result = {label: path for label, path in '
+        '[["orders", "x"], ["users", "y"]]}'
+    )
+    assert not _dict_comps(unroll_literal_loops(ast.parse(source)))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '''
+_PAIRS = [["orders", "x"], ["users", "y"]]
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = [["orders", "x"], ["users", "y"]]
+_PAIRS[0] = ["archive", "z"]
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = [["orders", "x"], ["users", "y"]]
+_PAIRS.append(["archive", "z"])
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = [["orders", "x"], ["users", "y"]]
+alias = _PAIRS
+alias.append(["archive", "z"])
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"), ["users", "y"])
+result = {label: path for label, path in _PAIRS}
+''',
+    ],
+)
+def test_named_lists_never_supply_dict_comprehension_rows(source: str):
+    assert _dict_comps(unroll_literal_loops(ast.parse(source))), source
+
+
+def test_named_iterable_expansion_requires_unique_binding():
+    sources = [
+        '''
+if False:
+    _PAIRS = (("orders", "x"),)
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"),)
+_PAIRS = (("users", "y"),)
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"),)
+if enabled:
+    _PAIRS = (("users", "y"),)
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"),)
+def build(_PAIRS):
+    return _PAIRS
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"),)
+import source as _PAIRS
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"),)
+try:
+    raise RuntimeError
+except RuntimeError as _PAIRS:
+    pass
+result = {label: path for label, path in _PAIRS}
+''',
+        '''
+_PAIRS = (("orders", "x"),)
+match value:
+    case _ as _PAIRS:
+        pass
+result = {label: path for label, path in _PAIRS}
+''',
+    ]
+    for source in sources:
+        assert _dict_comps(unroll_literal_loops(ast.parse(source))), source
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695 requires Python 3.12")
+@pytest.mark.parametrize("type_parameter", ["_PAIRS", "**_PAIRS", "*_PAIRS"])
+def test_pep695_type_parameter_shadowing_blocks_named_iterable_expansion(
+    type_parameter: str,
+):
+    source = f'''
+_PAIRS = (("orders", "x"),)
+def shadow[{type_parameter}]():
+    pass
+result = {{label: path for label, path in _PAIRS}}
+'''
+    assert _dict_comps(unroll_literal_loops(ast.parse(source))), source
+
+
+def test_dict_comprehension_budget_is_checked_before_row_copies(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    rows = ", ".join(f"(\"key-{index}\", \"value-{index}\")"
+                      for index in range(MAX_EXPANDED_NODES))
+    source = f"result = {{key: value for key, value in ({rows},)}}"
+    tree = ast.parse(source)
+
+    def unexpected_copy(_node: ast.AST):
+        raise AssertionError("oversized expansion copied a row before budget refusal")
+
+    monkeypatch.setattr(loop_unroll.copy, "deepcopy", unexpected_copy)
+    tree = unroll_literal_loops(tree)
+    assert _dict_comps(tree), "an oversized expansion must remain a DictComp"
 
 
 def test_tuple_target_is_destructured_and_constants_inlined():
