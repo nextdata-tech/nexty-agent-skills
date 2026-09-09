@@ -13,17 +13,48 @@ from pathlib import Path
 
 API_SOURCE = (Path(__file__).parents[1] / ".." / "src" /
               "nxd-generate-data-product" / "reference" / "api-source.md").resolve()
+SKILL_SOURCE = API_SOURCE.parents[1] / "SKILL.md"
 
 
 def _doc() -> str:
     return API_SOURCE.read_text(encoding="utf-8")
 
 
+def _normalized(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
 def _self_check_contract() -> str:
     """Return normalized prose from the self-check section only."""
 
     section = _doc().split("## Self-check (connectivity smoke test)", 1)[1]
-    return " ".join(section.split()).casefold()
+    return _normalized(section)
+
+
+def test_closure_artifacts_share_one_normalized_root():
+    skill = _normalized(SKILL_SOURCE.read_text(encoding="utf-8"))
+    api = _normalized(_doc().split("## Closure root", 1)[1].split("## Scope", 1)[0])
+
+    assert "before authoring any artifact" in skill
+    assert "every closure artifact must be inside `<dp-root>`" in skill
+    assert "root-level artifacts are direct children" in skill
+    assert "connector-specific artifacts such as `connectivity_check.py` for api sources" in skill
+    for artifact in (
+        "spec.py",
+        "models.py",
+        "transform/",
+        "requirements.txt",
+        "infra-profile.yaml",
+        "connectivity_check.py",
+        ".gitignore",
+        "sensitive",
+    ):
+        assert artifact in skill
+        assert artifact in api
+    assert "normalize existing artifacts into it" in api
+    assert "inside that root: root-level artifacts are direct children" in api
+    assert "do not place credentials" in api
+    assert "same root for the self-check, lock, and build" in api
 
 
 def test_authenticated_probe_is_named_local_and_dependency_light():

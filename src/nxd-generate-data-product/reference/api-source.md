@@ -27,6 +27,18 @@ file export. "No `data/`" is about the *connector*: this type brings no
 export of its own. A closure may still carry `data/` for landed reference
 data it authored — see § "Landed reference data in an API closure".
 
+## Closure root
+
+Before authoring, resolve exactly one absolute `<closure-root>`: the directory
+passed to the supervisor as the closure. Normalize existing artifacts into it
+before creating or checking any other artifact. Keep `infra-profile.yaml`,
+`connectivity_check.py`, `spec.py`, `models.py`, `transform/`, and
+`requirements.txt` inside that root: root-level artifacts are direct children,
+and nested artifacts are descendants. Credentialed closures also keep
+`.gitignore` and `SENSITIVE` inside that root. Do not place credentials,
+those sensitivity artifacts, or the profile beside or outside the root. Use the
+same root for the self-check, lock, and build.
+
 ## Scope
 
 An **off-mesh** REST API the user names directly — not an upstream

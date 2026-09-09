@@ -51,6 +51,9 @@ endpoint over it.
 
 ## The closure layout
 
+Choose and normalize one absolute `<dp-root>` — the exact directory passed to the desktop supervisor — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`.
+Never place credentials, `SENSITIVE`, `.gitignore`, or the profile beside/above `<dp-root>`; split artifacts must be consolidated first. Use this same root for self-check, lock, and build.
+
 The author emits **Python and prerequisite config only**:
 
 ```
@@ -96,8 +99,7 @@ and the `model_tables` identity map from these — you do not author them):
 | the physical table | what dlt writes: `main.<name>` | yes | yes |
 | the connector's per-model reference | `data/<name>/` for a file connector (CSV/JSON/JSONL/Parquet); a `db-source-tables` entry for a database connector; an `endpoint_<name>` infra-profile attribute for a REST API connector | yes — **except** reference data the closure lands itself on a `db-source`/`api-source` connector, which has none: do NOT invent one (`reference/api-source.md` § "Landed reference data in an API closure") | **no** |
 
-`PHYSICAL_MODELS` is the set of **landed-table identities**, not data
-directories: base models (`data/<name>/`) **plus** derived models (Step 3a).
+`PHYSICAL_MODELS` is the set of **landed-table identities**, not data directories: base models (`data/<name>/`) **plus** derived models (Step 3a).
 Required physical models use `.promise(...)`; optional-empty physical models use
 `.model(...)`; both appear in `model_tables`. `OPTIONAL_EMPTY_MODELS` is a
 literal subset whose dlt resource may yield zero rows and leave no table.
@@ -108,9 +110,7 @@ keys.
 
 ## Workflow
 
-The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value;
-if it is absent, return to nxd-run-job-loop — never reconstruct it from the
-closure or this skill's cwd.
+The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value; if it is absent, return to nxd-run-job-loop — never reconstruct it from the closure or this skill's cwd.
 
 **Selective-install dependency:** this skill needs **nxd-run-job-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-data-product` alone is not a supported substitute for that handoff.
 
