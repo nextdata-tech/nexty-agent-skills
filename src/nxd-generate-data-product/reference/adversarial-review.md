@@ -89,6 +89,12 @@ truthfully `timed_out`. An empty timeout is not a clean review. Use
 `status: needs_user` only for a round carrying at least one finding awaiting
 the user's decision.
 
+The reviewer inspects disclosure paths first: output promises and exposed
+ports, then model roles and physical writes, then both semantic and direct-store
+reachability. It continues with the broader logical and semantic review after
+that pass. This ordering is a threat-model checklist, not a supplied finding or
+resolution.
+
 ## Adjudicate every finding — this is the point
 
 **What comes back is a claim, not a verdict.** A reviewer told to find problems

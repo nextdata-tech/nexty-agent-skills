@@ -10,6 +10,7 @@
   - Paginating a GraphQL connection
   - Flatten fetched rows before they reach the port
   - Deriving from a fetched source
+- Payload inspection gate — before authoring
 - Credential handling, including refresh-on-401 for expiring tokens — read this before shipping
 - Custom request headers
 - Naming
@@ -68,8 +69,7 @@ resources = {r.name: r for r in rest_api_resources(config)}  # returns a LIST
 
 ### REST response envelopes: select the row array
 
-Inspect each response before authoring the models. If the API returns a top-level
-object that wraps rows in a key such as `data` — for example
+If the API returns a top-level object that wraps rows in a key such as `data` — for example
 `{"page": 1, "per_page": 10, "total": 12, "pages": 2, "data": [...]}` — set
 the resource endpoint's `data_selector` to that row-array path:
 
@@ -268,6 +268,49 @@ means something nested got through.
 yields no rows — which surfaces much later as an empty promised model. Do not
 diagnose that as a credential problem before checking the response body; the
 standalone probe below is what distinguishes them.
+
+## Payload inspection gate — before authoring
+
+After the plan is settled, resolve exactly one absolute closure root. For an
+`api-source`, the **first and only closure artifact initially allowed** is a
+closure-local `connectivity_check.py`. This is the deliberate exception to the
+general closure rule: the probe has to exist before it can perform the
+inspection. Its non-secret resource list, endpoint paths, expected row-array
+selectors, and pagination bounds come from the settled plan; it must not rely
+on a later generated transform or on an untrusted caller working directory.
+Keep it dependency-light and independent of NXD, dlt, DuckDB, and the
+generated transform — Python's standard library is sufficient for the bounded
+HTTP request and response parsing. Supply credentials only through the
+authoring session's runtime secret input; never embed or print them.
+
+When credentials are available, execute that probe before writing any other
+closure artifact, using the actual resolved base URL and endpoint path plus the
+configured authentication and headers. It must make one bounded, read-only
+request per configured resource, assert a parseable response matching the
+expected shape, and print a bounded, sanitized summary for **each** resource
+before it exits successfully. Each summary includes the endpoint label, HTTP status,
+top-level shape/keys, row-array path, pagination fields (`total`/`pages` when
+present), and one or two representative row keys and values. Values may be
+shown only when they are clearly non-sensitive and non-personal scalars (for
+example, a status enum or a count). Secret-like response fields (`token`,
+`secret`, `password`, `api_key`, `authorization`, `cookie`, or similar) and
+personal or account data are represented only by their field name and type or
+a `<redacted>` placeholder. Redact or omit authorization headers, bearer/API-key
+values, cookies, secret query parameters, and full response bodies. A summary
+from only one resource, a status code without the body shape, API documentation,
+or an inferred schema is not payload inspection. A failed or uninspectable
+resource must produce a bounded diagnostic and stop authoring; do not guess a
+schema. Repeat the gate whenever the endpoint set or source binding changes.
+
+If credentials are unavailable in-session, author the probe and then continue
+authoring the remaining closure from the settled plan. Mark **both** payload
+inspection and the connectivity self-check as **not run** and **unverified**;
+the plan is the source of the intended schema, not evidence that the source
+was reached. Structural checks may still run, but this is not source
+validation, is not a complete happy path, and must not be reported as a
+materialized success; leave the closure incomplete until a later credentialed
+probe succeeds. Do not manufacture a response summary from API docs,
+fixtures, or assumptions.
 
 ## Credential handling — read this before shipping
 
@@ -982,9 +1025,10 @@ add it explicitly rather than assuming it's already covered.
   `public:` per the sensitivity classification (secrets `false`, non-secret
   config like `auth_key_name`/`auth_key_location` `true`).
 
-  **No connector artifact** — an api-source closure's endpoint map lives in
-  these attributes, not in a companion file. Everything the transform reads at run
-  time is an attribute on the `api-source` service.
+  **Required probe; no endpoint-map companion** — every api-source closure
+  includes the closure-local `connectivity_check.py` probe. Its endpoint map
+  lives in these attributes, not in a companion file; everything the transform
+  reads at run time is an attribute on the `api-source` service.
 
   **Every api-source closure using this desktop-supervisor compatibility path still needs
   `csv-source-path` and a non-empty `data/` tree before the desktop supervisor
@@ -1041,32 +1085,30 @@ add it explicitly rather than assuming it's already covered.
 
 ## Self-check (connectivity smoke test)
 
-A REST API connector has two separate checks; keep their results separate:
+A REST API connector has two separate checks; keep their results separate. The
+payload-inspection gate above owns the ordering and the no-credentials
+reporting; this section describes the probe's relationship to the shipped
+offline self-check.
 
 1. The shipped `self_check.py` provides offline closure checks. Its Phase B
    cannot authenticate an API source, because the harness invokes `ingest()`
    with an empty secrets map.
 2. The authenticated connectivity smoke test is a real authoring-time probe.
-   Always write it as `connectivity_check.py` at the closure root, beside
-   `infra-profile.yaml` and `transform/`. Keep this script dependency-light
-   and independent of NXD, dlt, DuckDB, and the generated transform — prefer
-   Python's standard library for its bounded HTTP request and response parsing.
+   It is the closure-local `connectivity_check.py` written first under the
+   gate above, not a manual `curl`, a fixture, or the `self_check.py` dry run.
+   With credentials it must run successfully before the first build, making
+   one bounded request per configured resource and asserting a parseable
+   response matching the expected shape — not an exact fixture count, since
+   remote data is not static. Missing NXD, dlt, DuckDB, or generated-transform
+   packages do not excuse it: the probe uses only the standard library.
 
-When credentials are available in the authoring session, execute
-`python3 connectivity_check.py` (or the equivalent available interpreter)
-before the first build. The execution must make one bounded request per
-configured resource (respecting any stated pagination/rate limit) and assert a
-parseable response matching the expected shape — not an exact fixture count,
-since remote data isn't static. A manually issued `curl` or other exploratory
-fetch is useful for diagnosis but does **not** substitute for executing the
-closure-local probe. Supply credentials to the probe only through the
-authoring session's runtime secret input; never embed or print them, and apply
-the redaction rules below to every failure message.
-
-When credentials are not available in-session, write the probe but report the
-connectivity self-check as **not run** — do not claim it passed. Structural
-checks (naming invariant, no `.semantic_tools()`, import correctness) still run
-regardless.
+The closure is complete only after that authenticated probe succeeds. When
+credentials are unavailable, retain the probe but report payload inspection
+and connectivity as **not run** and **unverified**; structural checks still
+run, while source validation and the complete happy path remain unverified.
+A manually issued `curl` or other exploratory fetch is useful for diagnosis
+but does **not** substitute for executing the closure-local probe. Apply the
+redaction rules below to every failure message.
 
 **Phase B of `self_check.py` cannot pass for this connector, and that is not a
 defect to code around.** Do not confuse that offline limitation with the
@@ -1083,15 +1125,18 @@ than the dry run it replaces.
 
 ### Two ways a probe lies
 
-**Anchor the probe on its own directory, never the caller's cwd.** A probe that
-opens `"infra-profile.yaml"` relative to the working directory fails with
-`[Errno 2] No such file or directory: 'infra-profile.yaml'` the moment anyone
-runs it by absolute path — which is how you will hand it to the user, since the
-closure is not their working directory:
+**Anchor the probe on its own directory, never the caller's cwd.** The
+probe's initial non-secret request configuration comes from the settled plan,
+so it does not need a later closure artifact in order to run. If it reads the
+profile after that profile has been authored, resolve it from the probe's own
+directory; never open `"infra-profile.yaml"` relative to the caller's working
+directory. Running the probe by absolute path must not produce
+`[Errno 2] No such file or directory: 'infra-profile.yaml'` merely because the
+author's cwd is elsewhere:
 
 ```python
 _CLOSURE = Path(__file__).resolve().parent
-profile = yaml.safe_load((_CLOSURE / "infra-profile.yaml").read_text())
+profile_path = _CLOSURE / "infra-profile.yaml"
 ```
 
 **Never lead with OK when the response was empty.** A reachable endpoint that

@@ -71,7 +71,7 @@ def test_v2_construction_order_is_explicit():
         "call `advance_workflow` with `session_decision`",
         "Generate the closure only after this action succeeds",
         "call the indicated `capture` action",
-        "Run the existing true in-conversation read-only",
+        "exactly one built-in `Agent` or `Task` dispatch",
         "through `report_requirement`",
         "returned `start_requirement` action",
         "returned `start_run` action",
@@ -100,6 +100,57 @@ def test_executable_job_loop_matches_v2_order_and_has_one_mandatory_review():
     assert "mutable closure" in checkpoint
     assert "review-record.json" in checkpoint
     assert "reset, local correction, self-check, recapture" in checkpoint
+
+
+def test_prepare_uses_exact_kind_and_supervisor_owned_approval_lifecycle():
+    text = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    step = text[text.index("### Step 3") : text.index("### Step 3b")]
+    for marker in (
+        '`kind: "generated-data-product"`',
+        '`status: proposed`',
+        "Never set `status: approved` or invent approval hashes",
+        "returned consent action succeeds",
+    ):
+        assert marker in step
+    assert step.index("call `prepare_workflow`") < step.index("returned consent action succeeds")
+
+
+def test_job_helper_is_bound_to_the_exact_staged_skill_release():
+    text = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    step = text[text.index("### Step 3") : text.index("### Step 3b")]
+    for marker in (
+        "exact staged skill pack",
+        "metadata version must match",
+        "missing or mismatched helper path stops the workflow",
+        "never fall back to another cached plugin release",
+    ):
+        assert marker in step
+
+
+def test_generator_distinguishes_optional_tables_and_physical_pii_exposure():
+    text = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
+    for marker in (
+        "valid header-only CSV is still an optional physical base model",
+        "include it in both `PHYSICAL_MODELS` and `OPTIONAL_EMPTY_MODELS`",
+        "Never change it to `.promise(...)` or omit the model",
+        "do not mask a column in the physical DuckDB table or direct SQL",
+        "project every sensitive column out before any dlt resource is yielded",
+    ):
+        assert marker in text
+
+
+def test_reviewer_checks_semantic_and_direct_store_disclosure_early():
+    text = " ".join(REVIEW_SKILL.read_text(encoding="utf-8").split())
+    output = text[text.index("### 3. An output promise") : text.index("### 4. A metric")]
+    for marker in (
+        "promised output",
+        "exposed port",
+        "physical table",
+        "governed semantic discovery",
+        "direct DuckDB/raw-table access",
+        "Judge the captured code and schemas",
+    ):
+        assert marker in output
 
 
 def test_local_inference_is_data_only_until_supervisor_consent():
@@ -218,6 +269,40 @@ def test_review_relay_preserves_ledger_and_supervisor_boundary():
         assert marker in review, f"review relay contract lost: {marker}"
 
 
+def test_review_dispatch_is_one_conversation_child_with_the_canonical_marker():
+    """Capture must cause a real Agent/Task handoff, not an inline Skill call."""
+    text = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    review = text[text.index("## Run and report the review") : text.index("## Follow returned actions through admission")]
+    for marker in (
+        "exactly one built-in `Agent` or `Task` dispatch",
+        "`general-purpose` subagent is acceptable",
+        "conversation child, not a supervisor/MCP operation",
+        "load and follow `nxd-review-closure`",
+        "main thread must not invoke `Skill(nxd-review-closure)`",
+        "canonical marker line",
+        'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}',
+        "timeout or partial child result does not justify dispatching a second reviewer",
+        "Reporting is the main thread's relay step",
+    ):
+        assert marker in review, f"explicit review-dispatch boundary lost: {marker}"
+    assert review.count("NXD_REVIEW_DISPATCH") == 1
+
+
+def test_review_role_and_job_loop_ban_inline_or_supervisor_launched_review():
+    """The role boundary must survive both the orchestrator and reviewer docs."""
+    job = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    reviewer = " ".join(REVIEW_SKILL.read_text(encoding="utf-8").split())
+    checkpoint = job[job.index("### Step 3b") : job.index("### Step 4")]
+    for text in (checkpoint, reviewer):
+        lowered = text.casefold()
+        assert "must not" in lowered
+        assert "inline" in lowered
+        assert "supervisor" in lowered
+        assert "conversation" in lowered
+    assert "Skill(nxd-review-closure)" in checkpoint
+    assert "report_requirement" in reviewer
+
+
 def test_advance_wire_shapes_are_pinned_exactly():
     text = WORKFLOW_V2.read_text(encoding="utf-8")
     for marker in (
@@ -255,6 +340,27 @@ def test_capture_is_immutable_and_remediation_creates_a_new_review_generation():
     assert "reset the returned capture requirement" in text
     assert "recapture it, and run a fresh review" in text
     assert "Never write a review result into the captured closure" in text
+
+
+def test_harness_attestations_use_the_exact_sidecar_path_and_schema():
+    text = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    for marker in (
+        "persist the short construction attestations before `start_run`",
+        "exact path in `NXD_EVAL_ATTESTATIONS_PATH`",
+        "`agent-attestations.json` at the agent workspace root",
+        "root JSON array",
+        '"action_kind":"self_check"',
+        '"evidence_ref":"nxd-jobs/<workflow>/closure/build-record.json#self_check"',
+        '"action_kind":"adversarial_review"',
+        '"evidence_ref":"nxd-jobs/<workflow>/review-record.json#review_rounds/<index>"',
+        '"review_round_index":<index>',
+        "Replace only `<workflow>` and `<index>`",
+        "relative to the agent workspace root",
+        "one indexed review attestation for every external `review_rounds[]` entry",
+        "Do not place it under `closure/`, `artifacts/`, or the review ledger",
+    ):
+        assert marker in text, f"harness attestation contract lost: {marker}"
+    assert "no other keys" in text
 
 
 def test_scheduling_reference_uses_the_same_mandatory_immutable_review_contract():

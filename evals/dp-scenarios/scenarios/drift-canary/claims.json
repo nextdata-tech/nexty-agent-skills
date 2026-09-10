@@ -14,7 +14,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:type:e8f2213def63974d",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 40,
+      "line": 42,
       "quote": "| CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |",
       "content_hash": "sha256:e8f2213def63974d3c53e7dc99c10d4638ed12a9d60618a799e1d63c8a64d19f",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -25,7 +25,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:type:d69c3b59c91e0511",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 41,
+      "line": 43,
       "quote": "| Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |",
       "content_hash": "sha256:d69c3b59c91e05115924feb518c2615a6a0abeded6e93054fa358a29c119f9fc",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -36,7 +36,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:type:0c09855adfbe9a2b",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 42,
+      "line": 44,
       "quote": "| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |",
       "content_hash": "sha256:0c09855adfbe9a2bd1ed2c8abd55db1e54fa4e629c32529157556ab6c6893023",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -45,11 +45,11 @@
       "probe_id": "kitchen-sink"
     },
     {
-      "claim_id": "nxd-generate-data-product/SKILL.md:type:ccd7b4fc73d1191e",
+      "claim_id": "nxd-generate-data-product/SKILL.md:type:7bd1e3ceb3d09315",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 43,
-      "quote": "| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | **none** — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |",
-      "content_hash": "sha256:ccd7b4fc73d1191eaf78f48264100aa70187809677a11d1a1f1fd44e38e1a929",
+      "line": 45,
+      "quote": "| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |",
+      "content_hash": "sha256:7bd1e3ceb3d09315b70701358ea5ad38aad5413344befd0e2cb9132390f6c203",
       "expected_finding_code": "structure/spec_compile_failed",
       "direction": "documented-supported",
       "category": "type",
@@ -58,7 +58,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:companion:904f3f155163d5bf",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 68,
+      "line": 73,
       "quote": "    ├── csv-source-path          # one line: relative path to the CSV export root",
       "content_hash": "sha256:904f3f155163d5bf064bc3c0ab0ac4764055a5843d3a19e8a227fda9c56eb925",
       "expected_finding_code": "structure/companion_files_invalid",
@@ -69,7 +69,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:directory:6ebbe71dfdd59c11",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 69,
+      "line": 74,
       "quote": "    └── data/                    # the connector export: data/<base_model>/*.csv",
       "content_hash": "sha256:6ebbe71dfdd59c1174a984e611a8227fdcb2600a29b2271bb78565f2168191f6",
       "expected_finding_code": "structure/csv_source_invalid",
@@ -80,7 +80,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:semantic:418a864454b8ab81",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 242,
+      "line": 246,
       "quote": "- `semantic_model(\"<name>\")` — the bare lowercase physical table name.",
       "content_hash": "sha256:418a864454b8ab81c90a6faff5f7e2468f60a9756b6594cfd767361b8ab9e710",
       "expected_finding_code": "semantic/registry_invalid",
@@ -91,7 +91,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:unsupported:c01ac5c27a958249",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 386,
+      "line": 389,
       "quote": "- **No `.semantic_tools(...)`.** The supervisor's semantic child builds the MCP",
       "content_hash": "sha256:c01ac5c27a9582499f6d0dd35cc0efbec11417f10aa440cbbee9cd612cf7a76a",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -102,7 +102,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:secret:d145d907512aad71",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 402,
+      "line": 405,
       "quote": "**relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the",
       "content_hash": "sha256:d145d907512aad71a88c27641126e836e561c80246f43e30d1b850877703b8ee",
       "expected_finding_code": "build/transform_import",
@@ -114,7 +114,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:unsupported:8231b08d4e9b9f2f",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 491,
+      "line": 488,
       "quote": "- **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.",
       "content_hash": "sha256:8231b08d4e9b9f2f376b1c28e2f6b5ee82642fc7c785b663dd4cbc8737bbe807",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -170,7 +170,7 @@
     {
       "claim_id": "nxd-generate-data-product/reference/nxd-spec-api.md:semantic:b7fe5b2d72599463",
       "skill_file": "nxd-generate-data-product/reference/nxd-spec-api.md",
-      "line": 215,
+      "line": 219,
       "quote": "- **`semantic_model(name, attributes=None, description=None, sampling=None)`**",
       "content_hash": "sha256:b7fe5b2d725994632ad1f22ea91ee9d8671255da05571cb52b4d4c87a03b2dd2",
       "expected_finding_code": "semantic/registry_invalid",
@@ -181,7 +181,7 @@
     {
       "claim_id": "nxd-generate-data-product/reference/nxd-spec-api.md:semantic:109e09ce51271a35",
       "skill_file": "nxd-generate-data-product/reference/nxd-spec-api.md",
-      "line": 227,
+      "line": 231,
       "quote": "- **`semantic_view(name, base, attributes=None, description=None)`** — starts",
       "content_hash": "sha256:109e09ce51271a3555e8173ddf857fcba94701a8accf1b4da063a985f38b4568",
       "expected_finding_code": "semantic/registry_invalid",
@@ -192,7 +192,7 @@
     {
       "claim_id": "nxd-generate-data-product/reference/nxd-spec-api.md:unsupported:8e881fd02fa38db5",
       "skill_file": "nxd-generate-data-product/reference/nxd-spec-api.md",
-      "line": 244,
+      "line": 248,
       "quote": "  - **No `.semantic_tools(...)`** on desktop — it exists on `DataProductSpec`",
       "content_hash": "sha256:8e881fd02fa38db5671cdb9a2a0b6ba8b532561ba686a0ad0a17b25d01a54e58",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -257,12 +257,14 @@
       "nxd-build-data-product/reference/troubleshooting.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-semantic-data-product/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-semantic-data-product/reference/compiler-and-routing.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "nxd-build-semantic-data-product/reference/local-inference-handoff.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-semantic-data-product/reference/overview.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-semantic-data-product/reference/registry-authoring.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-semantic-data-product/reference/runtime-and-dependencies.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "nxd-build-semantic-data-product/reference/scripts-bootstrap.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-debug-data-product/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-fix-policy-failures/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "nxd-generate-data-product/SKILL.md": "sha256:bf718cea0ee862668b60f283912f39ca50cef6744b7f8eb8254c1bafc292f50d",
+      "nxd-generate-data-product/SKILL.md": "sha256:0d9b0ae4472340f88ffeccfbb2d5567282101988b02d8ec04959ee0a7a90bcfb",
       "nxd-generate-data-product/reference/adversarial-review.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/api-source.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/closure-record.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -309,18 +311,19 @@
       "nxd-run-job-loop/reference/scheduling.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/scripts-bootstrap.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/source-materialization.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "nxd-run-job-loop/reference/workflow-v2.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-setup-cli/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-setup-cli/reference/headless-device-flow.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-toggle-policies/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
-    "reviewer": "Ignacio Duart",
-    "review_date": "2026-08-31",
-    "approves_claims_hash": "sha256:0c9313d775e6c44d7418c2068f1ba437b0f73f977da762585361d6b588a5a9f3"
+    "reviewer": "iduartgomez",
+    "review_date": "2026-09-10",
+    "approves_claims_hash": "sha256:68fa58e2af8db3f901f2b66193fdfe625de08acc92b713026acce09dfd93df0b"
   },
   "approval": {
-    "reviewer": "Ignacio Duart",
-    "review_date": "2026-08-31",
-    "old_claims_hash": "sha256:6fb136ee752acd75b5546156a9974554c5c121cd5b7097309dc014c20810a27a",
-    "new_claims_hash": "sha256:0c9313d775e6c44d7418c2068f1ba437b0f73f977da762585361d6b588a5a9f3"
+    "reviewer": "iduartgomez",
+    "review_date": "2026-09-10",
+    "old_claims_hash": "sha256:0c9313d775e6c44d7418c2068f1ba437b0f73f977da762585361d6b588a5a9f3",
+    "new_claims_hash": "sha256:68fa58e2af8db3f901f2b66193fdfe625de08acc92b713026acce09dfd93df0b"
   }
 }

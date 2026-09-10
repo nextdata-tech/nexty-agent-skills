@@ -83,6 +83,24 @@ the generated closure's host-visible authoring root. Capture is the supervisor's
 retained, sealed input for all later work; do not mutate that authoring tree or
 run review/validation against a mutable path after capture.
 
+When this flow is being run by the dp-scenarios harness, persist the short
+construction attestations before `start_run`. Write the root JSON array to the
+exact path in `NXD_EVAL_ATTESTATIONS_PATH` (or, when the variable cannot be
+expanded by the file tool, `agent-attestations.json` at the agent workspace
+root). Do not place it under `closure/`, `artifacts/`, or the review ledger.
+Use only these objects: self-check is exactly
+`{"action_kind":"self_check","outcome":"pass","evidence_ref":"nxd-jobs/<workflow>/closure/build-record.json#self_check"}`;
+each retained-input review adds exactly
+`{"action_kind":"adversarial_review","outcome":"complete","evidence_ref":"nxd-jobs/<workflow>/review-record.json#review_rounds/<index>","review_round_index":<index>}`.
+Replace only `<workflow>` and `<index>`. The review ledger is the captured
+closure's sibling, and every `evidence_ref` is relative to the agent workspace
+root; do not shorten it to a bare filename.
+The root array may also carry a positive-integer `turn` on an object, but no
+other keys. Keep one indexed review attestation for every external
+`review_rounds[]` entry, including after resets. This sidecar is a
+non-authoritative harness observation; it never replaces the durable
+`build-record.json` or `review-record.json` evidence.
+
 ```json
 {
   "request_id": "capture-<workflow>-<unique>",
@@ -106,12 +124,27 @@ select the one in `next_actions[]` whose `requirement_id` is the requirement id
 of the returned review action, then take `review_input` from the matching
 `RequirementView`. Never
 take a `review_input` from another requirement, infer one from its array
-position, or substitute the mutable authoring root. Run the existing true
-in-conversation read-only `nxd-review-closure` subagent over the retained
-blueprint path and retained capture root from that matching view. Give it the
-original request under the existing sanitized-request contract. It may read and
-return claims, but it must not edit, build, serve, transform, or talk to the
-user.
+position, or substitute the mutable authoring root. Use only that matching view.
+The owning/main thread must
+now make exactly one built-in `Agent` or `Task` dispatch for this capture
+generation. A `general-purpose` subagent is acceptable; the reviewer is a
+conversation child, not a supervisor/MCP operation. Its prompt must tell the
+child to load and follow `nxd-review-closure`, give it the retained blueprint
+path, retained capture root, and original request under the existing
+sanitized-request contract, and contain exactly this canonical marker line
+(replace only the example closure path and round index):
+
+```text
+NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
+```
+
+The main thread must not invoke `Skill(nxd-review-closure)` or conduct
+the review with its own `Read`/`Glob`/`Grep` calls. The main thread may load this
+workflow guidance, then waits for the child to return claims; it does not
+silently turn those claims into a verdict. The child may read and return claims,
+but it must not edit, build, serve, transform, start a supervisor operation, or
+talk to the user. A timeout or partial child result does not justify dispatching
+a second reviewer for the same capture generation.
 
 Keep the rich review ledger in
 `…/nxd-jobs/<workflow>/review-record.json`, adjacent to the blueprint and
@@ -157,7 +190,8 @@ new generation. Do not report the old generation as clear.
 Relay the report with the requirement's returned generation, subject digest,
 dependency digest, session reference, and the current revision. The supervisor
 derives evidence identity from its current binding; caller-provided claims are
-not execution authority.
+not execution authority. Reporting is the main thread's relay step after the
+conversation child returns; it is not a supervisor-launched review.
 
 ```json
 {

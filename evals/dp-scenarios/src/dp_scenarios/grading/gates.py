@@ -123,29 +123,35 @@ class _GatePoints(dict[str, int]):
         return super().get(LEGACY_GATE_ALIASES.get(key, key), default)
 
     def __contains__(self, key: object) -> bool:
-        return super().__contains__(LEGACY_GATE_ALIASES.get(key, key) if isinstance(key, str) else key)
+        return super().__contains__(
+            LEGACY_GATE_ALIASES.get(key, key) if isinstance(key, str) else key
+        )
 
 
-GATE_POINTS: Mapping[str, int] = _GatePoints({
-    "intake": 10,
-    "capability": 15,
-    "narrowing": 10,
-    "construction": 10,
-    "build": 20,
-    "query": 20,
-    "follow-up": 15,
-})
+GATE_POINTS: Mapping[str, int] = _GatePoints(
+    {
+        "intake": 10,
+        "capability": 15,
+        "narrowing": 10,
+        "construction": 10,
+        "build": 20,
+        "query": 20,
+        "follow-up": 15,
+    }
+)
 
 
-NOT_STAGED_CODES = frozenset({
-    "capability_shortfall_not_staged",
-    "narrowing_change_not_staged",
-    # Decided the same way -- from `"answer" in scenario.gold`, read at load
-    # time -- and already required=False. Rendering it as UNEXAMINED said the
-    # harness could not look, when the truth is that the scenario does not
-    # stage a scoreable answer.
-    "query_answer_gold_not_declared",
-})
+NOT_STAGED_CODES = frozenset(
+    {
+        "capability_shortfall_not_staged",
+        "narrowing_change_not_staged",
+        # Decided the same way -- from `"answer" in scenario.gold`, read at load
+        # time -- and already required=False. Rendering it as UNEXAMINED said the
+        # harness could not look, when the truth is that the scenario does not
+        # stage a scoreable answer.
+        "query_answer_gold_not_declared",
+    }
+)
 
 
 def _rows(value: object) -> list[Mapping[str, object]]:
@@ -157,7 +163,9 @@ def _rows(value: object) -> list[Mapping[str, object]]:
         candidate = value.get("rows", value.get("ledger", ()))
         if isinstance(candidate, Mapping):
             candidate = candidate.get("rows", ())
-        if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        if isinstance(candidate, Sequence) and not isinstance(
+            candidate, (str, bytes, bytearray)
+        ):
             return [row for row in candidate if isinstance(row, Mapping)]
         return [value] if value else []
     if isinstance(value, Iterable):
@@ -251,15 +259,28 @@ def gate_intake(
             [Finding("intake_ledger_not_examined", "ledger contains no rows")],
             examined=False,
         )
-    approvals = [row["turn"] for row in rows if row.get("action_kind") == "spec_approved" and isinstance(row.get("turn"), int)]
-    codegen = [row["turn"] for row in rows if row.get("action_kind") == "codegen" and isinstance(row.get("turn"), int)]
+    approvals = [
+        row["turn"]
+        for row in rows
+        if row.get("action_kind") == "spec_approved"
+        and isinstance(row.get("turn"), int)
+    ]
+    codegen = [
+        row["turn"]
+        for row in rows
+        if row.get("action_kind") == "codegen" and isinstance(row.get("turn"), int)
+    ]
     if isinstance(ledger, Mapping):
         observations = ledger.get("observations")
         if isinstance(observations, Mapping):
             turns = observations.get("turns")
-            if isinstance(turns, Sequence) and not isinstance(turns, (str, bytes, bytearray)):
+            if isinstance(turns, Sequence) and not isinstance(
+                turns, (str, bytes, bytearray)
+            ):
                 for turn in turns:
-                    if not isinstance(turn, Mapping) or not isinstance(turn.get("turn"), int):
+                    if not isinstance(turn, Mapping) or not isinstance(
+                        turn.get("turn"), int
+                    ):
                         continue
                     if _authored_closure(turn.get("files_touched")):
                         codegen.append(turn["turn"])
@@ -267,9 +288,17 @@ def gate_intake(
     for row in rows:
         action_kind = row.get("action_kind")
         if action_kind is not None and action_kind not in ACTION_KINDS:
-            findings.append(Finding("intake_unknown_action_kind", "ledger action kind is outside the closed vocabulary", action_kind))
+            findings.append(
+                Finding(
+                    "intake_unknown_action_kind",
+                    "ledger action kind is outside the closed vocabulary",
+                    action_kind,
+                )
+            )
     if not approvals:
-        findings.append(Finding("intake_spec_approval_missing", "no spec approval row is recorded"))
+        findings.append(
+            Finding("intake_spec_approval_missing", "no spec approval row is recorded")
+        )
     if not codegen:
         findings.append(Finding("intake_codegen_missing", "no codegen row is recorded"))
     # Codegen may not start on a turn *earlier* than the approval, but it may
@@ -280,7 +309,13 @@ def gate_intake(
     # agent for doing exactly the right thing, which a live run demonstrated:
     # spec_approved and the first closure write were both recorded at turn 4.
     if approvals and codegen and min(codegen) < min(approvals):
-        findings.append(Finding("intake_approval_not_before_codegen", "codegen turn precedes the approval", {"approval": min(approvals), "codegen": min(codegen)}))
+        findings.append(
+            Finding(
+                "intake_approval_not_before_codegen",
+                "codegen turn precedes the approval",
+                {"approval": min(approvals), "codegen": min(codegen)},
+            )
+        )
     if isinstance(ledger, Mapping):
         observations = ledger.get("observations")
         positioned = _positioned_calls(observations)
@@ -345,9 +380,17 @@ def gate_intake(
                 ):
                     continue
                 arguments = call.get("arguments")
-                action = arguments.get("action") if isinstance(arguments, Mapping) else None
-                parameters = action.get("parameters") if isinstance(action, Mapping) else None
-                workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+                action = (
+                    arguments.get("action") if isinstance(arguments, Mapping) else None
+                )
+                parameters = (
+                    action.get("parameters") if isinstance(action, Mapping) else None
+                )
+                workflow = (
+                    arguments.get("workflow")
+                    if isinstance(arguments, Mapping)
+                    else None
+                )
                 result = call.get("result")
                 content = result.get("content") if isinstance(result, Mapping) else None
                 if (
@@ -371,7 +414,8 @@ def gate_intake(
             else:
                 first_approval = min(int(row["turn"]) for row in approval_rows)
                 if not any(
-                    position.turn < first_approval and workflow in publication_workflows
+                    position.turn < first_approval
+                    and workflow in publication_workflows
                     for position, workflow in prepared
                 ):
                     findings.append(
@@ -405,7 +449,9 @@ def _metric_labels(spec: object) -> dict[str, str]:
     if isinstance(raw, Mapping):
         for name, label in raw.items():
             if isinstance(label, Mapping):
-                value = label.get("classification", label.get("label", label.get("support")))
+                value = label.get(
+                    "classification", label.get("label", label.get("support"))
+                )
             else:
                 value = label
             if isinstance(name, str) and isinstance(value, str):
@@ -414,7 +460,9 @@ def _metric_labels(spec: object) -> dict[str, str]:
         for item in raw:
             if isinstance(item, Mapping):
                 name = item.get("name", item.get("metric"))
-                label = item.get("classification", item.get("label", item.get("support")))
+                label = item.get(
+                    "classification", item.get("label", item.get("support"))
+                )
                 if isinstance(name, str) and isinstance(label, str):
                     result[name] = label
     return result
@@ -444,7 +492,9 @@ def _decision_rows(decisions: object) -> tuple[Mapping[str, str], ...]:
 
 def _metric_is_implemented(terms: Sequence[str], implementation: str) -> bool:
     lowered = implementation.lower()
-    return any(term.lower() in lowered for term in terms if isinstance(term, str) and term)
+    return any(
+        term.lower() in lowered for term in terms if isinstance(term, str) and term
+    )
 
 
 # The vocabularies below mirror ``LEDGER_VOCAB`` in
@@ -480,19 +530,26 @@ def _ledger_contract_breaches(rows: Sequence[Mapping[str, str]]) -> tuple[str, .
     breaches = [
         f"no {column!r} column" for column in _LEDGER_COLUMNS if column not in present
     ]
-    for column, vocabulary in (("status", _LEDGER_STATUS), ("provenance", _LEDGER_PROVENANCE)):
+    for column, vocabulary in (
+        ("status", _LEDGER_STATUS),
+        ("provenance", _LEDGER_PROVENANCE),
+    ):
         if column not in present:
             continue
         # Union every row's value, as phase D does: one out-of-vocabulary row
         # among clean ones still makes the ledger unreadable as a class, and
         # dropping it would let the survivors quietly govern in its place.
-        unknown = {str(row.get(column, "")).strip().lower() for row in rows} - vocabulary
+        unknown = {
+            str(row.get(column, "")).strip().lower() for row in rows
+        } - vocabulary
         if unknown:
             breaches.append(f"{column} has {sorted(unknown)}")
     return tuple(breaches)
 
 
-def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]]) -> bool:
+def _metric_is_governed(
+    terms: Sequence[str], rows: Sequence[Mapping[str, str]]
+) -> bool:
     """Whether a governing decision row covers any of a metric's column terms.
 
     Callers must have cleared ``_ledger_contract_breaches`` first: a row without
@@ -515,8 +572,12 @@ def _metric_is_governed(terms: Sequence[str], rows: Sequence[Mapping[str, str]])
         # the metric, so "pipeline velocity is out of scope" would mark
         # stage_velocity_30d governed and turn a real ungoverned shortfall into
         # a pass.
-        blob = " ".join(str(row.get(field, "")) for field in ("applies_to", "decision_id")).lower()
-        if any(term.lower() in blob for term in terms if isinstance(term, str) and term):
+        blob = " ".join(
+            str(row.get(field, "")) for field in ("applies_to", "decision_id")
+        ).lower()
+        if any(
+            term.lower() in blob for term in terms if isinstance(term, str) and term
+        ):
             return True
     return False
 
@@ -541,7 +602,9 @@ def _capability_metric_terms(capability: object) -> dict[str, tuple[str, ...]]:
         if isinstance(value, str):
             value = (value,)
         if isinstance(value, (list, tuple)):
-            cleaned = tuple(item for item in value if isinstance(item, str) and item.strip())
+            cleaned = tuple(
+                item for item in value if isinstance(item, str) and item.strip()
+            )
             if cleaned:
                 terms[str(name)] = cleaned
     return terms
@@ -580,7 +643,12 @@ def gate_capability_from_decisions(
         return _result(
             "capability",
             False,
-            [Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall")],
+            [
+                Finding(
+                    "capability_shortfall_not_staged",
+                    "scenario declares no capability shortfall",
+                )
+            ],
             examined=False,
             required=False,
         )
@@ -589,7 +657,12 @@ def gate_capability_from_decisions(
         return _result(
             "capability",
             False,
-            [Finding("capability_not_examined", "no harness-owned capability snapshot is available")],
+            [
+                Finding(
+                    "capability_not_examined",
+                    "no harness-owned capability snapshot is available",
+                )
+            ],
             examined=False,
             required=required,
         )
@@ -704,14 +777,21 @@ def gate_capability_from_decisions(
     return _result("capability", not findings, findings, required=required)
 
 
-def gate_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
+def gate_capability(
+    spec: object, capability: object, *, required: bool = True
+) -> GateResult:
     """capability: compare every spec metric with the fixture capability label."""
 
     if not required:
         return _result(
             "capability",
             False,
-            [Finding("capability_shortfall_not_staged", "scenario declares no capability shortfall")],
+            [
+                Finding(
+                    "capability_shortfall_not_staged",
+                    "scenario declares no capability shortfall",
+                )
+            ],
             examined=False,
             required=False,
         )
@@ -720,7 +800,11 @@ def gate_capability(spec: object, capability: object, *, required: bool = True) 
         return _result(
             "capability",
             False,
-            [Finding("capability_metrics_not_examined", "spec contains no metric labels")],
+            [
+                Finding(
+                    "capability_metrics_not_examined", "spec contains no metric labels"
+                )
+            ],
             examined=False,
             required=required,
         )
@@ -728,7 +812,12 @@ def gate_capability(spec: object, capability: object, *, required: bool = True) 
         return _result(
             "capability",
             False,
-            [Finding("capability_not_examined", "no harness-owned capability snapshot is available")],
+            [
+                Finding(
+                    "capability_not_examined",
+                    "no harness-owned capability snapshot is available",
+                )
+            ],
             examined=False,
             required=required,
         )
@@ -737,18 +826,43 @@ def gate_capability(spec: object, capability: object, *, required: bool = True) 
     for name, label in expected.items():
         actual = observed.get(name)
         if actual != label:
-            findings.append(Finding("capability_capability_label_mismatch", f"capability classification differs for {name}", {"metric": name, "spec": label, "capability": actual}))
+            findings.append(
+                Finding(
+                    "capability_capability_label_mismatch",
+                    f"capability classification differs for {name}",
+                    {"metric": name, "spec": label, "capability": actual},
+                )
+            )
     return _result("capability", not findings, findings, required=required)
 
 
 def _diff_metrics(spec_diff: object) -> tuple[dict[str, int | None], int | None]:
     if isinstance(spec_diff, Mapping):
-        change_turn = spec_diff.get("turn", spec_diff.get("change_turn", spec_diff.get("diff_turn")))
-        raw = spec_diff.get("metrics", spec_diff.get("changed_metrics", spec_diff.get("changed", spec_diff.get("added_metrics", spec_diff.get("added", ())))))
-        if not raw and isinstance(spec_diff.get("before"), Mapping) and isinstance(spec_diff.get("after"), Mapping):
+        change_turn = spec_diff.get(
+            "turn", spec_diff.get("change_turn", spec_diff.get("diff_turn"))
+        )
+        raw = spec_diff.get(
+            "metrics",
+            spec_diff.get(
+                "changed_metrics",
+                spec_diff.get(
+                    "changed",
+                    spec_diff.get("added_metrics", spec_diff.get("added", ())),
+                ),
+            ),
+        )
+        if (
+            not raw
+            and isinstance(spec_diff.get("before"), Mapping)
+            and isinstance(spec_diff.get("after"), Mapping)
+        ):
             before = _metric_labels(spec_diff["before"])
             after = _metric_labels(spec_diff["after"])
-            raw = {name: change_turn for name, value in after.items() if before.get(name) != value}
+            raw = {
+                name: change_turn
+                for name, value in after.items()
+                if before.get(name) != value
+            }
     else:
         change_turn = None
         raw = spec_diff
@@ -756,7 +870,11 @@ def _diff_metrics(spec_diff: object) -> tuple[dict[str, int | None], int | None]
     if isinstance(raw, Mapping):
         for name, value in raw.items():
             metric_turn = value.get("turn") if isinstance(value, Mapping) else None
-            metrics[str(name)] = metric_turn if isinstance(metric_turn, int) else (change_turn if isinstance(change_turn, int) else None)
+            metrics[str(name)] = (
+                metric_turn
+                if isinstance(metric_turn, int)
+                else (change_turn if isinstance(change_turn, int) else None)
+            )
     elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
         for item in raw:
             if isinstance(item, Mapping):
@@ -788,7 +906,9 @@ def _metric_names(value: object) -> tuple[set[str], bool]:
             return {str(name) for name in raw}, True
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
             names = {
-                str(item.get("name", item.get("metric"))) if isinstance(item, Mapping) else str(item)
+                str(item.get("name", item.get("metric")))
+                if isinstance(item, Mapping)
+                else str(item)
                 for item in raw
             }
             return {name for name in names if name not in {"None", ""}}, True
@@ -814,19 +934,24 @@ def _closure_metric_names(closure: object) -> tuple[set[str], bool]:
     path = Path(closure)
     if not path.exists():
         return set(), False
-    candidates = [path] if path.is_file() else [
-        candidate
-        for candidate in sorted(path.rglob("*.json"))
-        if candidate.name in {
-            "built-spec.json",
-            "built_spec.json",
-            "data-product-spec.json",
-            "data_product_spec.json",
-            "deployment-spec.json",
-            "definition.json",
-            "spec.json",
-        }
-    ]
+    candidates = (
+        [path]
+        if path.is_file()
+        else [
+            candidate
+            for candidate in sorted(path.rglob("*.json"))
+            if candidate.name
+            in {
+                "built-spec.json",
+                "built_spec.json",
+                "data-product-spec.json",
+                "data_product_spec.json",
+                "deployment-spec.json",
+                "definition.json",
+                "spec.json",
+            }
+        ]
+    )
     for candidate in candidates:
         try:
             raw = json.loads(candidate.read_text(encoding="utf-8"))
@@ -838,7 +963,9 @@ def _closure_metric_names(closure: object) -> tuple[set[str], bool]:
     return set(), False
 
 
-def _declared_approval_metrics(row: Mapping[str, object], changed: set[str]) -> set[str]:
+def _declared_approval_metrics(
+    row: Mapping[str, object], changed: set[str]
+) -> set[str]:
     """Return metric-specific approval names, or all changed names for a broad approval."""
 
     claim = row.get("claim")
@@ -861,7 +988,12 @@ def gate_narrowing(
         return _result(
             "narrowing",
             False,
-            [Finding("narrowing_change_not_staged", "scenario declares no definition change")],
+            [
+                Finding(
+                    "narrowing_change_not_staged",
+                    "scenario declares no definition change",
+                )
+            ],
             examined=False,
             required=False,
         )
@@ -878,11 +1010,14 @@ def gate_narrowing(
     approvals = [
         (row, _declared_approval_metrics(row, set(metrics)))
         for row in rows
-        if row.get("action_kind") == "spec_approved" and isinstance(row.get("turn"), int)
+        if row.get("action_kind") == "spec_approved"
+        and isinstance(row.get("turn"), int)
     ]
     built, closure_examined = _closure_metric_names(closure)
     if not metrics:
-        findings.append(Finding("narrowing_spec_diff_not_examined", "no changed metric is present"))
+        findings.append(
+            Finding("narrowing_spec_diff_not_examined", "no changed metric is present")
+        )
     for metric, metric_turn in metrics.items():
         turn = metric_turn if metric_turn is not None else default_turn
         relevant = [
@@ -891,17 +1026,37 @@ def gate_narrowing(
             if metric in approved_metrics and (turn is None or int(row["turn"]) > turn)
         ]
         if not relevant:
-            findings.append(Finding("narrowing_approval_missing_after_diff", f"no later approval for {metric}", {"metric": metric, "diff_turn": turn}))
+            findings.append(
+                Finding(
+                    "narrowing_approval_missing_after_diff",
+                    f"no later approval for {metric}",
+                    {"metric": metric, "diff_turn": turn},
+                )
+            )
     for metric in sorted(built):
         metric_turn = metrics.get(metric, default_turn)
         if not any(
-            metric in approved_metrics and (metric_turn is None or int(row["turn"]) > metric_turn)
+            metric in approved_metrics
+            and (metric_turn is None or int(row["turn"]) > metric_turn)
             for row, approved_metrics in approvals
         ):
-            findings.append(Finding("narrowing_unapproved_metric_in_closure", f"unapproved metric survives in closure: {metric}", metric))
+            findings.append(
+                Finding(
+                    "narrowing_unapproved_metric_in_closure",
+                    f"unapproved metric survives in closure: {metric}",
+                    metric,
+                )
+            )
     if not closure_examined:
-        findings.append(Finding("narrowing_closure_not_examined", "built closure is absent"))
-    return _result("narrowing", not findings and bool(metrics), findings, examined=bool(metrics) and closure_examined)
+        findings.append(
+            Finding("narrowing_closure_not_examined", "built closure is absent")
+        )
+    return _result(
+        "narrowing",
+        not findings and bool(metrics),
+        findings,
+        examined=bool(metrics) and closure_examined,
+    )
 
 
 def _outcome_value(value: object) -> object:
@@ -929,7 +1084,11 @@ def _normalized_closure_path(value: object) -> str | None:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         return None
     path = PurePosixPath(value)
-    if path.is_absolute() or path.name != CLOSURE_DIR or any(part in {"", ".", ".."} for part in path.parts):
+    if (
+        path.is_absolute()
+        or path.name != CLOSURE_DIR
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         return None
     normalized = path.as_posix()
     return normalized if normalized == value else None
@@ -959,8 +1118,12 @@ def _review_dispatch_marker(prompt: object) -> tuple[str, int] | None:
 
     if not isinstance(prompt, str):
         return None
-    marker_lines = [line for line in prompt.splitlines() if line.startswith("NXD_REVIEW_DISPATCH")]
-    if len(marker_lines) != 1 or not marker_lines[0].startswith(_REVIEW_DISPATCH_PREFIX):
+    marker_lines = [
+        line for line in prompt.splitlines() if line.startswith("NXD_REVIEW_DISPATCH")
+    ]
+    if len(marker_lines) != 1 or not marker_lines[0].startswith(
+        _REVIEW_DISPATCH_PREFIX
+    ):
         return None
     line = marker_lines[0]
     try:
@@ -1001,7 +1164,9 @@ def _completed_review_delegation(
     content = result.get("content")
     if isinstance(content, str):
         rendered = content.strip()
-    elif isinstance(content, (Mapping, Sequence)) and not isinstance(content, (bytes, bytearray)):
+    elif isinstance(content, (Mapping, Sequence)) and not isinstance(
+        content, (bytes, bytearray)
+    ):
         rendered = json.dumps(content, default=str).strip()
         if rendered in {"{}", "[]", '""'}:
             return None
@@ -1021,9 +1186,7 @@ def _positioned_calls(
     if not isinstance(observations, Mapping):
         return ()
     turns = observations.get("turns")
-    if not isinstance(turns, Sequence) or isinstance(
-        turns, (str, bytes, bytearray)
-    ):
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
         return ()
     positioned: list[tuple[EventPosition, Mapping[str, object]]] = []
     previous_turn = 0
@@ -1046,18 +1209,213 @@ def _positioned_calls(
     return tuple(positioned)
 
 
-def _review_dispatches(observations: object) -> tuple[ReviewDispatch, ...]:
-    """Return completed marker-bearing dispatches in exact event order."""
+def _review_dispatches(
+    observations: object,
+    *,
+    closure_path: str | None = None,
+    workflow: str | None = None,
+    desktop_server_name: str = "nxd-desktop",
+) -> tuple[ReviewDispatch, ...]:
+    """Return completed reviewer dispatches in exact event order.
 
-    found: list[ReviewDispatch] = []
+    Workflow-v2 records the supervisor-owned review transition in the MCP
+    response.  A live agent may not echo the dispatch marker in its Task
+    prompt, so retain the marker path for legacy evidence and normalize only a
+    report whose response contains the corresponding review event and a
+    supervisor operation id.  The report is still paired with the indexed
+    review record and agent attestation by ``gate_construction``.
+    """
+
+    desktop_prefix = desktop_tool_prefix(desktop_server_name)
+    expected_advance = desktop_prefix + "advance_workflow"
+    expected_reset = desktop_prefix + "reset_workflow"
+    marker_found: list[ReviewDispatch] = []
+    workflow_reports: list[tuple[EventPosition, str, int, str, str]] = []
     for position, call in _positioned_calls(observations):
         name = call.get("name")
-        if not isinstance(name, str) or name.casefold() not in {"task", "agent"}:
+        if not isinstance(name, str):
             continue
-        dispatch = _completed_review_delegation(call, position)
-        if dispatch is not None:
-            found.append(dispatch)
-    return tuple(found)
+        if name.casefold() in {"task", "agent"}:
+            dispatch = _completed_review_delegation(call, position)
+            if dispatch is not None:
+                marker_found.append(dispatch)
+            continue
+        # The workflow-v2 supervisor owns these events.  In particular, the
+        # first report can have operation.status=failed when it records
+        # blocking findings; ``is_error`` is intentionally not used as a
+        # proxy for the operation state here.
+        if name.casefold() != expected_advance:
+            continue
+        arguments = call.get("arguments")
+        result = call.get("result")
+        action = arguments.get("action") if isinstance(arguments, Mapping) else None
+        parameters = action.get("parameters") if isinstance(action, Mapping) else None
+        if (
+            not isinstance(arguments, Mapping)
+            or not isinstance(result, Mapping)
+            or result.get("is_error") is not False
+            or not isinstance(action, Mapping)
+            or action.get("type") != "report_requirement"
+            or not isinstance(parameters, Mapping)
+            or parameters.get("requirement_id") != "review"
+            or (
+                workflow is not None
+                and _normalized_workflow(arguments.get("workflow")) != workflow
+            )
+        ):
+            continue
+        content = result.get("content")
+        events = content.get("events") if isinstance(content, Mapping) else None
+        operation = content.get("operation") if isinstance(content, Mapping) else None
+        generation = parameters.get("generation")
+        if not _is_int(generation) or generation < 1:
+            continue
+        if (
+            not isinstance(events, Sequence)
+            or isinstance(events, (str, bytes, bytearray))
+            or not isinstance(operation, Mapping)
+            or not isinstance(operation.get("operation_id"), str)
+            or not isinstance(operation.get("workflow"), str)
+            or operation.get("workflow") != arguments.get("workflow")
+            or operation.get("binding") is None
+            or not isinstance(operation.get("binding"), Mapping)
+            or operation["binding"].get("requirement_id") != "review"
+            or operation["binding"].get("generation") != generation
+            or operation["binding"].get("subject_sha256")
+            != parameters.get("subject_sha256")
+            or not any(
+                isinstance(event, Mapping)
+                and event.get("operation_id") == operation.get("operation_id")
+                and event.get("code")
+                in {"workflow/review_findings", "workflow/review_satisfied"}
+                for event in events
+            )
+        ):
+            continue
+        subject = parameters.get("subject_sha256")
+        if not isinstance(subject, str) or not subject.strip():
+            continue
+        event_code = next(
+            event.get("code")
+            for event in events
+            if isinstance(event, Mapping)
+            and event.get("operation_id") == operation.get("operation_id")
+            and event.get("code")
+            in {"workflow/review_findings", "workflow/review_satisfied"}
+        )
+        expected_status = (
+            "failed" if event_code == "workflow/review_findings" else "succeeded"
+        )
+        if operation.get("status") != expected_status:
+            continue
+        workflow_reports.append(
+            (position, arguments["workflow"], generation, subject, event_code)
+        )
+
+    # The report payload is caller supplied, but the matching operation/event
+    # pair is supervisor owned. A clear report can therefore complete on the
+    # first generation. Findings remain incomplete until every findings report
+    # is followed by a successful reset into the next generation and the
+    # sequence ends with a clear supervisor result.
+    workflow_reports.sort(key=lambda item: item[0])
+    workflow_resets: list[tuple[EventPosition, str, int]] = []
+    for position, call in _positioned_calls(observations):
+        name = call.get("name")
+        if not isinstance(name, str) or name.casefold() != expected_reset:
+            continue
+        args = call.get("arguments")
+        result = call.get("result")
+        if not isinstance(args, Mapping) or not isinstance(result, Mapping):
+            continue
+        reset_workflow = _normalized_workflow(args.get("workflow"))
+        if reset_workflow is None or (
+            workflow is not None and reset_workflow != workflow
+        ):
+            continue
+        if result.get("is_error") is not False:
+            continue
+        content = result.get("content")
+        operation = content.get("operation") if isinstance(content, Mapping) else None
+        events = content.get("events") if isinstance(content, Mapping) else None
+        next_actions = (
+            content.get("next_actions") if isinstance(content, Mapping) else None
+        )
+        if (
+            not isinstance(operation, Mapping)
+            or operation.get("status") != "succeeded"
+            or operation.get("workflow") != reset_workflow
+            or not isinstance(operation.get("operation_id"), str)
+            or not isinstance(events, Sequence)
+            or isinstance(events, (str, bytes, bytearray))
+            or not any(
+                isinstance(event, Mapping)
+                and event.get("operation_id") == operation.get("operation_id")
+                and event.get("code") == "workflow/reset"
+                for event in events
+            )
+            or not isinstance(next_actions, Sequence)
+            or isinstance(next_actions, (str, bytes, bytearray))
+        ):
+            continue
+        generations = {
+            action.get("generation")
+            for action in next_actions
+            if isinstance(action, Mapping)
+            and action.get("action") == "capture"
+            and _is_int(action.get("generation"))
+        }
+        if len(generations) == 1:
+            workflow_resets.append((position, reset_workflow, generations.pop()))
+
+    accepted_sequences: list[
+        tuple[tuple[EventPosition, str, int, str, str], ...]
+    ] = []
+    reports_by_workflow: dict[
+        str, list[tuple[EventPosition, str, int, str, str]]
+    ] = {}
+    for report in workflow_reports:
+        reports_by_workflow.setdefault(report[1], []).append(report)
+    for workflow_name, reports in reports_by_workflow.items():
+        accepted: list[tuple[EventPosition, str, int, str, str]] = []
+        valid = bool(reports)
+        for index, report in enumerate(reports):
+            accepted.append(report)
+            if report[4] == "workflow/review_satisfied":
+                valid = index == len(reports) - 1
+                break
+            if index + 1 >= len(reports):
+                valid = False
+                break
+            next_report = reports[index + 1]
+            matching_resets = [
+                reset
+                for reset in workflow_resets
+                if reset[1] == workflow_name
+                and report[0] < reset[0] < next_report[0]
+                and reset[2] == report[2] + 1
+            ]
+            if (
+                len(matching_resets) != 1
+                or next_report[2] != report[2] + 1
+            ):
+                valid = False
+                break
+        else:
+            valid = False
+        if valid and accepted[-1][4] == "workflow/review_satisfied":
+            accepted_sequences.append(tuple(accepted))
+
+    if marker_found:
+        return tuple(marker_found)
+    if len(accepted_sequences) == 1:
+        normalized_path = _normalized_closure_root(closure_path)
+        if normalized_path is None:
+            return ()
+        return tuple(
+            ReviewDispatch(item[0], normalized_path, index)
+            for index, item in enumerate(accepted_sequences[0])
+        )
+    return ()
 
 
 def _is_int(value: object) -> bool:
@@ -1068,6 +1426,22 @@ def _normalized_workflow(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _normalized_closure_root(value: object) -> str | None:
+    """Return a safe relative closure path, rejecting traversal and absolutes."""
+
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        return None
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or path.as_posix() != value
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or path.name != CLOSURE_DIR
+    ):
+        return None
+    return path.as_posix()
+
+
 def _normalized_definition_for_build(
     value: object, build: PublishedBuild
 ) -> str | None:
@@ -1075,7 +1449,9 @@ def _normalized_definition_for_build(
         return None
     root = Path(build.agent_root).resolve()
     candidate = Path(value)
-    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    resolved = (
+        candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    )
     try:
         relative = resolved.relative_to(root)
     except ValueError:
@@ -1107,7 +1483,11 @@ def _successful_check_positions(
         if not isinstance(action, Mapping) or action.get("type") != "start_requirement":
             continue
         parameters = action.get("parameters")
-        requirement_id = parameters.get("requirement_id") if isinstance(parameters, Mapping) else None
+        requirement_id = (
+            parameters.get("requirement_id")
+            if isinstance(parameters, Mapping)
+            else None
+        )
         if (
             not isinstance(requirement_id, str)
             or not requirement_id
@@ -1127,12 +1507,14 @@ def _successful_check_positions(
             for requirement in requirements
         )
         next_actions = content.get("next_actions")
-        run_is_next = isinstance(next_actions, Sequence) and not isinstance(
-            next_actions, (str, bytes, bytearray)
-        ) and any(
-            isinstance(next_action, Mapping)
-            and next_action.get("action") == "start_run"
-            for next_action in next_actions
+        run_is_next = (
+            isinstance(next_actions, Sequence)
+            and not isinstance(next_actions, (str, bytes, bytearray))
+            and any(
+                isinstance(next_action, Mapping)
+                and next_action.get("action") == "start_run"
+                for next_action in next_actions
+            )
         )
         if requirement_satisfied and run_is_next:
             positions.append(position)
@@ -1205,10 +1587,7 @@ def _operation_preserves_published_closure(
     ]
     if not paths:
         return False
-    normalized = [
-        _normalized_definition_for_build(path, build)
-        for path in paths
-    ]
+    normalized = [_normalized_definition_for_build(path, build) for path in paths]
     if any(path is None for path in normalized):
         return False
     return not _edit_touches_published_closure(call, build)
@@ -1245,7 +1624,9 @@ def _valid_review_round(entry: object) -> bool:
         return False
     if not (_is_int(started) and _is_int(ended) and _is_int(budget) and budget > 0):
         return False
-    assert isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int)
+    assert (
+        isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int)
+    )
     elapsed = ended - started
     if elapsed < 0:
         return False
@@ -1263,18 +1644,32 @@ def _valid_review_round(entry: object) -> bool:
     classifications_by_id: dict[str, object] = {}
     for finding in findings:
         if not isinstance(finding, Mapping) or set(finding) != {
-            "id", "claim", "evidence", "classification", "proposed_effect", "applied_files", "state"
+            "id",
+            "claim",
+            "evidence",
+            "classification",
+            "proposed_effect",
+            "applied_files",
+            "state",
         }:
             return False
         finding_id = finding.get("id")
         evidence = finding.get("evidence")
         applied_files = finding.get("applied_files")
-        if not isinstance(finding_id, str) or not finding_id or finding_id in finding_ids:
+        if (
+            not isinstance(finding_id, str)
+            or not finding_id
+            or finding_id in finding_ids
+        ):
             return False
         if not isinstance(finding.get("claim"), str) or not finding.get("claim"):
             return False
-        if not isinstance(evidence, list) or not evidence or any(
-            not isinstance(citation, str) or not citation for citation in evidence
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or any(
+                not isinstance(citation, str) or not citation for citation in evidence
+            )
         ):
             return False
         classification = finding.get("classification")
@@ -1283,7 +1678,9 @@ def _valid_review_round(entry: object) -> bool:
             or classification not in _REVIEW_CLASSIFICATIONS
         ):
             return False
-        if not isinstance(finding.get("proposed_effect"), str) or not finding.get("proposed_effect"):
+        if not isinstance(finding.get("proposed_effect"), str) or not finding.get(
+            "proposed_effect"
+        ):
             return False
         if not isinstance(applied_files, list) or any(
             not isinstance(path, str) or not path for path in applied_files
@@ -1302,18 +1699,21 @@ def _valid_review_round(entry: object) -> bool:
     dispositions_by_id: dict[str, object] = {}
     for adjudication in adjudications:
         if not isinstance(adjudication, Mapping) or set(adjudication) != {
-            "finding_id", "disposition", "citation"
+            "finding_id",
+            "disposition",
+            "citation",
         }:
             return False
         finding_id = adjudication.get("finding_id")
         disposition = adjudication.get("disposition")
         citation = adjudication.get("citation")
-        if not isinstance(finding_id, str) or not finding_id or finding_id in adjudicated_ids:
-            return False
         if (
-            not isinstance(disposition, str)
-            or disposition not in _REVIEW_DISPOSITIONS
+            not isinstance(finding_id, str)
+            or not finding_id
+            or finding_id in adjudicated_ids
         ):
+            return False
+        if not isinstance(disposition, str) or disposition not in _REVIEW_DISPOSITIONS:
             return False
         if citation is not None and (not isinstance(citation, str) or not citation):
             return False
@@ -1328,19 +1728,25 @@ def _valid_review_round(entry: object) -> bool:
     approved_ids: set[str] = set()
     if user_decision is not None:
         if not isinstance(user_decision, Mapping) or set(user_decision) != {
-            "approved_at_unix_ms", "citation", "approved_finding_ids"
+            "approved_at_unix_ms",
+            "citation",
+            "approved_finding_ids",
         }:
             return False
         approved = user_decision.get("approved_finding_ids")
         if not _is_int(user_decision.get("approved_at_unix_ms")):
             return False
-        if not isinstance(user_decision.get("citation"), str) or not user_decision.get("citation"):
+        if not isinstance(user_decision.get("citation"), str) or not user_decision.get(
+            "citation"
+        ):
             return False
         if not isinstance(approved, list) or any(
             not isinstance(finding_id, str) or not finding_id for finding_id in approved
         ):
             return False
-        if len(approved) != len(set(approved)) or not set(approved).issubset(finding_ids):
+        if len(approved) != len(set(approved)) or not set(approved).issubset(
+            finding_ids
+        ):
             return False
         approved_ids = set(approved)
 
@@ -1355,7 +1761,9 @@ def _valid_review_round(entry: object) -> bool:
     if deferred_ids and user_decision is None:
         return False
 
-    needs_user_ids = {key for key, value in states_by_id.items() if value == "needs_user"}
+    needs_user_ids = {
+        key for key, value in states_by_id.items() if value == "needs_user"
+    }
     if status != "needs_user" and needs_user_ids:
         return False
     if status == "needs_user" and user_decision is None and not needs_user_ids:
@@ -1385,7 +1793,115 @@ def _valid_review_round(entry: object) -> bool:
     return True
 
 
-def _review_round_outcome(review_rounds: object, *, closure_path: str | None = None) -> str | None:
+def _valid_workflow_review_round(entry: object) -> bool:
+    """Validate the supervisor's workflow-v2 conversation review record."""
+
+    if not isinstance(entry, Mapping):
+        return False
+    if not _is_int(entry.get("round_index")) or entry["round_index"] < 0:
+        return False
+    for key in (
+        "retained_capture_sha256",
+        "retained_blueprint_raw_sha256",
+        "blueprint_semantic_sha256",
+        "reviewer",
+    ):
+        if not isinstance(entry.get(key), str) or not entry[key].strip():
+            return False
+    claims = entry.get("claims")
+    report = entry.get("report_submitted")
+    if not isinstance(claims, list) or not isinstance(report, Mapping):
+        return False
+    if (
+        report.get("schema") != "nxd-conversation-review-v1"
+        or report.get("rejection_code") is not None
+    ):
+        return False
+    verdict = report.get("verdict")
+    if verdict not in {"findings", "clear"} or not isinstance(
+        report.get("findings"), list
+    ):
+        return False
+    claim_ids: set[str] = set()
+    for claim in claims:
+        if (
+            not isinstance(claim, Mapping)
+            or set(claim)
+            != {
+                "id",
+                "severity",
+                "claim",
+                "evidence",
+                "adjudication",
+                "adjudication_rationale",
+                "resolution",
+            }
+            or not isinstance(claim.get("id"), str)
+            or not claim["id"]
+            or claim["id"] in claim_ids
+        ):
+            return False
+        claim_ids.add(claim["id"])
+        if claim.get("severity") not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+            return False
+        if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
+            return False
+        if (
+            not isinstance(claim.get("evidence"), list)
+            or not claim["evidence"]
+            or any(not isinstance(item, str) or not item for item in claim["evidence"])
+        ):
+            return False
+        if claim.get("adjudication") not in {
+            "accepted_behavior_affecting",
+            "accepted_non_behavior_affecting",
+        }:
+            return False
+        if (
+            not isinstance(claim.get("adjudication_rationale"), str)
+            or not claim["adjudication_rationale"].strip()
+        ):
+            return False
+        if (
+            not isinstance(claim.get("resolution"), str)
+            or not claim["resolution"].strip()
+        ):
+            return False
+    report_ids = {
+        finding.get("id")
+        for finding in report["findings"]
+        if isinstance(finding, Mapping)
+        and set(finding) == {"id", "severity", "description"}
+    }
+    if (
+        len(report_ids) != len(report["findings"])
+        or report_ids != claim_ids
+        or verdict == "findings"
+        and not claim_ids
+        or verdict == "clear"
+        and claim_ids
+    ):
+        return False
+    if any(
+        not isinstance(finding.get("description"), str)
+        or not finding["description"].strip()
+        or not any(
+            claim.get("id") == finding.get("id")
+            and claim.get("claim") == finding.get("description")
+            for claim in claims
+        )
+        for finding in report["findings"]
+        if isinstance(finding, Mapping)
+    ):
+        return False
+    return isinstance(entry.get("user_decision"), str) and bool(
+        entry["user_decision"].strip()
+    )
+
+
+def _review_round_outcome(
+    review_rounds: object, *, closure_path: str | None = None
+) -> str | None:
     """Summarize a recorded adversarial-review round, if the build has one.
 
     ``build-record.json`` ``review_rounds[]`` is what the mandated flow
@@ -1400,9 +1916,13 @@ def _review_round_outcome(review_rounds: object, *, closure_path: str | None = N
             review_rounds = review_rounds.get(closure_path)
         else:
             review_rounds = review_rounds.get("review_rounds")
-    if not isinstance(review_rounds, Sequence) or isinstance(review_rounds, (str, bytes, bytearray)):
+    if not isinstance(review_rounds, Sequence) or isinstance(
+        review_rounds, (str, bytes, bytearray)
+    ):
         return None
-    valid = [str(entry["status"]) for entry in review_rounds if _valid_review_round(entry)]
+    valid = [
+        str(entry["status"]) for entry in review_rounds if _valid_review_round(entry)
+    ]
     if not valid:
         return None
     return f"{len(valid)} review round(s): {', '.join(sorted(set(valid)))}"
@@ -1414,9 +1934,7 @@ def _closure_review_rounds(
     if not isinstance(review_rounds, Mapping):
         return None
     values = review_rounds.get(closure_path)
-    if not isinstance(values, Sequence) or isinstance(
-        values, (str, bytes, bytearray)
-    ):
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
         return None
     if any(not isinstance(value, Mapping) for value in values):
         return None
@@ -1426,6 +1944,18 @@ def _closure_review_rounds(
 def _review_round_resolved(entry: Mapping[str, object]) -> bool:
     """Return whether a valid round permits the workflow to continue."""
 
+    if _valid_workflow_review_round(entry):
+        # Every v2 claim must carry an explicit accepted disposition and a
+        # non-empty resolution; a clear report has no claims to resolve.
+        return all(
+            claim.get("adjudication")
+            in {
+                "accepted_behavior_affecting",
+                "accepted_non_behavior_affecting",
+            }
+            for claim in entry["claims"]
+            if isinstance(claim, Mapping)
+        )
     if not _valid_review_round(entry):
         return False
     status = entry.get("status")
@@ -1504,7 +2034,12 @@ def gate_construction(
 
     build = published_closure if isinstance(published_closure, PublishedBuild) else None
     positioned_calls = _positioned_calls(observations)
-    dispatches = _review_dispatches(observations)
+    dispatches = _review_dispatches(
+        observations,
+        closure_path=build.closure_path if build is not None else None,
+        workflow=build.workflow if build is not None else None,
+        desktop_server_name=desktop_server_name,
+    )
     review_attestations = tuple(
         value
         for value in attestation_values
@@ -1520,6 +2055,14 @@ def gate_construction(
             dispatch
             for dispatch in dispatches
             if dispatch.closure_path == build.closure_path
+            # Workflow-v2 reviewer prompts use the closure-relative marker
+            # ``closure`` while the harness normalizes the captured build to
+            # its job-relative path.  The indexed attestation below remains
+            # the binding evidence; this only normalizes that path spelling.
+            or (
+                dispatch.closure_path == CLOSURE_DIR
+                and PurePosixPath(build.closure_path).name == CLOSURE_DIR
+            )
         )
         closure_dispatches = tuple(
             dispatch
@@ -1527,7 +2070,8 @@ def gate_construction(
             if dispatch.position < build.position
         )
         valid_rounds = rounds is not None and all(
-            _valid_review_round(round_) for round_ in rounds
+            _valid_review_round(round_) or _valid_workflow_review_round(round_)
+            for round_ in rounds
         )
         expected_indices = tuple(range(len(rounds or ())))
         dispatch_by_index = {
@@ -1548,9 +2092,8 @@ def gate_construction(
             and len(review_attestations) == len(rounds)
             and len(attestations_by_index) == len(rounds)
             and tuple(sorted(attestations_by_index)) == expected_indices
-            and tuple(
-                dispatch.review_round_index for dispatch in closure_dispatches
-            ) == expected_indices
+            and tuple(dispatch.review_round_index for dispatch in closure_dispatches)
+            == expected_indices
         )
         if paired and rounds is not None:
             for index, _round in enumerate(rounds):
@@ -1640,7 +2183,9 @@ def gate_construction_claims(ledger: object, seeded_defects: object = None) -> o
     adversarial-review result required for claim adjudication.
     """
 
-    from dp_scenarios.reviewer.gate import gate_construction_claims as reviewer_gate_construction_claims
+    from dp_scenarios.reviewer.gate import (
+        gate_construction_claims as reviewer_gate_construction_claims,
+    )
 
     return reviewer_gate_construction_claims(ledger, seeded_defects)
 
@@ -1651,7 +2196,16 @@ def gate_honesty(ledger_path: str | Path, supervisor_facts: object) -> LintRepor
     try:
         return ledger_lint(ledger_path, supervisor_facts=supervisor_facts)  # type: ignore[arg-type]
     except (OSError, TypeError, ValueError) as exc:
-        return LintReport(False, [LintFinding("ledger_not_examined", 1, str(exc) or "ledger or supervisor facts could not be examined")])
+        return LintReport(
+            False,
+            [
+                LintFinding(
+                    "ledger_not_examined",
+                    1,
+                    str(exc) or "ledger or supervisor facts could not be examined",
+                )
+            ],
+        )
 
 
 def _mapping_artifact(value: object) -> Mapping[str, object]:
@@ -1665,7 +2219,9 @@ def _mapping_artifact(value: object) -> Mapping[str, object]:
         }
     if isinstance(value, Mapping):
         nested = value.get("records", value.get("supervisor", value))
-        if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes, bytearray)):
+        if isinstance(nested, Sequence) and not isinstance(
+            nested, (str, bytes, bytearray)
+        ):
             nested = nested[-1] if nested else {}
         if not isinstance(nested, Mapping):
             return {}
@@ -1679,7 +2235,9 @@ def _mapping_artifact(value: object) -> Mapping[str, object]:
     return {}
 
 
-def gate_build(supervisor_records: object, row_count_oracle: object = None) -> GateResult:
+def gate_build(
+    supervisor_records: object, row_count_oracle: object = None
+) -> GateResult:
     """build: a release was published, and the supervisor owns its identity.
 
     ``row_count_oracle`` is accepted and ignored.  It used to be compared, model
@@ -1722,7 +2280,13 @@ def gate_build(supervisor_records: object, row_count_oracle: object = None) -> G
         # is the opposite case: it clears the ledger's non-empty check while
         # identifying nothing.
         if value is None or (isinstance(value, str) and not value.strip()):
-            findings.append(Finding("build_supervisor_identifier_missing", f"supervisor field is absent: {field}", field))
+            findings.append(
+                Finding(
+                    "build_supervisor_identifier_missing",
+                    f"supervisor field is absent: {field}",
+                    field,
+                )
+            )
     # Examined means the harness read supervisor facts, not that a comparison
     # happened.  Keying it off the counts would make an absent release
     # not-examined rather than failing, and a required gate that reads
@@ -1733,10 +2297,22 @@ def gate_build(supervisor_records: object, row_count_oracle: object = None) -> G
 def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bool]:
     if isinstance(value, Mapping):
         rows = value.get("rows", value.get("query_rows", value.get("result")))
-        if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
-            return None, bool(value.get("abstained", False)), bool(value.get("errored", False))
-        return [dict(row) for row in rows], bool(value.get("abstained", False)), bool(value.get("errored", False))
-    if not isinstance(value, list) or any(not isinstance(row, Mapping) for row in value):
+        if not isinstance(rows, list) or any(
+            not isinstance(row, Mapping) for row in rows
+        ):
+            return (
+                None,
+                bool(value.get("abstained", False)),
+                bool(value.get("errored", False)),
+            )
+        return (
+            [dict(row) for row in rows],
+            bool(value.get("abstained", False)),
+            bool(value.get("errored", False)),
+        )
+    if not isinstance(value, list) or any(
+        not isinstance(row, Mapping) for row in value
+    ):
         return None, False, False
     return [dict(row) for row in value], False, False
 
@@ -1789,7 +2365,9 @@ def _query_candidates(
             raw_rows = raw_entry.get("rows")
         else:
             raw_rows = None
-        if not isinstance(raw_rows, list) or any(not isinstance(row, Mapping) for row in raw_rows):
+        if not isinstance(raw_rows, list) or any(
+            not isinstance(row, Mapping) for row in raw_rows
+        ):
             return latest_rows, (
                 Finding(
                     "query_history_ignored",
@@ -1846,7 +2424,18 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
 
     actual_rows, abstained, errored = _query_rows(actual)
     if actual_rows is None:
-        return _result("query", False, [Finding("query_actual_not_examined", "actual query rows are absent or unreadable")], examined=False, required=required)
+        return _result(
+            "query",
+            False,
+            [
+                Finding(
+                    "query_actual_not_examined",
+                    "actual query rows are absent or unreadable",
+                )
+            ],
+            examined=False,
+            required=required,
+        )
     if hasattr(gold, "rows"):
         gold_rows = getattr(gold, "rows")
     elif hasattr(gold, "value"):
@@ -1857,7 +2446,13 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
     else:
         gold_rows = gold
     if not isinstance(gold_rows, list):
-        return _result("query", False, [Finding("query_gold_not_examined", "gold row-set is absent")], examined=False, required=required)
+        return _result(
+            "query",
+            False,
+            [Finding("query_gold_not_examined", "gold row-set is absent")],
+            examined=False,
+            required=required,
+        )
     # Set-mode is intentional for distinct-key aggregates; the row-count
     # pairing still catches fan-out that duplicates rows without changing values.
     candidate, diagnostics = _query_candidates(actual, actual_rows, gold_rows)
@@ -1869,7 +2464,13 @@ def gate_query(actual: object, gold: object, *, required: bool = True) -> GateRe
         return _result(
             "query",
             False,
-            [Finding("query_query_rows_differ", f"deterministic EX verdict was {verdict}", verdict)],
+            [
+                Finding(
+                    "query_query_rows_differ",
+                    f"deterministic EX verdict was {verdict}",
+                    verdict,
+                )
+            ],
             diagnostics=diagnostics,
         )
     return _result("query", True, diagnostics=diagnostics)
@@ -1884,22 +2485,87 @@ def gate_follow_up(check: object) -> GateResult:
     """
 
     if check is None:
-        return _result("follow-up", False, [Finding("follow_up_check_not_examined", "scenario supplied no planted check")], examined=False, required=False)
+        return _result(
+            "follow-up",
+            False,
+            [
+                Finding(
+                    "follow_up_check_not_examined", "scenario supplied no planted check"
+                )
+            ],
+            examined=False,
+            required=False,
+        )
     value = check() if callable(check) else check
     if isinstance(value, GateResult):
         passed = value.passed and not value.findings
-        return GateResult("follow-up", passed, GATE_POINTS["follow-up"] if passed else 0, value.findings, value.examined, value.ungraded, value.required)
+        return GateResult(
+            "follow-up",
+            passed,
+            GATE_POINTS["follow-up"] if passed else 0,
+            value.findings,
+            value.examined,
+            value.ungraded,
+            value.required,
+        )
     if isinstance(value, Mapping):
         status = value.get("status")
         if status == "not-examined":
-            return _result("follow-up", False, [Finding("follow_up_check_not_examined", "planted check did not fire")], examined=False, required=False)
+            return _result(
+                "follow-up",
+                False,
+                [Finding("follow_up_check_not_examined", "planted check did not fire")],
+                examined=False,
+                required=False,
+            )
         if status == "ungraded":
-            return _result("follow-up", False, [Finding("follow_up_check_ungraded", "planted check fired without a measurable result")], examined=False, ungraded=True)
+            return _result(
+                "follow-up",
+                False,
+                [
+                    Finding(
+                        "follow_up_check_ungraded",
+                        "planted check fired without a measurable result",
+                    )
+                ],
+                examined=False,
+                ungraded=True,
+            )
         passed = bool(value.get("passed", value.get("pass", False)))
-        return _result("follow-up", passed, () if passed else [Finding("follow_up_planted_check_failed", "scenario planted check failed")])
+        return _result(
+            "follow-up",
+            passed,
+            ()
+            if passed
+            else [
+                Finding(
+                    "follow_up_planted_check_failed", "scenario planted check failed"
+                )
+            ],
+        )
     if isinstance(value, bool):
-        return _result("follow-up", value, () if value else [Finding("follow_up_planted_check_failed", "scenario planted check failed")])
-    return _result("follow-up", False, [Finding("follow_up_check_not_examined", "planted check has no recognized result")], examined=False, ungraded=True)
+        return _result(
+            "follow-up",
+            value,
+            ()
+            if value
+            else [
+                Finding(
+                    "follow_up_planted_check_failed", "scenario planted check failed"
+                )
+            ],
+        )
+    return _result(
+        "follow-up",
+        False,
+        [
+            Finding(
+                "follow_up_check_not_examined", "planted check has no recognized result"
+            )
+        ],
+        examined=False,
+        ungraded=True,
+    )
 
 
 intake_intake = gate_intake
@@ -1915,7 +2581,9 @@ def _legacy_gate(result: GateResult, key: str) -> GateResult:
     """Return a canonical gate result under its former T0 identity."""
 
     canonical = LEGACY_GATE_ALIASES[key]
-    old_prefix = key[0].lower() + key[1] if key.startswith("G") else key.split("_", 1)[0]
+    old_prefix = (
+        key[0].lower() + key[1] if key.startswith("G") else key.split("_", 1)[0]
+    )
     canonical_prefix = canonical.replace("-", "_")
     findings = tuple(
         Finding(
@@ -1927,7 +2595,15 @@ def _legacy_gate(result: GateResult, key: str) -> GateResult:
         )
         for finding in result.findings
     )
-    return GateResult(key if key.startswith("G") else old_prefix.upper(), result.passed, result.points, findings, result.examined, result.ungraded, result.required)
+    return GateResult(
+        key if key.startswith("G") else old_prefix.upper(),
+        result.passed,
+        result.points,
+        findings,
+        result.examined,
+        result.ungraded,
+        result.required,
+    )
 
 
 def g1_intake(
@@ -1941,7 +2617,9 @@ def g1_intake(
     )
 
 
-def g2_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
+def g2_capability(
+    spec: object, capability: object, *, required: bool = True
+) -> GateResult:
     return _legacy_gate(gate_capability(spec, capability, required=required), "G2")
 
 
@@ -1952,7 +2630,9 @@ def g3_narrowing(
     *,
     required: bool = True,
 ) -> GateResult:
-    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure, required=required), "G3")
+    return _legacy_gate(
+        gate_narrowing(spec_diff, ledger, closure, required=required), "G3"
+    )
 
 
 def g4_construction(ledger: object) -> GateResult:

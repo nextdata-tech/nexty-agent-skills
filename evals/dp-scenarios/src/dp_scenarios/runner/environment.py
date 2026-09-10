@@ -627,6 +627,7 @@ class RunEnvironment:
     desktop_session_root: Path | None = None
     live_cwd: Path | None = None
     allow_host_home: bool = False
+    staged_job_helper_dir: Path | None = None
     knobs: SupervisorKnobs = field(default_factory=SupervisorKnobs.off)
     attempt: int = 1
     _temporary: tempfile.TemporaryDirectory[str] | None = field(default=None, init=False, repr=False)
@@ -656,6 +657,13 @@ class RunEnvironment:
 
         if self._temporary is not None:
             return self
+        if self.staged_job_helper_dir is not None:
+            helper = self.staged_job_helper_dir.expanduser().resolve()
+            if not helper.is_dir():
+                raise EnvironmentError(
+                    f"staged nxd-run-job-loop helper directory is unavailable: {helper}"
+                )
+            self.staged_job_helper_dir = helper
         parent = str(self.root.expanduser().resolve()) if self.root is not None else None
         if parent is not None and not Path(parent).is_dir():
             raise EnvironmentError(f"environment root is not a directory: {parent}")
@@ -778,6 +786,15 @@ class RunEnvironment:
                     environment={
                         **self.agent_environment,
                         **dict(self.live_environment or {}),
+                        # This value is resolved and validated from the exact
+                        # staged plugin by the local runner. Apply it last so
+                        # an incidental live-environment override cannot send
+                        # the agent back to a host-cached helper.
+                        **(
+                            {"NXD_JOB_HELPER_DIR": str(self.staged_job_helper_dir)}
+                            if self.staged_job_helper_dir is not None
+                            else {}
+                        ),
                     },
                     cwd=self.live_cwd or (base / "agent"),
                     server_command=self.supervisor_command,
@@ -1082,6 +1099,8 @@ class RunEnvironment:
             values["NXD_EVAL_SOURCE_URL"] = self._mock_source.server.data_url
         if self._source_profile_path is not None:
             values["NXD_EVAL_SOURCE_PROFILE"] = str(self._source_profile_path)
+        if self.staged_job_helper_dir is not None:
+            values["NXD_JOB_HELPER_DIR"] = str(self.staged_job_helper_dir)
         return MappingProxyType(values)
 
     @property

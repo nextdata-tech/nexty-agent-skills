@@ -516,6 +516,21 @@ def test_openai_key_never_reaches_the_agent_environment(
     assert "OPENAI_API_KEY" not in environment_module._SESSION_ENVIRONMENT_ALLOWLIST
 
 
+def test_staged_job_helper_dir_is_reserved_in_the_agent_environment(tmp_path: Path) -> None:
+    helper = tmp_path / "staged" / "src" / "nxd-run-job-loop"
+    helper.mkdir(parents=True)
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        staged_job_helper_dir=helper,
+        live_environment={"NXD_JOB_HELPER_DIR": "/host/cache/old-helper"},
+    ) as environment:
+        values = environment.agent_environment
+
+    assert values["NXD_JOB_HELPER_DIR"] == str(helper.resolve())
+
+
 def test_pinned_driver_fields_default_to_a_scripted_operator() -> None:
     scripted = pins()
 
