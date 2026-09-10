@@ -23,15 +23,14 @@ an installed copy as below. The resolver only discovers installed copies; it
 does not create or edit Claude app state.
 
 ```bash
-if [ -n "${NXD_JOB_HELPER_DIR:-}" ]; then
-  JOB_HELPER_DIR="$(python3 - "$NXD_JOB_HELPER_DIR" <<'PY'
+JOB_HELPER_DIR="$(python3 - "$HOME" "$PWD" "${NXD_JOB_HELPER_DIR:-}" <<'PY'
 from pathlib import Path
 import json
 import re
 import sys
 
-root = Path(sys.argv[1]).expanduser().resolve()
-plugin = root.parent.parent
+home, cwd = map(Path, sys.argv[1:3])
+injected = sys.argv[3].strip()
 required = (
     "SKILL.md",
     "scripts/dp_diagnostics.py",
@@ -41,34 +40,32 @@ required = (
     "scripts/self_check.py",
     "scripts/validate_dp_spec.py",
 )
-try:
-    root.relative_to(plugin)
-except ValueError as exc:
-    raise SystemExit("NXD_JOB_HELPER_DIR is outside its plugin root") from exc
-manifest_path = plugin / ".claude-plugin" / "plugin.json"
-try:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-    raise SystemExit("NXD_JOB_HELPER_DIR has no readable plugin manifest") from exc
-version = manifest.get("version") if isinstance(manifest, dict) else None
-if not isinstance(version, str) or not version.strip():
-    raise SystemExit("NXD_JOB_HELPER_DIR plugin manifest has no version")
-missing = [relative for relative in required if not (root / relative).is_file()]
-if missing:
-    raise SystemExit("NXD_JOB_HELPER_DIR is incomplete: " + ", ".join(missing))
-skill_text = (root / "SKILL.md").read_text(encoding="utf-8")
-match = re.search(r"(?ms)^metadata:\s*$.*?^\s+version:\s*([^\s#]+)\s*$", skill_text)
-if match is None or match.group(1).strip("\"'") != version:
-    raise SystemExit("NXD_JOB_HELPER_DIR skill version does not match its plugin manifest")
-print(root)
-PY
-)"
-else
-  JOB_HELPER_DIR="$(python3 - "$HOME" "$PWD" <<'PY'
-from pathlib import Path
-import sys
 
-home, cwd = map(Path, sys.argv[1:])
+if injected:
+    root = Path(injected).expanduser().resolve()
+    plugin = root.parent.parent
+    try:
+        root.relative_to(plugin)
+    except ValueError as exc:
+        raise SystemExit("NXD_JOB_HELPER_DIR is outside its plugin root") from exc
+    manifest_path = plugin / ".claude-plugin" / "plugin.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("NXD_JOB_HELPER_DIR has no readable plugin manifest") from exc
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        raise SystemExit("NXD_JOB_HELPER_DIR plugin manifest has no version")
+    missing = [relative for relative in required if not (root / relative).is_file()]
+    if missing:
+        raise SystemExit("NXD_JOB_HELPER_DIR is incomplete: " + ", ".join(missing))
+    skill_text = (root / "SKILL.md").read_text(encoding="utf-8")
+    match = re.search(r"(?ms)^metadata:\s*$.*?^\s+version:\s*([^\s#]+)\s*$", skill_text)
+    if match is None or match.group(1).strip("\"'") != version:
+        raise SystemExit("NXD_JOB_HELPER_DIR skill version does not match its plugin manifest")
+    print(root)
+    raise SystemExit(0)
+
 roots = [home / ".claude" / "skills" / "nxd-run-job-loop"]
 roots += [parent / ".claude" / "skills" / "nxd-run-job-loop" for parent in (cwd, *cwd.parents)]
 plugins = home / ".claude" / "plugins"
@@ -130,7 +127,6 @@ else:
     )
 PY
 )"
-fi
 test -n "$JOB_HELPER_DIR"
 ```
 
