@@ -172,12 +172,15 @@ expensive profiling on every bounce:
 1. **Profile subagent (Step 2, read-only).** Dispatch a built-in read-only
    subagent for a **file** source (CSV/JSON/JSONL/Parquet), giving it only the
    source path and the `nxd-build-semantic-data-product` inference instructions. It
-   profiles each source into `schema.json`, derives the semantic model, and —
+   profiles each source into `schema.json`, derives the semantic model into the
+   data-only `semantic-model-plan.json` handoff beside `dp-blueprint.md`, and —
    crucially — surfaces any way the source data makes the user's supplied
    procedure ambiguous or under-determined. It returns the inferred model, the
    per-source schemas (each with its label), and a `gap_found` field naming any
-   policy gap the profile exposed. It writes no closure, does not transform the
-   source, and asks the user nothing. A live database/API source is profiled on
+   policy gap the profile exposed. It writes no closure and specifically never
+   writes `models.py`, `spec.py`, `transform/`, or `requirements.txt`; it does
+   not invoke the generator, transform the source, or ask the user anything. A
+   live database/API source is profiled on
    the main thread or from the user's description only (table/endpoint list,
    sample shape) — never fan out a profile that would need a live credential to
    connect (same credential boundary as generation, below).

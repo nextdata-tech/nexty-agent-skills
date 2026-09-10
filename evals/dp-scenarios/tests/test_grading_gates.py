@@ -209,10 +209,17 @@ def test_intake_still_catches_closure_authoring_before_approval() -> None:
     assert result.points == 0
 
 
-def _workflow_v2_intake(*, quote: str = "Approved.", include_prepare: bool = True) -> dict[str, object]:
+def _workflow_v2_intake(
+    *,
+    quote: str = "Approved.",
+    include_prepare: bool = True,
+    desktop_server_name: str = "nxd-desktop",
+    decision_response_workflow: str | None = "workflow",
+) -> dict[str, object]:
+    tool_prefix = f"mcp__{desktop_server_name}__"
     prepare_calls = [
         {
-            "name": "mcp__nxd-desktop__prepare_workflow",
+            "name": f"{tool_prefix}prepare_workflow",
             "arguments": {"workflow": "workflow", "blueprint_path": "dp-blueprint.md"},
             "result": {"is_error": False, "content": {"workflow": "workflow"}},
         }
@@ -235,7 +242,7 @@ def _workflow_v2_intake(*, quote: str = "Approved.", include_prepare: bool = Tru
                     "files_touched": [{"path": "closure/spec.py"}],
                     "tool_calls": [
                         {
-                            "name": "mcp__nxd-desktop__advance_workflow",
+                            "name": f"{tool_prefix}advance_workflow",
                             "arguments": {
                                 "workflow": "workflow",
                                 "action": {
@@ -243,7 +250,14 @@ def _workflow_v2_intake(*, quote: str = "Approved.", include_prepare: bool = Tru
                                     "parameters": {"approved": True, "quote": quote},
                                 },
                             },
-                            "result": {"is_error": False, "content": {"workflow": "workflow"}},
+                            "result": {
+                                "is_error": False,
+                                "content": (
+                                    {"workflow": decision_response_workflow}
+                                    if decision_response_workflow is not None
+                                    else {}
+                                ),
+                            },
                         }
                     ],
                 },
@@ -252,7 +266,7 @@ def _workflow_v2_intake(*, quote: str = "Approved.", include_prepare: bool = Tru
                     "files_touched": [],
                     "tool_calls": [
                         {
-                            "name": "mcp__nxd-desktop__advance_workflow",
+                            "name": f"{tool_prefix}advance_workflow",
                             "arguments": {
                                 "workflow": "workflow",
                                 "action": {
@@ -284,6 +298,29 @@ def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval(
     decision["result"]["content"]["workflow"] = "other-workflow"
     result = gate_intake(wrong_workflow)
     assert "intake_workflow_approval_not_relayed" in result.codes
+
+    wrong_decision_response = gate_intake(
+        _workflow_v2_intake(decision_response_workflow="other-workflow")
+    )
+    assert "intake_workflow_approval_not_relayed" in wrong_decision_response.codes
+
+    missing_decision_workflow = gate_intake(
+        _workflow_v2_intake(decision_response_workflow=None)
+    )
+    assert "intake_workflow_approval_not_relayed" in missing_decision_workflow.codes
+
+    malformed_decision_response = _workflow_v2_intake()
+    malformed_decision = malformed_decision_response["observations"]["turns"][1][
+        "tool_calls"
+    ][0]
+    malformed_decision["result"]["content"] = ["not", "a", "mapping"]
+    malformed = gate_intake(malformed_decision_response)
+    assert "intake_workflow_approval_not_relayed" in malformed.codes
+
+
+def test_intake_uses_the_configured_desktop_server_name() -> None:
+    ledger = _workflow_v2_intake(desktop_server_name="desktop-under-test")
+    assert gate_intake(ledger, desktop_server_name="desktop-under-test").passed
 
 
 def test_intake_codegen_inference_ignores_non_authoring_observations() -> None:

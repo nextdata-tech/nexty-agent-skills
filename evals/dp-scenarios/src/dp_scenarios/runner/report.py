@@ -110,7 +110,13 @@ def human_summary(result: TierResult) -> str:
         "Efficiency is reported only and never contributes points.",
         "",
         f"Canary: {result.canary.verdict.outcome} (blocking={result.canary.blocking})",
+        f"Canary legacy build: {result.canary.legacy_build_status}",
     ]
+    if result.canary.legacy_build_status == "deferred_to_workflow_v2":
+        lines.append(
+            "Canary legacy build was deferred to workflow-v2 scenario execution; "
+            "it was not passed. Each scenario must provide its construction and publication gates."
+        )
     if result.canary.verdict.issues:
         lines.append("Canary findings:")
         for issue in result.canary.verdict.issues:

@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.48.0
+  version: 0.49.0
 ---
 
 # nxd-generate-data-product skill
@@ -447,7 +447,7 @@ discipline, and `build-record.json` is **generated, never hand-authored**: outco
 and never go back into the IR. Neither replaces the machine-enforced surfaces:
 rulings still land as data (`nxd_decisions`, carrying both `status` and `provenance`) and the Step-3b asserts still run.
 
-### Step 6b — Adversarial review, BEFORE the self-check (MANDATORY when `nxd-review-closure` is installed)
+### Step 6b — Defer adversarial review to the job loop after capture
 
 Under workflow v2, do not dispatch the reviewer here. Continue through Step 7 so every local self-check/build-record mutation finishes, then return the closure to the owning `nxd-run-job-loop`. It captures the immutable tree and dispatches exactly one built-in read-only reviewer per capture generation over the supervisor-provided retained capture and retained blueprint paths. The activated contract makes this review mandatory; there is no complexity-based skip or mutable-path duplicate.
 The main thread preserves the rich claim ledger outside the captured closure, reports its bounded projection through `report_requirement`, and resets, corrects, rechecks, recaptures, and re-reviews after an accepted change. Exact ordering and wire shapes are in `nxd-run-job-loop/reference/workflow-v2.md`; dispatch, sanitization, claim relay, and authorization remain governed by [reference/adversarial-review.md](reference/adversarial-review.md).

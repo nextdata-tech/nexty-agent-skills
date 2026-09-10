@@ -505,7 +505,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = TierRunner(
             scenarios,
             pins=pins,
-            canary=lambda: run_drift_canary(CANARY_ROOT, skills_root=skill_pack_root / "src", supervisor=supervisor),
+            canary=lambda: run_drift_canary(
+                CANARY_ROOT,
+                skills_root=skill_pack_root / "src",
+                supervisor=supervisor,
+                defer_legacy_build=True,
+            ),
             session_factory=session_factory,
             environment_root=report_dir,
             evidence_root=report_dir / "evidence",

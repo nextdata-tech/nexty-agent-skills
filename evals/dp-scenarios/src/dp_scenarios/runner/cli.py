@@ -283,6 +283,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
 
         def canary() -> CanaryResult:
+            if args.mode == "live":
+                return run_drift_canary(
+                    args.canary_dir,
+                    skills_root=args.skills_root,
+                    supervisor=args.supervisor,
+                    defer_legacy_build=True,
+                )
             return run_drift_canary(
                 args.canary_dir,
                 skills_root=args.skills_root,

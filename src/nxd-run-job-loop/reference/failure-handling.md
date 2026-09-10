@@ -164,7 +164,7 @@ steps below do not describe enrolled v2 construction.
    matching the exception text. If no operation or run identity is available,
    say that; do not substitute the outer error string for the diagnostic you
    could not read.
-3. **Preserve the artifact.** Keep the failing closure and its diagnostic. They
+4. **Preserve the artifact.** Keep the failing closure and its diagnostic. They
    are the evidence for the report, and re-running destroys the state that
    explains the failure.
 

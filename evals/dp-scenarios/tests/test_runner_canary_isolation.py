@@ -129,3 +129,47 @@ def test_the_report_names_the_package_beside_the_invocation_it_actually_ran(
     assert result.probe.closure != str(CANARY_ROOT)
     assert Path(result.probe.closure).name == CANARY_ROOT.name
     assert all(closure != CANARY_ROOT for closure in stubbed_supervisor)
+
+
+def test_workflow_v2_canary_defers_legacy_build_but_keeps_claims_and_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracted: list[Path] = []
+
+    def fake_preflight(closure: Path, **kwargs: object) -> ProbeResult:
+        del kwargs
+        return ProbeResult("supervisor", str(closure), ("supervisor",), 0, {"probe_id": "kitchen-sink"}, "", "")
+
+    def refuse_build(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("workflow-v2 canary must not call legacy run_build")
+
+    monkeypatch.setattr(tier_module, "run_preflight", fake_preflight)
+    monkeypatch.setattr(tier_module, "run_build", refuse_build)
+    monkeypatch.setattr(
+        tier_module,
+        "extract_claims",
+        lambda root, **_kwargs: (extracted.append(Path(root)) or SimpleNamespace(drift=(), advisories=())),
+    )
+    monkeypatch.setattr(
+        tier_module,
+        "aggregate_verdict",
+        lambda *_args, **_kwargs: Verdict("clean", (), ()),
+    )
+
+    result = run_drift_canary(
+        CANARY_ROOT,
+        skills_root=CANARY_ROOT,
+        defer_legacy_build=True,
+    )
+
+    assert result.build is None
+    assert result.legacy_build_status == "deferred_to_workflow_v2"
+    assert extracted == [CANARY_ROOT]
+    assert result.probe is not None
+
+
+def test_regular_canary_performs_legacy_build(stubbed_supervisor: list[Path]) -> None:
+    result = run_drift_canary(CANARY_ROOT, skills_root=CANARY_ROOT)
+
+    assert result.legacy_build_status == "performed"
+    assert result.build is not None

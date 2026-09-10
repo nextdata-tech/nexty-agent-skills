@@ -230,8 +230,12 @@ def _authored_closure(files: object) -> bool:
     return False
 
 
-def gate_intake(ledger: object) -> GateResult:
-    """intake: require approval strictly before the first code-generation row."""
+def gate_intake(
+    ledger: object,
+    *,
+    desktop_server_name: str = "nxd-desktop",
+) -> GateResult:
+    """Require approval no later than codegen and bind v2 publication to it."""
 
     rows = _rows(ledger)
     if not rows:
@@ -274,8 +278,9 @@ def gate_intake(ledger: object) -> GateResult:
     if isinstance(ledger, Mapping):
         observations = ledger.get("observations")
         positioned = _positioned_calls(observations)
-        advance_name = "mcp__nxd-desktop__advance_workflow"
-        prepare_name = "mcp__nxd-desktop__prepare_workflow"
+        desktop_prefix = f"mcp__{desktop_server_name.strip().casefold()}__"
+        advance_name = f"{desktop_prefix}advance_workflow"
+        prepare_name = f"{desktop_prefix}prepare_workflow"
 
         def successful(call: Mapping[str, object]) -> bool:
             result = call.get("result")
@@ -337,6 +342,7 @@ def gate_intake(ledger: object) -> GateResult:
                 action = arguments.get("action") if isinstance(arguments, Mapping) else None
                 parameters = action.get("parameters") if isinstance(action, Mapping) else None
                 workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+                result = call.get("result")
                 content = result.get("content") if isinstance(result, Mapping) else None
                 if (
                     not isinstance(parameters, Mapping)
@@ -1542,7 +1548,6 @@ def gate_construction(
         )
         if paired and rounds is not None:
             for index, _round in enumerate(rounds):
-                dispatch = dispatch_by_index[index]
                 attestation = attestations_by_index[index]
                 job_path = PurePosixPath(build.closure_path).parent
                 review_path = (job_path / "review-record.json").as_posix()
@@ -1919,8 +1924,15 @@ def _legacy_gate(result: GateResult, key: str) -> GateResult:
     return GateResult(key if key.startswith("G") else old_prefix.upper(), result.passed, result.points, findings, result.examined, result.ungraded, result.required)
 
 
-def g1_intake(ledger: object) -> GateResult:
-    return _legacy_gate(gate_intake(ledger), "G1")
+def g1_intake(
+    ledger: object,
+    *,
+    desktop_server_name: str = "nxd-desktop",
+) -> GateResult:
+    return _legacy_gate(
+        gate_intake(ledger, desktop_server_name=desktop_server_name),
+        "G1",
+    )
 
 
 def g2_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:

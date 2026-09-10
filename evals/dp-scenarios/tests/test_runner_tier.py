@@ -801,6 +801,42 @@ def test_blocking_canary_returns_before_any_scenario_transport_is_constructed() 
     assert result.blocked_reason[0]["code"] == "code"
 
 
+def test_workflow_v2_canary_deferral_does_not_waive_scenario_build_gates(tmp_path: Path) -> None:
+    base = make_scenario("workflow-v2-build-required", turns=3)
+    scenario = NoPlantScenario(
+        id=base.id,
+        tier=base.tier,
+        fixture=base.fixture,
+        turn_budget=base.turn_budget,
+        script=base.script,
+        epochs=base.epochs,
+        repeatability_tier=base.repeatability_tier,
+        package_dir=base.package_dir,
+        gates=base.gates,
+    )
+    deferred = CanaryResult(
+        Verdict("clean", (), ()),
+        claims_hash="claims-1",
+        legacy_build_status="deferred_to_workflow_v2",
+    )
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=deferred,
+        replay_recordings={scenario.id: recording_for(scenario, responses_for(scenario))},
+        workflow_activation_bundle=tmp_path / "workflow-activation.json",
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert result.verdict == "failed"
+    assert run.score.gates["construction"].required is True
+    assert run.score.gates["construction"].passed is False
+    assert run.score.gates["build"].required is True
+    assert run.score.gates["build"].passed is False
+    assert "build_supervisor_identifier_missing" in run.score.gates["build"].codes
+
+
 def test_tier_retains_a_digestable_evidence_bundle_and_replay_status(tmp_path: Path) -> None:
     scenario = make_scenario("bundle")
     recording = recording_for(scenario, responses_for(scenario))

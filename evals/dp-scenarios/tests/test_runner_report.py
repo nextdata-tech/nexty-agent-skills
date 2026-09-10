@@ -115,6 +115,23 @@ def test_canary_block_report_contains_claim_code_and_line(tmp_path: Path) -> Non
     assert "Scenarios: none ran" in summary
 
 
+def test_report_surfaces_workflow_v2_canary_build_deferral() -> None:
+    canary = CanaryResult(
+        Verdict("clean", (), ()),
+        claims_hash="claims-1",
+        legacy_build_status="deferred_to_workflow_v2",
+    )
+    result = TierRunner([], pins=pins(), canary=canary).run()
+
+    document = machine_report(result)
+    summary = human_summary(result)
+
+    assert document["canary"]["legacy_build_status"] == "deferred_to_workflow_v2"
+    assert "Canary legacy build: deferred_to_workflow_v2" in summary
+    assert "legacy build was deferred to workflow-v2 scenario execution" in summary
+    assert "it was not passed" in summary
+
+
 def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
     claims_path = Path(__file__).parents[1] / "scenarios/drift-canary/claims.json"
     expected = load_claims(claims_path).baseline.approves_claims_hash

@@ -246,7 +246,10 @@ DP_INTERRUPTED_TERMINAL_STATES = frozenset({
 DP_ERROR_SCORE_STATES = frozenset({"automatic zero", "invalid", "ungraded"})
 CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 DP_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:-]*$")
-DP_CANARY_FIELDS = frozenset({"verdict", "claims_hash", "probe", "build", "package"})
+DP_CANARY_FIELDS = frozenset({
+    "verdict", "claims_hash", "probe", "build", "package", "legacy_build_status",
+})
+DP_CANARY_REQUIRED_FIELDS = DP_CANARY_FIELDS - {"legacy_build_status"}
 DP_CANARY_VERDICT_FIELDS = frozenset({
     "outcome", "blocking", "observed_codes", "issues", "advisories",
 })
@@ -1239,9 +1242,15 @@ def _validate_supervisor_report(value: Any, path: str) -> None:
 
 
 def _validate_canary(value: Any, path: str) -> None:
-    raw = _exact_keys(value, DP_CANARY_FIELDS, path, required=DP_CANARY_FIELDS)
+    raw = _exact_keys(value, DP_CANARY_FIELDS, path, required=DP_CANARY_REQUIRED_FIELDS)
     _nullable_hash(raw["claims_hash"], f"{path}.claims_hash")
     _nullable_text(raw["package"], f"{path}.package")
+    if "legacy_build_status" in raw:
+        _enum(
+            raw["legacy_build_status"],
+            {"not_attempted", "performed", "provided", "deferred_to_workflow_v2"},
+            f"{path}.legacy_build_status",
+        )
     verdict = _exact_keys(raw["verdict"], DP_CANARY_VERDICT_FIELDS, f"{path}.verdict",
                           required=DP_CANARY_VERDICT_FIELDS)
     _enum(verdict["outcome"], {"clean", "drift", "blocked"}, f"{path}.verdict.outcome")

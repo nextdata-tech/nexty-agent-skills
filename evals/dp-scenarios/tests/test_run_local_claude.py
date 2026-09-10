@@ -132,10 +132,17 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
         captured["scenario_root"] = path
         return original_load_scenarios(path)
 
-    def fake_canary(canary_root: Path, *, skills_root: Path, supervisor: Path):
+    def fake_canary(
+        canary_root: Path,
+        *,
+        skills_root: Path,
+        supervisor: Path,
+        defer_legacy_build: bool,
+    ):
         captured["canary_root"] = canary_root
         captured["canary_skills_root"] = skills_root
         captured["canary_supervisor"] = supervisor
+        captured["canary_defer_legacy_build"] = defer_legacy_build
         return SimpleNamespace(verdict="clean")
 
     class FakeTierRunner:
@@ -173,6 +180,7 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     assert captured["scenario_root"] == module.SCENARIO_ROOT
     assert captured["canary_root"] == module.CANARY_ROOT
     assert captured["canary_skills_root"] == skill_root / "src"
+    assert captured["canary_defer_legacy_build"] is True
     assert captured["staged_plugin_manifest"]["version"] == "selected-version"
     assert captured["staged_skill"] == "selected\n"
     command = captured["live_command"]

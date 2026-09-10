@@ -2,7 +2,7 @@
 id: 2026-09-09-workflow-v2-construction-contract
 date: 2026-09-09
 label: "supervisor v2 admission path in the job loop and generator"
-plugin_version: 0.48.0
+plugin_version: 0.49.0
 status: NO_EVAL
 scenarios: []
 record: null
@@ -21,7 +21,7 @@ no-legacy, review-relay, admission, and reset tests.
 
 ## Evidence
 
-- `evals/tests/test_workflow_v2_job_loop_contract.py` — thirteen deterministic tests
+- `evals/tests/test_workflow_v2_job_loop_contract.py` — deterministic tests
   over the shipped skill/reference text.
 - `src/nxd-run-job-loop/reference/workflow-v2.md` — the v2 construction
   sequence and bounded review-report contract.

@@ -953,12 +953,14 @@ letting a reader assume otherwise.
   The *existence* of a concession and its `code` are checkable; the account of
   it is not.
 - **Supervisor tracebacks now have a producer; per-attempt identity does not.**
-  `mcp__nxd-desktop__inspect_run`, called once with the failed `run_id`, returns
-  a `run.stdout_tail` carrying the verbatim, path-redacted traceback from inside
-  the user transform — enough to fill `supervisor_detail` with
-  `origin: "supervisor_reported"`, quoting that payload and naming
-  `tool:inspect_run.run.stdout_tail` as its path. See
-  [failure-handling.md](failure-handling.md) § After a failed build.
+  In workflow v2, call `mcp__nxd-desktop__inspect_workflow` once with the failed
+  workflow and current operation or requirement identity; its bounded diagnostic
+  can fill `supervisor_detail` with `origin: "supervisor_reported"` and a
+  `tool:inspect_workflow.operation` path. In a feature-off or non-enrolled
+  compatibility runtime only, `mcp__nxd-desktop__inspect_run` with the failed
+  `run_id` supplies `run.stdout_tail` and the matching
+  `tool:inspect_run.run.stdout_tail` path. See [failure-handling.md](failure-handling.md)
+  § After a failed supervisor operation: inspect once, then classify.
   **Per-attempt supervisor identity is still `origin: "unbound"`**, as is stage
   attribution: the supervisor emits no `code`/`stage`/`severity`/`owner`, so the
   stage remains an agent inference over supervisor-authored evidence. Those

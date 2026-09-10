@@ -16,6 +16,14 @@ SRC = REPO_ROOT / "src"
 JOB_LOOP = REPO_ROOT / "src" / "nxd-run-job-loop"
 JOB_SKILL = JOB_LOOP / "SKILL.md"
 GENERATOR_SKILL = REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md"
+SEMANTIC_SKILL = REPO_ROOT / "src" / "nxd-build-semantic-data-product" / "SKILL.md"
+LOCAL_INFERENCE = (
+    REPO_ROOT
+    / "src"
+    / "nxd-build-semantic-data-product"
+    / "reference"
+    / "local-inference-handoff.md"
+)
 REVIEW_SKILL = REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md"
 WORKFLOW_V2 = JOB_LOOP / "reference" / "workflow-v2.md"
 SCHEDULING = JOB_LOOP / "reference" / "scheduling.md"
@@ -92,6 +100,41 @@ def test_executable_job_loop_matches_v2_order_and_has_one_mandatory_review():
     assert "mutable closure" in checkpoint
     assert "review-record.json" in checkpoint
     assert "reset, local correction, self-check, recapture" in checkpoint
+
+
+def test_local_inference_is_data_only_until_supervisor_consent():
+    """The shared semantic skill must not turn inference into early codegen."""
+    semantic = " ".join(SEMANTIC_SKILL.read_text(encoding="utf-8").split())
+    assert "reference/local-inference-handoff.md" in semantic
+    local_flow = " ".join(LOCAL_INFERENCE.read_text(encoding="utf-8").split())
+    for marker in (
+        "`schema.json`",
+        "`semantic-model-plan.json`",
+        "never under `closure/`",
+        "Stop after returning those two inference artifacts",
+        "Do not create or edit `models.py`, `spec.py`, `transform/`, `requirements.txt`",
+        "successful supervisor `session_decision`",
+    ):
+        assert marker in local_flow, f"local inference boundary lost: {marker}"
+
+    job_loop = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    inference = job_loop[job_loop.index("### Step 2") : job_loop.index("### Step 3")]
+    for marker in (
+        "`semantic-model-plan.json`",
+        "outside `closure/`",
+        "must not create or edit `models.py`, `spec.py`",
+        "must not invoke the generator",
+    ):
+        assert marker in inference, f"job-loop inference boundary lost: {marker}"
+
+
+def test_generator_is_dispatched_only_after_successful_session_decision():
+    text = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    prepared = text.index("Do not present an approval prompt or ask for approval until `prepare_workflow` succeeds")
+    consent = text.index("successful returned `session_decision` action is the generation gate", prepared)
+    generation = text.index("Invoke **nxd-generate-data-product**", consent)
+    capture = text.index("returned `capture` action", generation)
+    assert prepared < consent < generation < capture
 
 
 def test_v2_path_has_no_legacy_construction_fallback():

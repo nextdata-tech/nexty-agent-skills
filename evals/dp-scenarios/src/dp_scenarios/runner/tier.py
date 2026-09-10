@@ -105,7 +105,13 @@ class RunBudgets:
 
 @dataclass(frozen=True, slots=True)
 class CanaryResult:
-    """Canary probe, build, and probe-scoped verdict."""
+    """Canary probe, legacy build status, and probe-scoped verdict.
+
+    A workflow-v2 live run still needs the canary's trusted ``check`` and
+    skill-claim extraction, but its scenario is the executable construction
+    and publication proof.  ``legacy_build_status`` keeps that distinction
+    explicit when the old create/build probe is intentionally not run.
+    """
 
     verdict: Verdict
     claims_hash: str | None = None
@@ -117,6 +123,9 @@ class CanaryResult:
     #: time anyone reads the report; this is the identifier that is stable
     #: across runs and reconcilable with the repo.
     package: str | None = None
+    #: ``deferred_to_workflow_v2`` means no legacy canary create was attempted;
+    #: the scenario must provide the construction/publication evidence instead.
+    legacy_build_status: str = "not_attempted"
 
     @property
     def blocking(self) -> bool:
@@ -137,6 +146,7 @@ class CanaryResult:
             "build": serial(self.build),
             "wall_clock_seconds": self.wall_clock_seconds,
             "package": self.package,
+            "legacy_build_status": self.legacy_build_status,
         }
 
 
@@ -398,8 +408,15 @@ def run_drift_canary(
     claims_path: str | Path | None = None,
     probe: ProbeResult | Mapping[str, object] | None = None,
     build: BuildResult | Mapping[str, object] | None = None,
+    defer_legacy_build: bool = False,
 ) -> CanaryResult:
-    """Run or consume the drift-canary probe and aggregate its exact claim verdict."""
+    """Run or consume the drift-canary probe and aggregate its exact claim verdict.
+
+    ``defer_legacy_build`` is an explicit workflow-v2 live-mode signal.  It
+    skips only the legacy canary ``run_build`` step; preflight and claim
+    extraction still run, and scenario workflow-v2 gates remain responsible
+    for construction and publication evidence.
+    """
 
     started = time.monotonic()
     root = Path(canary_dir).expanduser().resolve()
@@ -467,18 +484,29 @@ def run_drift_canary(
                 verdict.advisories,
             )
         built = build
+        legacy_build_status = "not_attempted"
         if built is None and not verdict.blocking:
             if isinstance(probed, ProbeResult):
-                if temporary_data is None:
-                    temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
-                built = run_build(
-                    closure,
-                    supervisor=probed.supervisor,
-                    data_dir=Path(temporary_data.name),
-                    workflow="drift-canary",
-                )
+                if defer_legacy_build:
+                    # The supervisor's strict workflow-v2 contract rejects
+                    # legacy create invocations.  Preflight remains valuable
+                    # evidence, while construction and publication are proved
+                    # by each workflow-v2 scenario below.
+                    legacy_build_status = "deferred_to_workflow_v2"
+                else:
+                    if temporary_data is None:
+                        temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
+                    built = run_build(
+                        closure,
+                        supervisor=probed.supervisor,
+                        data_dir=Path(temporary_data.name),
+                        workflow="drift-canary",
+                    )
+                    legacy_build_status = "performed"
             else:
                 raise TierError("a live canary build is required when no replay build was supplied")
+        elif built is not None:
+            legacy_build_status = "provided"
         if isinstance(built, Mapping):
             if "returncode" not in built:
                 raise TierError("replayed canary build has no mandatory returncode")
@@ -501,6 +529,7 @@ def run_drift_canary(
             build=built,
             wall_clock_seconds=time.monotonic() - started,
             package=str(root),
+            legacy_build_status=legacy_build_status,
         )
     finally:
         if temporary_data is not None:
@@ -2180,7 +2209,10 @@ class TierRunner:
                 findings=construction.findings + attestation_read.findings,
             )
         gates: dict[str, GateResult] = {
-            "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
+            "intake": gate_intake(
+                {"rows": read_ledger(environment.ledger_path), "observations": observations},
+                desktop_server_name=environment.desktop_server_name,
+            ),
             "capability": _capability_gate_result(
                 artifact_root, spec, capability, environment, scenario
             ),

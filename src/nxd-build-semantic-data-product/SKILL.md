@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.48.0
+  version: 0.49.0
 ---
 
 # nxd-build-semantic-data-product skill
@@ -46,12 +46,10 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 >   Snowflake/warehouse output, split-pod k8s `.semantic_tools()`, a deploy step.
 >   The workflow/credential/deploy/consume sections below assume this flow.
 > - **Local end-to-end flow:** the AI generates AND runs the DP locally on a
->   desktop supervisor — a **different shape** (local DuckDB port, dlt-in-transform,
->   local Python executor) owned by **nxd-generate-data-product**. Use this skill only for the
->   shared part: profile and infer public semantic roles **with their descriptions
->   and PII flags**, then hand off. The generator PLACES what it receives — a
->   description you don't infer here is one no later step adds. The
->   generator translates them to the public DSL; do not write private metadata.
+>   desktop supervisor — a **different shape** owned by
+>   **nxd-generate-data-product**. Follow the data-only boundary in
+>   [reference/local-inference-handoff.md](reference/local-inference-handoff.md),
+>   then stop and return its complete inference handoff to the owning job loop.
 >   **Do NOT
 >   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
 
@@ -87,8 +85,9 @@ Interview the user or read the table DDL to establish, per source table:
 ### Step 1-alt — Infer from a profiled source + the user's questions
 
 When there is **no schema doc** — only a materialized sample of the source and the
-user's natural-language questions — derive the Step-1 vocabulary yourself. Steps
-2–4 (models.py / transform.py / spec.py) are then **unchanged**.
+user's natural-language questions — derive the Step-1 vocabulary yourself. In
+the platform flow, Steps 2–4 (models.py / transform.py / spec.py) are unchanged.
+In the local end-to-end flow, follow the linked handoff and stop before codegen.
 
 **1. Profile the materialized tables → `schema.json`.** A sample load (e.g. dlt)
 lands each source table as `main.<name>` in a local DuckDB file. Read

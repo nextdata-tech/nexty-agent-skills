@@ -13,7 +13,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.48.0
+  version: 0.49.0
 ---
 
 # nxd-run-job-loop skill
@@ -191,7 +191,14 @@ each source into `schema.json`, then derive the semantic model — grains,
 dimensions, metrics, joins, PII, **and a description on every model, dimension
 and metric** (Step 5 reads them to map questions) — from the profile(s), the
 user's questions, and the spec's `models:` plan. With 2+ sources profile each
-separately, carrying labels forward. That skill owns the role grammar.
+separately, carrying labels forward. That skill owns the role grammar. For this
+local flow its complete output is `schema.json` plus
+`semantic-model-plan.json`, both beside `dp-blueprint.md` and outside
+`closure/`. This step must not create or edit `models.py`, `spec.py`,
+`transform/`, `requirements.txt`, or any other generated closure surface, and
+must not invoke the generator. Treat any executable closure write from the
+inference step as a failed handoff: remove that unapproved generated output and
+repeat inference within this boundary.
 
 ### Step 3 — Enroll, approve, then generate the runnable closure
 
@@ -200,12 +207,15 @@ supervisor's v2 execution capability and enroll this exact prose blueprint:
 call `get_workflow_capabilities`, require structured `execution_enabled: true`,
 then call `prepare_workflow` against the host-visible `dp-blueprint.md`. Use
 only its returned revision, invalidation epoch, requirement identities and
-`next_actions`. Present the prepared echo-back and relay the user's exact
+`next_actions`. Do not present an approval prompt or ask for approval until
+`prepare_workflow` succeeds. Then present the prepared echo-back and relay the user's exact
 approval through the returned `session_decision` action. A capability blocker or
 failed prepare/consent action stops construction; it does not route to a legacy
 tool or a local substitute.
 
-Invoke **nxd-generate-data-product** through its **Step 7** self-check: assemble
+The successful returned `session_decision` action is the generation gate.
+Invoke **nxd-generate-data-product** through its **Step 7** self-check only
+after that gate succeeds, to assemble
 the complete Python-authored closure — `spec.py`, `models.py`, `infra-profile.yaml`,
 `transform/main.py`, `requirements.txt`, the approved-plan snapshot,
 `build-record.json`, `README.md`, and the connector artifact — from the approved
