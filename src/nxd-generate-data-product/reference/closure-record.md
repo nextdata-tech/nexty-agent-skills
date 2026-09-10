@@ -18,12 +18,19 @@ needs the plan too — a cold reader, an export handoff or a later session has o
 the closure — but it must never *depend on a file outside itself* to get it. So
 at generation time, **after** approval, the approved spec is copied in and hashed.
 
+For a new local construction, generation is not admission. When the connected
+desktop runtime advertises workflow-v2 execution, the owning job loop must use
+`get_workflow_capabilities` → `prepare_workflow` → consent → capture → retained
+review → `start_requirement` → `start_run` as described in
+`nxd-run-job-loop/reference/workflow-v2.md`. A generated closure or a local
+self-check cannot bypass that sequence.
+
 | file | what it is | written by |
 |---|---|---|
 | `dp-blueprint.approved.md` | byte-identical copy of the approved `dp-blueprint.md` | `cp` / `shutil.copyfile` |
 | `dp-blueprint.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | `dp_diagnostics.py lock write` |
 | `dp-blueprint.lock.json` | its canonical hash, snapshot hash, and compiler version | `dp_diagnostics.py lock write` |
-| `build-record.json` | what happened: stages, review rounds, attempts, concessions, blockers | `dp_diagnostics.py record …` |
+| `build-record.json` | what happened: stages, attempts, concessions, blockers | `dp_diagnostics.py record …` |
 | `README.md` | the reopen recipe, and a credentials block when one is needed | this skill, from the template below |
 | `contracts/<name>.md` | the contract for a model still to be built | this skill, from the template below |
 
@@ -98,10 +105,12 @@ live IR.
 
 From here the record is **generated, never hand-authored**.
 `self_check.py --record build-record.json` merges its own stages; the loop
-appends the build, serve, run, publish and query stages as they happen; and every
-heal, regenerate, remap and retry appends to `attempts[]` *before* the re-run.
-Every adversarial review instead appends its claims, adjudications and user
-decisions to `review_rounds[]` before any authorized mutation.
+appends the supervisor's validation, run, publication and query stages as they
+happen; and every heal, regenerate, remap and retry appends to `attempts[]`
+*before* the re-run. Under workflow v2, adversarial review claims,
+adjudications and user decisions belong in the adjacent job-level
+`review-record.json`, never in the captured closure's record; see
+`nxd-run-job-loop/reference/build-record.md`.
 There is no section for you to fill in, and no prose to keep in sync — which is
 the whole point: the outcomes are a pure product of the build, so nobody should
 be transcribing them.
@@ -130,6 +139,13 @@ The plan this closure was built from is `dp-blueprint.approved.md`, bound by
 Reattach first. A rebuild is the fallback, taken only when the published
 artifact is genuinely gone.
 
+For an enrolled workflow on a runtime with workflow-v2 execution enabled, use
+the returned v2 actions and never call `build_data_product` for new
+construction. The legacy rebuild shown below is compatibility-only for an
+explicitly feature-off or non-enrolled runtime. If a new construction is
+v2-capable but a capability or enrollment check fails, stop and report that
+blocker rather than bypassing capture and review.
+
 For a multi-source CSV/file closure that uses directory companion declarations,
 use a desktop supervisor with directory-companion support before step 1. Do not
 fall back to an undeclared export root.
@@ -138,7 +154,8 @@ fall back to an undeclared export root.
    `available`?
 2. `resume_data_product(workflow="<workflow-id>")` — reattaches to the published
    artifact in seconds and returns a fresh endpoint and bearer, with no rebuild.
-   Fallback, only on `collected` / `artifact_unavailable`:
+   In a feature-off/non-enrolled compatibility runtime, fallback only on
+   `collected` / `artifact_unavailable`:
    `build_data_product(definition="<abs path to this dir>", workflow="<workflow-id>")`
    — a full rebuild, sound because this closure is deterministic and embeds its
    source.

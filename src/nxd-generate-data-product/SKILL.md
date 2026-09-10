@@ -51,15 +51,15 @@ endpoint over it.
 
 ## The closure layout
 
-Choose and normalize one absolute `<dp-root>` — the exact directory passed to the desktop supervisor — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`.
-Never place credentials, `SENSITIVE`, `.gitignore`, or the profile beside/above `<dp-root>`; split artifacts must be consolidated first. Use this same root for self-check, lock, and build.
+Choose and normalize one absolute `<dp-root>` — the exact directory submitted through the supervisor's returned `capture` action — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`.
+Never place credentials, `SENSITIVE`, `.gitignore`, or the profile beside/above `<dp-root>`; split artifacts must be consolidated first. Use this same root for capture, self-check, and lock verification.
 
 The author emits **Python and prerequisite config only**:
 
 ```
 …/nxd-jobs/<workflow>/
 ├── dp-blueprint.md              # the approved IR — INPUT, outside the closure. Never emitted here.
-└── closure/                     # <dp-root>: what build_data_product receives
+└── closure/                     # <dp-root>: what the v2 capture action receives
     ├── spec.py                  # generated closure wiring: models + transform + output port
     ├── models.py                # semantic models + placed semantic roles
     ├── infra-profile.yaml       # the desktop-local profile: duckdb + python-compute + csv-source
@@ -110,10 +110,9 @@ keys.
 
 ## Workflow
 
+When the connected desktop supervisor advertises v2 execution, the owning job-loop must use its capability-gated construction sequence in the nxd-run-job-loop skill's `reference/workflow-v2.md`: call `get_workflow_capabilities` and `prepare_workflow`, relay `session_decision` exactly, capture and review retained paths, report through `report_requirement`, and follow `next_actions` through admitted `start_run`. This skill never supplies a legacy construction fallback.
 The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value; if it is absent, return to nxd-run-job-loop — never reconstruct it from the closure or this skill's cwd.
-
 **Selective-install dependency:** this skill needs **nxd-run-job-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-data-product` alone is not a supported substitute for that handoff.
-
 ### Step 1 — Collect the inputs
 
 - **The approved `dp-blueprint.md`** is the primary input when one exists — the
@@ -450,7 +449,8 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and `provena
 
 ### Step 6b — Adversarial review, BEFORE the self-check (MANDATORY when `nxd-review-closure` is installed)
 
-**Explicitly dispatch one built-in read-only reviewer** — never a custom/plugin agent definition — with the normalized closure path and verbatim request content under the `sanitized_original_request` contract, preserving every question/procedure while replacing every known user-designated or non-public credential with a named placeholder; if complete sanitization cannot be established, do not delegate and stop. Include exactly one marker line: `NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}`; substitute only `closure_path` and `review_round_index`, keep every other key/value unchanged, and add no colon, slug or prose prefix. Tell the reviewer to return claims only; no credential may reach it, and it never edits, builds, serves, transforms or talks to the user. The dispatcher enforces 120 seconds, then records every returned claim (or terminal `timed_out` round) in `build-record.json` `review_rounds[]` and adjudicates it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs; adjudication is not authorization to mutate the closure. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. **Skip only** a closure with no derived models, no judgement calls and a single question; that writes no round, and `skipped` is not a review status. Contract: [reference/adversarial-review.md](reference/adversarial-review.md), including the authorization rules.
+Under workflow v2, do not dispatch the reviewer here. Continue through Step 7 so every local self-check/build-record mutation finishes, then return the closure to the owning `nxd-run-job-loop`. It captures the immutable tree and dispatches exactly one built-in read-only reviewer per capture generation over the supervisor-provided retained capture and retained blueprint paths. The activated contract makes this review mandatory; there is no complexity-based skip or mutable-path duplicate.
+The main thread preserves the rich claim ledger outside the captured closure, reports its bounded projection through `report_requirement`, and resets, corrects, rechecks, recaptures, and re-reviews after an accepted change. Exact ordering and wire shapes are in `nxd-run-job-loop/reference/workflow-v2.md`; dispatch, sanitization, claim relay, and authorization remain governed by [reference/adversarial-review.md](reference/adversarial-review.md).
 ### Step 7 — Self-check before handing off (MANDATORY)
 The closure-root self-check is the generator's record gate, distinct from the supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
 

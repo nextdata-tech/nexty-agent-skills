@@ -26,15 +26,12 @@ Neither is a structural defect. Both are wrong answers.
 
 ## When to dispatch
 
-After the closure is authored and its derived models carry their asserts
-(Step 3b), **before** Step 7. Reviewing before the self-check means a fix does
-not invalidate a green self-check; reviewing after it would force a second run.
-
-Do not dispatch for a closure with no derived models, no judgement calls, and a
-single question — there is nothing for it to find and it still costs a full
-round. That means no `review_rounds[]` entry is created; **`skipped` is not a
-review status**. The only statuses are `complete`, `timed_out`, and
-`needs_user`.
+Under workflow v2, dispatch after Step 7 has finished every mutable self-check
+and record write and after the supervisor has captured the closure. Run one
+review for each capture generation over the supervisor-provided retained paths.
+The activated contract makes the review mandatory; there is no complexity-based
+skip. A behavior-changing fix resets capture and requires a fresh review of the
+new generation. The statuses are `complete`, `timed_out`, and `needs_user`.
 
 ## Dispatching
 
@@ -78,7 +75,7 @@ builds, serves, runs the transform, or starts a user conversation.
 
 The dispatcher starts a **120000 ms elapsed-time deadline** at dispatch; this
 is never a cap on findings. At the deadline it persists one terminal
-`review_rounds[]` entry with `status: timed_out`, `budget_ms: 120000`, elapsed
+external `review-record.json` entry with `status: timed_out`, `budget_ms: 120000`, elapsed
 time, and every partial claim received by then — no delayed collection and no
 finding-count cap. Adjudicate and relay those partial claims normally. If the
 client cannot cancel or collect the child at the deadline, still persist that
@@ -142,9 +139,11 @@ because it looks settled.
 
 ## Land the adjudication
 
-Record the round in `build-record.json` `review_rounds[]`, not `attempts[]`:
-deadline and elapsed time, completeness/status, every original claim,
-adjudication, classification, user decision, proposed effect and applied files.
+Record the round in the job-level `review-record.json` outside the captured
+closure, under schema `nxd-conversation-review-ledger-v1`, the workflow id, and
+append-only `review_rounds[]`: deadline and elapsed time, completeness/status,
+every original claim, adjudication, classification, user decision, proposed
+effect and applied files. Never mutate the captured closure with review output.
 Also record `deferred_finding_ids`: it is empty unless the cited user decision
 explicitly continues while leaving accepted behavior-affecting findings
 unapplied, in which case it names those finding IDs exactly.
@@ -162,7 +161,7 @@ The marker is a declaration of the sanitization contract, not proof that the
 delegated request was faithful or credential-free. Number each dispatch from
 zero in array order. The live attestation for that review carries the same
 `review_round_index` and uses the exact evidence reference
-`<normalized-closure>/build-record.json#review_rounds/<review_round_index>`;
+`<normalized-job>/review-record.json#review_rounds/<review_round_index>`;
 it does not need a `turn` field. If an older recording carries `turn`, it is
 informational only: chronology comes from the harness-observed dispatch,
 self-check, and build events. Treat the round as observed only when that

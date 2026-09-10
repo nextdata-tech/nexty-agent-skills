@@ -117,16 +117,17 @@ def test_scheduling_pins_reference_scoping():
     ), "scheduling.md must scope each subagent's loaded references to the work at hand"
 
 
-def test_skill_wires_subagent_and_verify_before_build():
+def test_skill_wires_subagent_and_verify_before_capture():
     text = _strip_markdown(SKILL.read_text())
-    # SKILL.md Step 3 offers the generation subagent and Step 4 verifies host-side.
+    # SKILL.md Step 3 offers the generation subagent and verifies its path before
+    # the supervisor captures the immutable review/validation input.
     # Collapse whitespace so a line-wrapped "generation\nsubagent" still matches.
     collapsed = re.sub(r"\s+", " ", text)
     assert "generation subagent" in collapsed, (
         "SKILL.md must offer the generation subagent in Step 3"
     )
-    assert "verify" in text and "host" in text and "before build" in text, (
-        "SKILL.md Step 4 must verify the returned path host-side before building"
+    assert "verify" in text and "host" in text and "before capture" in text, (
+        "SKILL.md must verify the returned path host-side before v2 capture"
     )
     # The safety invariant is present: subagent never owns the policy turn / holds a credential.
     assert "never owns the policy turn and never holds a credential" in text, (
@@ -134,44 +135,42 @@ def test_skill_wires_subagent_and_verify_before_build():
     )
 
 
-def test_job_loop_declares_reviewer_tools_and_orders_review_before_build():
+def test_job_loop_declares_reviewer_tools_and_orders_review_before_admission():
     raw = SKILL.read_text()
     text = _strip_markdown(raw)
     assert "  - Agent" in raw and "  - Task" in raw
-    assert raw.index("### Step 3b — Review") < raw.index("### Step 4 — Build")
-    assert "refuse check/build" in text
-    assert all(
-        phrase in text
-        for phrase in ("no derived models", "no judgement calls", "exactly one question")
-    )
-    assert "original request verbatim" in text
-    assert "return claims only" in text
-    assert "relay every claim" in text
-    assert "required user decision" in text
+    assert raw.index("### Step 3b — Capture, review") < raw.index("### Step 4 — Build")
+    checkpoint = text[text.index("### step 3b") : text.index("### step 4")]
+    assert "exactly one" in checkpoint and "mandatory" in checkpoint
+    assert "there is no skip" in checkpoint
+    assert "retained" in checkpoint and "reviewinput" in checkpoint
+    assert "reportrequirement" in checkpoint
 
 
-def test_offloaded_generation_cannot_self_check_before_main_thread_review():
+def test_offloaded_generation_returns_for_host_self_check_before_capture_and_review():
     raw = SCHEDULING.read_text()
     generation = raw.index("3. **Generate subagent")
-    awaiting = raw.index('status: "awaiting_review"', generation)
+    awaiting = raw.index('status: "awaiting_host_finalize"', generation)
+    self_check = raw.index("runs generator Step 7", generation)
+    capture = raw.index("only then captures", generation)
     review = raw.index("## Main-thread review checkpoint")
-    self_check = raw.index("Then run generator Step 7 self-check", review)
-    assert generation < awaiting < review < self_check
-    assert "does **not** dispatch the" in raw[generation:review]
+    assert generation < awaiting < self_check < capture < review
+    assert "does **not** dispatch" in raw[generation:review]
 
 
 def test_build_record_review_round_example_is_strict_json_and_validated():
     section = BUILD_RECORD.read_text().split(
-        "## `review_rounds[]` — review claims and user decisions", 1
+        "## Where conversation review lives", 1
     )[1].split("## `attempts[]` — the part that makes claims checkable", 1)[0]
     match = re.search(
-        r"```json\n(?P<payload>\{\n  \"review_rounds\": \[\n.*?\n  \]\n\}\n)```",
+        r"```json\n(?P<payload>\{\n  \"schema\": \"nxd-conversation-review-ledger-v1\",\n"
+        r"  \"workflow\": .*?\n  \"review_rounds\": \[\n.*?\n  \]\n\}\n)```",
         section,
         flags=re.DOTALL,
     )
     assert match, "build-record.md must contain the anchored strict JSON example"
     document = json.loads(match.group("payload"))
-    assert set(document) == {"review_rounds"}
+    assert set(document) == {"schema", "workflow", "review_rounds"}
     assert len(document["review_rounds"]) == 1
     assert validate_review_round(document["review_rounds"][0]) == []
 
@@ -319,11 +318,10 @@ def test_adversarial_review_is_builtin_claims_only_dispatch():
     skill = _strip_markdown(GENERATE_DP.read_text())
     reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
     # Step 6b is the entry contract; the reference supplies the full handoff.
-    assert "explicitly dispatch one built-in read-only reviewer" in skill
-    assert "never a custom/plugin agent definition" in skill
-    assert "closure path and verbatim request" in skill
-    assert "return claims only" in skill
-    assert all(word in skill for word in ("never edits", "builds", "serves", "transforms", "talks to the user"))
+    assert "dispatches exactly one built-in read-only reviewer" in skill
+    assert "supervisor-provided retained capture" in skill
+    assert "reportrequirement" in skill
+    assert "reference/adversarial-review.md" in skill
     assert "one built-in read-only subagent" in reference
     assert "the closure path" in reference and "original request, verbatim" in reference
     assert "return claims only" in reference
@@ -332,15 +330,11 @@ def test_adversarial_review_is_builtin_claims_only_dispatch():
 
 def test_adversarial_deadline_records_partial_claims_without_a_finding_cap():
     reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
-    record = _strip_markdown(BUILD_RECORD.read_text())
     collapsed = re.sub(r"\s+", " ", reference)
     assert "120000 ms elapsed-time deadline" in reference
     assert "status: timedout" in reference and "budgetms: 120000" in reference
     assert "every partial claim received by then" in collapsed
     assert "no finding-count cap" in collapsed
     assert "client cannot cancel or collect" in collapsed and "stop the workflow as needsuser" in collapsed
-    # `skipped` was never a legal review round status. Non-eligibility is no
-    # dispatch, while a dispatched entry is complete/timed_out/needs_user.
-    assert "skipped is not a review status" in collapsed
-    assert "complete, timedout, or needsuser" in record
-    assert "never skipped" in record
+    assert "no complexity-based skip" in collapsed
+    assert "complete, timedout, and needsuser" in collapsed
