@@ -1,6 +1,6 @@
 # Nexty desktop user guide
 
-**For analysts working in Claude Desktop or Claude Cowork.**
+**For analysts working in Claude Cowork.**
 
 Nexty Desktop builds a data product from an analysis you already do by hand. You connect a source, work through the definitions with Claude until the numbers are right, then package that as something you can query again later.
 
