@@ -112,12 +112,14 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-19 of 37 public scenarios. The remaining 18 declare `ci_skip` in their
+18 of 37 public scenarios. The remaining 19 declare `ci_skip` in their
 `checks.json`. Fifteen need a Tier 2 or Tier 3 install; two are gated on the agent
-backend; and one requires an operator-provided source-isolation wrapper:
+backend; one requires an operator-provided source-isolation wrapper; and one
+is temporarily excluded for an operator-approved demo exception:
 
 | Scenario | Needs |
 |---|---|
+| `multi-source-labeled-roots` | investigation of a confirmed regression; restore automatic coverage on 2026-09-11 |
 | `authenticated-api-source-supervisor` | local desktop supervisor (Tier 3) |
 | `pharma-cross-dp-mesh-query` | semantic MCP server (Tier 2) |
 | `pharma-mesh-query-hard` | semantic MCP server (Tier 2) |

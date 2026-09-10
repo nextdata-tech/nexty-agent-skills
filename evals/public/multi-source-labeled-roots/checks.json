@@ -1,5 +1,6 @@
 {
   "name": "Generate a multi-source labeled CSV closure",
+  "ci_skip": "Temporary demo-release exception approved by the operator on 2026-09-10: confirmed regression tracked in https://github.com/nextdata-tech/nexty-agent-skills/issues/257; investigate and restore automatic coverage on 2026-09-11. This scenario remains runnable explicitly.",
   "skills": ["nxd-generate-data-product"],
   "workspace_files": [
     "companion-files",
