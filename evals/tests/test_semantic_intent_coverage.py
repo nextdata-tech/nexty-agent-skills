@@ -1,22 +1,9 @@
-"""The describe-every-model coverage rule must ship in the skill AND be graded.
+"""The shared intent gate and both query adapters must carry the contract.
 
-The intent-gate change (SKILL.md §6d/§6f) is behavioral: the agent must call
-``describe_model`` on every model in the agreed scope, deciding relevance from
-each response rather than from names/grains first. Two things have to hold, and
-they fail independently:
-
-* **The rule ships.** ``src/nxd-query-data-product/SKILL.md`` must carry it —
-  §6d step 2 requiring `describe_model` on EVERY model, and §6f's gate opening
-  with a coverage step. These assertions are the carrying evidence for the
-  `NO_EVAL` benchmark entry: reverting the instruction turns them red without
-  touching anything under ``evals/``.
-* **The scenario can catch a regression.** The graded checks and fixture must
-  carry the rule too, or an agent that skips models still scores green.
-
-The scope carve-out is asserted on both sides: §6d lets a large catalog be
-narrowed by domain, so §6f step 0 must speak of the *agreed scope* rather than
-demanding the full ``list_models`` set unconditionally — otherwise an agent that
-correctly narrows under §6d fails the gate that §6d feeds.
+The deployed semantic-intent scenario remains the behavioral coverage, while
+these tests guard the source-level seams that could otherwise silently drift:
+the platform adapter's complete model-description rule, the shared four-part
+gate, the desktop adaptation, and the scenario's package membership.
 """
 
 from __future__ import annotations
@@ -30,8 +17,20 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 EVALS_DIR = REPO / "evals"
-SKILL = REPO / "src" / "nxd-query-data-product" / "SKILL.md"
+PLATFORM_SKILL = REPO / "src" / "nxd-query-data-product" / "SKILL.md"
+DESKTOP_SKILL = REPO / "src" / "nxd-run-job-loop" / "SKILL.md"
+SHARED_SKILL = REPO / "src" / "nxd-semantic-query-intent" / "SKILL.md"
+SHARED_REFERENCE = SHARED_SKILL.parent / "reference" / "semantic-intent-validation.md"
 SCENARIO = EVALS_DIR / "public" / "semantic-intent-validation"
+SEMANTIC_QUERY_SCENARIOS = {
+    "authenticated-api-source-supervisor",
+    "job-loop-export-handoff",
+    "job-loop-serve-query-refine",
+    "optional-empty-output-aggregate-desktop",
+    "pharma-cross-dp-mesh-query",
+    "pharma-mesh-query-hard",
+    "pharma-mesh-query-loop",
+}
 
 
 @pytest.fixture(scope="module")
@@ -57,17 +56,12 @@ def _flat(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def _skill_text() -> str:
-    return _flat(SKILL.read_text(encoding="utf-8"))
+def _platform_text() -> str:
+    return _flat(PLATFORM_SKILL.read_text(encoding="utf-8"))
 
 
-def _intent_gate_section() -> str:
-    """The §6f intent-gate block: from 'Intent gate (REQUIRED' to the next H2."""
-    text = SKILL.read_text(encoding="utf-8")
-    start = text.index("Intent gate (REQUIRED")
-    rest = text[start:]
-    end = re.search(r"\n## ", rest)
-    return _flat(rest[: end.start()] if end else rest)
+def _shared_text() -> str:
+    return _flat(SHARED_REFERENCE.read_text(encoding="utf-8"))
 
 
 # --- the rule ships in the skill (guards the file that actually changed) ---
@@ -75,7 +69,7 @@ def _intent_gate_section() -> str:
 
 def test_skill_requires_describe_model_on_every_model():
     """§6d step 2 must require reading every model, not the intended subset."""
-    text = _skill_text()
+    text = _platform_text()
     assert "`describe_model(name)` on EVERY model" in text, (
         "§6d step 2 must require describe_model on EVERY model — the pre-fix "
         "wording ('for each model you intend to query') let relevance be "
@@ -87,19 +81,48 @@ def test_skill_requires_describe_model_on_every_model():
     )
 
 
-def test_skill_intent_gate_opens_with_a_coverage_step():
-    """§6f must run a coverage check, and count itself as four steps."""
-    gate = _intent_gate_section()
-    assert "Run all four" in gate, (
-        "the intent gate must enumerate four steps once coverage is added"
-    )
-    assert "Coverage — no model skipped" in gate, (
-        "§6f must carry step 0 'Coverage — no model skipped'"
-    )
-    assert "is **not** a valid skip" in gate, (
-        "§6f step 0 must declare 'it's a different grain' an invalid skip — "
-        "that loophole is the whole point of the step"
-    )
+def test_shared_reference_contains_the_canonical_four_part_gate():
+    """The detailed gate lives once in the shared progressive-disclosure reference."""
+    text = _shared_text()
+    assert "## The four techniques" in text
+    for technique in (
+        "Coverage (no skipping)",
+        "Catalog-aware critic",
+        "Round-trip echo",
+        "Clarification on ambiguity",
+    ):
+        assert technique in text, f"shared reference must contain {technique}"
+    assert "Run all four checks before execution" in text
+    assert "Execute only when the verdict is `ok`" in text
+    assert "explicitly confirms" in text
+    assert "compatible_dimensions" in text
+    assert "reaches_dimensions" in text
+
+
+def test_shared_reference_is_platform_neutral():
+    """The shared reference must not smuggle either adapter's runtime contract in."""
+    text = SHARED_REFERENCE.read_text(encoding="utf-8").lower()
+    for forbidden in (
+        "mesh",
+        "gateway",
+        "credential leasing",
+        "direct-store",
+        "query-system-dp",
+        "mcp__nxd-desktop",
+    ):
+        assert forbidden not in text, f"shared reference must not mention {forbidden!r}"
+
+
+def test_both_adapters_reference_the_shared_foundation():
+    """Desktop and DataMesh keep their surface-specific adapters over one gate."""
+    for skill in (PLATFORM_SKILL, DESKTOP_SKILL):
+        text = skill.read_text(encoding="utf-8")
+        assert "../nxd-semantic-query-intent/SKILL.md" in text
+        assert "../nxd-semantic-query-intent/reference/semantic-intent-validation.md" in text
+    desktop_text = DESKTOP_SKILL.read_text(encoding="utf-8")
+    assert "complete catalog for this local closure" in desktop_text
+    assert "Do not apply mesh-sized catalog narrowing here" in desktop_text
+    assert "query-system behavior out of this local path" in desktop_text
 
 
 def test_skill_coverage_step_matches_the_large_catalog_carve_out():
@@ -112,7 +135,7 @@ def test_skill_coverage_step_matches_the_large_catalog_carve_out():
     non-interactive cross-DP session has to either block on an unanswerable
     AskUserQuestion or violate a REQUIRED gate.
     """
-    text = _skill_text()
+    text = _platform_text()
     # Interactive path: the narrowing ask is still available.
     assert "if a user is reachable" in text, (
         "§6d step 2 must keep the large-catalog interactive-narrowing path"
@@ -124,7 +147,7 @@ def test_skill_coverage_step_matches_the_large_catalog_carve_out():
         "session against a large cross-DP mesh blocks on an unanswerable "
         "AskUserQuestion or violates the REQUIRED gate"
     )
-    gate = _intent_gate_section()
+    gate = _shared_text()
     assert "agreed scope" in gate, (
         "§6f step 0 must scope coverage to the agreed scope, or it contradicts "
         "the narrowing §6d permits"
@@ -139,10 +162,22 @@ def test_skill_coverage_step_matches_the_large_catalog_carve_out():
 
 
 def test_checks_json_names_the_coverage_rule():
+    skills = set(_checks()["skills"])
+    assert skills == {"nxd-query-data-product", "nxd-semantic-query-intent"}
     ids = {c["id"] for c in _checks()["checks"]}
     assert "coverage-all-models-described" in ids, (
         "graded checks must assert describe_model is called on EVERY model"
     )
+
+
+def test_every_semantic_query_scenario_declares_shared_skill():
+    """Shared intent changes must select every scenario that exercises querying."""
+    public = EVALS_DIR / "public"
+    for scenario in SEMANTIC_QUERY_SCENARIOS:
+        checks = json.loads((public / scenario / "checks.json").read_text(encoding="utf-8"))
+        skills = set(checks["skills"])
+        assert "nxd-semantic-query-intent" in skills, scenario
+        assert skills.intersection({"nxd-query-data-product", "nxd-run-job-loop"}), scenario
 
 
 def test_catalog_has_a_decoy_model():

@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.49.5
+  version: 0.50.0
 ---
 
 # nxd data product query
@@ -326,57 +326,35 @@ The location is a URL; the leased credential is whatever the upstream API needs 
 
 ### 6f. Semantic query layer — the intent gate
 
-Builds on §6d's discover→select→run protocol for the three semantic tools, adding
-the **intent gate** between selection and execution (rationale: [reference/semantic-intent-validation.md](reference/semantic-intent-validation.md)).
-The compiler is deterministic and fan-out-safe, so once the **selection**
-(`{measures, dimensions, filters}`, §6d) is right the number is right; the only
-remaining risk is whether it captured what the user asked. The gate confirms that
-first, reading only `describe_model` metadata (`metrics` with
-`compatible_dimensions`, `dimensions` with PII flags, `joins` with
-`reaches_dimensions`) — no extra server surface.
+Builds on §6d's platform discover→select→run protocol and applies the shared
+`nxd-semantic-query-intent` foundation between selection and execution. Consult
+the [foundation skill](../nxd-semantic-query-intent/SKILL.md) and its
+[canonical intent-gate reference](../nxd-semantic-query-intent/reference/semantic-intent-validation.md).
 
-**Intent gate (REQUIRED before `run_semantic_query`).** Run all four:
+**Intent gate (REQUIRED before `run_semantic_query`).** Run all four shared
+checks: coverage of every model in the agreed scope, a catalog-aware critic, a
+plain-language round-trip echo, and clarification/abstain when the verdict or
+catalog fit is ambiguous. Execute only after `ok` or explicit user confirmation.
+Do not duplicate or replace the shared gate with a platform-specific variant.
 
-0. **Coverage — no model skipped.** The selection must be built only after
-   **every** model *in the agreed scope* has been read via `describe_model`
-   (§6d step 2). The agreed scope is: the full `list_models` set; or — when the
-   catalog is large and a user is reachable — the domain subset the user approved
-   under §6d step 2, with the echo stating the narrowing so the user sees what
-   was not read; or — when the catalog is large and no user is reachable
-   (non-interactive session, scripted caller) — the full set read without asking,
-   with the echo stating the catalog size. Within the agreed
-   scope there are no exceptions: do NOT wave a model off because it looks like
-   a different grain or carries an irrelevant-sounding name — grain and
-   relevance are decided *from* `describe_model`, never before it, so a model
-   skipped on `list_models`-only evidence was never really considered. In
-   particular, "it's a different grain from the one I already picked" is **not**
-   a valid skip: grain was chosen from exactly the information this check exists
-   to complete. If any in-scope model is unread, read it now (and revisit the
-   selection if it surfaces a better-fitting metric) before running the critic.
-1. **Critic (catalog-aware).** From the *verbatim* question + selection +
-   `describe_model` metadata, return a verdict (`ok` / `ambiguous` / `likely-wrong`)
-   and suspect concepts. Check each metric's `description` matches intent (e.g.
-   `sales_calls`, not `call_count`), and each chosen dimension is in the metric's
-   `compatible_dimensions` **or** a join's `reaches_dimensions` (neither → the
-   compiler rejects it; catch it here).
-2. **Echo (round-trip restatement).** Restate the selection in plain language from
-   `describe_model` — *"<metric.description>, per <dimension.description>, filtered
-   where <dimension.description> <op> <value>"* — using each metric's `description`
-   as-is (don't re-prefix the raw `aggregation`). PII-flagged dimension → note it's
-   governed / maskable. Deterministic: same selection → same echo.
-3. **Clarify (don't guess).** Critic `ambiguous` / `likely-wrong`, **or** a chosen
-   dimension neither `compatible` nor reachable → `AskUserQuestion` listing the real
-   candidates from `list_models` / `describe_model`; do **not** execute until
-   resolved. Abstain beats a confident wrong number.
+This adapter supplies the platform-specific inputs and execution boundary:
 
-**Execute** only after the gate passes (critic `ok` / user confirmed). The response
-carries `compiled_sql`, `rows`, `row_count`, `truncated`, `error`; on non-empty `error`, map via the troubleshooting table (mixed-grain → one query per model), don't retry blindly.
+1. Establish the agreed catalog scope through §6d's `list_models` /
+   `describe_model` flow, including its large-catalog narrowing and
+   non-interactive fallback.
+2. Give the shared gate the verbatim question, concept-name selection, and all
+   relevant descriptions, including compatibility, reachability, and PII
+   metadata.
+3. Keep the platform routing rules in §6d: a cross-DP selection uses the
+   platform query-system path, while a single-DP selection uses the selected
+   DP's governed semantic endpoint.
+4. After the gate, call the governed semantic query with concept names and map
+   any returned execution error through the existing troubleshooting table; do
+   not retry blindly.
 
-> **Not built here:** self-consistency vote (deferred) and value-linking
-> (server-side — grounding a filter *value* to its stored form needs a warehouse
-> `DISTINCT` read, not reachable from the three tools). See the [README](README.md)
-> for both; the value-mismatch symptom is the table row below.
-
+The shared gate does not define the platform's tool names, transport, query
+grammar, cross-DP routing, or deferred product-side features. Those remain here
+and in this skill's README.
 ---
 
 ## Credentials on the command line

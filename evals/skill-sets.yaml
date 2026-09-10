@@ -23,6 +23,7 @@ skill_sets:
       - "src/nxd-run-job-loop"
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"
+      - "src/nxd-semantic-query-intent"
 
   nexty_desktop:
     description: "Nexty Desktop local workflow plugin set."
@@ -32,6 +33,7 @@ skill_sets:
       - "src/nxd-render-static-artifact"
       - "src/nxd-review-closure"
       - "src/nxd-run-job-loop"
+      - "src/nxd-semantic-query-intent"
 
   nexty_datamesh:
     description: "Nexty DataMesh deployed-workflow plugin set."
@@ -47,6 +49,7 @@ skill_sets:
       - "src/nxd-fix-policy-failures"
       - "src/nxd-query-data-product"
       - "src/nxd-run-evals"
+      - "src/nxd-semantic-query-intent"
       - "src/nxd-setup-cli"
       - "src/nxd-toggle-policies"
 
@@ -84,6 +87,7 @@ skill_sets:
       - "src/nxd-run-job-loop"
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"
+      - "src/nxd-semantic-query-intent"
 
   # Staging slot for skills under evaluation before promotion to current_pack.
   # Add new experimental skills here.
@@ -107,3 +111,4 @@ skill_sets:
       - "src/nxd-run-job-loop"
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"
+      - "src/nxd-semantic-query-intent"
