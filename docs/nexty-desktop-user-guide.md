@@ -1,4 +1,4 @@
-# Nexty Desktop User Guide
+# Nexty desktop user guide
 
 **For analysts working in Claude Desktop or Claude Cowork.**
 
