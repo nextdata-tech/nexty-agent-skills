@@ -187,6 +187,36 @@ def test_replayed_canary_preserves_workflow_v2_build_deferral(
     assert result.legacy_build_status == "deferred_to_workflow_v2"
 
 
+@pytest.mark.parametrize(
+    ("legacy_build_status", "build", "message"),
+    (
+        ([], None, "unknown legacy_build_status"),
+        ({}, None, "unknown legacy_build_status"),
+        ("not_attempted", {"returncode": 0}, "did not attempt a legacy build"),
+    ),
+)
+def test_replayed_canary_rejects_malformed_or_inconsistent_build_status(
+    legacy_build_status: object,
+    build: object,
+    message: str,
+) -> None:
+    claims_path = Path(__file__).parents[1] / "scenarios/drift-canary/claims.json"
+    expected = load_claims(claims_path).baseline.approves_claims_hash
+
+    with pytest.raises(TierError, match=message):
+        _canary_from_mapping(
+            {
+                "claims_hash": expected,
+                "probe": {"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+                "build": build,
+                "legacy_build_status": legacy_build_status,
+            },
+            canary_dir=claims_path.parent,
+            skills_root=claims_path.parent,
+            expected_claims_hash=expected,
+        )
+
+
 def test_stable_document_removes_all_non_reproducible_keys_and_keeps_format_version() -> None:
     value = {
         "wall_clock": "discard-wall_clock",
