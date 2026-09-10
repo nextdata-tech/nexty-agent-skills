@@ -141,8 +141,12 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 
 **Neither rule is visible offline.** `self_check.py`'s structural phase parses
 `models.py` against the surface described here and passes on both; they are the
-compiler's own validation, so `check_data_product` is what reports them, as
-`structure/spec_compile_failed`. Note also that the compiler prints
+compiler's own validation, so the workflow-v2 supervisor's returned
+`start_requirement` action reports them for an enrolled construction, as
+`structure/spec_compile_failed`. `check_data_product` is the compatibility
+validator only for an explicitly feature-off/non-enrolled runtime. Do not use
+either surface to bypass workflow-v2 capture, review, or admission. Note also
+that the compiler prints
 `deployment-spec.yaml: OK` / `manifest.yaml: OK` *after* the error line and
 still exits non-zero — read the `error:` line, not the tail.
 

@@ -1072,10 +1072,14 @@ regardless.
 defect to code around.** Do not confuse that offline limitation with the
 authenticated `connectivity_check.py` above. Do not add a profile-reading
 fallback to `self_check.py` to make Phase B green — that reintroduces the
-sidecar channel this file spends a section rejecting. Report Phase B as **not runnable**,
-and verify the closure with `check_data_product` instead: it pins
-and compiles the real closure under the supervisor's own interpreter, which is
-stronger evidence than the dry run it replaces.
+sidecar channel this file spends a section rejecting. Report Phase B as **not runnable**.
+In a workflow-v2-capable enrolled runtime, the supervisor's returned
+`start_requirement` action performs the authoritative validation before
+`start_run`; do not use a local check as a construction fallback.
+`check_data_product` remains the compatibility verification path only for an
+explicitly feature-off/non-enrolled runtime: it pins and compiles the real
+closure under the supervisor's own interpreter, which is stronger evidence
+than the dry run it replaces.
 
 ### Two ways a probe lies
 

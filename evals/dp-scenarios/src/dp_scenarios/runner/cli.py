@@ -28,7 +28,7 @@ from dp_scenarios.scenario import (
 from dp_scenarios.operator.driver import DriverOperator
 from dp_scenarios.operator.openai_driver import OpenAIDriverProvider, driver_prompt_hash
 
-from .environment import PinnedVersions
+from .environment import DEFAULT_WORKFLOW_ACTIVATION_BUNDLE, PinnedVersions
 from .report import write_report
 from .session import LiveSession, ReplayRecording
 from .tier import CanaryResult, RunBudgets, TierError, TierRunner, run_drift_canary
@@ -54,12 +54,29 @@ def _canary_from_mapping(
         raise TierError("replayed canary build must be an object")
     if isinstance(build, Mapping) and "returncode" not in build:
         raise TierError("replayed canary build has no mandatory returncode")
-    return run_drift_canary(
+    legacy_build_status = value.get("legacy_build_status")
+    allowed_build_statuses = {
+        "not_attempted", "performed", "provided", "deferred_to_workflow_v2",
+    }
+    if legacy_build_status is not None and (
+        not isinstance(legacy_build_status, str)
+        or legacy_build_status not in allowed_build_statuses
+    ):
+        raise TierError("replayed canary has an unknown legacy_build_status")
+    if legacy_build_status == "deferred_to_workflow_v2" and build is not None:
+        raise TierError("a deferred replayed canary cannot carry a legacy build")
+    if legacy_build_status == "not_attempted" and build is not None:
+        raise TierError("a replayed canary that did not attempt a legacy build cannot carry one")
+    if legacy_build_status in {"performed", "provided"} and build is None:
+        raise TierError("a replayed canary with a completed legacy build must carry that build")
+    result = run_drift_canary(
         canary_dir,
         skills_root=skills_root,
         probe=probe,
         build=build,
+        defer_legacy_build=legacy_build_status == "deferred_to_workflow_v2",
     )
+    return replace(result, legacy_build_status=legacy_build_status) if legacy_build_status is not None else result
 
 
 def _read_json(path: Path) -> Mapping[str, object]:
@@ -206,6 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--session-command", help="JSONL headless session command for live mode")
     parser.add_argument("--supervisor", type=Path)
+    parser.add_argument(
+        "--workflow-activation-bundle",
+        type=Path,
+        default=DEFAULT_WORKFLOW_ACTIVATION_BUNDLE,
+        help="trusted workflow-v2 activation bundle required by live runs",
+    )
     parser.add_argument("--skill-pack-version", required=True)
     parser.add_argument("--supervisor-version", required=True)
     parser.add_argument("--runtime-wheel-version", required=True)
@@ -281,6 +304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.canary_dir,
                 skills_root=args.skills_root,
                 supervisor=args.supervisor,
+                defer_legacy_build=args.mode == "live",
             )
 
     replays: dict[str, ReplayRecording] = {}
@@ -311,6 +335,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         replay_recordings=replays,
         live_command=command if args.mode == "live" else None,
         supervisor_command=args.supervisor if args.mode == "live" else None,
+        workflow_activation_bundle=(
+            args.workflow_activation_bundle if args.mode == "live" else None
+        ),
         knob_plan=knob_plan,
         budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
         operator_factory=operator_factory,

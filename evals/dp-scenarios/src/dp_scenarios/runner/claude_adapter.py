@@ -52,11 +52,12 @@ its infra profile is the infra-profile.yaml file at the workspace root; read it
 for the base URL and the endpoints it lists, and call the source yourself to
 learn anything the profile does not state. Keep the authored data-product
 closure in the workspace's closure/ directory and keep any blueprint at the
-workspace root. Use the nxd-desktop MCP tools for self-check, build, serving,
-inspection, and governed queries; do not invoke nxd-desktop-supervisor from
-Bash. Follow the installed Nexty skills and answer the operator directly after
-each turn. The runner owns machine evidence; do not create or edit artifacts/
-files or ledger-extra.json.
+workspace root. Use the nxd-desktop MCP tools for workflow capability,
+preparation, consent relay, capture, review reporting, validation, admission,
+serving, inspection, and governed queries; do not invoke
+nxd-desktop-supervisor from Bash. Follow the installed Nexty skills and answer
+the operator directly after each turn. The runner owns machine evidence; do
+not create or edit artifacts/ files or ledger-extra.json.
 
 If you perform the self-check and adversarial review, write only their short
 outcomes to agent-attestations.json at your workspace root -- the same file
@@ -73,7 +74,7 @@ is a root JSON array (not an object wrapper), for example:
   {
     "action_kind": "adversarial_review",
     "outcome": "complete",
-    "evidence_ref": "closure/build-record.json#review_rounds/0",
+    "evidence_ref": "review-record.json#review_rounds/0",
     "review_round_index": 0
   }
 ]
@@ -83,10 +84,11 @@ review_round_index. A legacy turn field may be included as informational
 metadata, but it is optional and must be a positive JSON integer, never a
 boolean; the harness does not use it to pair review evidence. The
 review_round_index is a non-negative JSON integer, never a boolean. outcome is
-non-empty text. evidence_ref is the exact normalized relative closure/build-
-record reference: use the closure path bound to the published build, with
-#self_check or #review_rounds/<review_round_index> as shown. Do not add keys,
-use an object wrapper, or use a different reference.
+non-empty text. evidence_ref is the exact normalized relative evidence
+reference: self-check uses the published closure's
+build-record.json#self_check, while review uses the adjacent job-level
+review-record.json#review_rounds/<review_round_index> as shown. Do not add
+keys, use an object wrapper, or use a different reference.
 
 If scenario-evidence-contract.json exists at the workspace root, read it and
 write the requested JSON object at its artifact_path, and follow every entry in
@@ -98,10 +100,10 @@ For an authenticated mock source, the infra profile names the credential_env
 variable for the generated connector runtime; never print or echo its value.
 When Bash is unavailable, the shell-only helper scripts some skill steps
 mention cannot run: write closure files with the file tools and use the
-nxd-desktop check/build/query MCP tools for runtime verification instead. That
-substitutes a mechanism, not a workflow -- follow the installed Nexty skills'
-normal flow. Do not launch a subagent merely to find or run a shell-only
-helper.
+nxd-desktop workflow-v2 and governed-query MCP tools for runtime verification
+instead. That substitutes a mechanism, not a workflow -- follow the installed
+Nexty skills' normal flow. Do not launch a subagent merely to find or run a
+shell-only helper.
 
 Background execution is disabled in this session: any helper you start runs to
 completion inside your current turn and hands its result back in that same tool
@@ -120,32 +122,32 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "WebFetch: WebFetch against the loopback URL bypasses the connector under "
     "test, so its traffic is not the thing this run is measuring. Probing the "
     "source is expected and is not restricted.",
-    "Before authoring a closure or calling check_data_product or "
-    "build_data_product, draft the blueprint and ask the operator for explicit "
-    "approval; treat only an explicit operator approval as authorization to "
-    "generate or modify the closure.",
-    "If an answer marked as approval arrives before the written blueprint is "
-    "complete, treat it as approval for the source and decisions already "
-    "discussed, finish the blueprint internally, and continue without asking "
-    "for a second approval.",
-    # This rule exists to stop the agent stalling for a second approval. It
-    # used to also forbid loading a skill and delegating a helper, and to say
-    # "author the closure ... directly" -- which instructed the agent off the
-    # skill flow and away from the subagent dispatch that
-    # nxd-generate-data-product step 6b mandates, and that `construction` then
-    # graded it for missing. A conduct rule may constrain how the agent treats
-    # the *operator*; it must not countermand the skills under test.
+    "Before authoring a closure, draft the blueprint, require "
+    "get_workflow_capabilities to report execution_enabled true, and call "
+    "prepare_workflow for that exact blueprint. Ask the operator for explicit "
+    "approval of the prepared blueprint; treat only that explicit operator "
+    "approval as authorization to generate or modify the closure, and relay "
+    "it with the returned session_decision action.",
+    "An answer marked as approval is usable only after prepare_workflow has "
+    "bound the complete written blueprint and returned its consent subject. "
+    "Never manufacture, summarize, or pre-fill approval evidence.",
+    # This rule stops the agent stalling for a second approval after the
+    # supervisor has bound the exact consent subject. A conduct rule may
+    # constrain how the agent treats the operator; it must not countermand the
+    # skills under test.
     "After the operator approves the blueprint, do not ask for another "
     "confirmation; proceed with the work under the installed Nexty skills' "
     "own flow.",
-    "Once check_data_product passes for the unchanged approved closure, do not "
-    "repeat the check; proceed to build_data_product and then the governed "
-    "query.",
-    "If a build fails, inspect the run once, make a targeted repair, and retry "
-    "rather than repeating identical checks or builds.",
+    "After the approved closure passes its generator self-check, follow only "
+    "the workflow response's current next_actions through capture, one "
+    "retained-input conversation review, trusted validation, and start_run. "
+    "Never fall back to check_data_product or build_data_product.",
+    "If workflow validation or admission fails, inspect the returned workflow "
+    "state once, make a targeted repair through reset and a new capture when "
+    "required, and retry rather than repeating an identical action.",
     "Do not report numeric or status results until the approved closure has "
-    "passed check_data_product, build_data_product has completed, and the "
-    "result has been obtained through the governed query tool.",
+    "completed the workflow-v2 start_run action with an admitted publication, "
+    "and the result has been obtained through the governed query tool.",
     "Do not use raw fixture CSVs, oracle files, or hidden gold as the source of "
     "a user-facing answer; those files are inputs and grading references, not a "
     "substitute for the configured source and governed query.",
@@ -481,7 +483,11 @@ def parse_claude_events(
         mcp_observations.append(observation)
         if paired is None:
             unpaired_mcp_tools.append(mcp_tool)
-        elif mcp_tool == "build_data_product" and observation["is_error"]:
+        elif (
+            mcp_tool == "advance_workflow"
+            and _advance_action_type(observation["arguments"]) == "start_run"
+            and observation["is_error"]
+        ):
             build_failures += 1
 
     environment_details: list[str] = []
@@ -536,6 +542,34 @@ def _mapping_payload(value: object) -> Mapping[str, object] | None:
     """Return an inner MCP JSON object when the result is one."""
 
     return value if isinstance(value, Mapping) else None
+
+
+def _advance_action_type(arguments: object) -> str | None:
+    """Return the closed workflow action tag from an advance request."""
+
+    if not isinstance(arguments, Mapping):
+        return None
+    action = arguments.get("action")
+    if not isinstance(action, Mapping):
+        return None
+    action_type = action.get("type")
+    return action_type if isinstance(action_type, str) else None
+
+
+def _workflow_admission(
+    payload: Mapping[str, object], arguments: object
+) -> Mapping[str, object] | None:
+    """Return an admission only for a matching workflow-v2 start_run result."""
+
+    if _advance_action_type(arguments) != "start_run" or not isinstance(arguments, Mapping):
+        return None
+    workflow = arguments.get("workflow")
+    if not isinstance(workflow, str) or not workflow:
+        return None
+    if payload.get("workflow") != workflow:
+        return None
+    admission = payload.get("admission")
+    return admission if isinstance(admission, Mapping) else None
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -823,16 +857,28 @@ def _update_machine_artifacts(
         payload = _mapping_payload(observation.get("result"))
         if observation.get("is_error"):
             continue
-        if tool == "build_data_product" and payload is not None:
-            for key in ("run_id", "artifact_id", "workflow"):
-                if key in payload:
-                    build_context[key] = payload[key]
-            run_id = payload.get("run_id")
-            if isinstance(run_id, str) and run_id:
-                built_runs.add(run_id)
+        if tool == "advance_workflow" and payload is not None:
             arguments = observation.get("arguments")
-            if isinstance(arguments, Mapping) and isinstance(arguments.get("workflow"), str):
-                build_context["workflow"] = arguments["workflow"]
+            admission = _workflow_admission(payload, arguments)
+            if admission is None or not isinstance(arguments, Mapping):
+                continue
+            run_id = admission.get("run_id")
+            artifact_id = admission.get("artifact_id")
+            if not (
+                isinstance(run_id, str)
+                and run_id
+                and isinstance(artifact_id, str)
+                and artifact_id
+            ):
+                continue
+            build_context.update(
+                {
+                    "run_id": run_id,
+                    "artifact_id": artifact_id,
+                    "workflow": arguments["workflow"],
+                }
+            )
+            built_runs.add(run_id)
         elif tool == "inspect_run" and payload is not None:
             run = payload.get("run")
             if isinstance(run, Mapping):

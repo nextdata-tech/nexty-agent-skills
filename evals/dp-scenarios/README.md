@@ -190,7 +190,7 @@ scenario.
 
 | Package | Tier | Run order | Primary source or drill |
 |---|---:|---:|---|
-| [drift-canary](scenarios/drift-canary/README.md) | preflight | before smoke | skill claims, companion files, negative probes, and one local build |
+| [drift-canary](scenarios/drift-canary/README.md) | preflight | before smoke | skill claims, companion files, negative probes, and a local build outside live workflow-v2 mode |
 | [zero-row-optional-output](scenarios/zero-row-optional-output/README.md) | smoke | 1 | file-backed fixture with one valid zero-row optional resource |
 | [parent-child-grain-trap](scenarios/parent-child-grain-trap/README.md) | smoke | 2 | generated orders and line items with a parent-grain aggregation trap |
 | [credential-rotation](scenarios/credential-rotation/README.md) | core | 3 | disposable Postgres with command-stepped credential rotation |
@@ -224,6 +224,16 @@ the local `claude` executable, the `nxd-desktop-supervisor` executable, and the
 desktop Python environment at `~/.nxd/desktop-venv/bin/python` unless an
 explicit `--desktop-python` is supplied. It does not use the platform CLI or a
 Kubernetes cluster.
+
+Before each disposable MCP server starts, the runner activates the bundled
+workflow-v2 contract in that trial's supervisor data directory. Activation is
+trusted runner configuration, not user consent. The agent must still prepare
+the exact blueprint, request the scenario's declared approval turn, and relay
+that verbatim approval through `session_decision` before it authors the
+closure. Activation failure stops the run; the live runner does not fall back
+to `check_data_product` or `build_data_product`. Use
+`--workflow-activation-bundle <path>` only when testing another exact trusted
+contract.
 
 Each trial gets a disposable home, fixture, skill-pack staging area, and
 evidence directory; the report and transcript artifacts are retained under
@@ -751,13 +761,18 @@ declaring one is rejected rather than silently running with the switch off.
 
 ## Approval boundary
 
-The smoke tier does not qualify the job-loop's prose-first authoring lifecycle. It
-does not require a vague opening prompt to produce an approved
-`dp-blueprint.md`, nor does it run an independent user-presence approval gate
-before materialization. The job-loop skill and closure validators define that
-artifact contract; this harness records only the scripted scenario phases and the
-artifacts available to its gates. Mapper approval is a separate supervisor
-admission boundary and is not reproduced here.
+Every shipped scenario declares exactly one explicit approval turn before
+code generation. The operator sends that line verbatim; the agent cannot replace
+it with a paraphrase or manufacture approval from its own response. A qualifying
+workflow-v2 observation must prepare the blueprint before that turn and relay the
+same text through `session_decision` before capture, review, trusted validation,
+and admission.
+
+Live runs enforce this sequence in the supervisor. Replay runs do not start a
+supervisor, but their recorded evidence must contain the same workflow-v2 calls
+and ordering; legacy check/build observations are not accepted as construction
+or publication proof. Mapper approval remains a separate supervisor admission
+boundary.
 
 ## Which skill pack is under test
 

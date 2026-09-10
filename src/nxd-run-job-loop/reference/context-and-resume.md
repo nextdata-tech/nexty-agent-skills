@@ -15,6 +15,13 @@ session recovers a product it did not build in this session. The
 task-scheduling half — routing, step order, caps, fan-out — lives in
 [scheduling.md](scheduling.md).
 
+This file covers reattachment, not a way around construction controls. For a
+new local construction on a runtime that advertises workflow-v2 execution,
+follow [workflow-v2.md](workflow-v2.md) and its returned capability, consent,
+capture, retained-review, and admission actions. A false or unavailable
+capability is a blocker for that construction, not permission to call a legacy
+builder.
+
 ## What persists, what dies
 
 Draw the line clearly, because the recovery path depends on it:
@@ -125,8 +132,9 @@ cross-session catalog and a fast re-serve; use them:
 2. **Resume.** If the workflow appears with `artifact_status: available`, call
    `mcp__nxd-desktop__resume_data_product` with that `workflow` id (pass it
    verbatim). It reuses the durable published artifact and returns a fresh
-   `semantic_endpoint` plus a session `bearer_token` — the same shape
-   `build_data_product` returns — in seconds, with **no** regeneration. Then
+   `semantic_endpoint` plus a session `bearer_token` — the same shape the
+   compatibility `build_data_product` path returns — in seconds, with **no**
+   regeneration. Then
    render the pinned release with `nxd-render-static-artifact` before describing or
    querying it. Every ruling encoded when the product was built is preserved.
 3. **Describe, then answer.** Call `mcp__nxd-desktop__describe_models` with the
@@ -149,7 +157,10 @@ to re-check, or treat it as a fresh build.
 ## When resume is not possible — rebuild fallback
 
 Rebuild is the fallback, not the default. Reach for it only when the published
-artifact is genuinely gone:
+artifact is genuinely gone. On an enrolled workflow-v2 runtime, reset and
+reconstruct through the v2 sequence instead of bypassing capture and review.
+The `build_data_product` command in this section is retained only for an
+explicitly feature-off or non-enrolled compatibility runtime:
 
 - `list_data_products` reports the workflow as `collected` (the published data
   was garbage-collected) or `release_unreadable` (the durable record is
@@ -164,7 +175,10 @@ the **same** workflow id:
 build_data_product(definition="<abs path to the closure>", workflow="<workflow-id>")
 ```
 
-Reusing the workflow id is what makes this a reopen of one product rather than
+Use that legacy command only after confirming the runtime is feature-off or the
+workflow is not enrolled in v2; it must not be used to bypass an enrolled
+workflow's construction actions. Reusing the workflow id is what makes this a
+reopen of one product rather than
 the creation of a second one. Rebuild is sound because the closure is
 deterministic and embeds its own copy of the source: the rebuilt product carries
 identical rulings and identical rows, including any landed decisions model. It

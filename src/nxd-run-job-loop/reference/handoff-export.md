@@ -17,8 +17,10 @@ Portability has two halves, and they use different tools:
 - **Reopen** (`reference/context-and-resume.md`) is the *inbound* half: get a
   product you already own back in a later session, on the **same host, same
   user**. It is resume-first — `list_data_products` → `resume_data_product` —
-  falling back to a `build_data_product` rebuild only when the published artifact
-  is gone.
+  falling back to a compatibility rebuild only when the published artifact is
+  gone. On a workflow-v2-capable enrolled runtime, a new construction must use
+  the v2 capability, prepare, consent, capture, retained-review and admission
+  actions; it must not bypass them with `build_data_product`.
 - **Export** (this file) is the *outbound* half: hand a product to **another
   person or another machine**. It is a single call to
   `mcp__nxd-desktop__export_data_product` that produces a shareable zip.
@@ -40,7 +42,9 @@ mcp__nxd-desktop__export_data_product(
 
 - `definition` is the closure's durable, host-visible absolute path — the one
   stated in the handoff and named by the workflow id (`…/nxd-jobs/<workflow>/closure/`).
-  It is the same path `build_data_product` takes.
+  It is the path used by the v2 capture action. A legacy `build_data_product`
+  import may use the same path only in an explicitly feature-off or non-enrolled
+  compatibility runtime.
 - `import_notes` is **required**.
 - `redact` is optional and rarely needed — see the next section.
 - `destination` is optional: where to write the `.zip`. Omit it and the tool
@@ -134,13 +138,19 @@ records what the build actually did — including any concession taken to reach
 green. Nothing in the bundle points outside itself.
 
 **Importing is reopen-by-rebuild with the recipient's own credential.** The
-recipient unzips, refills the credentials the `IMPORT.md` header names (a
-file/CSV closure needs none), then runs `build_data_product` with the closure's
-path and a workflow id — the rebuild fallback in
-`reference/context-and-resume.md`. Because the closure
-embeds its own copy of the source data and the transform is deterministic, the
-rebuilt product carries identical rulings and rows — a file/CSV export rebuilds
-to the same numbers with no credential step at all.
+recipient unzips and refills the credentials the `IMPORT.md` header names (a
+file/CSV closure needs none). On a workflow-v2-capable enrolled runtime, place
+the approved blueprint beside the imported closure and use the v2 construction
+sequence so capture, retained review and admission remain mandatory. The
+`build_data_product` command below is retained only for an explicitly
+feature-off or non-enrolled compatibility runtime, as described in
+`reference/context-and-resume.md`. Because the closure embeds its own copy of
+the source data and the transform is deterministic, the rebuilt product carries
+identical rulings and rows — a file/CSV export rebuilds to the same numbers with
+no credential step at all.
+
+In that compatibility runtime, run `build_data_product` with the closure's path
+and a workflow id. Do not use this command to bypass workflow v2.
 
 This is the guided version of `context-and-resume.md`'s "file is absent —
 closure obtained as a clone or copy" credential-recovery branch: instead of a

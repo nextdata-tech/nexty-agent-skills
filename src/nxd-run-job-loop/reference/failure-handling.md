@@ -8,7 +8,7 @@
 - [Classification fails closed](#classification-fails-closed)
 - [Typed exits, and caps you count instead of estimate](#typed-exits-and-caps-you-count-instead-of-estimate)
 - [A blocker is an open question found late](#a-blocker-is-an-open-question-found-late)
-- [After a failed build: inspect once, then classify](#after-a-failed-build-inspect-once-then-classify)
+- [After a failed supervisor operation: inspect once, then classify](#after-a-failed-supervisor-operation-inspect-once-then-classify)
 - [What the user hears](#what-the-user-hears)
 - [The commands](#the-commands)
 
@@ -40,7 +40,7 @@ the whole classifier.
 | 3 self-check A | structure vs the pinned DSL; **nothing executed** | `s1_structure` | malformed generated code — yours |
 | 3 self-check B | the transform **executes for real**, scratch DuckDB, no kernel, no network | `s2_transform` | **unambiguously the code** |
 | 3 self-check C/D | closure completeness; policy boundary | `s3_closure` | structural or governance — yours |
-| 4 build | the supervisor pins and compiles the closure | `s4_pin` | **code the offline checks could not see** — yours |
+| 4 admission | the workflow-v2 supervisor validates and admits the captured closure (`start_requirement` → `start_run`) | `s4_pin` | **code the offline checks could not see** — yours |
 | 4 serve | provision, kernel, dependencies, endpoint | `s5_serve` | usually the environment |
 | 4 run | the transform on the supervisor | `s6_run` | mixed — an assert that fired is code, a refused connection is not |
 | 4a publish | publish, verify, static artifact | `s7_publish` | mixed |
@@ -52,10 +52,13 @@ is nothing to retry: fix the code.
 
 ## Three caveats that decide most misclassifications
 
-1. **A build failure masquerades as an environment failure.** The structural
-   check cannot execute the builders — a closure can pass it in full and still
-   fail when the supervisor pins it. So a `build_data_product` error is **not**
-   presumptive evidence of a bad machine. Treat it as yours by default.
+1. **An admission failure masquerades as an environment failure.** The
+   structural check cannot execute the supervisor — a closure can pass it in
+   full and still fail when the supervisor validates or admits it. In workflow
+   v2, a `start_requirement` or `start_run` error is **not** presumptive
+   evidence of a bad machine. Treat it as yours by default. The legacy
+   `build_data_product` error has the same default only in an explicitly
+   feature-off/non-enrolled compatibility runtime.
 2. **The transform dry-run covers `transform/main.py` only.** A green dry-run
    says nothing about `spec.py` or `models.py`, and its own `unverified:` list is
    its declared blind spot for dynamic constructs. Carry those lines into the
@@ -135,24 +138,33 @@ The consequence worth internalizing: the elicitation contract is a **loop**, not
 a pre-build gate. The same "I need something from you" queue serves a gap found
 while authoring the spec and a gap found while running it.
 
-## After a failed build: inspect once, then classify
+## After a failed supervisor operation: inspect once, then classify
 
-A failed `build_data_product` returns an error string. That string is the
-**outermost** frame — it is routinely a generic timeout or "transform execution
-failed" wording that says nothing about which stage died. Do not classify from
-it, and do not retry on it.
+A failed workflow-v2 supervisor operation returns an operation or requirement
+status plus an error payload. Treat the payload as the **outermost** frame — it
+may still be a generic timeout or "transform execution failed" wording that
+says nothing about which stage died. Do not classify from it, and do not retry
+on it. A failed `build_data_product` returns the same kind of outer error only
+in an explicitly feature-off/non-enrolled compatibility runtime; the legacy
+steps below do not describe enrolled v2 construction.
 
-1. **Call `mcp__nxd-desktop__inspect_run` once**, passing the failed `run_id`.
-   It returns that run's status plus the bounded, path-redacted child failure
-   diagnostic — the actual exception from inside the transform. It takes no
-   ownership lock and starts no runtime, so it is safe while another session
-   builds. Omit `run_id` only to list recent failed-run summaries when you do
-   not have one. **Once**, not in a loop: it is a read of a recorded diagnostic,
-   so a second identical call cannot return anything new.
-2. **Classify by the stage it died in**, using the ladder above — never by
-   matching the exception text. If no `run_id` is available, say that; do not
-   substitute the outer error string for the diagnostic you could not read.
-3. **Preserve the artifact.** Keep the failing closure and its diagnostic. They
+1. **For workflow v2, call `mcp__nxd-desktop__inspect_workflow` once**, passing
+   the failed workflow and the current operation/requirement identity returned
+   by the supervisor. It returns the bounded, path-redacted diagnostic and
+   durable status for that operation. It takes no ownership lock and starts no
+   runtime, so it is safe while another session builds. **Once**, not in a loop:
+   it reads recorded workflow evidence, so a second identical call cannot
+   return anything new.
+2. **For feature-off/non-enrolled compatibility only, call
+   `mcp__nxd-desktop__inspect_run` once**, passing the failed `run_id`. It returns
+   that run's status plus the bounded, path-redacted child failure diagnostic —
+   the actual exception from inside the transform. Omit `run_id` only to list
+   recent failed-run summaries when you do not have one.
+3. **Classify by the stage it died in**, using the ladder above — never by
+   matching the exception text. If no operation or run identity is available,
+   say that; do not substitute the outer error string for the diagnostic you
+   could not read.
+4. **Preserve the artifact.** Keep the failing closure and its diagnostic. They
    are the evidence for the report, and re-running destroys the state that
    explains the failure.
 

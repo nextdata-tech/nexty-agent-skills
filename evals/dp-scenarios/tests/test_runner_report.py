@@ -13,6 +13,7 @@ from dp_scenarios.operator.transport import OperatorMessage, TouchedFile, TurnRe
 from dp_scenarios.runner import CanaryResult, ReplayRecording, TierError, TierRunner
 from dp_scenarios.runner.report import _stable_document, human_summary, machine_report, write_report
 from dp_scenarios.runner.cli import _canary_from_mapping
+from dp_scenarios.runner import cli as cli_module
 from dp_scenarios.runner.session import RecordedTurn
 
 from test_runner_tier import (
@@ -115,6 +116,23 @@ def test_canary_block_report_contains_claim_code_and_line(tmp_path: Path) -> Non
     assert "Scenarios: none ran" in summary
 
 
+def test_report_surfaces_workflow_v2_canary_build_deferral() -> None:
+    canary = CanaryResult(
+        Verdict("clean", (), ()),
+        claims_hash="claims-1",
+        legacy_build_status="deferred_to_workflow_v2",
+    )
+    result = TierRunner([], pins=pins(), canary=canary).run()
+
+    document = machine_report(result)
+    summary = human_summary(result)
+
+    assert document["canary"]["legacy_build_status"] == "deferred_to_workflow_v2"
+    assert "Canary legacy build: deferred_to_workflow_v2" in summary
+    assert "legacy build was deferred to workflow-v2 scenario execution" in summary
+    assert "it was not passed" in summary
+
+
 def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
     claims_path = Path(__file__).parents[1] / "scenarios/drift-canary/claims.json"
     expected = load_claims(claims_path).baseline.approves_claims_hash
@@ -130,6 +148,69 @@ def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
     with pytest.raises(Exception, match="claims_hash"):
         _canary_from_mapping(
             {"verdict": {"outcome": "clean"}, "claims_hash": "arbitrary"},
+            canary_dir=claims_path.parent,
+            skills_root=claims_path.parent,
+            expected_claims_hash=expected,
+        )
+
+
+def test_replayed_canary_preserves_workflow_v2_build_deferral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claims_path = Path(__file__).parents[1] / "scenarios/drift-canary/claims.json"
+    expected = load_claims(claims_path).baseline.approves_claims_hash
+    calls: list[dict[str, object]] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> CanaryResult:
+        calls.append(kwargs)
+        return CanaryResult(Verdict("clean", (), ()), claims_hash=expected)
+
+    monkeypatch.setattr(cli_module, "run_drift_canary", fake_run)
+    result = _canary_from_mapping(
+        {
+            "claims_hash": expected,
+            "probe": {"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+            "build": None,
+            "legacy_build_status": "deferred_to_workflow_v2",
+        },
+        canary_dir=claims_path.parent,
+        skills_root=claims_path.parent,
+        expected_claims_hash=expected,
+    )
+
+    assert calls == [{
+        "skills_root": claims_path.parent,
+        "probe": {"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+        "build": None,
+        "defer_legacy_build": True,
+    }]
+    assert result.legacy_build_status == "deferred_to_workflow_v2"
+
+
+@pytest.mark.parametrize(
+    ("legacy_build_status", "build", "message"),
+    (
+        ([], None, "unknown legacy_build_status"),
+        ({}, None, "unknown legacy_build_status"),
+        ("not_attempted", {"returncode": 0}, "did not attempt a legacy build"),
+    ),
+)
+def test_replayed_canary_rejects_malformed_or_inconsistent_build_status(
+    legacy_build_status: object,
+    build: object,
+    message: str,
+) -> None:
+    claims_path = Path(__file__).parents[1] / "scenarios/drift-canary/claims.json"
+    expected = load_claims(claims_path).baseline.approves_claims_hash
+
+    with pytest.raises(TierError, match=message):
+        _canary_from_mapping(
+            {
+                "claims_hash": expected,
+                "probe": {"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+                "build": build,
+                "legacy_build_status": legacy_build_status,
+            },
             canary_dir=claims_path.parent,
             skills_root=claims_path.parent,
             expected_claims_hash=expected,
@@ -316,7 +397,7 @@ def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> Non
         turn_timed_out=True,
         environment_detail="Claude did not complete the turn within 324.0s",
         failure_reason="provider_session_limit",
-        last_mcp_call="build_data_product:error",
+        last_mcp_call="advance_workflow:error",
     )
     result = TierRunner(
         [scenario],
@@ -327,7 +408,7 @@ def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> Non
     text = human_summary(result)
 
     assert "interrupted: provider_session_limit" in text
-    assert "last MCP call: build_data_product:error" in text
+    assert "last MCP call: advance_workflow:error" in text
     assert "detail: Claude did not complete the turn within 324.0s" in text
 
 

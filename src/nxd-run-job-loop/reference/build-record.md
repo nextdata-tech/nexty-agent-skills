@@ -6,7 +6,7 @@
 - [The unified diagnostic record](#the-unified-diagnostic-record)
 - [The report envelope](#the-report-envelope)
 - [The build record, field by field](#the-build-record-field-by-field)
-- [`review_rounds[]` — review claims and user decisions](#review_rounds--review-claims-and-user-decisions)
+- [Where conversation review lives](#where-conversation-review-lives)
 - [`attempts[]` — the part that makes claims checkable](#attempts--the-part-that-makes-claims-checkable)
 - [The stage ladder](#the-stage-ladder)
 - [The three caveats](#the-three-caveats)
@@ -21,20 +21,26 @@
 
 ## What this file is
 
-`dp-blueprint.md` is the plan. `build-record.json` is **what happened when the plan
-was compiled and run** — and it is the only place that content lives.
+`dp-blueprint.md` is the plan. `build-record.json` is **what happened while the
+plan was compiled and self-checked before capture**. Runtime stages append later
+through the supervisor-controlled job loop. Conversation review is deliberately
+separate because it begins only after the closure has been captured and made
+immutable.
 
 The split is not filing tidiness. The compiler framing behind this pack is: user
 intent is the source, [`dp-blueprint.md`](dp-blueprint.md) is the IR, `nxd-generate-data-product` is
 codegen, the closure's Python is the output artifact. An IR is a pure function
-of its source, so an outcome — a row count, a runtime blocker, a review round, a
-build result — cannot live in it. It lives here.
+of its source, so an outcome — a row count, a runtime blocker, an attempt, or a
+build result — cannot live in it. It lives here. Review claims and decisions live
+in the job-level review ledger described below.
 
 ```
-closure/
-├── dp-blueprint.approved.md    byte copy of the approved IR       — the plan
-├── dp-blueprint.lock.json      its canonical hash + compiler version — the binding
-└── build-record.json           outcomes, reviews, attempts, concessions — this file
+…/nxd-jobs/<workflow>/
+├── review-record.json          append-only conversation review ledger
+└── <captured-generation>/
+    ├── dp-blueprint.approved.md    byte copy of the approved IR       — the plan
+    ├── dp-blueprint.lock.json      its canonical hash + compiler version — the binding
+    └── build-record.json           stages, attempts, concessions — this file
 ```
 
 Three properties, all load-bearing:
@@ -49,7 +55,9 @@ Three properties, all load-bearing:
   a reader can check, makes the regenerate cap countable rather than estimated,
   and gives a harness its retry / question / concession queues.
 - **It travels with the closure.** A cold reader and the export handoff read the
-  snapshot for the plan and this file for the history. Neither reads the chat.
+  snapshot for the plan and this file for generation and execution history.
+  Conversation review is read from the supervisor-bound job ledger, never from
+  a mutable file inside the captured closure. Neither source requires the chat.
 
 **This is not the old hand-written closure context document under a new name.**
 The plan sections such a document used to duplicate are gone —
@@ -155,10 +163,11 @@ these hold:
 
 1. `evidence.supervisor_detail` carries the **verbatim, unedited**
    supervisor-authored payload — an error body or traceback returned in a tool
-   result, or a field read out of `verified.json`. A paraphrase, a summary or a
-   reconstruction disqualifies it.
+   result, or the durable operation/requirement status returned by
+   `inspect_workflow`. A paraphrase, a summary or a reconstruction disqualifies
+   it.
 2. `path` names the producing tool, so a reader can find the payload:
-   `tool:build_data_product.error`.
+   `tool:inspect_workflow.operation`.
 
 Otherwise `agent_observed`. **When it is unclear, it is `agent_observed`** —
 this is the fail-closed rule expressed as a field, and it is what stops an
@@ -171,7 +180,7 @@ v2:models[scored_candidates].key
 v2:open_questions[fx_rates].target
 closure:transform/main.py:214
 closure:models.py:scored_candidates.verdict
-tool:build_data_product.error
+tool:inspect_workflow.operation
 ```
 
 Three prefixes and no others: `spec:`, `closure:`, `tool:`. A subscript is the
@@ -244,7 +253,7 @@ disguise an observation as a measurement. `record append` rejects a report whose
   "generated_at_unix_ms": 1769904000000,
   "generator_model": "claude-opus-5",
   "stages":      { /* nine keys, always all present */ },
-  "review_rounds": [ /* every dispatched complete, timed-out, or needs-user review */ ],
+  "review_rounds": [], /* reserved schema field; workflow v2 never appends here */
   "attempts":    [ /* every heal, remap, regenerate, retry */ ],
   "concessions": [ /* discouraged things done, and whether disclosed */ ],
   "blockers":    [ /* open_questions discovered late */ ],
@@ -279,9 +288,10 @@ predicate below.
 3. **Stages 4–8** are merged by the loop as they happen, via `record append`.
 4. **Every** heal, regenerate, remap and retry appends to `attempts[]` *before*
    re-running.
-5. **Every** adversarial review appends one `review_rounds[]` entry before any
-   authorized mutation; pending behavior-affecting claims set materialization to
-   `needs_user`.
+5. **After capture**, exactly one conversation review for that capture generation
+   appends to the job-level `review-record.json`. `build-record.json` remains
+   unchanged. An accepted behavior-affecting finding requires reset, local
+   correction, self-check, recapture, and a fresh review of the new generation.
 
 `record init` is the only writer of `s0_spec`, and re-validating after a
 write-back does not update it: `s0_spec` describes the snapshot the closure was
@@ -474,34 +484,32 @@ A cap is a **bound on retrying, not a verdict on the closure.** Exhausting the
 retry cap does not make the closure known-bad; it means the user hears about it
 instead of the agent looping in silence.
 
-## `review_rounds[]` — review claims and user decisions
+## Where conversation review lives
 
-Reviews are separate from mutation attempts: a finding can be rejected, denied,
-pending or timed out without changing code. A dispatched round has exactly one
-of `complete`, `timed_out`, or `needs_user` status — never `skipped`. A
-non-eligible review is no dispatch and no round entry. Each round records its
-deadline, elapsed time and every returned finding's claim, evidence,
-adjudication/citation, classification, proposed effect, user decision and
-applied files. `accepted` means verified, not authorized. A behavior-affecting
-accepted finding remains `needs_user` until the user explicitly approves it;
-only a proved behavior-preserving structural note may be applied automatically.
-Likewise, a `timed_out` round blocks materialization until an auditable
-`user_decision` cites the user's choice to continue; keep the round status
-`timed_out` and use an empty `approved_finding_ids` list when that choice
-approves no finding. When the user explicitly continues without applying an
-accepted behavior-affecting finding, list that still-unapplied ID in
-`deferred_finding_ids`; the list is empty otherwise. Every accepted
-behavior-affecting finding in a resolved round is therefore either applied
-with approval or explicitly deferred by the cited user decision.
+The `review_rounds` member in `build-record.json` is a required, reserved empty
+array for schema compatibility. Workflow v2 must not append review data to it:
+doing so after capture would mutate the source digest that the supervisor is
+protecting.
 
-The following is the canonical strict-JSON shape for a completed review with one
-rejected, non-applied behavior finding. Keep the fence and keys exact; validate
-each emitted round with `dp_diagnostics.validate_review_round` before recording
-it. A rejected claim needs a citation, but does not need a user decision because
-it authorizes no change.
+Conversation review instead uses
+`…/nxd-jobs/<workflow>/review-record.json`, outside every captured closure. The
+ledger has schema `nxd-conversation-review-ledger-v1`, names the workflow, and
+appends exactly one round per capture generation. A round can be `complete`,
+`timed_out`, or `needs_user` — never `skipped` — and records the deadline,
+elapsed time, claims, evidence, adjudication, proposed effect, and any user
+decision. `accepted` means verified, not authorized. See
+[workflow-v2.md](workflow-v2.md) and
+[adversarial-review.md](../../nxd-generate-data-product/reference/adversarial-review.md)
+for the authoritative dispatch, projection, reset, and remediation contract.
+
+The following illustrates the external ledger envelope for a completed review
+with one rejected, non-applied behavior finding. A rejected claim needs a
+citation, but does not need a user decision because it authorizes no change.
 
 ```json
 {
+  "schema": "nxd-conversation-review-ledger-v1",
+  "workflow": "candidate-scoring",
   "review_rounds": [
     {
       "status": "complete",
@@ -638,10 +646,11 @@ the pack for "a poorly generated data product that will not do its work":
 Written down here so they are not rediscovered the hard way.
 
 1. **Stage 4 masquerades as environment.** Phase A *cannot execute the builders*
-   — a closure can pass Phase A in full and still fail when the supervisor pins
-   it. So a `build_data_product` failure is **not** presumptive evidence of a bad
-   environment. `pin.build_failed` therefore ships with `owner: "agent"` in the
-   registry, by construction rather than by evidence.
+   — a closure can pass Phase A in full and still fail when the supervisor runs
+   trusted validation through the returned `start_requirement` action. A failed
+   validation operation in `inspect_workflow` is **not** presumptive evidence of
+   a bad environment. `pin.build_failed` therefore ships with `owner: "agent"`
+   in the registry, by construction rather than by evidence.
 2. **Phase B covers only `transform/main.py`.** A green Phase B says nothing
    about `spec.py` or `models.py`. Its printed `unverified:` list is its own
    declared blind spot for dynamic constructs, and those lines are emitted as
@@ -874,17 +883,19 @@ not materialized. R7.
 
 ```jsonc
 {"stage":"s4_pin","code":"pin.build_failed","severity":"error",
- "owner":"agent","origin":"agent_observed","path":"tool:build_data_product.error",
- "message":"build returned an error with no endpoint",
- "evidence":{"stdout_excerpt":"…"},"fix":null}
+ "owner":"agent","origin":"supervisor_reported","path":"tool:inspect_workflow.operation",
+ "message":"trusted validation failed before admission",
+ "evidence":{"supervisor_detail":{"status":"failed","code":"workflow/validation_failed"}},"fix":null}
 ```
 
-> The build didn't complete, and I can't yet tell whether that's my code or the
+> Validation didn't complete, and I can't yet tell whether that's my code or the
 > machine — so I'm treating it as mine and taking another look at the
 > definition.
 
 Never "that's an environment problem". Stage 4 masquerades as environment, there
-is no supervisor-reported evidence here, and R8 applies.
+is not enough evidence here to reclassify ownership, and R8 applies. Continue
+only through the next action returned by `inspect_workflow`; never retry by
+calling a separate construction tool.
 
 ## The CLI
 
@@ -942,12 +953,14 @@ letting a reader assume otherwise.
   The *existence* of a concession and its `code` are checkable; the account of
   it is not.
 - **Supervisor tracebacks now have a producer; per-attempt identity does not.**
-  `mcp__nxd-desktop__inspect_run`, called once with the failed `run_id`, returns
-  a `run.stdout_tail` carrying the verbatim, path-redacted traceback from inside
-  the user transform — enough to fill `supervisor_detail` with
-  `origin: "supervisor_reported"`, quoting that payload and naming
-  `tool:inspect_run.run.stdout_tail` as its path. See
-  [failure-handling.md](failure-handling.md) § After a failed build.
+  In workflow v2, call `mcp__nxd-desktop__inspect_workflow` once with the failed
+  workflow and current operation or requirement identity; its bounded diagnostic
+  can fill `supervisor_detail` with `origin: "supervisor_reported"` and a
+  `tool:inspect_workflow.operation` path. In a feature-off or non-enrolled
+  compatibility runtime only, `mcp__nxd-desktop__inspect_run` with the failed
+  `run_id` supplies `run.stdout_tail` and the matching
+  `tool:inspect_run.run.stdout_tail` path. See [failure-handling.md](failure-handling.md)
+  § After a failed supervisor operation: inspect once, then classify.
   **Per-attempt supervisor identity is still `origin: "unbound"`**, as is stage
   attribution: the supervisor emits no `code`/`stage`/`severity`/`owner`, so the
   stage remains an agent inference over supervisor-authored evidence. Those

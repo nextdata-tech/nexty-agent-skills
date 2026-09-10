@@ -172,12 +172,15 @@ expensive profiling on every bounce:
 1. **Profile subagent (Step 2, read-only).** Dispatch a built-in read-only
    subagent for a **file** source (CSV/JSON/JSONL/Parquet), giving it only the
    source path and the `nxd-build-semantic-data-product` inference instructions. It
-   profiles each source into `schema.json`, derives the semantic model, and —
+   profiles each source into `schema.json`, derives the semantic model into the
+   data-only `semantic-model-plan.json` handoff beside `dp-blueprint.md`, and —
    crucially — surfaces any way the source data makes the user's supplied
    procedure ambiguous or under-determined. It returns the inferred model, the
    per-source schemas (each with its label), and a `gap_found` field naming any
-   policy gap the profile exposed. It writes no closure, does not transform the
-   source, and asks the user nothing. A live database/API source is profiled on
+   policy gap the profile exposed. It writes no closure and specifically never
+   writes `models.py`, `spec.py`, `transform/`, or `requirements.txt`; it does
+   not invoke the generator, does not transform the source, and asks the user nothing. A
+   live database/API source is profiled on
    the main thread or from the user's description only (table/endpoint list,
    sample shape) — never fan out a profile that would need a live credential to
    connect (same credential boundary as generation, below).
@@ -188,8 +191,9 @@ expensive profiling on every bounce:
 3. **Generate subagent (Step 3).** Receives the already-computed model and the
    **verbatim approved policy** — never re-profiles, never re-opens the gate as a
    user turn. It authors through generator **Step 6a**, then stops and returns an
-   explicit `status: "awaiting_review"` handoff. It does **not** dispatch the
-   reviewer or run generator Step 7 self-check. If it finds a result-changing gap
+   explicit `status: "awaiting_host_finalize"` handoff. It does **not** dispatch
+   the reviewer. The main thread injects any credential, runs generator Step 7
+   self-check, verifies the host path, and only then captures. If it finds a result-changing gap
    the approved policy does not resolve — either a policy element the enumeration never covered,
    or a profiling finding that makes an approved element ambiguous or conditional
    — it stops and returns `gap_found` instead; the main thread does
@@ -213,19 +217,20 @@ Its return is **structured, not prose**, and must begin with this handoff state:
 
 ```json
 {
-  "status": "awaiting_review",
+  "status": "awaiting_host_finalize",
   "closure_path": "/host-visible/nxd-jobs/<workflow>/closure",
   "surface": "host_absolute",
   "promised_models": ["base_model"],
   "policy_fingerprint": {},
   "credential_slots": [],
   "gap_found": null,
-  "self_check": {"status": "not_started"}
+  "self_check": {"status": "not_started", "owner": "main_thread"}
 }
 ```
 
 `self_check.status` is deliberately pending; the subagent must not claim a
-result it has not run. The main thread changes it only after Step 3b review.
+result it has not run. The main thread changes it before capture, after any
+host-side credential injection. Review starts only after capture.
 The remaining fields carry the following:
 
 - `closure_path` **plus a surface tag** (`host_absolute` or `workspace_relative`)
@@ -239,13 +244,13 @@ The remaining fields carry the following:
   never a value (see the credential boundary below);
 - `gap_found` (or null) as a first-class field distinct from success.
 
-After Step 3b, the main thread appends the self-check fields — Phase-C / Phase-D
+Before Step 3b capture, the main thread appends the self-check fields — Phase-C / Phase-D
 pass/fail, transform dry-run result, and the `distributions` / `unverified` /
 `absent` arrays verbatim. Relay them unchanged; `UNIFORM` still means a value
 supplied by the plan, not one produced by the data.
 
-**The main thread verifies before it builds.** Never pass a subagent-returned
-path to `build_data_product` unverified: confirm the path resolves on the
+**The main thread verifies before capture.** Never pass a subagent-returned
+path to the supervisor unverified: confirm the path resolves on the
 supervisor's **host** surface and that
 `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 `requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
@@ -261,7 +266,7 @@ next: `dp-blueprint.approved.md` is the byte copy of the approved plan the closu
 compiled from, `dp-blueprint.lock.json` carries its hash, and `build-record.json`
 carries what happened — without them nothing downstream can tell whether the
 closure still matches the plan. A path that does not resolve host-side, or is
-missing a required file, is a handoff failure, not a build input.
+missing a required file, is a handoff failure, not a capture input.
 
 **Credential boundary — a live credential never enters a subagent.** For a
 database or REST API source the closure carries a real credential in
@@ -269,7 +274,7 @@ database or REST API source the closure carries a real credential in
 secret into a second transcript — a new leak the main-thread flow does not have.
 So the generate subagent writes a **placeholder** for the credential and returns
 `credential_slots` (the key names); the real value is written into
-`infra-profile.yaml` **host-side after the hand-back and before the build**, where
+`infra-profile.yaml` **host-side after the hand-back and before self-check and capture**, where
 `SENSITIVE` / `.gitignore` / `chmod 0600` are asserted. A subagent must never
 receive, echo, or narrate a live credential. When post-hand-back injection is not
 available, keep credentialed generation on the main thread and fan out only
@@ -282,54 +287,23 @@ one.
 
 ## Main-thread review checkpoint
 
-Step 3b belongs to the main thread for both inline and offloaded generation. Treat
-every Step 6a handoff as `awaiting_review` until eligibility is explicitly
-resolved. Verify these three skip predicates separately: no derived models, no
-judgement calls, and exactly one question. Review is skipped only when **all
-three** are verified; otherwise it is required. If the reviewer is unavailable,
-stop with a blocker — do not reinterpret that as eligibility to skip.
+Step 3b belongs to the main thread for both inline and offloaded generation.
+Finish generator Step 7 before capture, then never mutate the captured closure.
+The activated v2 contract requires exactly one built-in read-only `Agent` or
+`Task` review per capture generation over the supervisor-returned retained
+paths; there is no complexity-based skip or mutable-path duplicate.
 
-For a required review, dispatch exactly one built-in read-only `Agent` or `Task`
-with the normalized host-visible closure path and a
-`sanitized_original_request`. Preserve every user question and supplied
-procedure, but replace every value the user designated as a credential and
-every value from a non-public credential field with a named placeholder such as
-`[CREDENTIAL:database_password]`. Inventory and replace before dispatch, then
-verify that no known credential value remains anywhere in the child prompt. If
-the inventory or complete sanitization cannot be established, do not delegate:
-stop the workflow and report the credential-safety blocker. No credential may
-reach the reviewer.
+Preserve every user question and supplied procedure under the
+`sanitized_original_request` contract, inventory and replace every credential,
+and stop if complete sanitization cannot be established. The reviewer returns
+claims only and never edits, builds, serves, transforms, or talks to the user.
+The exact marker, 120-second deadline, external `review-record.json` ledger,
+bounded `report_requirement` projection, remediation loop, and wire fields are
+canonical in [workflow-v2.md](workflow-v2.md) and
+[adversarial-review.md](../../nxd-generate-data-product/reference/adversarial-review.md).
 
-Include exactly one marker line in the prompt, with compact JSON, exact keys,
-and the normalized closure path:
-
-```text
-NXD_REVIEW_DISPATCH {"closure_path":"nxd-jobs/<workflow>/closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
-```
-
-Substitute only `closure_path` and `review_round_index`; keep every other
-key/value unchanged and add no colon, slug or prose prefix.
-
-Ask for claims only. The reviewer never edits, builds, serves, transforms or
-talks to the user. Bound the dispatch at 120 seconds. A background launch with
-no returned claims is not a completed review.
-
-Record one `review_rounds[]` object in `build-record.json` for every dispatched
-round and run the shipped `dp_diagnostics.validate_review_round` validator before
-using it. Include every claim and exactly one adjudication/citation per claim.
-Relay every claim, including rejected or out-of-scope claims, and resolve any
-required user decision. Before self-check, every round must be valid and either
-`complete`, or carry `needs_user`/`timed_out` together with an auditable user
-decision to continue. A `needs_user` status remains truthful after that choice;
-the cited decision is what resolves it. For a verified ineligible review, write
-no review round. Then run generator Step 7 self-check and lock verification.
-
-Step 4 must refuse `check_data_product` and `build_data_product` until review
-eligibility is resolved, every required round is valid and unblocked, and the
-self-check completed **after** that resolution. This ordering is a workflow
-contract. Bind the review to the exact marker, the canonical
-`<normalized-closure>/build-record.json#review_rounds/<review_round_index>` attestation,
-closure-keyed rounds, and the closure identified by matching supervisor
-`run_id` and `artifact_id`. Use observed dispatch, self-check, and build order
-for chronology; do not add or infer a dispatch turn. Evidence from sibling
-or abandoned closures never combines.
+An accepted behavior-changing finding requires reset, local correction,
+self-check, recapture, and one fresh review for the new generation. Evidence
+from sibling captures or abandoned workflows never combines. Step 4 proceeds
+only when the supervisor reports the review requirement satisfied and returns
+the validation action; no local ledger or self-check asserts completion.

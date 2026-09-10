@@ -83,6 +83,11 @@ def test_skill_pack_root_defaults_to_and_validates_the_current_checkout(tmp_path
 
     assert module.build_parser().parse_args([]).skill_pack_root is None
     assert module._validated_skill_pack_root(None) == module.REPO_ROOT
+    activation_bundle = module.build_parser().parse_args([]).workflow_activation_bundle
+    assert activation_bundle.is_file()
+    assert json.loads(activation_bundle.read_text(encoding="utf-8"))["schema"] == (
+        "nxd-workflow-activation-v1"
+    )
 
     incomplete = tmp_path / "incomplete-skill-pack"
     incomplete.mkdir()
@@ -127,10 +132,17 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
         captured["scenario_root"] = path
         return original_load_scenarios(path)
 
-    def fake_canary(canary_root: Path, *, skills_root: Path, supervisor: Path):
+    def fake_canary(
+        canary_root: Path,
+        *,
+        skills_root: Path,
+        supervisor: Path,
+        defer_legacy_build: bool,
+    ):
         captured["canary_root"] = canary_root
         captured["canary_skills_root"] = skills_root
         captured["canary_supervisor"] = supervisor
+        captured["canary_defer_legacy_build"] = defer_legacy_build
         return SimpleNamespace(verdict="clean")
 
     class FakeTierRunner:
@@ -168,6 +180,7 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     assert captured["scenario_root"] == module.SCENARIO_ROOT
     assert captured["canary_root"] == module.CANARY_ROOT
     assert captured["canary_skills_root"] == skill_root / "src"
+    assert captured["canary_defer_legacy_build"] is True
     assert captured["staged_plugin_manifest"]["version"] == "selected-version"
     assert captured["staged_skill"] == "selected\n"
     command = captured["live_command"]

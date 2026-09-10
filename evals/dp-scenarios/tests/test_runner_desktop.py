@@ -156,7 +156,7 @@ def test_production_builder_injects_isolated_mcp_configuration(tmp_path: Path) -
     turn = _script(tmp_path / "turn.py", ARGV_CAPTURE)
     args_file = tmp_path / "production-argv.json"
     server = _script(tmp_path / "server.py", "for _line in __import__('sys').stdin: pass\n")
-    allowed_tools = ("mcp__nxd-desktop__build_data_product",)
+    allowed_tools = ("mcp__nxd-desktop__advance_workflow",)
     with RunEnvironment(
         make_scenario(),
         pins(),

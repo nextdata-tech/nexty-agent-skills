@@ -6,7 +6,7 @@ import csv
 import io
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -207,6 +207,120 @@ def test_intake_still_catches_closure_authoring_before_approval() -> None:
     assert not result.passed
     assert "intake_approval_not_before_codegen" in result.codes
     assert result.points == 0
+
+
+def _workflow_v2_intake(
+    *,
+    quote: str = "Approved.",
+    include_prepare: bool = True,
+    desktop_server_name: str = "nxd-desktop",
+    decision_response_workflow: str | None = "workflow",
+) -> dict[str, object]:
+    tool_prefix = f"mcp__{desktop_server_name}__"
+    prepare_calls = [
+        {
+            "name": f"{tool_prefix}prepare_workflow",
+            "arguments": {"workflow": "workflow", "blueprint_path": "dp-blueprint.md"},
+            "result": {"is_error": False, "content": {"workflow": "workflow"}},
+        }
+    ] if include_prepare else []
+    return {
+        "rows": [
+            {"record_type": "run_manifest"},
+            {
+                "turn": 2,
+                "action_kind": "spec_approved",
+                "artifact_ref": "Approved.",
+            },
+            {"turn": 2, "action_kind": "codegen"},
+        ],
+        "observations": {
+            "turns": [
+                {"turn": 1, "files_touched": [], "tool_calls": prepare_calls},
+                {
+                    "turn": 2,
+                    "files_touched": [{"path": "closure/spec.py"}],
+                    "tool_calls": [
+                        {
+                            "name": f"{tool_prefix}advance_workflow",
+                            "arguments": {
+                                "workflow": "workflow",
+                                "action": {
+                                    "type": "session_decision",
+                                    "parameters": {"approved": True, "quote": quote},
+                                },
+                            },
+                            "result": {
+                                "is_error": False,
+                                "content": (
+                                    {"workflow": decision_response_workflow}
+                                    if decision_response_workflow is not None
+                                    else {}
+                                ),
+                            },
+                        }
+                    ],
+                },
+                {
+                    "turn": 3,
+                    "files_touched": [],
+                    "tool_calls": [
+                        {
+                            "name": f"{tool_prefix}advance_workflow",
+                            "arguments": {
+                                "workflow": "workflow",
+                                "action": {
+                                    "type": "start_run",
+                                    "parameters": {"expected_invalidation_epoch": 0},
+                                },
+                            },
+                            "result": {"is_error": False, "content": {"workflow": "workflow"}},
+                        }
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval() -> None:
+    assert gate_intake(_workflow_v2_intake()).passed
+
+    wrong_quote = gate_intake(_workflow_v2_intake(quote="Sure, go ahead."))
+    assert "intake_workflow_approval_not_relayed" in wrong_quote.codes
+
+    missing_prepare = gate_intake(_workflow_v2_intake(include_prepare=False))
+    assert "intake_workflow_prepare_not_before_approval" in missing_prepare.codes
+
+    wrong_workflow = _workflow_v2_intake()
+    decision = wrong_workflow["observations"]["turns"][1]["tool_calls"][0]
+    decision["arguments"]["workflow"] = "other-workflow"
+    decision["result"]["content"]["workflow"] = "other-workflow"
+    result = gate_intake(wrong_workflow)
+    assert "intake_workflow_approval_not_relayed" in result.codes
+
+    wrong_decision_response = gate_intake(
+        _workflow_v2_intake(decision_response_workflow="other-workflow")
+    )
+    assert "intake_workflow_approval_not_relayed" in wrong_decision_response.codes
+
+    missing_decision_workflow = gate_intake(
+        _workflow_v2_intake(decision_response_workflow=None)
+    )
+    assert "intake_workflow_approval_not_relayed" in missing_decision_workflow.codes
+
+    malformed_decision_response = _workflow_v2_intake()
+    malformed_decision = malformed_decision_response["observations"]["turns"][1][
+        "tool_calls"
+    ][0]
+    malformed_decision["result"]["content"] = ["not", "a", "mapping"]
+    malformed = gate_intake(malformed_decision_response)
+    assert "intake_workflow_approval_not_relayed" in malformed.codes
+
+
+def test_intake_uses_the_configured_desktop_server_name() -> None:
+    ledger = _workflow_v2_intake(desktop_server_name="desktop-under-test")
+    assert gate_intake(ledger, desktop_server_name="  DeSkToP-UnDeR-TeSt  ").passed
 
 
 def test_intake_codegen_inference_ignores_non_authoring_observations() -> None:
@@ -521,11 +635,13 @@ def _review_attestation(
     closure: str = "closure",
     review_round_index: int = 0,
 ) -> dict:
+    job_path = PurePosixPath(closure).parent
+    review_path = (job_path / "review-record.json").as_posix()
     return {
         "action_kind": "adversarial_review",
         "turn": turn,
         "outcome": outcome,
-        "evidence_ref": f"{closure}/build-record.json#review_rounds/{review_round_index}",
+        "evidence_ref": f"{review_path}#review_rounds/{review_round_index}",
         "review_round_index": review_round_index,
     }
 
@@ -548,7 +664,7 @@ def _published_build(
 def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> None:
     """A self-check the harness observed needs no agent testimony about it.
 
-    A live crm-pipeline run called ``check_data_product`` successfully before
+    A live crm-pipeline run completed trusted workflow validation before
     every build and still failed on ``self_check_outcome_missing`` and
     ``self_check_attestation_missing`` -- the harness failing an agent for not
     re-telling it what it had just seen. Same pattern as the build gate, where
@@ -591,19 +707,8 @@ def _dispatch_observations(*, tool: str = "Agent", subagent_type: str = "general
                         },
                         "result": {"is_error": False, "content": "No claims."},
                     },
-                    {
-                        "name": "mcp__nxd-desktop__check_data_product",
-                        "arguments": {"definition": "/workspace/closure", "workflow": "workflow"},
-                        "result": {
-                            "is_error": False,
-                            "content": {"outcome": "pass", "workflow": "workflow"},
-                        },
-                    },
-                    {
-                        "name": "mcp__nxd-desktop__build_data_product",
-                        "arguments": {"definition": "/workspace/closure", "workflow": "workflow"},
-                        "result": {"is_error": False, "content": {}},
-                    },
+                    _workflow_validation_call(),
+                    _workflow_start_run_call(),
                 ]
             }
         ]
@@ -626,7 +731,7 @@ def test_construction_observes_the_review_the_mandated_flow_actually_produces() 
     The attestation is still required for this kind, unlike ``self_check``: a
     delegation call only shows that *a* subagent ran, and the round entry is
     agent-written, so neither is the harness witnessing a review the way a
-    ``check_data_product`` call is the harness witnessing a self-check.
+    workflow validation is the harness witnessing a self-check.
     """
 
     result = gate_construction(
@@ -918,9 +1023,6 @@ def test_construction_keeps_two_closures_separate_and_uses_only_the_published_on
     observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"] = prompt.replace(
         '"closure_path":"closure"', f'"closure_path":"{published}"'
     )
-    for call in observations["turns"][0]["tool_calls"][1:]:
-        call["arguments"]["definition"] = f"/workspace/{published}"
-
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=observations,
@@ -991,29 +1093,120 @@ def _review_call(index: int, *, closure: str = "closure") -> dict[str, object]:
     }
 
 
-def _check_call(*, closure: str = "closure") -> dict[str, object]:
+def _workflow_start_run_call() -> dict[str, object]:
     return {
-        "name": "mcp__nxd-desktop__check_data_product",
-        "arguments": {"definition": f"/workspace/{closure}", "workflow": "workflow"},
+        "name": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {
+            "workflow": "workflow",
+            "action": {
+                "type": "start_run",
+                "parameters": {"expected_invalidation_epoch": 0},
+            },
+        },
+        "result": {"is_error": False, "content": {"workflow": "workflow"}},
+    }
+
+
+def _workflow_validation_call() -> dict[str, object]:
+    return {
+        "name": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {
+            "workflow": "workflow",
+            "action": {
+                "type": "start_requirement",
+                "parameters": {"requirement_id": "validation"},
+            },
+        },
         "result": {
             "is_error": False,
-            "content": {"outcome": "pass", "workflow": "workflow"},
+            "content": {
+                "workflow": "workflow",
+                "requirements": [
+                    {"id": "validation", "status": "satisfied"}
+                ],
+                "next_actions": [{"action": "start_run"}],
+            },
         },
     }
 
 
-def _build_call(*, closure: str = "closure") -> dict[str, object]:
-    return {
-        "name": "mcp__nxd-desktop__build_data_product",
-        "arguments": {"definition": f"/workspace/{closure}", "workflow": "workflow"},
-        "result": {"is_error": False, "content": {}},
+def test_construction_accepts_trusted_v2_validation_before_admission() -> None:
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    _review_call(0),
+                    _workflow_validation_call(),
+                    {
+                        "name": "mcp__nxd-desktop__advance_workflow",
+                        "arguments": {
+                            "workflow": "workflow",
+                            "action": {
+                                "type": "start_run",
+                                "parameters": {"expected_invalidation_epoch": 0},
+                            },
+                        },
+                        "result": {"is_error": False, "content": {}},
+                    },
+                ],
+            }
+        ]
     }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(review_round_index=0),),
+        review_rounds={"closure": [_review_round()]},
+        published_closure=_published_build(call_index=2),
+        require_observed=True,
+        desktop_server_name="  NxD-DeSkToP  ",
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_rejects_legacy_check_as_validation_evidence() -> None:
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    _review_call(0),
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {
+                            "definition": "/workspace/closure",
+                            "workflow": "workflow",
+                        },
+                        "result": {
+                            "is_error": False,
+                            "content": {"outcome": "pass", "workflow": "workflow"},
+                        },
+                    },
+                    _workflow_start_run_call(),
+                ],
+            }
+        ]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_self_check_not_observed" in result.codes
 
 
 def test_construction_accepts_two_fully_paired_review_rounds_before_final_check() -> None:
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _review_call(0), _review_call(1), _check_call(), _build_call()
+            _review_call(0), _review_call(1), _workflow_validation_call(), _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1032,7 +1225,7 @@ def test_construction_accepts_two_fully_paired_review_rounds_before_final_check(
 def test_construction_does_not_hide_an_unresolved_earlier_round_with_a_later_one() -> None:
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _review_call(0), _review_call(1), _check_call(), _build_call()
+            _review_call(0), _review_call(1), _workflow_validation_call(), _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1058,7 +1251,7 @@ def test_construction_resolves_needs_user_only_with_an_auditable_user_decision()
     review["deferred_finding_ids"] = ["review-1"]
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _review_call(0), _check_call(), _build_call()
+            _review_call(0), _workflow_validation_call(), _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1074,10 +1267,10 @@ def test_construction_resolves_needs_user_only_with_an_auditable_user_decision()
     assert result.codes == ()
 
 
-def test_construction_requires_same_turn_review_check_build_call_order() -> None:
+def test_construction_requires_same_turn_review_validation_admission_order() -> None:
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _check_call(), _review_call(0), _build_call()
+            _workflow_validation_call(), _review_call(0), _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1097,9 +1290,9 @@ def test_construction_invalidates_a_check_when_the_closure_is_edited_before_buil
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
             _review_call(0),
-            _check_call(),
+            _workflow_validation_call(),
             {"name": "Edit", "arguments": {"file_path": "/workspace/closure/spec.py"}, "result": {"is_error": False}},
-            _build_call(),
+            _workflow_start_run_call(),
         ]}]
     }
     result = gate_construction(
@@ -1122,13 +1315,13 @@ def test_construction_rejects_opaque_operations_between_check_and_build(
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
             _review_call(0),
-            _check_call(),
+            _workflow_validation_call(),
             {
                 "name": tool_name,
                 "arguments": {"prompt": "unverifiable helper", "command": "unknown"},
                 "result": {"is_error": False, "content": "done"},
             },
-            _build_call(),
+            _workflow_start_run_call(),
         ]}]
     }
     result = gate_construction(
@@ -1161,7 +1354,7 @@ def test_construction_permits_operations_proven_not_to_mutate_the_closure(
     call["result"] = {"is_error": False, "content": "done"}
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _review_call(0), _check_call(), call, _build_call()
+            _review_call(0), _workflow_validation_call(), call, _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1179,7 +1372,7 @@ def test_construction_permits_operations_proven_not_to_mutate_the_closure(
 def test_construction_requires_dispatch_indices_in_chronological_array_order() -> None:
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _review_call(1), _review_call(0), _check_call(), _build_call()
+            _review_call(1), _review_call(0), _workflow_validation_call(), _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1203,7 +1396,7 @@ def test_construction_rejects_out_of_order_turn_records_even_when_indices_look_o
         "turns": [
             {"turn": 2, "tool_calls": [_review_call(0)]},
             {"turn": 1, "tool_calls": [_review_call(1)]},
-            {"turn": 3, "tool_calls": [_check_call(), _build_call()]},
+            {"turn": 3, "tool_calls": [_workflow_validation_call(), _workflow_start_run_call()]},
         ]
     }
     result = gate_construction(
@@ -1225,7 +1418,7 @@ def test_construction_rejects_out_of_order_turn_records_even_when_indices_look_o
 def test_construction_rejects_review_evidence_for_a_sibling_closure() -> None:
     observations = {
         "turns": [{"turn": 1, "tool_calls": [
-            _review_call(0, closure="sibling/closure"), _check_call(), _build_call()
+            _review_call(0, closure="sibling/closure"), _workflow_validation_call(), _workflow_start_run_call()
         ]}]
     }
     result = gate_construction(
@@ -1242,7 +1435,7 @@ def test_construction_rejects_review_evidence_for_a_sibling_closure() -> None:
 
 
 def test_construction_chronology_fails_closed_without_explicit_turn_numbers() -> None:
-    observations = {"turns": [{"tool_calls": [_review_call(0), _check_call(), _build_call()]}]}
+    observations = {"turns": [{"tool_calls": [_review_call(0), _workflow_validation_call(), _workflow_start_run_call()]}]}
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=observations,
@@ -1256,23 +1449,19 @@ def test_construction_chronology_fails_closed_without_explicit_turn_numbers() ->
     assert "construction_adversarial_review_not_observed" in result.codes
 
 
-def test_shipped_review_docs_embed_the_shared_canonical_dispatch_marker() -> None:
+def test_shipped_review_docs_keep_one_canonical_dispatch_marker() -> None:
     repository_root = Path(__file__).resolve().parents[3]
-    docs = (
-        (
-            repository_root / "src/nxd-generate-data-product/reference/adversarial-review.md",
-            "closure",
-        ),
-        (
-            repository_root / "src/nxd-run-job-loop/reference/scheduling.md",
-            "nxd-jobs/<workflow>/closure",
-        ),
+    canonical = (
+        repository_root / "src/nxd-generate-data-product/reference/adversarial-review.md"
     )
+    scheduling = repository_root / "src/nxd-run-job-loop/reference/scheduling.md"
 
-    assert all(
-        canonical_review_dispatch_marker(closure, 0) in path.read_text(encoding="utf-8")
-        for path, closure in docs
+    assert canonical_review_dispatch_marker("closure", 0) in canonical.read_text(
+        encoding="utf-8"
     )
+    scheduling_text = scheduling.read_text(encoding="utf-8")
+    assert "NXD_REVIEW_DISPATCH" not in scheduling_text
+    assert "adversarial-review.md" in scheduling_text
 
 
 def _documented_review_marker(path: Path) -> str:
@@ -1282,56 +1471,48 @@ def _documented_review_marker(path: Path) -> str:
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "template_closure", "concrete_closure"),
+    ("relative_path", "canonical_link"),
     (
         (
             "src/nxd-run-job-loop/SKILL.md",
-            "nxd-jobs/<workflow>/closure",
-            "nxd-jobs/crm-deals-pipeline/closure",
+            "reference/scheduling.md",
         ),
         (
             "src/nxd-generate-data-product/SKILL.md",
-            "closure",
-            "nxd-jobs/finance-close/closure",
+            "reference/adversarial-review.md",
         ),
     ),
 )
-def test_top_level_review_marker_examples_parse_after_allowed_substitution(
-    relative_path: str, template_closure: str, concrete_closure: str
+def test_top_level_skills_link_to_the_canonical_review_marker(
+    relative_path: str, canonical_link: str
 ) -> None:
     repository_root = Path(__file__).resolve().parents[3]
-    marker = _documented_review_marker(repository_root / relative_path)
+    text = (repository_root / relative_path).read_text(encoding="utf-8")
 
-    assert _review_dispatch_marker(marker) == (template_closure, 0)
-    substituted = marker.replace(
-        f'"closure_path":"{template_closure}"',
-        f'"closure_path":"{concrete_closure}"',
-    ).replace('"review_round_index":0', '"review_round_index":2')
-    assert _review_dispatch_marker(substituted) == (concrete_closure, 2)
+    assert "NXD_REVIEW_DISPATCH" not in text
+    assert canonical_link in text
 
 
-def test_top_level_review_marker_examples_keep_strict_malformed_rejection() -> None:
+def test_canonical_review_marker_keeps_strict_malformed_rejection() -> None:
     repository_root = Path(__file__).resolve().parents[3]
-    for relative_path in (
-        "src/nxd-run-job-loop/SKILL.md",
-        "src/nxd-generate-data-product/SKILL.md",
-    ):
-        marker = _documented_review_marker(repository_root / relative_path)
-        malformed = (
-            marker.replace("NXD_REVIEW_DISPATCH ", "NXD_REVIEW_DISPATCH: ", 1),
-            marker.replace(
-                '"request_contract":"sanitized_original_request"',
-                '"request_contract":"original_request"',
-                1,
-            ),
-            marker.replace(
-                '"return":"claims_only"',
-                '"return":"claims_only","extra":true',
-                1,
-            ),
-            marker.replace('"review_round_index":0', '"review_round_index":"2"', 1),
-        )
-        assert all(_review_dispatch_marker(value) is None for value in malformed)
+    marker = _documented_review_marker(
+        repository_root / "src/nxd-generate-data-product/reference/adversarial-review.md"
+    )
+    malformed = (
+        marker.replace("NXD_REVIEW_DISPATCH ", "NXD_REVIEW_DISPATCH: ", 1),
+        marker.replace(
+            '"request_contract":"sanitized_original_request"',
+            '"request_contract":"original_request"',
+            1,
+        ),
+        marker.replace(
+            '"return":"claims_only"',
+            '"return":"claims_only","extra":true',
+            1,
+        ),
+        marker.replace('"review_round_index":0', '"review_round_index":"2"', 1),
+    )
+    assert all(_review_dispatch_marker(value) is None for value in malformed)
 
 
 @pytest.mark.parametrize("attestations", [

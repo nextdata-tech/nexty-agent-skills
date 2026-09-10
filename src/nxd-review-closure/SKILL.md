@@ -1,13 +1,13 @@
 ---
 name: nxd-review-closure
-description: ADVERSARIAL REVIEWER for a data-product closure that has already been authored. Reads the closure AND the original request, then hunts for LOGICAL and SEMANTIC defects the structural self-check cannot see - a question the closure cannot answer, a platform capability dismissed instead of researched, a metric whose aggregation is wrong for its grain, a judgement resolved silently in code, an assert that restates the transform's own arithmetic and so can never fail. Returns CLAIMS, never verdicts - the builder adjudicates each one against the closure and may reject it with a citation. Use when a closure has been authored and before nxd-generate-data-product runs its Step 7 self-check, dispatched as a read-only subagent holding both the closure path and the verbatim request. Not a structural checker - file set, naming invariant, imports and port name belong to that self-check.
+description: ADVERSARIAL REVIEWER for an immutable data-product capture whose generator self-check has already finished. Reads the supervisor-retained capture, exact retained blueprint, and sanitized original request, then hunts for LOGICAL and SEMANTIC defects the structural self-check cannot see. Returns CLAIMS, never verdicts; the owning conversation adjudicates and reports them. Use when exactly one review is required for a capture generation after supervisor capture and before trusted validation. Not a structural checker and never receives a mutable authoring path.
 allowed-tools:
   - Read
   - Glob
   - Grep
 metadata:
   author: nextdata
-  version: 0.48.0
+  version: 0.49.0
 ---
 
 # Review a generated closure — adversarially
@@ -23,14 +23,17 @@ this review.
 
 ## What you are given
 
-1. **The closure** — a directory containing
+1. **The supervisor-retained capture** — the exact read-only directory supplied
+   as `review_input.retained_capture_root`, containing
    `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
    `requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
    `build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
    for a credentialed source, `SENSITIVE` and `.gitignore`
    — plus `data/` where the connector is file-based.
-2. **The original request** — the questions the user asked and any procedure
-   they supplied.
+2. **The exact retained blueprint** — the file supplied as
+   `review_input.retained_blueprint_path`.
+3. **The sanitized original request** — every user question and supplied
+   procedure, with credentials inventoried and replaced before dispatch.
 
 `dp-blueprint.approved.md` is the **approved plan**, byte for byte: it is the closure's
 own statement of what it was supposed to do, and it is the sharpest thing you
@@ -38,10 +41,17 @@ have to review the code against. `build-record.json` is what happened when that
 plan was compiled and run — read its `concessions[]` before you accept a clean
 run, because a concession is the closure telling you where it gave something up.
 
-**Both are mandatory.** If you were dispatched without the request, say so and
-return no findings. Reviewing a closure without knowing what it was meant to
-answer is the one failure mode this role exists to avoid: a closure can be
-internally immaculate and still answer the wrong question.
+**All three are mandatory.** Refuse scope if either path is missing, is not the
+supervisor-provided retained input, or the sanitized request is absent. Never
+substitute the mutable authoring root. Reviewing a closure without knowing what
+it was meant to answer is the one failure mode this role exists to avoid: a
+closure can be internally immaculate and still answer the wrong question.
+
+The generator self-check and canonical lock verification completed before
+capture. Do not rerun them and do not write their results. This review happens
+exactly once for this capture generation; a behavior-changing correction
+requires the owning conversation to reset, correct locally, self-check,
+recapture, and dispatch a fresh reviewer for the new generation.
 
 ## What to hunt for
 
@@ -110,10 +120,11 @@ bytes still match the lock's `snapshot_sha256`, that `README.md` is present, and
 that `build-record.json` exists with `compiled_from` equal to the lock's
 `spec_hash`.
 
-Those are mechanical, settled by generator-run `self_check.py` and canonical lock
-verification. This read-only review **does not execute either helper** and receives
-only the closure path plus verbatim request; inspect their recorded evidence in
-the closure. If evidence is absent, say it is unverified rather than inventing a
+Those are mechanical, settled before capture by generator-run `self_check.py`
+and canonical lock verification. This read-only review **does not execute either
+helper** and receives only the supervisor-retained capture path, retained
+blueprint path, and sanitized request; inspect their recorded evidence in the
+capture. If evidence is absent, say it is unverified rather than inventing a
 failure or requesting a helper path.
 
 If you notice a structural problem, mention it in one line under

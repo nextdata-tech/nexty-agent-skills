@@ -19,7 +19,8 @@ different questions:
 
 - **Tools** (`mcp__nxd-desktop__…`) are *actions*: check, build, resume, list,
   inspect, describe, query, export. Most take locks, boot runtimes, or mint
-  bearers; `check_data_product` is the no-lock, no-publish admission check.
+  bearers. `check_data_product` is a compatibility no-lock, no-publish check;
+  it is not the workflow-v2 construction admission boundary.
 - **Resources** (`nxd://…`) are *read-only documents* projected from the pinned
   artifact bytes of a published release. Reading one takes no lock, boots
   nothing, and cannot disturb a running instance.
@@ -30,18 +31,25 @@ tool when you want to *do* something or when you need live runtime state.
 
 ## Preflight before build
 
-Before building an authored or edited closure, call
-`mcp__nxd-desktop__check_data_product` with the same `definition` and
-`workflow` that you will give to `build_data_product`. The host-local equivalent
-is `nxd-desktop-supervisor check --definition <dir> --workflow <workflow> --json`.
-This is a read-only admission check: it publishes nothing, opens no run, and
-takes no supervisor ownership lock.
+For a new local construction, first call `get_workflow_capabilities` and follow
+the strict workflow-v2 sequence in [workflow-v2.md](workflow-v2.md) when the
+runtime advertises execution. Do not use this preflight, a direct supervisor
+CLI, or `build_data_product` to bypass v2 capture, retained review, and
+admission. A false or unavailable v2 capability is a blocker for that
+construction; it is not permission to silently take a legacy path.
 
-This supervisor preflight and the generator's closure-root `self_check.py` are
+`mcp__nxd-desktop__check_data_product` and its host-local equivalent
+(`nxd-desktop-supervisor check --definition <dir> --workflow <workflow> --json`)
+remain valid only for an explicitly feature-off/non-enrolled compatibility
+runtime or for inspecting an already-authored closure outside an enrolled v2
+construction. They are read-only checks: they publish nothing, open no run, and
+take no supervisor ownership lock.
+
+This compatibility preflight and the generator's closure-root `self_check.py` are
 complementary gates, not two names for the same check. The preflight is the
 host-owned admission decision for the exact definition and workflow: it runs
 structure, runtime, contract, and semantic checks in the supervisor's
-environment before `build_data_product`. The generator-owned [Step 7 self-check](../../nxd-generate-data-product/SKILL.md#step-7--self-check-before-handing-off-mandatory)
+environment before a legacy compatibility build. The generator-owned [Step 7 self-check](../../nxd-generate-data-product/SKILL.md#step-7--self-check-before-handing-off-mandatory)
 is copied into the generated closure and records its local structural,
 scratch-transform, reach, policy, and read-back evidence in `build-record.json`.
 A green self-check does not admit or publish a product, and a passing preflight
@@ -131,8 +139,10 @@ durable move is:
 
 Or just re-read `resources/list`, which always advertises the current seq.
 
-Rebuilding through `build_data_product` with the same `workflow` advances
-`publish_seq`. After any rebuild, discard cached URIs.
+In a feature-off/non-enrolled compatibility runtime, rebuilding through
+`build_data_product` with the same `workflow` advances `publish_seq`. In an
+enrolled v2 workflow, follow the returned v2 actions instead. After any rebuild,
+discard cached URIs.
 
 ## What each document carries
 
@@ -219,11 +229,14 @@ content.
   was superseded. Re-read `current` (or `resources/list`) and retry against the
   current seq. Not an error state; a rebuild happened.
 - **`artifact_unavailable`** — the published data was garbage-collected or
-  failed integrity checks. The server marks this **not retryable**: rebuild with
+  failed integrity checks. The server marks this **not retryable**: on an
+  enrolled v2 workflow, reset and reconstruct through the returned v2 actions;
+  on an explicitly feature-off/non-enrolled compatibility runtime, rebuild with
   `build_data_product` from the source definition. Re-reading won't help.
 - **`workflow_not_found`** — nothing published under that workflow. The error
   carries `available_workflows`; `list_data_products` shows what exists, or
-  `build_data_product` creates a new product.
+  a fresh v2 workflow creates a new product. Only a feature-off/non-enrolled
+  compatibility runtime may use `build_data_product` for that new product.
 
 Report a read failure as what it is. Never substitute a shape inferred from the
 source definition for a resource read and present it as the published product.

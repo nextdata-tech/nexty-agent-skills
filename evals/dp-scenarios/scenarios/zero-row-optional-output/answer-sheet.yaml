@@ -4,7 +4,9 @@ opening_message: How did January go, and is there anything I should worry about?
 turns:
   - How did January go, and is there anything I should worry about?
   - Thanks. What did you use to work out how January went?
-  - That covers the outcome. Did anything go wrong in January?
+  - text: "Approved. Proceed with the agreed January definition. Did anything go wrong in January?"
+    substitute_reply: false
+    approval: true
   - Can you explain what gives you confidence in that answer?
   - Please build the January result now.
   - Now query that result and show me the final rows.

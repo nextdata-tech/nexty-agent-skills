@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -806,3 +807,56 @@ def test_the_live_adapter_is_told_where_the_supervisor_keeps_its_state() -> None
         ]
     )
     assert parsed.supervisor_data_dir == Path("/tmp/run/desktop-state")
+
+
+def test_workflow_activation_runs_before_mcp_with_the_exact_disposable_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "activation.json"
+    bundle.write_text('{"schema":"nxd-workflow-activation-v1"}\n', encoding="utf-8")
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((argv, kwargs["env"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(argv, 0, '{"activated":true}\n', "")
+
+    monkeypatch.setattr(environment_module.subprocess, "run", run)
+    digest = environment_module._activate_workflow_control(
+        ("/opt/nxd/supervisor", "--quiet"),
+        data_dir=tmp_path / "desktop-state",
+        bundle=bundle,
+        environment={"HOME": str(tmp_path / "home")},
+    )
+
+    assert calls[0][0] == (
+        "/opt/nxd/supervisor",
+        "--quiet",
+        "--data-dir",
+        str(tmp_path / "desktop-state"),
+        "workflow",
+        "activate",
+        "--bundle",
+        str(bundle.resolve()),
+    )
+    assert calls[0][1]["HOME"] == str(tmp_path / "home")
+    assert digest == "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+
+def test_workflow_activation_fails_closed_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "activation.json"
+    bundle.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        environment_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "{}\n", ""),
+    )
+
+    with pytest.raises(RunEnvironmentError, match="did not confirm activation"):
+        environment_module._activate_workflow_control(
+            "/opt/nxd/supervisor",
+            data_dir=tmp_path / "desktop-state",
+            bundle=bundle,
+            environment={},
+        )

@@ -1,0 +1,76 @@
+{
+  "schema": "nxd-workflow-activation-v1",
+  "contract": {
+    "schema": "nxd-workflow-contract-v1",
+    "kind": "generated-data-product",
+    "version": 1,
+    "requirements": [
+      {
+        "id": "consent",
+        "handler": "session-confirmation-v1",
+        "subject": "consent",
+        "depends_on": [],
+        "accepted_sources": ["session_reported"]
+      },
+      {
+        "id": "capture",
+        "handler": "capture-v1",
+        "subject": "blueprint",
+        "depends_on": ["consent"],
+        "accepted_sources": ["supervisor_execution"]
+      },
+      {
+        "id": "review",
+        "handler": "independent-review-v1",
+        "subject": "capture",
+        "depends_on": ["capture"],
+        "accepted_sources": ["session_reported"]
+      },
+      {
+        "id": "validation",
+        "handler": "generator-validation-v1",
+        "subject": "capture",
+        "depends_on": ["review"],
+        "accepted_sources": ["supervisor_execution"]
+      }
+    ]
+  },
+  "policy": {
+    "policy_id": "desktop-generated-data-product",
+    "revision": 1,
+    "workflow_scope": "all_new_builds",
+    "operation_scopes": ["new_build"],
+    "enforcement": "required",
+    "allowed_contracts": [
+      {
+        "kind": "generated-data-product",
+        "version": 1
+      }
+    ],
+    "handlers": {
+      "session-confirmation-v1": {
+        "kind": "session_confirmation"
+      },
+      "capture-v1": {
+        "kind": "capture",
+        "max_files": 4096,
+        "max_bytes": 268435456,
+        "max_depth": 32
+      },
+      "independent-review-v1": {
+        "kind": "conversation_review",
+        "report_schema_version": 1,
+        "max_report_bytes": 524288,
+        "max_findings": 64
+      },
+      "generator-validation-v1": {
+        "kind": "generator_validation",
+        "process_bound": true
+      }
+    },
+    "minimum_contract_versions": {
+      "generated-data-product": 1
+    },
+    "revoked_identity_ids": []
+  }
+}

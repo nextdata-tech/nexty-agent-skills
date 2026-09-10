@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 import tempfile
@@ -35,6 +36,12 @@ class EnvironmentError(RuntimeError):
 
 
 RunEnvironmentError = EnvironmentError
+
+
+DEFAULT_WORKFLOW_ACTIVATION_BUNDLE = Path(__file__).with_name(
+    "workflow-execution-activation.json"
+)
+WORKFLOW_ACTIVATION_DIGEST_ENV = "NXD_EVAL_WORKFLOW_ACTIVATION_SHA256"
 
 
 _AGENT_MANIFEST_FIELDS = frozenset(
@@ -158,6 +165,80 @@ def _supervisor_data_dir(supervisor_args: Sequence[str]) -> Path | None:
         if argument.startswith("--data-dir="):
             return Path(argument.split("=", 1)[1])
     return None
+
+
+def _supervisor_command(command: str | Path | Sequence[str]) -> tuple[str, ...]:
+    """Return a direct supervisor argv without involving a shell."""
+
+    if isinstance(command, (str, Path)):
+        result = (str(command),)
+    else:
+        result = tuple(str(part) for part in command)
+    if not result or any(not part for part in result):
+        raise EnvironmentError("supervisor_command must not be empty")
+    return result
+
+
+def _activate_workflow_control(
+    command: str | Path | Sequence[str],
+    *,
+    data_dir: Path | None,
+    bundle: Path,
+    environment: Mapping[str, str],
+) -> str:
+    """Activate the trusted v2 contract before the MCP server owns its state."""
+
+    if data_dir is None:
+        raise EnvironmentError(
+            "workflow-v2 activation requires explicit supervisor --data-dir"
+        )
+    if not data_dir.is_absolute():
+        raise EnvironmentError(
+            "workflow-v2 activation requires an absolute supervisor --data-dir"
+        )
+    resolved_bundle = bundle.expanduser().resolve()
+    if not resolved_bundle.is_file():
+        raise EnvironmentError(
+            f"workflow-v2 activation bundle is not a file: {resolved_bundle}"
+        )
+    bundle_bytes = resolved_bundle.read_bytes()
+    if len(bundle_bytes) > 1_048_576:
+        raise EnvironmentError("workflow-v2 activation bundle exceeds 1 MiB")
+    bundle_digest = "sha256:" + hashlib.sha256(bundle_bytes).hexdigest()
+    argv = (
+        *_supervisor_command(command),
+        "--data-dir",
+        str(data_dir),
+        "workflow",
+        "activate",
+        "--bundle",
+        str(resolved_bundle),
+    )
+    try:
+        completed = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, **environment},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise EnvironmentError(f"workflow-v2 activation could not run: {exc}") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()[-2048:]
+        raise EnvironmentError(
+            "workflow-v2 activation failed"
+            + (f": {detail}" if detail else "")
+        )
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    try:
+        response = json.loads(lines[-1]) if lines else None
+    except json.JSONDecodeError as exc:
+        raise EnvironmentError("workflow-v2 activation returned invalid JSON") from exc
+    if not isinstance(response, Mapping) or response.get("activated") is not True:
+        raise EnvironmentError("workflow-v2 activation did not confirm activation")
+    return bundle_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,6 +621,7 @@ class RunEnvironment:
     supervisor_command: str | Path | Sequence[str] | None = None
     supervisor_args: Sequence[str] = ()
     supervisor_environment: Mapping[str, str] | None = None
+    workflow_activation_bundle: Path | None = None
     desktop_server_name: str = "nxd-desktop"
     desktop_allowed_tools: Sequence[str] | None = None
     desktop_session_root: Path | None = None
@@ -672,6 +754,23 @@ class RunEnvironment:
                     )
                     supervisor_environment.update(
                         self.knobs.broker_fault.environment_for_attempt(self.attempt)  # type: ignore[union-attr]
+                    )
+
+                if self.workflow_activation_bundle is not None:
+                    activation_environment = dict(supervisor_environment)
+                    activation_environment.pop("NXD_EVAL_SOURCE_TOKEN", None)
+                    activation_digest = _activate_workflow_control(
+                        self.supervisor_command,
+                        data_dir=supervisor_data_dir,
+                        bundle=self.workflow_activation_bundle,
+                        environment=activation_environment,
+                    )
+                    # The activation bytes are a semantic run input. Including
+                    # their digest in the supervisor session configuration
+                    # makes otherwise identical manifests non-comparable when
+                    # an operator overrides the trusted bundle.
+                    supervisor_environment[WORKFLOW_ACTIVATION_DIGEST_ENV] = (
+                        activation_digest
                     )
 
                 transport = DesktopStdioTransport.create(
@@ -1027,6 +1126,7 @@ RunSetup = RunEnvironment
 
 
 __all__ = [
+    "DEFAULT_WORKFLOW_ACTIVATION_BUNDLE",
     "Environment",
     "EnvironmentError",
     "MockSourceHandle",
@@ -1034,4 +1134,5 @@ __all__ = [
     "RunEnvironment",
     "RunEnvironmentError",
     "RunSetup",
+    "WORKFLOW_ACTIVATION_DIGEST_ENV",
 ]
