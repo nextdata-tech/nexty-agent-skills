@@ -34,7 +34,7 @@ Neither is an Intel build.
 
 The steps below are the Mac install, Linux is similar.
 
-1. **Download the Nexty Desktop distribution** named `nxd-desktop-x.y.z-macos-arm64.command` from [the releases page](https://github.com/nextdata-tech/nexty-agent-skills/releases/tag/v0.48.g0cb20a504).
+1. **Download the Nexty Desktop distribution** named `nxd-desktop-x.y.z-macos-arm64.command` from [the releases page](https://github.com/nextdata-tech/nexty-agent-skills/releases#release-v0.49.1).
 2. **Double-click it.** macOS refuses to open it and warns that it cannot verify
    the developer. That is expected: the installer is not signed yet. Dismiss the
    warning.
