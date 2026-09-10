@@ -25,6 +25,9 @@ from dp_scenarios.scenario import RepeatabilitySpec, load_scenarios
 # counting parents -- see that module for why the count is not portable.
 SCENARIO_ROOT = Path(__file__).resolve().parents[1] / "scenarios"
 SCRIPT = Path(__file__).parents[1] / "scripts/run_local_claude.py"
+PACK_VERSION = json.loads(
+    (REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+)["version"]
 
 
 @dataclass(frozen=True)
@@ -120,20 +123,20 @@ def test_staged_job_helper_dir_is_bound_to_the_plugin_manifest_and_skill_version
     source = tmp_path / "source"
     shutil.copytree(REPO_ROOT / "src", source / "src")
     (source / ".claude-plugin").mkdir()
-    manifest = {"name": "nexty-agent-skills", "version": "0.49.0"}
+    manifest = {"name": "nexty-agent-skills", "version": PACK_VERSION}
     (source / ".claude-plugin" / "plugin.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
     owner = None
     try:
         owner, staged = temporary_plugin(source)
-        helper = staged_job_helper_dir(staged, "0.49.0")
+        helper = staged_job_helper_dir(staged, PACK_VERSION)
         assert helper == (staged / "src" / "nxd-run-job-loop").resolve()
         assert helper.is_dir()
 
         (helper / "scripts" / "self_check.py").unlink()
         with pytest.raises(LocalRunnerError, match="helper is incomplete"):
-            staged_job_helper_dir(staged, "0.49.0")
+            staged_job_helper_dir(staged, PACK_VERSION)
     finally:
         if owner is not None:
             owner.cleanup()
@@ -146,13 +149,13 @@ def test_staged_job_helper_dir_rejects_a_manifest_version_mismatch(tmp_path: Pat
     shutil.copytree(REPO_ROOT / "src", source / "src")
     (source / ".claude-plugin").mkdir()
     (source / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "nexty-agent-skills", "version": "0.49.0"}),
+        json.dumps({"name": "nexty-agent-skills", "version": PACK_VERSION}),
         encoding="utf-8",
     )
     owner, staged = temporary_plugin(source)
     try:
         with pytest.raises(LocalRunnerError, match="manifest version"):
-            staged_job_helper_dir(staged, "0.48.0")
+            staged_job_helper_dir(staged, f"{PACK_VERSION}-mismatch")
     finally:
         owner.cleanup()
 
@@ -175,7 +178,9 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     )
     manifest_path = skill_root / ".claude-plugin" / "plugin.json"
     manifest_path.parent.mkdir()
-    manifest_path.write_text(json.dumps({"name": "selected", "version": "0.49.0"}), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps({"name": "selected", "version": PACK_VERSION}), encoding="utf-8"
+    )
     output_dir = tmp_path / "report"
     captured: dict[str, object] = {}
     original_load_scenarios = module.load_scenarios
@@ -233,7 +238,7 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     assert captured["canary_root"] == module.CANARY_ROOT
     assert captured["canary_skills_root"] == skill_root / "src"
     assert captured["canary_defer_legacy_build"] is True
-    assert captured["staged_plugin_manifest"]["version"] == "0.49.0"
+    assert captured["staged_plugin_manifest"]["version"] == PACK_VERSION
     assert captured["staged_skill"] == "selected\n"
     command = captured["live_command"]
     assert command[command.index("--repo-root") + 1] == str(module.REPO_ROOT)

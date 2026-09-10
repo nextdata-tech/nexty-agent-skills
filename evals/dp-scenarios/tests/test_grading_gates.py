@@ -689,6 +689,29 @@ def test_construction_does_not_ask_the_agent_to_retell_a_check_it_watched() -> N
     assert result.codes == ()
 
 
+def test_construction_accepts_the_documented_nested_workflow_attestation_path() -> None:
+    """The skill's normal nxd-jobs layout must pair with the construction gate."""
+
+    closure = "nxd-jobs/monthly-summary/closure"
+    observations = _dispatch_observations()
+    prompt = observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"]
+    observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"] = prompt.replace(
+        '"closure_path":"closure"', f'"closure_path":"{closure}"'
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation("complete", closure=closure),),
+        review_rounds=_rounds_for(closure),
+        published_closure=_published_build(closure),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
 def _dispatch_observations(*, tool: str = "Agent", subagent_type: str = "general-purpose") -> dict:
     return {
         "turns": [
