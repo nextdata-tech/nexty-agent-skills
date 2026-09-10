@@ -112,6 +112,51 @@ def test_skill_pack_root_rejects_a_malformed_or_empty_pack(tmp_path: Path) -> No
         module._validated_skill_pack_root(root)
 
 
+def test_staged_job_helper_dir_is_bound_to_the_plugin_manifest_and_skill_version(
+    tmp_path: Path,
+) -> None:
+    from dp_scenarios.runner.local import LocalRunnerError, staged_job_helper_dir, temporary_plugin
+
+    source = tmp_path / "source"
+    shutil.copytree(REPO_ROOT / "src", source / "src")
+    (source / ".claude-plugin").mkdir()
+    manifest = {"name": "nexty-agent-skills", "version": "0.49.0"}
+    (source / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    owner = None
+    try:
+        owner, staged = temporary_plugin(source)
+        helper = staged_job_helper_dir(staged, "0.49.0")
+        assert helper == (staged / "src" / "nxd-run-job-loop").resolve()
+        assert helper.is_dir()
+
+        (helper / "scripts" / "self_check.py").unlink()
+        with pytest.raises(LocalRunnerError, match="helper is incomplete"):
+            staged_job_helper_dir(staged, "0.49.0")
+    finally:
+        if owner is not None:
+            owner.cleanup()
+
+
+def test_staged_job_helper_dir_rejects_a_manifest_version_mismatch(tmp_path: Path) -> None:
+    from dp_scenarios.runner.local import LocalRunnerError, temporary_plugin, staged_job_helper_dir
+
+    source = tmp_path / "source"
+    shutil.copytree(REPO_ROOT / "src", source / "src")
+    (source / ".claude-plugin").mkdir()
+    (source / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "nexty-agent-skills", "version": "0.49.0"}),
+        encoding="utf-8",
+    )
+    owner, staged = temporary_plugin(source)
+    try:
+        with pytest.raises(LocalRunnerError, match="manifest version"):
+            staged_job_helper_dir(staged, "0.48.0")
+    finally:
+        owner.cleanup()
+
+
 def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -121,9 +166,16 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     skill_root = tmp_path / "selected-skill-pack"
     (skill_root / "src" / "selected").mkdir(parents=True)
     (skill_root / "src" / "selected" / "SKILL.md").write_text("selected\n", encoding="utf-8")
+    # The local runner must validate and hand off the actual job-loop helper
+    # tree as well as the selected skill identity. Keep the selected skill
+    # deliberately tiny; copy only the helper tree needed by the handoff.
+    shutil.copytree(
+        module.REPO_ROOT / "src" / "nxd-run-job-loop",
+        skill_root / "src" / "nxd-run-job-loop",
+    )
     manifest_path = skill_root / ".claude-plugin" / "plugin.json"
     manifest_path.parent.mkdir()
-    manifest_path.write_text(json.dumps({"name": "selected", "version": "selected-version"}), encoding="utf-8")
+    manifest_path.write_text(json.dumps({"name": "selected", "version": "0.49.0"}), encoding="utf-8")
     output_dir = tmp_path / "report"
     captured: dict[str, object] = {}
     original_load_scenarios = module.load_scenarios
@@ -181,10 +233,12 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     assert captured["canary_root"] == module.CANARY_ROOT
     assert captured["canary_skills_root"] == skill_root / "src"
     assert captured["canary_defer_legacy_build"] is True
-    assert captured["staged_plugin_manifest"]["version"] == "selected-version"
+    assert captured["staged_plugin_manifest"]["version"] == "0.49.0"
     assert captured["staged_skill"] == "selected\n"
     command = captured["live_command"]
     assert command[command.index("--repo-root") + 1] == str(module.REPO_ROOT)
+    staged = Path(command[command.index("--plugin-dir") + 1])
+    assert captured["staged_job_helper_dir"] == staged / "src" / "nxd-run-job-loop"
 
 
 def test_identical_skill_pack_sources_produce_identical_canary_results(

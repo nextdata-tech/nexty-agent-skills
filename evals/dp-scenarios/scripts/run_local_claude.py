@@ -34,7 +34,12 @@ from dp_scenarios.operator.openai_driver import (
 )
 from dp_scenarios.runner.environment import PinnedVersions
 from dp_scenarios.runner.environment import DEFAULT_WORKFLOW_ACTIVATION_BUNDLE
-from dp_scenarios.runner.local import FileSupervisorRecordReader, temporary_plugin
+from dp_scenarios.runner.local import (
+    FileSupervisorRecordReader,
+    LocalRunnerError,
+    staged_job_helper_dir,
+    temporary_plugin,
+)
 from dp_scenarios.runner.report import write_report
 from dp_scenarios.runner.session import LiveSession
 from dp_scenarios.runner.tier import RunBudgets, TierError, TierRunner, run_drift_canary
@@ -474,6 +479,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_dir.mkdir(parents=True, exist_ok=True)
 
     plugin_owner, plugin_dir = temporary_plugin(skill_pack_root)
+    try:
+        exact_job_helper_dir = staged_job_helper_dir(plugin_dir, skill_pack_version)
+    except Exception:
+        plugin_owner.cleanup()
+        raise
     adapter_kwargs = {
         "claude": str(claude),
         "model": args.model,
@@ -526,6 +536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
             workflow_activation_bundle=args.workflow_activation_bundle,
             allow_host_home=args.allow_host_home,
+            staged_job_helper_dir=exact_job_helper_dir,
             operator_factory=operator_factory,
             max_workers=args.jobs,
         ).run()
@@ -546,7 +557,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 if __name__ == "__main__":  # pragma: no cover - exercised as a local entrypoint
     try:
         raise SystemExit(main())
-    except (TierError, DriverConfigError) as exc:
+    except (TierError, DriverConfigError, LocalRunnerError) as exc:
         # DriverConfigError carries only the name of the missing variable, never
         # its value; there is nothing to redact on this path.
         print(f"error: {exc}", file=sys.stderr)

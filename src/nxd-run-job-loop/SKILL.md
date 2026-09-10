@@ -205,7 +205,7 @@ repeat inference within this boundary.
 Before the approval turn, the main thread must establish the connected
 supervisor's v2 execution capability and enroll this exact prose blueprint:
 call `get_workflow_capabilities`, require structured `execution_enabled: true`,
-then call `prepare_workflow` against the host-visible `dp-blueprint.md`. Use
+then call `prepare_workflow` against the host-visible `dp-blueprint.md` with `kind: "generated-data-product"`. Keep the blueprint at `status: proposed` during prepare. Never set `status: approved` or invent approval hashes; the supervisor binds approval only after the returned consent action succeeds. Use
 only its returned revision, invalidation epoch, requirement identities and
 `next_actions`. Do not present an approval prompt or ask for approval until
 `prepare_workflow` succeeds. Then present the prepared echo-back and relay the user's exact
@@ -229,26 +229,26 @@ supervisor records the approval. Steps 2–3
 may be split between a built-in profile subagent and a separate generate subagent,
 but policy read-back, review relay, credential injection and host-path
 verification remain on the main thread. A new result-changing gap returns
-`gap_found` and triggers a fresh read-back and generation-only bounce. See [reference/scheduling.md](reference/scheduling.md).
+`gap_found` and triggers a fresh read-back and generation-only bounce. See [reference/scheduling.md](reference/scheduling.md). Resolve `job_helper_dir` from the exact staged skill pack for this run. Its skill metadata version must match the loaded `nxd-run-job-loop` version and it must contain the expected helper scripts. A missing or mismatched helper path stops the workflow; never fall back to another cached plugin release.
 
 ### Step 3b — Capture, review, and adjudicate
 
-After the self-check has finished mutating its local record, follow only the
-supervisor's returned `capture` action and pass its host-visible authoring root.
-Never modify the captured authoring tree afterward. Run **exactly one mandatory
-review per capture generation**: a true in-conversation read-only
-`nxd-review-closure` over the supervisor's returned retained `review_input`
-paths. There is no skip under the activated v2 contract and no duplicate review
-against a mutable closure. Preserve the rich claim ledger and user adjudication
-in `…/nxd-jobs/<workflow>/review-record.json`, outside `closure/`; submit only
-the bounded projection through the returned `report_requirement` action. A
-rejected, indeterminate, or scope-refused report remains unsatisfied. A fix
-requires reset, local correction, self-check, recapture, and one fresh review
-for the new generation. See [reference/workflow-v2.md](reference/workflow-v2.md).
+After self-check finishes mutating its local record, follow only the supervisor's returned `capture` action with its
+host-visible authoring root. Never modify the captured tree afterward. Run **exactly one mandatory review per capture generation**:
+immediately dispatch one built-in `Agent` or `Task` conversation subagent (a `general-purpose` subagent is fine).
+Its prompt tells it to load and follow `nxd-review-closure`, supplies the supervisor-returned retained
+`review_input` paths and sanitized request, and includes the canonical `NXD_REVIEW_DISPATCH` marker from
+[reference/workflow-v2.md](reference/workflow-v2.md). The main thread must not invoke
+`Skill(nxd-review-closure)`, inspect the retained capture to form claims inline, or launch the reviewer through
+MCP/supervisor. The reviewer is a conversation subagent, never supervisor-launched. The main thread waits for the
+child claims, keeps the rich ledger and adjudication in `…/nxd-jobs/<workflow>/review-record.json` outside `closure/`, relays only the bounded projection through the returned `report_requirement` action, and when `NXD_EVAL_ATTESTATIONS_PATH` is present writes the required root-array construction sidecar there before `start_run` (exact path and schema: [reference/workflow-v2.md](reference/workflow-v2.md)).
+There is no skip under the activated v2 contract and no duplicate review against a mutable closure. A rejected,
+indeterminate, or scope-refused report remains unsatisfied. A fix requires reset, local correction, self-check,
+recapture, and one fresh review for the new generation. See
+[reference/workflow-v2.md](reference/workflow-v2.md).
 
-Auto-fix only an evidenced syntax/mechanical/procedural structural correction
-with approved spec, models, grain, rows, values, aggregation, thresholds,
-verdicts and asserts unchanged. A timeout needs explicit user consent. No credential enters a reviewer.
+Auto-fix only an evidenced syntax/mechanical/procedural structural correction with approved spec, models, grain,
+rows, values, aggregation, thresholds, verdicts and asserts unchanged. A timeout needs explicit user consent; no credential enters a reviewer.
 
 **Land the closure at a durable, user-visible path — never a temp or scratch
 directory.** Put it under a directory named by the workflow id, with the IR

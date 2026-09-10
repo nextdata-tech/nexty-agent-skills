@@ -12,6 +12,13 @@ metadata:
 
 # Review a generated closure — adversarially
 
+This role is loaded by exactly one built-in `Agent` or `Task` conversation
+subagent dispatched by the owning job loop after capture. The owning/main thread
+may load orchestration guidance, but must not invoke this skill with `Skill` to
+conduct the review inline, and the supervisor/MCP never launches the reviewer.
+The main thread receives the child's claims and remains responsible for the
+external ledger, user adjudication, and `report_requirement` relay.
+
 You are reviewing a closure someone else authored. Your job is to find what is
 **wrong with it as an answer to the request**, not what is wrong with it as a
 Python project.
@@ -75,7 +82,24 @@ a research error and shipped a lesser product because of it.
 
 Quote the sentence that makes the claim, and cite the doc that contradicts it.
 
-### 3. A metric whose aggregation is wrong for its grain
+### 3. An output promise broken through another access path
+
+Check disclosure promises before broader metric review:
+
+1. Compare each promised output with every `.promise(...)`, `.model(...)`, and
+   exposed port.
+2. Trace model roles and the columns actually yielded to dlt or written to each
+   physical table.
+3. Test the promise against both governed semantic discovery and direct
+   DuckDB/raw-table access.
+
+`pii=True` and a roleless field can hide a column from semantic discovery while
+the raw value remains queryable from the physical table. If the request says
+raw PII must never be exposed, any supported access path that retains it is a
+HIGH finding. Judge the captured code and schemas; do not assume this defect or
+prescribe its fix.
+
+### 4. A metric whose aggregation is wrong for its grain
 
 - a **semi-additive** measure summed over time (rates, balances, yields — you
   may average or take end-of-period, never sum)
@@ -84,7 +108,7 @@ Quote the sentence that makes the claim, and cite the doc that contradicts it.
   are counted several times
 - a rollup whose grain silently differs from the grain its key declares
 
-### 4. A judgement resolved silently
+### 5. A judgement resolved silently
 
 The source cannot settle some question — which of two conventions applies,
 which rows are in scope, how an ambiguous category maps — and the closure
@@ -94,14 +118,14 @@ Grade **disclosure, never the choice**. Two defensible conventions both pass.
 Silence fails. A ruling landed as a queryable row and stated in the handoff
 passes regardless of which way it went.
 
-### 5. Assert theatre
+### 6. Assert theatre
 
 An assert that restates the transform's own arithmetic cannot fail, no matter
 how wrong the data is. If the expected value is computed by the same expression
 that produced the actual value, the assert is decoration. The reconciliation
 must come from an INDEPENDENT read of the source.
 
-### 6. Null and coverage handling
+### 7. Null and coverage handling
 
 - blanks coerced to zero, fabricating a real measurement
 - rows dropped by a join or filter without the loss being stated

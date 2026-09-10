@@ -102,7 +102,7 @@ and the `model_tables` identity map from these — you do not author them):
 `PHYSICAL_MODELS` is the set of **landed-table identities**, not data directories: base models (`data/<name>/`) **plus** derived models (Step 3a).
 Required physical models use `.promise(...)`; optional-empty physical models use
 `.model(...)`; both appear in `model_tables`. `OPTIONAL_EMPTY_MODELS` is a
-literal subset whose dlt resource may yield zero rows and leave no table.
+literal subset whose dlt resource may yield zero rows and leave no table. An optional source or output that must remain a valid header-only CSV is still an optional physical base model: keep it in `Models`, register it with `.model(...)`, and include it in both `PHYSICAL_MODELS` and `OPTIONAL_EMPTY_MODELS`. Never change it to `.promise(...)` or omit the model to work around an absent zero-row table.
 Semantic views use `.model(...)` only and never enter `PHYSICAL_MODELS`; assert
 dlt output against declared physical models, not the whole `model_tables` map.
 Base attribute names are byte-exact post-dlt headers; derived ones are resource
@@ -134,7 +134,7 @@ The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved ab
   description, and which questions the semantic layer must answer.
 - The inferred model gives each base model's primary key, dimensions, joins,
   PII flags, metrics, and column types. Base roles and metric views are
-  different authored objects — see Step 2.
+  different authored objects — see Step 2. `pii=True` and a roleless field control semantic discovery; they do not mask a column in the physical DuckDB table or direct SQL. When an approved output promises that raw PII is never exposed, project every sensitive column out before any dlt resource is yielded or any pipeline write occurs. The transform may use those source values in memory for approved derived flags, but no supported physical output may retain them.
 - Each connector config names a **connector type** (CSV / other local file /
   database / REST API) plus its location. For non-CSV types follow
   `reference/file-source.md` / `database-source.md` / `api-source.md`; for
@@ -449,7 +449,7 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and `provena
 
 ### Step 6b — Defer adversarial review to the job loop after capture
 
-Under workflow v2, do not dispatch the reviewer here. Continue through Step 7 so every local self-check/build-record mutation finishes, then return the closure to the owning `nxd-run-job-loop`. It captures the immutable tree and dispatches exactly one built-in read-only reviewer per capture generation over the supervisor-provided retained capture and retained blueprint paths. The activated contract makes this review mandatory; there is no complexity-based skip or mutable-path duplicate.
+Under workflow v2, do not dispatch the reviewer here. Continue through Step 7 so every local self-check/build-record mutation finishes, then return the closure to the owning `nxd-run-job-loop`. That job loop captures the immutable tree and dispatches exactly one built-in read-only reviewer through an `Agent` or `Task` conversation subagent per capture generation over the supervisor-provided retained capture and blueprint; its prompt loads `nxd-review-closure` and carries the canonical `NXD_REVIEW_DISPATCH` marker. The reviewer is never supervisor-launched; the main thread relays its bounded result through `report_requirement`. The activated contract makes this review mandatory; there is no complexity-based skip or mutable-path duplicate.
 The main thread preserves the rich claim ledger outside the captured closure, reports its bounded projection through `report_requirement`, and resets, corrects, rechecks, recaptures, and re-reviews after an accepted change. Exact ordering and wire shapes are in `nxd-run-job-loop/reference/workflow-v2.md`; dispatch, sanitization, claim relay, and authorization remain governed by [reference/adversarial-review.md](reference/adversarial-review.md).
 ### Step 7 — Self-check before handing off (MANDATORY)
 The closure-root self-check is the generator's record gate, distinct from the supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).

@@ -291,7 +291,13 @@ Step 3b belongs to the main thread for both inline and offloaded generation.
 Finish generator Step 7 before capture, then never mutate the captured closure.
 The activated v2 contract requires exactly one built-in read-only `Agent` or
 `Task` review per capture generation over the supervisor-returned retained
-paths; there is no complexity-based skip or mutable-path duplicate.
+paths. The owning/main thread must dispatch that one conversation child (a
+`general-purpose` subagent is acceptable); it must not load
+`nxd-review-closure` with `Skill` and review inline, and the supervisor never
+launches the reviewer. The child prompt carries only the retained review inputs
+and sanitized request, tells the child to load the reviewer skill, and includes
+the canonical dispatch marker in [workflow-v2.md](workflow-v2.md). There is no
+complexity-based skip or mutable-path duplicate.
 
 Preserve every user question and supplied procedure under the
 `sanitized_original_request` contract, inventory and replace every credential,
