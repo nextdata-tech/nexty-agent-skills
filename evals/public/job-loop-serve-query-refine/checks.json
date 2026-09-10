@@ -3,7 +3,8 @@
   "skills": [
     "nxd-run-job-loop",
     "nxd-build-semantic-data-product",
-    "nxd-generate-data-product"
+    "nxd-generate-data-product",
+    "nxd-semantic-query-intent"
   ],
   "ci_skip": "needs a live desktop supervisor (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
   "desktop_verify": true,

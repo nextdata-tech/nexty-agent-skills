@@ -134,6 +134,38 @@ for skill_dir in "$SRC_DIR"/*/; do
   zip_path="$OUT_DIR/${skill}.zip"
   rm -f "$zip_path"
 
+  # Standalone query-adapter uploads are consumed as one skill, so they cannot
+  # resolve a sibling skill directory. Materialize the shared reference inside
+  # those two archives while keeping the source and named plugin bundles on the
+  # canonical shared-skill layout.
+  zip_source="$skill_dir"
+  if [[ "$skill" == "nxd-run-job-loop" || "$skill" == "nxd-query-data-product" ]]; then
+    standalone_stage="$(mktemp -d "${TMPDIR:-/tmp}/nexty-agent-skills-standalone.XXXXXX")"
+    STAGING_PATHS+=("$standalone_stage")
+    cp -R "$skill_dir/." "$standalone_stage/"
+    mkdir -p "$standalone_stage/reference"
+    cp "$SRC_DIR/nxd-semantic-query-intent/reference/semantic-intent-validation.md" \
+      "$standalone_stage/reference/semantic-intent-validation.md"
+    python3 - "$standalone_stage" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+for path in root.rglob("*.md"):
+    text = path.read_text(encoding="utf-8")
+    for prefix in ("../", "../../"):
+        text = text.replace(
+            f"{prefix}nxd-semantic-query-intent/reference/semantic-intent-validation.md",
+            "reference/semantic-intent-validation.md",
+        ).replace(
+            f"{prefix}nxd-semantic-query-intent/SKILL.md",
+            "reference/semantic-intent-validation.md",
+        )
+    path.write_text(text, encoding="utf-8")
+PY
+    zip_source="$standalone_stage"
+  fi
+
   # Per-skill prune of non-curated example DPs (no-op for skills without the submodule)
   prune_args=()
   prune_names="$(examples_prune_names "$skill_dir")"
@@ -144,7 +176,7 @@ for skill_dir in "$SRC_DIR"/*/; do
   fi
 
   (
-    cd "$skill_dir"
+    cd "$zip_source"
     zip_args=(. "${ZIP_EXCLUDE_ARGS[@]}")
     if [[ -n "${prune_args[0]+set}" ]]; then
       zip_args+=("${prune_args[@]}")
@@ -236,6 +268,33 @@ with open(destination, "w", encoding="utf-8") as fh:
 PY
 }
 
+restore_canonical_bundle_links() {
+  local pack_staging="$1"
+  python3 - "$pack_staging" "$SRC_DIR" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+pack_root, source_root = (Path(value) for value in sys.argv[1:])
+for skill_dir in (pack_root / "skills").iterdir():
+    if not skill_dir.is_dir():
+        continue
+    source_skill = source_root / skill_dir.name
+    for document in skill_dir.rglob("*.md"):
+        source_document = source_skill / document.relative_to(skill_dir)
+        if source_document.is_file():
+            shutil.copyfile(source_document, document)
+    # This file exists only to make a standalone adapter ZIP self-contained.
+    # Multi-skill bundles carry the canonical shared skill beside the adapter.
+    standalone_reference = skill_dir / "reference" / "semantic-intent-validation.md"
+    if (
+        skill_dir.name in {"nxd-run-job-loop", "nxd-query-data-product"}
+        and not (source_skill / "reference" / "semantic-intent-validation.md").is_file()
+    ):
+        standalone_reference.unlink(missing_ok=True)
+PY
+}
+
 build_plugin_pack() {
   local plugin_name="$1" archive_name="$2"
   local pack_staging skill_list
@@ -258,6 +317,7 @@ build_plugin_pack() {
     mkdir -p "$pack_staging/skills/$skill"
     unzip -q "$OUT_DIR/$skill.zip" -d "$pack_staging/skills/$skill"
   done < "$skill_list"
+  restore_canonical_bundle_links "$pack_staging"
 
   local pack_path="$OUT_DIR/${archive_name}-v${PLUGIN_VERSION}.zip"
   rm -f "$pack_path"
@@ -304,6 +364,7 @@ if [[ -n "${SKILL_ZIPS[0]+set}" ]]; then
     unzip -q "$zip_path" -d "$PACK_STAGING/skills/$skill"
   done
 fi
+restore_canonical_bundle_links "$PACK_STAGING"
 
 rm -f "$PACK_PATH"
 (
