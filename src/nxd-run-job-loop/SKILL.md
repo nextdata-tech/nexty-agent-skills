@@ -237,7 +237,7 @@ After self-check finishes mutating its local record, follow only the supervisor'
 host-visible authoring root. Never modify the captured tree afterward. Run **exactly one mandatory review per capture generation**:
 immediately dispatch one built-in `Agent` or `Task` conversation subagent (a `general-purpose` subagent is fine).
 Its prompt tells it to load and follow `nxd-review-closure`, supplies the supervisor-returned retained
-`review_input` paths and sanitized request, and includes the canonical `NXD_REVIEW_DISPATCH` marker from
+`review_input` paths and sanitized request, and uses the canonical dispatch marker defined in
 [reference/workflow-v2.md](reference/workflow-v2.md). The main thread must not invoke
 `Skill(nxd-review-closure)`, inspect the retained capture to form claims inline, or launch the reviewer through
 MCP/supervisor. The reviewer is a conversation subagent, never supervisor-launched. The main thread waits for the
