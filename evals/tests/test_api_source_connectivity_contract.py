@@ -70,6 +70,22 @@ def test_authenticated_probe_is_named_local_and_dependency_light():
     assert "apply the redaction rules below to every failure message" in contract
 
 
+def test_payload_inspection_covers_every_resource_before_authoring():
+    contract = _normalized(_doc())
+    assert "enumerate **every** api resource/endpoint" in contract
+    assert "inspect one real response from each one" in contract
+    assert "a status code, api documentation" in contract
+    assert "print a bounded, sanitized summary for **each** resource" in contract
+    assert "the summary must be visible in the session output before the first closure write" in contract
+    assert "values may be shown only when they are clearly non-sensitive and non-personal scalars" in contract
+    assert "secret-like response fields (`token`, `secret`, `password`, `api_key`" in contract
+    assert "for any personal or account data" in contract
+    assert "show only the field name and type or a `<redacted>` placeholder" in contract
+    assert "redact or omit authorization headers, bearer/api-key values, cookies" in contract
+    assert "secret-like response fields, personal data, and full response bodies" in contract
+    assert "stop with a bounded diagnostic rather than authoring a guessed schema" in contract
+
+
 def test_credentials_available_require_real_probe_execution():
     contract = _self_check_contract()
     assert "execute `python3 connectivity_check.py`" in contract

@@ -68,8 +68,34 @@ resources = {r.name: r for r in rest_api_resources(config)}  # returns a LIST
 
 ### REST response envelopes: select the row array
 
-Inspect each response before authoring the models. If the API returns a top-level
-object that wraps rows in a key such as `data` — for example
+#### Payload inspection gate — before authoring
+
+Before writing or editing `models.py`, `transform/`, or any other closure
+artifact, enumerate **every** API resource/endpoint in the settled plan and
+inspect one real response from each one. Use the actual resolved base URL and
+endpoint path, the configured authentication and headers, and a bounded,
+read-only request. A status code, API documentation, an inferred schema, or a
+response from only one resource is not inspection. Read the returned body and
+print a bounded, sanitized summary for **each** resource, including its
+endpoint label, HTTP status, top-level shape/keys, row-array path, pagination
+fields (`total`/`pages` when present), and one or two representative row
+keys and values. Values may be shown only when they are clearly non-sensitive
+and non-personal scalars (for example, a status enum or a count). For
+secret-like response fields (`token`, `secret`, `password`, `api_key`,
+`authorization`, `cookie`, or similar) and for any personal or account data,
+show only the field name and type or a `<redacted>` placeholder. The summary
+must be visible in the session output before the first closure write; it is
+evidence for the model plan, not a generated closure artifact.
+
+Redact or omit authorization headers, bearer/API-key values, cookies, secret
+query parameters, secret-like response fields, personal data, and full response
+bodies. Do not save an unsanitized payload or credential-bearing command output
+in the closure. If a resource cannot be fetched or its body cannot be
+inspected, stop with a bounded diagnostic rather than authoring a guessed
+schema. Repeat the gate whenever the endpoint set or source binding changes.
+
+After this gate, inspect each response before authoring the models. If the API
+returns a top-level object that wraps rows in a key such as `data` — for example
 `{"page": 1, "per_page": 10, "total": 12, "pages": 2, "data": [...]}` — set
 the resource endpoint's `data_selector` to that row-array path:
 
