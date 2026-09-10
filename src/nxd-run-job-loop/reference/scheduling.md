@@ -179,7 +179,7 @@ expensive profiling on every bounce:
    per-source schemas (each with its label), and a `gap_found` field naming any
    policy gap the profile exposed. It writes no closure and specifically never
    writes `models.py`, `spec.py`, `transform/`, or `requirements.txt`; it does
-   not invoke the generator, transform the source, or ask the user anything. A
+   not invoke the generator, does not transform the source, and asks the user nothing. A
    live database/API source is profiled on
    the main thread or from the user's description only (table/endpoint list,
    sample shape) — never fan out a profile that would need a live credential to

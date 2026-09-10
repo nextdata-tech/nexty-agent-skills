@@ -75,6 +75,12 @@ class ReviewDispatch:
     review_round_index: int
 
 
+def desktop_tool_prefix(server_name: str) -> str:
+    """Return the canonical MCP prefix for a configured desktop server."""
+
+    return f"mcp__{server_name.strip().casefold()}__"
+
+
 # The protocol phase each gate is graded in.  This used to be implicit in the
 # gate's own name, which meant a rename could silently break reachability
 # checking; naming it makes the coupling checkable.
@@ -278,7 +284,7 @@ def gate_intake(
     if isinstance(ledger, Mapping):
         observations = ledger.get("observations")
         positioned = _positioned_calls(observations)
-        desktop_prefix = f"mcp__{desktop_server_name.strip().casefold()}__"
+        desktop_prefix = desktop_tool_prefix(desktop_server_name)
         advance_name = f"{desktop_prefix}advance_workflow"
         prepare_name = f"{desktop_prefix}prepare_workflow"
 
@@ -1083,7 +1089,7 @@ def _successful_check_positions(
     *,
     desktop_server_name: str,
 ) -> tuple[EventPosition, ...]:
-    desktop_prefix = f"mcp__{desktop_server_name.casefold()}__"
+    desktop_prefix = desktop_tool_prefix(desktop_server_name)
     expected_advance = desktop_prefix + "advance_workflow"
     positions: list[EventPosition] = []
     for position, call in _positioned_calls(observations):
@@ -1182,7 +1188,7 @@ def _operation_preserves_published_closure(
     folded = name.casefold()
     if folded in _KNOWN_READ_ONLY_TOOLS:
         return True
-    desktop_prefix = f"mcp__{desktop_server_name.casefold()}__"
+    desktop_prefix = desktop_tool_prefix(desktop_server_name)
     if folded.startswith(desktop_prefix):
         return folded.removeprefix(desktop_prefix) in _KNOWN_READ_ONLY_DESKTOP_ACTIONS
     if folded not in _CLOSURE_EDIT_TOOLS:

@@ -2931,7 +2931,7 @@ def test_published_closure_matches_a_custom_mixed_case_desktop_server(tmp_path: 
         observations,
         _facts_for_closure(),
         agent_root=agent,
-        desktop_server_name="nXd-DeSkToP-cUsToM",
+        desktop_server_name="  nXd-DeSkToP-cUsToM  ",
     )
 
     assert published is not None

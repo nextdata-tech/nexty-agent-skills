@@ -54,12 +54,24 @@ def _canary_from_mapping(
         raise TierError("replayed canary build must be an object")
     if isinstance(build, Mapping) and "returncode" not in build:
         raise TierError("replayed canary build has no mandatory returncode")
-    return run_drift_canary(
+    legacy_build_status = value.get("legacy_build_status")
+    allowed_build_statuses = {
+        "not_attempted", "performed", "provided", "deferred_to_workflow_v2",
+    }
+    if legacy_build_status is not None and legacy_build_status not in allowed_build_statuses:
+        raise TierError("replayed canary has an unknown legacy_build_status")
+    if legacy_build_status == "deferred_to_workflow_v2" and build is not None:
+        raise TierError("a deferred replayed canary cannot carry a legacy build")
+    if legacy_build_status in {"performed", "provided"} and build is None:
+        raise TierError("a replayed canary with a completed legacy build must carry that build")
+    result = run_drift_canary(
         canary_dir,
         skills_root=skills_root,
         probe=probe,
         build=build,
+        defer_legacy_build=legacy_build_status == "deferred_to_workflow_v2",
     )
+    return replace(result, legacy_build_status=legacy_build_status) if isinstance(legacy_build_status, str) else result
 
 
 def _read_json(path: Path) -> Mapping[str, object]:
@@ -283,17 +295,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
 
         def canary() -> CanaryResult:
-            if args.mode == "live":
-                return run_drift_canary(
-                    args.canary_dir,
-                    skills_root=args.skills_root,
-                    supervisor=args.supervisor,
-                    defer_legacy_build=True,
-                )
             return run_drift_canary(
                 args.canary_dir,
                 skills_root=args.skills_root,
                 supervisor=args.supervisor,
+                defer_legacy_build=args.mode == "live",
             )
 
     replays: dict[str, ReplayRecording] = {}

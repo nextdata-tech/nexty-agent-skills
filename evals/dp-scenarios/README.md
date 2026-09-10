@@ -190,7 +190,7 @@ scenario.
 
 | Package | Tier | Run order | Primary source or drill |
 |---|---:|---:|---|
-| [drift-canary](scenarios/drift-canary/README.md) | preflight | before smoke | skill claims, companion files, negative probes, and one local build |
+| [drift-canary](scenarios/drift-canary/README.md) | preflight | before smoke | skill claims, companion files, negative probes, and a local build outside live workflow-v2 mode |
 | [zero-row-optional-output](scenarios/zero-row-optional-output/README.md) | smoke | 1 | file-backed fixture with one valid zero-row optional resource |
 | [parent-child-grain-trap](scenarios/parent-child-grain-trap/README.md) | smoke | 2 | generated orders and line items with a parent-grain aggregation trap |
 | [credential-rotation](scenarios/credential-rotation/README.md) | core | 3 | disposable Postgres with command-stepped credential rotation |

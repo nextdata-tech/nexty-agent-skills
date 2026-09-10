@@ -173,3 +173,28 @@ def test_regular_canary_performs_legacy_build(stubbed_supervisor: list[Path]) ->
 
     assert result.legacy_build_status == "performed"
     assert result.build is not None
+
+
+def test_deferred_canary_accepts_a_replayed_probe_without_a_legacy_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tier_module,
+        "extract_claims",
+        lambda *_args, **_kwargs: SimpleNamespace(drift=(), advisories=()),
+    )
+    monkeypatch.setattr(
+        tier_module,
+        "aggregate_verdict",
+        lambda *_args, **_kwargs: Verdict("clean", (), ()),
+    )
+
+    result = run_drift_canary(
+        CANARY_ROOT,
+        skills_root=CANARY_ROOT,
+        probe={"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+        defer_legacy_build=True,
+    )
+
+    assert result.build is None
+    assert result.legacy_build_status == "deferred_to_workflow_v2"

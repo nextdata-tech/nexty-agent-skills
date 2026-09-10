@@ -320,7 +320,7 @@ def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval(
 
 def test_intake_uses_the_configured_desktop_server_name() -> None:
     ledger = _workflow_v2_intake(desktop_server_name="desktop-under-test")
-    assert gate_intake(ledger, desktop_server_name="desktop-under-test").passed
+    assert gate_intake(ledger, desktop_server_name="  DeSkToP-UnDeR-TeSt  ").passed
 
 
 def test_intake_codegen_inference_ignores_non_authoring_observations() -> None:
@@ -1160,6 +1160,7 @@ def test_construction_accepts_trusted_v2_validation_before_admission() -> None:
         review_rounds={"closure": [_review_round()]},
         published_closure=_published_build(call_index=2),
         require_observed=True,
+        desktop_server_name="  NxD-DeSkToP  ",
     )
 
     assert result.passed is True

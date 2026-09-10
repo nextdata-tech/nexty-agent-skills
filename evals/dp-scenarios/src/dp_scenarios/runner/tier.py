@@ -44,7 +44,7 @@ from dp_scenarios.grading import (
     score_run,
 )
 from dp_scenarios.grading.oracles import marker_values
-from dp_scenarios.grading.gates import EventPosition, PublishedBuild
+from dp_scenarios.grading.gates import EventPosition, PublishedBuild, desktop_tool_prefix
 from dp_scenarios.grading.scans import gold_access_scan, sentinel_byte_scan
 from dp_scenarios.grading.score import (
     EfficiencyReport,
@@ -486,23 +486,23 @@ def run_drift_canary(
         built = build
         legacy_build_status = "not_attempted"
         if built is None and not verdict.blocking:
-            if isinstance(probed, ProbeResult):
-                if defer_legacy_build:
-                    # The supervisor's strict workflow-v2 contract rejects
-                    # legacy create invocations.  Preflight remains valuable
-                    # evidence, while construction and publication are proved
-                    # by each workflow-v2 scenario below.
-                    legacy_build_status = "deferred_to_workflow_v2"
-                else:
-                    if temporary_data is None:
-                        temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
-                    built = run_build(
-                        closure,
-                        supervisor=probed.supervisor,
-                        data_dir=Path(temporary_data.name),
-                        workflow="drift-canary",
-                    )
-                    legacy_build_status = "performed"
+            if defer_legacy_build:
+                # The supervisor's strict workflow-v2 contract rejects
+                # legacy create invocations.  Preflight remains valuable
+                # evidence, while construction and publication are proved
+                # by each workflow-v2 scenario below. Replay preserves this
+                # boundary without needing a live ProbeResult.
+                legacy_build_status = "deferred_to_workflow_v2"
+            elif isinstance(probed, ProbeResult):
+                if temporary_data is None:
+                    temporary_data = tempfile.TemporaryDirectory(prefix="dp-scenario-canary-")
+                built = run_build(
+                    closure,
+                    supervisor=probed.supervisor,
+                    data_dir=Path(temporary_data.name),
+                    workflow="drift-canary",
+                )
+                legacy_build_status = "performed"
             else:
                 raise TierError("a live canary build is required when no replay build was supplied")
         elif built is not None:
@@ -883,8 +883,7 @@ def _published_closure(
         or not desktop_server_name.strip()
     ):
         return None
-    server_prefix = f"mcp__{desktop_server_name.strip()}__"
-    expected_advance_tool = (server_prefix + "advance_workflow").casefold()
+    expected_advance_tool = desktop_tool_prefix(desktop_server_name) + "advance_workflow"
     run_id = supervisor_facts.run_id
     artifact_id = supervisor_facts.artifact_id
     if not isinstance(run_id, str) or not run_id or not isinstance(artifact_id, str) or not artifact_id:

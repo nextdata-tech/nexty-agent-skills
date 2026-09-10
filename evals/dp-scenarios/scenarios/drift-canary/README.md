@@ -25,7 +25,7 @@ probe closures:
    process.
 2. Extract the declared claims from the supplied `--skills-root`, checking
    file, line, quote, direction, and content hash.
-3. Run the kitchen-sink closure through supervisor preflight and one build.
+3. Run the kitchen-sink closure through supervisor preflight. Replay and non-workflow-v2 runs also perform one local build; live workflow-v2 runs defer that legacy build to scenario construction and publication.
    Supported claims must produce the expected structure, companion-file,
    semantic, or build findings.
 4. For each documented-unsupported probe, remove exactly its planted
@@ -126,7 +126,7 @@ closure and claims baseline while probing temporary copies.
 - **Claim coverage is explicit.** Only claims and probes recorded in
   `claims.json` and `probes.json` are checked. A skill behavior not represented
   in that matrix is outside this preflight.
-- **The build is local and pinned by the runner.** A clean result does not
+- **When performed, the legacy build is local and pinned by the runner.** Live workflow-v2 runs defer it and must instead prove scenario construction and publication. A clean result does not
   validate hosted CI, a different supervisor version, or an unpinned global
   skill installation.
 - **Human approval remains separate.** Updating the claims baseline requires a

@@ -13,6 +13,7 @@ from dp_scenarios.operator.transport import OperatorMessage, TouchedFile, TurnRe
 from dp_scenarios.runner import CanaryResult, ReplayRecording, TierError, TierRunner
 from dp_scenarios.runner.report import _stable_document, human_summary, machine_report, write_report
 from dp_scenarios.runner.cli import _canary_from_mapping
+from dp_scenarios.runner import cli as cli_module
 from dp_scenarios.runner.session import RecordedTurn
 
 from test_runner_tier import (
@@ -151,6 +152,39 @@ def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
             skills_root=claims_path.parent,
             expected_claims_hash=expected,
         )
+
+
+def test_replayed_canary_preserves_workflow_v2_build_deferral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claims_path = Path(__file__).parents[1] / "scenarios/drift-canary/claims.json"
+    expected = load_claims(claims_path).baseline.approves_claims_hash
+    calls: list[dict[str, object]] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> CanaryResult:
+        calls.append(kwargs)
+        return CanaryResult(Verdict("clean", (), ()), claims_hash=expected)
+
+    monkeypatch.setattr(cli_module, "run_drift_canary", fake_run)
+    result = _canary_from_mapping(
+        {
+            "claims_hash": expected,
+            "probe": {"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+            "build": None,
+            "legacy_build_status": "deferred_to_workflow_v2",
+        },
+        canary_dir=claims_path.parent,
+        skills_root=claims_path.parent,
+        expected_claims_hash=expected,
+    )
+
+    assert calls == [{
+        "skills_root": claims_path.parent,
+        "probe": {"returncode": 0, "report": {"probe_id": "kitchen-sink"}},
+        "build": None,
+        "defer_legacy_build": True,
+    }]
+    assert result.legacy_build_status == "deferred_to_workflow_v2"
 
 
 def test_stable_document_removes_all_non_reproducible_keys_and_keeps_format_version() -> None:
