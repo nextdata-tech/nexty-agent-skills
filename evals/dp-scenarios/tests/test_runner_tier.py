@@ -492,26 +492,98 @@ def _completed_review_call() -> ToolCall:
     )
 
 
-def _completed_build_call(supervisor: Mapping[str, object]) -> ToolCall:
+def _completed_prepare_call(workflow: str) -> ToolCall:
     return ToolCall(
-        "mcp__nxd-desktop__build_data_product",
-        arguments={"definition": "closure"},
+        "mcp__nxd-desktop__prepare_workflow",
+        arguments={
+            "workflow": workflow,
+            "kind": "generated-data-product",
+            "blueprint_path": "blueprint.json",
+        },
+        result={"is_error": False, "content": {"workflow": workflow}},
+    )
+
+
+def _completed_session_decision_call(workflow: str, quote: str) -> ToolCall:
+    return ToolCall(
+        "mcp__nxd-desktop__advance_workflow",
+        arguments={
+            "workflow": workflow,
+            "action": {
+                "type": "session_decision",
+                "parameters": {
+                    "requirement_id": "consent",
+                    "subject_sha256": "consent-subject",
+                    "quote": quote,
+                    "session_ref": "replay-session",
+                    "approved": True,
+                },
+            },
+        },
+        result={"is_error": False, "content": {"workflow": workflow}},
+    )
+
+
+def _completed_capture_call(workflow: str) -> ToolCall:
+    return ToolCall(
+        "mcp__nxd-desktop__advance_workflow",
+        arguments={
+            "workflow": workflow,
+            "action": {
+                "type": "capture",
+                "parameters": {"requirement_id": "capture", "authoring_root": "closure"},
+            },
+        },
+        result={"is_error": False, "content": {"workflow": workflow}},
+    )
+
+
+def _completed_build_call(supervisor: Mapping[str, object], workflow: str) -> ToolCall:
+    return ToolCall(
+        "mcp__nxd-desktop__advance_workflow",
+        arguments={
+            "workflow": workflow,
+            "action": {
+                "type": "start_run",
+                "parameters": {"expected_invalidation_epoch": 0},
+            },
+        },
         result={
             "is_error": False,
             "content": {
-                "run_id": supervisor["run_id"],
-                "artifact_id": supervisor["artifact_id"],
+                "workflow": workflow,
+                "admission": {
+                    "run_id": supervisor["run_id"],
+                    "artifact_id": supervisor["artifact_id"],
+                },
             },
         },
     )
 
 
-def _completed_check_call() -> ToolCall:
+def _completed_check_call(workflow: str) -> ToolCall:
     return ToolCall(
-        "mcp__nxd-desktop__check_data_product",
-        arguments={"definition": "closure"},
-        result={"is_error": False, "content": {"outcome": "pass"}},
+        "mcp__nxd-desktop__advance_workflow",
+        arguments={
+            "workflow": workflow,
+            "action": {
+                "type": "start_requirement",
+                "parameters": {"requirement_id": "validation"},
+            },
+        },
+        result={
+            "is_error": False,
+            "content": {
+                "workflow": workflow,
+                "requirements": [{"id": "validation", "status": "satisfied"}],
+                "next_actions": [{"action": "start_run"}],
+            },
+        },
     )
+
+
+def _tool_call_observation(call: ToolCall) -> dict[str, object]:
+    return {"name": call.name, "arguments": call.arguments, "result": call.result}
 
 
 def _completion_capable(responses: list[TurnResult]) -> list[TurnResult]:
@@ -563,7 +635,7 @@ def populated_parent_child_recordings(
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
             "agent-attestations.json": [
                 {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"},
-                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
+                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "review-record.json#review_rounds/0", "review_round_index": 0},
             ],
             "closure/semantic.json": {
                 "semantic": {
@@ -572,23 +644,40 @@ def populated_parent_child_recordings(
                 }
             },
             "closure/built-spec.json": {"metrics": {"regional_revenue": "supported"}},
-            "closure/build-record.json": {"review_rounds": [_recorded_review_round()]},
+            "closure/build-record.json": {},
+            "review-record.json": {"schema": "nxd-conversation-review-ledger-v1", "review_rounds": [_recorded_review_round()]},
         }
         files = tuple(
             TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
             for path, value in artifacts.items()
         )
         responses = _completion_capable([
-            TurnResult(agent_message="What is the source?"),
-            TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
-            TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
+            TurnResult(
+                agent_message="What is the source?",
+                tool_calls=(_completed_prepare_call(scenario.id),),
+            ),
+            TurnResult(
+                agent_message="Please approve the agreed definition.",
+                approval_artifact="artifact://approval-2",
+            ),
+            TurnResult(
+                agent_message="Please approve the narrowed metric.",
+                approval_artifact="artifact://approval-3",
+                tool_calls=(
+                    _completed_session_decision_call(
+                        scenario.id,
+                        "Approved. Proceed with the agreed regional revenue definition.",
+                    ),
+                ),
+            ),
             TurnResult(agent_message="The build is ready."),
             TurnResult(
                 agent_message="The build completed.",
                 tool_calls=(
+                    _completed_capture_call(scenario.id),
                     _completed_review_call(),
-                    _completed_check_call(),
-                    _completed_build_call(supervisor),
+                    _completed_check_call(scenario.id),
+                    _completed_build_call(supervisor, scenario.id),
                 ),
                 files_touched=files,
             ),
@@ -632,13 +721,14 @@ def populated_zero_row_recordings(
             "spec.json": {"metrics": {"primary": "supported"}},
             "agent-attestations.json": [
                 {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"},
-                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
+                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "review-record.json#review_rounds/0", "review_round_index": 0},
             ],
             "closure/requiredness.json": {
                 "requiredness": {"optional_events": False, "primary": True}
             },
             "closure/built-spec.json": {"metrics": {"primary": "supported"}},
-            "closure/build-record.json": {"review_rounds": [_recorded_review_round()]},
+            "closure/build-record.json": {},
+            "review-record.json": {"schema": "nxd-conversation-review-ledger-v1", "review_rounds": [_recorded_review_round()]},
         }
         for resource in ("optional_events", "primary"):
             source_text = (generated.data_dir / f"{resource}.csv").read_text(encoding="utf-8")
@@ -659,16 +749,29 @@ def populated_zero_row_recordings(
             for path, value in artifacts.items()
         )
         responses = _completion_capable([
-            TurnResult(agent_message=opening_agent_message or "How did January go?"),
+            TurnResult(
+                agent_message=opening_agent_message or "How did January go?",
+                tool_calls=(_completed_prepare_call(scenario.id),),
+            ),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
-            TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
+            TurnResult(
+                agent_message="Please approve the narrowed metric.",
+                approval_artifact="artifact://approval-3",
+                tool_calls=(
+                    _completed_session_decision_call(
+                        scenario.id,
+                        "Approved. Proceed with the agreed January definition. Did anything go wrong in January?",
+                    ),
+                ),
+            ),
             TurnResult(agent_message="The build is ready."),
             TurnResult(
                 agent_message="The build completed.",
                 tool_calls=(
+                    _completed_capture_call(scenario.id),
                     _completed_review_call(),
-                    _completed_check_call(),
-                    _completed_build_call(supervisor),
+                    _completed_check_call(scenario.id),
+                    _completed_build_call(supervisor, scenario.id),
                 ),
                 files_touched=files,
             ),
@@ -804,9 +907,7 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
     closure = documented[0]["evidence_ref"].removesuffix(
         "/build-record.json#self_check"
     )
-    assert documented[1]["evidence_ref"] == (
-        f"{closure}/build-record.json#review_rounds/0"
-    )
+    assert documented[1]["evidence_ref"] == "review-record.json#review_rounds/0"
     (agent / "agent-attestations.json").write_text(json.dumps(documented), encoding="utf-8")
 
     parsed = tier_module._agent_attestations(agent)
@@ -815,33 +916,38 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
 
     observations = {
         "turns": [{
-            "turn": turn,
-            "tool_calls": [
-                {
-                    "name": "Agent",
+                "turn": turn,
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__advance_workflow",
+                        "arguments": {
+                            "workflow": "workflow",
+                            "action": {
+                                "type": "capture",
+                                "parameters": {
+                                    "requirement_id": "capture",
+                                    "authoring_root": str(agent / closure),
+                                },
+                            },
+                        },
+                        "result": {"is_error": False, "content": {"workflow": "workflow"}},
+                    },
+                    {
+                        "name": "Agent",
                     "arguments": {
                         "prompt": "Return claims only.\n"
                         + canonical_review_dispatch_marker(closure, 0),
                     },
                     "result": {"is_error": False, "content": "No claims."},
                 },
-                {
-                    "name": "mcp__nxd-desktop__check_data_product",
-                    "arguments": {"definition": str(agent / closure), "workflow": "workflow"},
-                    "result": {"is_error": False, "content": {"outcome": "pass", "workflow": "workflow"}},
-                },
-                {
-                    "name": "mcp__nxd-desktop__build_data_product",
-                    "arguments": {"definition": str(agent / closure), "workflow": "workflow"},
-                    "result": {
-                        "is_error": False,
-                        "content": {
-                            "run_id": "run-published",
-                            "artifact_id": "artifact-published",
-                        },
-                    },
-                },
-            ],
+                    _tool_call_observation(_completed_check_call("workflow")),
+                    _tool_call_observation(
+                        _completed_build_call(
+                            {"run_id": "run-published", "artifact_id": "artifact-published"},
+                            "workflow",
+                        )
+                    ),
+                ],
         }]
     }
     published = tier_module._published_closure(
@@ -899,8 +1005,8 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
         [{"action_kind": "self_check", "turn": 0, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
         [{"action_kind": "self_check", "turn": -1, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
         [{"action_kind": "self_check", "turn": "1", "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"}],
-        [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": True}],
-        [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "closure/build-record.json#review_rounds/-1", "review_round_index": -1}],
+        [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "review-record.json#review_rounds/0", "review_round_index": True}],
+        [{"action_kind": "adversarial_review", "turn": 1, "outcome": "complete", "evidence_ref": "review-record.json#review_rounds/-1", "review_round_index": -1}],
     ],
 )
 def test_agent_attestation_parser_rejects_extra_keys_bools_and_negative_indices(
@@ -926,7 +1032,7 @@ def test_construction_rejects_a_parsed_attestation_for_the_wrong_evidence_ref(tm
                 "action_kind": "adversarial_review",
                 "turn": 1,
                 "outcome": "complete",
-                "evidence_ref": "other-job/closure/build-record.json#review_rounds/0",
+                "evidence_ref": "other-job/review-record.json#review_rounds/0",
                 "review_round_index": 0,
             }
         ]),
@@ -2526,12 +2632,12 @@ def test_review_rounds_remain_keyed_when_two_closures_exist(tmp_path: Path) -> N
     second = root / "nxd-jobs" / "other" / "closure"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
-    first.joinpath("build-record.json").write_text(
-        json.dumps({"review_rounds": [_recorded_review_round()]}), encoding="utf-8"
+    first.parent.joinpath("review-record.json").write_text(
+        json.dumps({"schema": "nxd-conversation-review-ledger-v1", "review_rounds": [_recorded_review_round()]}), encoding="utf-8"
     )
     timed_out = {**_recorded_review_round(), "status": "timed_out", "ended_at_unix_ms": 121_000}
-    second.joinpath("build-record.json").write_text(
-        json.dumps({"review_rounds": [timed_out]}), encoding="utf-8"
+    second.parent.joinpath("review-record.json").write_text(
+        json.dumps({"schema": "nxd-conversation-review-ledger-v1", "review_rounds": [timed_out]}), encoding="utf-8"
     )
 
     assert tier_module._review_rounds(root) == {
@@ -2550,22 +2656,47 @@ def _facts_for_closure() -> SupervisorFacts:
     )
 
 
-def _observed_build(
+def _observed_capture(
     definition: str,
+    *,
+    workflow: str = "workflow",
+    tool_name: str = "mcp__nxd-desktop__advance_workflow",
+) -> dict:
+    return {
+        "name": tool_name,
+        "arguments": {
+            "workflow": workflow,
+            "action": {
+                "type": "capture",
+                "parameters": {"requirement_id": "capture", "authoring_root": definition},
+            },
+        },
+        "result": {"is_error": False, "content": {"workflow": workflow}},
+    }
+
+
+def _observed_build(
     *,
     run_id: str = "run-published",
     artifact_id: str = "artifact-published",
     is_error: bool = False,
-    tool_name: str = "mcp__nxd-desktop__build_data_product",
+    workflow: str = "workflow",
+    tool_name: str = "mcp__nxd-desktop__advance_workflow",
 ) -> dict:
     return {
         "name": tool_name,
-        "arguments": {"definition": definition},
+        "arguments": {
+            "workflow": workflow,
+            "action": {
+                "type": "start_run",
+                "parameters": {"expected_invalidation_epoch": 0},
+            },
+        },
         "result": {
             "is_error": is_error,
             "content": {
-                "run_id": run_id,
-                "artifact_id": artifact_id,
+                "workflow": workflow,
+                "admission": {"run_id": run_id, "artifact_id": artifact_id},
                 "bearer_token": "must-not-become-evidence",
             },
         },
@@ -2580,8 +2711,10 @@ def test_published_closure_uses_matching_real_build_result_and_normalizes_defini
             {
                 "turn": 1,
                 "tool_calls": [
-                    _observed_build("closure", run_id="stale"),
-                    _observed_build(str(agent / "nxd-jobs" / "current" / ".." / "current" / "closure")),
+                    _observed_capture("closure"),
+                    _observed_build(run_id="stale"),
+                    _observed_capture(str(agent / "nxd-jobs" / "current" / ".." / "current" / "closure")),
+                    _observed_build(),
                 ]
             }
         ]
@@ -2591,10 +2724,131 @@ def test_published_closure_uses_matching_real_build_result_and_normalizes_defini
         observations, _facts_for_closure(), agent_root=agent
     ) == PublishedBuild(
         "nxd-jobs/current/closure",
-        EventPosition(1, 1),
-        None,
+        EventPosition(1, 3),
+        "workflow",
         str(agent.resolve()),
     )
+
+
+def test_published_closure_uses_the_latest_v2_capture_for_start_run(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    workflow = "crm-deals-pipeline"
+
+    def advance(action_type: str, parameters: dict, content: dict) -> dict:
+        return {
+            "name": "mcp__nxd-desktop__advance_workflow",
+            "arguments": {
+                "workflow": workflow,
+                "action": {"type": action_type, "parameters": parameters},
+            },
+            "result": {"is_error": False, "content": {"workflow": workflow, **content}},
+        }
+
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    advance("capture", {"authoring_root": "old/closure"}, {}),
+                ],
+            },
+            {
+                "turn": 2,
+                "tool_calls": [
+                    advance("capture", {"authoring_root": "current/closure"}, {}),
+                    advance(
+                        "start_run",
+                        {"expected_invalidation_epoch": 1},
+                        {
+                            "admission": {
+                                "run_id": "run-published",
+                                "artifact_id": "artifact-published",
+                            }
+                        },
+                    ),
+                ],
+            },
+        ]
+    }
+
+    assert tier_module._published_closure(
+        observations, _facts_for_closure(), agent_root=agent
+    ) == PublishedBuild(
+        "current/closure",
+        EventPosition(2, 1),
+        workflow,
+        str(agent.resolve()),
+    )
+
+
+def test_published_closure_rejects_a_matching_legacy_build(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__build_data_product",
+                        "arguments": {"definition": "closure", "workflow": "workflow"},
+                        "result": {
+                            "is_error": False,
+                            "content": {
+                                "run_id": "run-published",
+                                "artifact_id": "artifact-published",
+                            },
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    assert tier_module._published_closure(
+        observations, _facts_for_closure(), agent_root=agent
+    ) is None
+
+
+def test_published_closure_refuses_v2_start_run_without_an_observed_capture(
+    tmp_path: Path,
+) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    {
+                        "name": "mcp__nxd-desktop__advance_workflow",
+                        "arguments": {
+                            "workflow": "crm-deals-pipeline",
+                            "action": {
+                                "type": "start_run",
+                                "parameters": {"expected_invalidation_epoch": 0},
+                            },
+                        },
+                        "result": {
+                            "is_error": False,
+                            "content": {
+                                "workflow": "crm-deals-pipeline",
+                                "admission": {
+                                    "run_id": "run-published",
+                                    "artifact_id": "artifact-published",
+                                },
+                            },
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    assert tier_module._published_closure(
+        observations, _facts_for_closure(), agent_root=agent
+    ) is None
 
 
 def test_published_closure_fails_closed_for_mismatch_ambiguity_or_noncanonical_result(tmp_path: Path) -> None:
@@ -2602,9 +2856,9 @@ def test_published_closure_fails_closed_for_mismatch_ambiguity_or_noncanonical_r
     agent.mkdir()
     facts = _facts_for_closure()
 
-    mismatched = {"turns": [{"turn": 1, "tool_calls": [_observed_build("closure", artifact_id="other")]}]}
+    mismatched = {"turns": [{"turn": 1, "tool_calls": [_observed_capture("closure"), _observed_build(artifact_id="other")]}]}
     ambiguous = {
-        "turns": [{"turn": 1, "tool_calls": [_observed_build("closure"), _observed_build("closure")]}]
+        "turns": [{"turn": 1, "tool_calls": [_observed_capture("closure"), _observed_build(), _observed_build()]}]
     }
     flat_result = {
         "turns": [{"turn": 1, "tool_calls": [{
@@ -2613,7 +2867,7 @@ def test_published_closure_fails_closed_for_mismatch_ambiguity_or_noncanonical_r
             "result": {"is_error": False, "run_id": facts.run_id, "artifact_id": facts.artifact_id},
         }]}]
     }
-    errored = {"turns": [{"turn": 1, "tool_calls": [_observed_build("closure", is_error=True)]}]}
+    errored = {"turns": [{"turn": 1, "tool_calls": [_observed_capture("closure"), _observed_build(is_error=True)]}]}
 
     for observations in (mismatched, ambiguous, flat_result, errored):
         assert tier_module._published_closure(observations, facts, agent_root=agent) is None
@@ -2626,9 +2880,12 @@ def test_published_closure_matches_a_custom_mixed_case_desktop_server(tmp_path: 
         "turns": [{
             "turn": 1,
             "tool_calls": [
-                _observed_build(
+                _observed_capture(
                     "closure",
-                    tool_name="mcp__Nxd-Desktop-Custom__build_data_product",
+                    tool_name="mcp__Nxd-Desktop-Custom__advance_workflow",
+                ),
+                _observed_build(
+                    tool_name="mcp__Nxd-Desktop-Custom__advance_workflow",
                 )
             ],
         }]
@@ -2652,9 +2909,12 @@ def test_published_closure_rejects_a_build_from_the_wrong_desktop_server(tmp_pat
         "turns": [{
             "turn": 1,
             "tool_calls": [
-                _observed_build(
+                _observed_capture(
                     "closure",
-                    tool_name="mcp__nxd-desktop-other__build_data_product",
+                    tool_name="mcp__nxd-desktop-other__advance_workflow",
+                ),
+                _observed_build(
+                    tool_name="mcp__nxd-desktop-other__advance_workflow",
                 )
             ],
         }]
@@ -2686,7 +2946,7 @@ def test_an_interrupted_run_reaches_the_report_with_its_structured_reason() -> N
         turn_timed_out=True,
         environment_detail="Claude did not complete the turn within 324.0s",
         failure_reason="provider_session_limit",
-        last_mcp_call="build_data_product:error",
+        last_mcp_call="advance_workflow:error",
     )
     recording = recording_for(scenario, responses_for(scenario, first=interrupted))
 
@@ -2703,7 +2963,7 @@ def test_an_interrupted_run_reaches_the_report_with_its_structured_reason() -> N
     assert interruption == {
         "failure_reason": "provider_session_limit",
         "failure_detail": "Claude did not complete the turn within 324.0s",
-        "last_mcp_call": "build_data_product:error",
+        "last_mcp_call": "advance_workflow:error",
     }
 
 
@@ -2822,7 +3082,7 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gates"]["narrowing"] = {
         "kind": "narrowing",
-        "definition_change": {"trigger_turn": 3, "changed_metrics": ["regional_revenue"]},
+        "definition_change": {"trigger_turn": 2, "changed_metrics": ["regional_revenue"]},
     }
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
@@ -2836,17 +3096,18 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
         artifacts = {
             "spec.json": {"metrics": {"regional_revenue": "supported"}},
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
-            "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
+            "spec-diff.json": {"turn": 2, "metrics": {"regional_revenue": 3}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
             "agent-attestations.json": [
                 {"action_kind": "self_check", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#self_check"},
-                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "closure/build-record.json#review_rounds/0", "review_round_index": 0},
+                {"action_kind": "adversarial_review", "turn": 5, "outcome": "pass", "evidence_ref": "review-record.json#review_rounds/0", "review_round_index": 0},
             ],
             "closure/semantic.json": {
                 "semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}
             },
             "closure/built-spec.json": {"metrics": {"regional_revenue": "supported"}},
-            "closure/build-record.json": {"review_rounds": [_recorded_review_round()]},
+            "closure/build-record.json": {},
+            "review-record.json": {"schema": "nxd-conversation-review-ledger-v1", "review_rounds": [_recorded_review_round()]},
         }
         files = tuple(
             TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -2860,16 +3121,32 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
             "lifecycle_state": "published",
         }
         responses = _completion_capable([
-            TurnResult(agent_message="What is the source?"),
-            TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
-            TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
+            TurnResult(
+                agent_message="What is the source?",
+                tool_calls=(_completed_prepare_call(scenario.id),),
+            ),
+            TurnResult(
+                agent_message="Please approve the agreed definition.",
+                approval_artifact="artifact://approval-2",
+            ),
+            TurnResult(
+                agent_message="Please approve the narrowed metric.",
+                approval_artifact="artifact://approval-3",
+                tool_calls=(
+                    _completed_session_decision_call(
+                        scenario.id,
+                        "Approved. Proceed with the agreed regional revenue definition.",
+                    ),
+                ),
+            ),
             TurnResult(agent_message="The build is ready."),
             TurnResult(
                 agent_message="The build completed.",
                 tool_calls=(
+                    _completed_capture_call(scenario.id),
                     _completed_review_call(),
-                    _completed_check_call(),
-                    _completed_build_call(supervisor),
+                    _completed_check_call(scenario.id),
+                    _completed_build_call(supervisor, scenario.id),
                 ),
                 files_touched=files,
             ),

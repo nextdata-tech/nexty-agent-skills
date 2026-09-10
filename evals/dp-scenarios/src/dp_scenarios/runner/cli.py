@@ -28,7 +28,7 @@ from dp_scenarios.scenario import (
 from dp_scenarios.operator.driver import DriverOperator
 from dp_scenarios.operator.openai_driver import OpenAIDriverProvider, driver_prompt_hash
 
-from .environment import PinnedVersions
+from .environment import DEFAULT_WORKFLOW_ACTIVATION_BUNDLE, PinnedVersions
 from .report import write_report
 from .session import LiveSession, ReplayRecording
 from .tier import CanaryResult, RunBudgets, TierError, TierRunner, run_drift_canary
@@ -206,6 +206,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--session-command", help="JSONL headless session command for live mode")
     parser.add_argument("--supervisor", type=Path)
+    parser.add_argument(
+        "--workflow-activation-bundle",
+        type=Path,
+        default=DEFAULT_WORKFLOW_ACTIVATION_BUNDLE,
+        help="trusted workflow-v2 activation bundle required by live runs",
+    )
     parser.add_argument("--skill-pack-version", required=True)
     parser.add_argument("--supervisor-version", required=True)
     parser.add_argument("--runtime-wheel-version", required=True)
@@ -311,6 +317,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         replay_recordings=replays,
         live_command=command if args.mode == "live" else None,
         supervisor_command=args.supervisor if args.mode == "live" else None,
+        workflow_activation_bundle=(
+            args.workflow_activation_bundle if args.mode == "live" else None
+        ),
         knob_plan=knob_plan,
         budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
         operator_factory=operator_factory,

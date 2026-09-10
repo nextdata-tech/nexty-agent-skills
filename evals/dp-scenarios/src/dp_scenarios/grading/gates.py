@@ -271,6 +271,116 @@ def gate_intake(ledger: object) -> GateResult:
     # spec_approved and the first closure write were both recorded at turn 4.
     if approvals and codegen and min(codegen) < min(approvals):
         findings.append(Finding("intake_approval_not_before_codegen", "codegen turn precedes the approval", {"approval": min(approvals), "codegen": min(codegen)}))
+    if isinstance(ledger, Mapping):
+        observations = ledger.get("observations")
+        positioned = _positioned_calls(observations)
+        advance_name = "mcp__nxd-desktop__advance_workflow"
+        prepare_name = "mcp__nxd-desktop__prepare_workflow"
+
+        def successful(call: Mapping[str, object]) -> bool:
+            result = call.get("result")
+            return isinstance(result, Mapping) and result.get("is_error") is False
+
+        def action_type(call: Mapping[str, object]) -> str | None:
+            arguments = call.get("arguments")
+            action = arguments.get("action") if isinstance(arguments, Mapping) else None
+            value = action.get("type") if isinstance(action, Mapping) else None
+            return value if isinstance(value, str) else None
+
+        publication_workflows = {
+            arguments["workflow"]
+            for _, call in positioned
+            if isinstance(call.get("name"), str)
+            and call["name"].casefold() == advance_name
+            and action_type(call) == "start_run"
+            and successful(call)
+            and isinstance((arguments := call.get("arguments")), Mapping)
+            and isinstance(arguments.get("workflow"), str)
+            and arguments["workflow"]
+            and isinstance((result := call.get("result")), Mapping)
+            and isinstance((content := result.get("content")), Mapping)
+            and content.get("workflow") == arguments["workflow"]
+        }
+        if publication_workflows:
+            approval_rows = [
+                row
+                for row in rows
+                if row.get("action_kind") == "spec_approved"
+                and isinstance(row.get("turn"), int)
+                and not isinstance(row.get("turn"), bool)
+                and isinstance(row.get("artifact_ref"), str)
+                and row.get("artifact_ref")
+            ]
+            prepared = [
+                (position, arguments["workflow"])
+                for position, call in positioned
+                if isinstance(call.get("name"), str)
+                and call["name"].casefold() == prepare_name
+                and successful(call)
+                and isinstance((arguments := call.get("arguments")), Mapping)
+                and isinstance(arguments.get("workflow"), str)
+                and isinstance((result := call.get("result")), Mapping)
+                and isinstance((content := result.get("content")), Mapping)
+                and content.get("workflow") == arguments["workflow"]
+            ]
+            decisions: list[tuple[EventPosition, str, str]] = []
+            for position, call in positioned:
+                name = call.get("name")
+                if (
+                    not isinstance(name, str)
+                    or name.casefold() != advance_name
+                    or action_type(call) != "session_decision"
+                    or not successful(call)
+                ):
+                    continue
+                arguments = call.get("arguments")
+                action = arguments.get("action") if isinstance(arguments, Mapping) else None
+                parameters = action.get("parameters") if isinstance(action, Mapping) else None
+                workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+                content = result.get("content") if isinstance(result, Mapping) else None
+                if (
+                    not isinstance(parameters, Mapping)
+                    or parameters.get("approved") is not True
+                    or not isinstance(workflow, str)
+                    or not isinstance(content, Mapping)
+                    or content.get("workflow") != workflow
+                ):
+                    continue
+                quote = parameters.get("quote")
+                if isinstance(quote, str):
+                    decisions.append((position, workflow, quote))
+            if not approval_rows:
+                findings.append(
+                    Finding(
+                        "intake_workflow_approval_evidence_missing",
+                        "workflow-v2 publication has no declared operator approval text",
+                    )
+                )
+            else:
+                first_approval = min(int(row["turn"]) for row in approval_rows)
+                if not any(
+                    position.turn < first_approval and workflow in publication_workflows
+                    for position, workflow in prepared
+                ):
+                    findings.append(
+                        Finding(
+                            "intake_workflow_prepare_not_before_approval",
+                            "prepare_workflow did not bind the blueprint before operator approval",
+                        )
+                    )
+                exact_quotes = {str(row["artifact_ref"]) for row in approval_rows}
+                if not any(
+                    position.turn >= first_approval
+                    and workflow in publication_workflows
+                    and quote in exact_quotes
+                    for position, workflow, quote in decisions
+                ):
+                    findings.append(
+                        Finding(
+                            "intake_workflow_approval_not_relayed",
+                            "session_decision does not relay the exact operator approval",
+                        )
+                    )
     return _result("intake", not findings, findings)
 
 
@@ -967,30 +1077,53 @@ def _successful_check_positions(
     *,
     desktop_server_name: str,
 ) -> tuple[EventPosition, ...]:
-    expected_name = f"mcp__{desktop_server_name.casefold()}__check_data_product"
+    desktop_prefix = f"mcp__{desktop_server_name.casefold()}__"
+    expected_advance = desktop_prefix + "advance_workflow"
     positions: list[EventPosition] = []
     for position, call in _positioned_calls(observations):
         name = call.get("name")
-        if not isinstance(name, str) or name.casefold() != expected_name:
+        if not isinstance(name, str) or name.casefold() != expected_advance:
             continue
         arguments = call.get("arguments")
         result = call.get("result")
         if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
             continue
         content = result.get("content")
+        if result.get("is_error") is not False or not isinstance(content, Mapping):
+            continue
+        action = arguments.get("action")
+        if not isinstance(action, Mapping) or action.get("type") != "start_requirement":
+            continue
+        parameters = action.get("parameters")
+        requirement_id = parameters.get("requirement_id") if isinstance(parameters, Mapping) else None
         if (
-            result.get("is_error") is not False
-            or not isinstance(content, Mapping)
-            or str(content.get("outcome", "")).strip().casefold() != "pass"
-            or _normalized_definition_for_build(arguments.get("definition"), build)
-            != build.closure_path
+            not isinstance(requirement_id, str)
+            or not requirement_id
             or _normalized_workflow(arguments.get("workflow")) != build.workflow
+            or _normalized_workflow(content.get("workflow")) != build.workflow
         ):
             continue
-        result_workflow = content.get("workflow")
-        if result_workflow is not None and _normalized_workflow(result_workflow) != build.workflow:
+        requirements = content.get("requirements")
+        if not isinstance(requirements, Sequence) or isinstance(
+            requirements, (str, bytes, bytearray)
+        ):
             continue
-        positions.append(position)
+        requirement_satisfied = any(
+            isinstance(requirement, Mapping)
+            and requirement.get("id") == requirement_id
+            and str(requirement.get("status", "")).casefold() == "satisfied"
+            for requirement in requirements
+        )
+        next_actions = content.get("next_actions")
+        run_is_next = isinstance(next_actions, Sequence) and not isinstance(
+            next_actions, (str, bytes, bytearray)
+        ) and any(
+            isinstance(next_action, Mapping)
+            and next_action.get("action") == "start_run"
+            for next_action in next_actions
+        )
+        if requirement_satisfied and run_is_next:
+            positions.append(position)
     return tuple(positions)
 
 
@@ -1003,6 +1136,7 @@ _KNOWN_READ_ONLY_DESKTOP_ACTIONS = frozenset(
         "read",
         "list_data_products",
         "inspect_run",
+        "inspect_workflow",
         "read_data_product_resource",
         "run_semantic_query",
     }
@@ -1410,9 +1544,9 @@ def gate_construction(
             for index, _round in enumerate(rounds):
                 dispatch = dispatch_by_index[index]
                 attestation = attestations_by_index[index]
-                expected_ref = (
-                    f"{build.closure_path}/build-record.json#review_rounds/{index}"
-                )
+                job_path = PurePosixPath(build.closure_path).parent
+                review_path = (job_path / "review-record.json").as_posix()
+                expected_ref = f"{review_path}#review_rounds/{index}"
                 if attestation.get("evidence_ref") != expected_ref:
                     paired = False
                     break

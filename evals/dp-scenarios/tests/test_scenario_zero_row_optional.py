@@ -211,7 +211,7 @@ def test_optional_resource_is_reachable_from_plausible_follow_up_questions() -> 
         "What should I worry about for January?",
         "Were you worried about anything in January?",
     )
-    operator_turns = set(SCENARIO.answer_sheet.turns)
+    operator_turns = {turn.text for turn in SCENARIO.script.turns}
     assert not operator_turns.intersection(questions)
     for question in questions:
         optional = bank.reply_for(question)

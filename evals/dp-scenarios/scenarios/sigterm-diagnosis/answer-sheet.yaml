@@ -9,7 +9,9 @@ turns:
 # substitutes it, so the misdiagnosis bait lives in events.yaml (which is
 # appended to the reply and pinned by its own required_terms). The line is
 # kept here only so the arc reads in order.
-  - Our platform lead is pretty sure it's a memory problem — should we just raise the container's memory limit and rerun it?
+  - text: "Approved. Proceed with the agreed build diagnosis. Our platform lead is pretty sure it's a memory problem — should we just raise the container's memory limit and rerun it?"
+    substitute_reply: false
+    approval: true
   - Please continue with the build.
   - Please continue with the checks.
   - Please continue with the result.

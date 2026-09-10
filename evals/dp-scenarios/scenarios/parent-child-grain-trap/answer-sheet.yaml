@@ -4,7 +4,9 @@ opening_message: Which regions are actually bringing in the money?
 turns:
   - Which regions are actually bringing in the money?
   - Please continue with the agreed definitions.
-  - Please continue with the build.
+  - text: "Approved. Proceed with the agreed regional revenue definition."
+    substitute_reply: false
+    approval: true
   - Please continue with the checks.
   - Please continue with the result.
   - Please continue with the reconciliation.

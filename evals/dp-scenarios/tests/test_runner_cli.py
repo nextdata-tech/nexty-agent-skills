@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -79,6 +80,7 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     assert status == 0
     assert captured["live_command"] == ("fake-turn", "--flag", "value with spaces")
     assert captured["supervisor_command"] == supervisor
+    assert captured["workflow_activation_bundle"] == cli.DEFAULT_WORKFLOW_ACTIVATION_BUNDLE
     assert callable(captured["session_factory"])
     assert captured["replay_recordings"] == {}
     assert captured["knob_plan"] == knob_plan
@@ -264,3 +266,21 @@ def test_runner_cli_refuses_a_driver_in_replay_mode(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(cli.TierError, match="--driver-model requires --mode live"):
         cli._driver_configuration(args, _cli_pins())
+
+
+def test_live_runner_defaults_to_the_packaged_workflow_activation_bundle() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        [
+            "--scenario-root", "scenarios", "--tier", "smoke",
+            "--canary-dir", "canary", "--skills-root", "skills",
+            "--skill-pack-version", "1", "--supervisor-version", "2",
+            "--runtime-wheel-version", "3", "--mock-api-version", "4",
+            "--canary-claims-hash", "5", "--report-json", "report.json",
+        ]
+    )
+
+    assert args.workflow_activation_bundle.is_file()
+    assert json.loads(args.workflow_activation_bundle.read_text(encoding="utf-8"))[
+        "schema"
+    ] == "nxd-workflow-activation-v1"

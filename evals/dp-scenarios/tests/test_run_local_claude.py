@@ -83,6 +83,11 @@ def test_skill_pack_root_defaults_to_and_validates_the_current_checkout(tmp_path
 
     assert module.build_parser().parse_args([]).skill_pack_root is None
     assert module._validated_skill_pack_root(None) == module.REPO_ROOT
+    activation_bundle = module.build_parser().parse_args([]).workflow_activation_bundle
+    assert activation_bundle.is_file()
+    assert json.loads(activation_bundle.read_text(encoding="utf-8"))["schema"] == (
+        "nxd-workflow-activation-v1"
+    )
 
     incomplete = tmp_path / "incomplete-skill-pack"
     incomplete.mkdir()

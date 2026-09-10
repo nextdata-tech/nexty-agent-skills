@@ -690,6 +690,19 @@ def test_live_is_the_only_tier_that_cannot_be_replayed() -> None:
     assert not requires_live_session("T0"), "the legacy smoke spelling is replayable"
 
 
+def test_every_shipped_scenario_declares_one_pre_codegen_workflow_approval() -> None:
+    """Every build scenario must supply the exact consent quote workflow v2 relays."""
+
+    for scenario in load_scenarios(SCENARIO_ROOT):
+        approval_turns = [
+            turn_number
+            for turn_number, turn in enumerate(scenario.script.turns, start=1)
+            if turn.approval
+        ]
+        assert len(approval_turns) == 1, scenario.id
+        assert scenario.phase_map[approval_turns[0]] == GATE_PHASES["narrowing"], scenario.id
+
+
 def test_capability_shortfall_is_the_first_package_to_declare_the_live_tier() -> None:
     # The live tier existed before any package used it (b6acc702); this pins
     # capability-shortfall as the first, and only, package that does. A

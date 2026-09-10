@@ -211,12 +211,9 @@ def test_unpaired_mcp_tool_use_is_an_environment_wedge_not_a_build_failure() -> 
 def test_machine_artifacts_require_structured_mcp_facts(tmp_path: Path) -> None:
     artifact_dir = tmp_path / "artifacts"
     observations = [
-        {
-            "tool": "build_data_product",
-            "arguments": {"workflow": "parent-child-grain-trap"},
-            "result": {"run_id": "run-6", "artifact_id": "artifact-6"},
-            "is_error": False,
-        },
+        _start_run_observation(
+            "run-6", "artifact-6", workflow="parent-child-grain-trap"
+        ),
         {
             "tool": "list_data_products",
             "arguments": {},
@@ -1131,6 +1128,28 @@ def _observation(tool: str, content: object, *, arguments: object = None, is_err
     return {"tool": tool, "arguments": arguments or {}, "result": content, "is_error": is_error}
 
 
+def _start_run_observation(
+    run_id: str,
+    artifact_id: str,
+    *,
+    workflow: str = "crm-deals-pipeline",
+) -> dict[str, object]:
+    return _observation(
+        "advance_workflow",
+        {
+            "workflow": workflow,
+            "admission": {"run_id": run_id, "artifact_id": artifact_id},
+        },
+        arguments={
+            "workflow": workflow,
+            "action": {
+                "type": "start_run",
+                "parameters": {"expected_invalidation_epoch": 0},
+            },
+        },
+    )
+
+
 def _verified_release(*, run_id: str, artifact_id: str, publish_seq: int, counts: dict[str, int]) -> dict[str, object]:
     """The resource payload the supervisor labels ``artifact_verified``."""
 
@@ -1228,7 +1247,7 @@ def test_supervisor_facts_come_from_the_verified_release_the_agent_published(tmp
 
     facts, _ = _harvest(
         [
-            _observation("build_data_product", {"run_id": "run-701f", "artifact_id": "artifact-cdb6"}, arguments={"workflow": "crm-deals-pipeline"}),
+            _start_run_observation("run-701f", "artifact-cdb6"),
             _observation("inspect_run", {"run": {"run_id": "run-701f", "lifecycle": "terminal"}}),
             _observation(
                 "read_data_product_resource",
@@ -1248,6 +1267,52 @@ def test_supervisor_facts_come_from_the_verified_release_the_agent_published(tmp
     assert facts["publish_sequence"] == "6"
 
 
+def test_workflow_start_run_supplies_the_published_run_identity(tmp_path: Path) -> None:
+    facts, _ = _harvest(
+        [
+            _observation(
+                "advance_workflow",
+                {
+                    "workflow": "crm-deals-pipeline",
+                    "admission": {
+                        "run_id": "run-v2",
+                        "artifact_id": "artifact-v2",
+                    },
+                },
+                arguments={
+                    "workflow": "crm-deals-pipeline",
+                    "action": {
+                        "type": "start_run",
+                        "parameters": {"expected_invalidation_epoch": 0},
+                    },
+                },
+            ),
+            _observation(
+                "inspect_run",
+                {"run": {"run_id": "run-v2", "lifecycle": "terminal"}},
+            ),
+            _observation(
+                "read_data_product_resource",
+                _verified_release(
+                    run_id="run-v2",
+                    artifact_id="artifact-v2",
+                    publish_seq=8,
+                    counts={"main.deals": 6},
+                ),
+            ),
+        ],
+        tmp_path,
+    )
+
+    assert facts == {
+        "run_id": "run-v2",
+        "artifact_id": "artifact-v2",
+        "publish_sequence": "8",
+        "lifecycle_state": "terminal",
+        "per_model_row_counts": {"main.deals": "6"},
+    }
+
+
 def test_a_release_from_a_run_this_session_never_built_is_refused(tmp_path: Path) -> None:
     """Attribution is the whole point: a leftover release must not supply facts.
 
@@ -1257,7 +1322,6 @@ def test_a_release_from_a_run_this_session_never_built_is_refused(tmp_path: Path
 
     _harvest(
         [
-            _observation("build_data_product", {"run_id": "run-mine", "artifact_id": "artifact-mine"}),
             _observation("inspect_run", {"run": {"run_id": "run-mine", "lifecycle": "terminal"}}),
             _observation(
                 "read_data_product_resource",
@@ -1275,8 +1339,8 @@ def test_the_highest_publish_sequence_wins_when_several_releases_are_read(tmp_pa
 
     facts, _ = _harvest(
         [
-            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
-            _observation("build_data_product", {"run_id": "run-b", "artifact_id": "artifact-b"}),
+            _start_run_observation("run-a", "artifact-a"),
+            _start_run_observation("run-b", "artifact-b"),
             _observation("inspect_run", {"run": {"run_id": "run-b", "lifecycle": "terminal"}}),
             _observation("read_data_product_resource", _verified_release(run_id="run-b", artifact_id="artifact-b", publish_seq=7, counts={"main.deals": 6})),
             _observation("read_data_product_resource", _verified_release(run_id="run-a", artifact_id="artifact-a", publish_seq=5, counts={"main.deals": 4})),
@@ -1291,7 +1355,7 @@ def test_the_highest_publish_sequence_wins_when_several_releases_are_read(tmp_pa
 def test_an_errored_resource_read_contributes_nothing(tmp_path: Path) -> None:
     _harvest(
         [
-            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
+            _start_run_observation("run-a", "artifact-a"),
             _observation("inspect_run", {"run": {"run_id": "run-a", "lifecycle": "terminal"}}),
             _observation(
                 "read_data_product_resource",
@@ -1414,8 +1478,8 @@ def test_lifecycle_is_paired_with_the_run_whose_identifiers_are_published(tmp_pa
 
     facts, _ = _harvest(
         [
-            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
-            _observation("build_data_product", {"run_id": "run-b", "artifact_id": "artifact-b"}),
+            _start_run_observation("run-a", "artifact-a"),
+            _start_run_observation("run-b", "artifact-b"),
             _observation("inspect_run", {"run": {"run_id": "run-a", "lifecycle": "failed"}}),
             _observation("inspect_run", {"run": {"run_id": "run-b", "lifecycle": "terminal"}}),
             _observation("read_data_product_resource", _verified_release(run_id="run-b", artifact_id="artifact-b", publish_seq=7, counts={"main.deals": 6})),
@@ -1445,7 +1509,7 @@ def test_a_lifecycle_from_an_earlier_turn_is_not_published_beside_a_later_run(tm
     # Turn n: build run-a, inspect it, no release published yet.
     _update_machine_artifacts(
         [
-            _observation("build_data_product", {"run_id": "run-a", "artifact_id": "artifact-a"}),
+            _start_run_observation("run-a", "artifact-a"),
             _observation("inspect_run", {"run": {"run_id": "run-a", "lifecycle": "failed"}}),
         ],
         artifact_dir=tmp_path,
@@ -1459,7 +1523,7 @@ def test_a_lifecycle_from_an_earlier_turn_is_not_published_beside_a_later_run(tm
     # inspect_run this turn.
     _update_machine_artifacts(
         [
-            _observation("build_data_product", {"run_id": "run-b", "artifact_id": "artifact-b"}),
+            _start_run_observation("run-b", "artifact-b"),
             _observation("read_data_product_resource", _verified_release(run_id="run-b", artifact_id="artifact-b", publish_seq=7, counts={"main.deals": 6})),
         ],
         artifact_dir=tmp_path,

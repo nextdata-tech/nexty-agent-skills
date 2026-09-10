@@ -33,6 +33,7 @@ from dp_scenarios.operator.openai_driver import (
     driver_prompt_hash,
 )
 from dp_scenarios.runner.environment import PinnedVersions
+from dp_scenarios.runner.environment import DEFAULT_WORKFLOW_ACTIVATION_BUNDLE
 from dp_scenarios.runner.local import FileSupervisorRecordReader, temporary_plugin
 from dp_scenarios.runner.report import write_report
 from dp_scenarios.runner.session import LiveSession
@@ -135,7 +136,7 @@ def resolve_desktop_python(selected: Path | None) -> Path:
     base interpreter instead -- the same executable, but without the venv's
     site-packages.  A live run on 2026-09-03 lost every build to exactly that:
     the venv carried PyYAML 6.0.3, the resolved base did not, so
-    ``build_data_product`` failed for any closure and the build, query,
+    workflow-v2 admission failed for any closure and the build, query,
     narrowing and capability gates all recorded not-examined.  The path must
     stay the venv's own so ``sys.prefix`` lands inside it.
     """
@@ -378,6 +379,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-budget-usd", type=float, help="per-scenario Claude Code spend ceiling")
     parser.add_argument("--turn-timeout", type=float, default=600.0, help="maximum seconds for each Claude turn")
     parser.add_argument("--supervisor", type=Path, help="nxd-desktop-supervisor executable")
+    parser.add_argument(
+        "--workflow-activation-bundle",
+        type=Path,
+        default=DEFAULT_WORKFLOW_ACTIVATION_BUNDLE,
+        help="trusted workflow-v2 activation bundle required by every scenario run",
+    )
     parser.add_argument("--desktop-python", type=Path, default=None, help="desktop supervisor Python interpreter")
     parser.add_argument("--runtime-wheel-version", help="override the runtime pin stored in the manifest")
     parser.add_argument(
@@ -512,6 +519,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             supervisor_command=supervisor,
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
+            workflow_activation_bundle=args.workflow_activation_bundle,
             allow_host_home=args.allow_host_home,
             operator_factory=operator_factory,
             max_workers=args.jobs,

@@ -316,7 +316,7 @@ def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> Non
         turn_timed_out=True,
         environment_detail="Claude did not complete the turn within 324.0s",
         failure_reason="provider_session_limit",
-        last_mcp_call="build_data_product:error",
+        last_mcp_call="advance_workflow:error",
     )
     result = TierRunner(
         [scenario],
@@ -327,7 +327,7 @@ def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> Non
     text = human_summary(result)
 
     assert "interrupted: provider_session_limit" in text
-    assert "last MCP call: build_data_product:error" in text
+    assert "last MCP call: advance_workflow:error" in text
     assert "detail: Claude did not complete the turn within 324.0s" in text
 
 

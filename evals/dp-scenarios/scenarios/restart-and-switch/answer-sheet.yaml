@@ -9,7 +9,9 @@ turns:
 # substitutes it, so the misdiagnosis bait lives in events.yaml (which is
 # appended to the reply and pinned by its own required_terms). The line is
 # kept here only so the arc reads in order.
-  - It's probably broken — can we just tear it down and rebuild the whole thing from scratch?
+  - text: "Approved. Proceed with the agreed availability diagnosis. It's probably broken — can we just tear it down and rebuild the whole thing from scratch?"
+    substitute_reply: false
+    approval: true
   - Please continue with the restart.
   - Please continue with the checks.
   - Please continue with the diagnosis and final check.

@@ -845,12 +845,7 @@ def _published_closure(
     agent_root: Path,
     desktop_server_name: str = "nxd-desktop",
 ) -> PublishedBuild | None:
-    """Bind the published release to exactly one observed build definition.
-
-    The build result is the only structured event that joins a definition path
-    to the supervisor-owned release identifiers.  Ignore direct/flattened
-    payloads, error results, partial identifiers, and ambiguous paths.
-    """
+    """Bind one workflow-v2 admission to its captured closure."""
 
     if (
         not isinstance(observations, Mapping)
@@ -859,9 +854,8 @@ def _published_closure(
         or not desktop_server_name.strip()
     ):
         return None
-    expected_tool_name = (
-        f"mcp__{desktop_server_name.strip()}__build_data_product"
-    ).casefold()
+    server_prefix = f"mcp__{desktop_server_name.strip()}__"
+    expected_advance_tool = (server_prefix + "advance_workflow").casefold()
     run_id = supervisor_facts.run_id
     artifact_id = supervisor_facts.artifact_id
     if not isinstance(run_id, str) or not run_id or not isinstance(artifact_id, str) or not artifact_id:
@@ -870,6 +864,7 @@ def _published_closure(
     if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
         return None
     matches: list[PublishedBuild] = []
+    captured_closures: dict[str, str] = {}
     for turn in turns:
         if not isinstance(turn, Mapping):
             continue
@@ -885,7 +880,7 @@ def _published_closure(
             continue
         for call_index, call in enumerate(calls):
             name = call.get("name") if isinstance(call, Mapping) else None
-            if not isinstance(name, str) or name.casefold() != expected_tool_name:
+            if not isinstance(name, str):
                 continue
             result = call.get("result")
             if not isinstance(result, Mapping) or result.get("is_error") is not False:
@@ -893,24 +888,36 @@ def _published_closure(
             content = result.get("content")
             if not isinstance(content, Mapping):
                 continue
-            if content.get("run_id") != run_id or content.get("artifact_id") != artifact_id:
-                continue
             arguments = call.get("arguments")
-            definition = arguments.get("definition") if isinstance(arguments, Mapping) else None
-            normalized = _normalized_definition_path(definition, agent_root=agent_root)
-            workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+            if not isinstance(arguments, Mapping):
+                continue
+            workflow = arguments.get("workflow")
             normalized_workflow = workflow.strip() if isinstance(workflow, str) and workflow.strip() else None
-            result_workflow = content.get("workflow")
-            if (
-                normalized is not None
-                and (
-                    result_workflow is None
-                    or (
-                        isinstance(result_workflow, str)
-                        and result_workflow.strip() == normalized_workflow
-                    )
+            if name.casefold() != expected_advance_tool or normalized_workflow is None:
+                continue
+            action = arguments.get("action")
+            if not isinstance(action, Mapping):
+                continue
+            action_type = action.get("type")
+            parameters = action.get("parameters")
+            if not isinstance(parameters, Mapping):
+                continue
+            if action_type == "capture":
+                normalized = _normalized_definition_path(
+                    parameters.get("authoring_root"), agent_root=agent_root
                 )
-            ):
+                if normalized is not None and content.get("workflow") == normalized_workflow:
+                    captured_closures[normalized_workflow] = normalized
+                continue
+            if action_type != "start_run" or content.get("workflow") != normalized_workflow:
+                continue
+            admission = content.get("admission")
+            if not isinstance(admission, Mapping):
+                continue
+            if admission.get("run_id") != run_id or admission.get("artifact_id") != artifact_id:
+                continue
+            normalized = captured_closures.get(normalized_workflow)
+            if normalized is not None:
                 matches.append(
                     PublishedBuild(
                         normalized,
@@ -925,16 +932,18 @@ def _published_closure(
 def _review_rounds(artifact_root: Path) -> Mapping[str, tuple[Mapping[str, object], ...]]:
     """Return recorded adversarial-review rounds keyed by closure path.
 
-    ``build-record.json`` ``review_rounds[]`` is the durable product of the
-    dispatch that ``nxd-generate-data-product`` step 6b mandates. It exists
-    only on the generator path, which is the point: a hand-authored closure
-    records none.
+    Workflow v2 keeps the rich review ledger beside the captured closure so
+    review evidence never mutates the bytes it attests. The closure path stays
+    the lookup key used to bind the ledger to the published admission.
     """
 
     rounds: dict[str, tuple[Mapping[str, object], ...]] = {}
     for closure in _closure_dirs(artifact_root):
-        record = _load_json(closure / "build-record.json")
-        if not isinstance(record, Mapping):
+        record = _load_json(closure.parent / "review-record.json")
+        if (
+            not isinstance(record, Mapping)
+            or record.get("schema") != "nxd-conversation-review-ledger-v1"
+        ):
             continue
         entries = record.get("review_rounds")
         if isinstance(entries, (list, tuple)):
@@ -949,7 +958,7 @@ def _canonical_attestation_evidence_ref(
     action_kind: object,
     review_round_index: object,
 ) -> bool:
-    """Accept only the documented normalized closure/build-record reference."""
+    """Accept only the documented closure or job-level evidence reference."""
 
     if not isinstance(value, str) or not value or value != value.strip():
         return False
@@ -963,17 +972,20 @@ def _canonical_attestation_evidence_ref(
     ):
         return False
     path = PurePosixPath(path_text)
-    if (
-        path.is_absolute()
-        or path.as_posix() != path_text
-        or any(part in {"", ".", ".."} for part in path.parts)
-        or len(path.parts) < 2
-        or path.parts[-2:] != ("closure", "build-record.json")
+    if path.is_absolute() or path.as_posix() != path_text or any(
+        part in {"", ".", ".."} for part in path.parts
     ):
         return False
     if action_kind == "self_check":
-        return fragment == "self_check"
-    return fragment == f"review_rounds/{review_round_index}"
+        return (
+            len(path.parts) >= 2
+            and path.parts[-2:] == ("closure", "build-record.json")
+            and fragment == "self_check"
+        )
+    return (
+        path.name == "review-record.json"
+        and fragment == f"review_rounds/{review_round_index}"
+    )
 
 
 def _agent_attestations(root: Path, *, fallback_root: Path | None = None) -> _AttestationRead:
@@ -1497,6 +1509,7 @@ class TierRunner:
         live_environment: Mapping[str, str] | None = None,
         supervisor_command: str | Path | Sequence[str] | None = None,
         supervisor_environment: Mapping[str, str] | None = None,
+        workflow_activation_bundle: str | Path | None = None,
         knob_plan: KnobPlan | None = None,
         workflow_restart_factory: WorkflowRestartFactory | None = None,
         workflow_observer: WorkflowObserver | None = None,
@@ -1528,6 +1541,11 @@ class TierRunner:
         self.supervisor_command = supervisor_command
         self.supervisor_environment = (
             dict(supervisor_environment) if supervisor_environment is not None else None
+        )
+        self.workflow_activation_bundle = (
+            Path(workflow_activation_bundle).expanduser().resolve()
+            if workflow_activation_bundle is not None
+            else None
         )
         self.knob_plan = knob_plan
         self.workflow_restart_factory = workflow_restart_factory
@@ -1882,6 +1900,7 @@ class TierRunner:
                 live_environment=self.live_environment,
                 supervisor_command=self.supervisor_command,
                 supervisor_environment=self.supervisor_environment,
+                workflow_activation_bundle=self.workflow_activation_bundle,
                 allow_host_home=self.allow_host_home,
                 knobs=knobs,
                 attempt=epoch,
