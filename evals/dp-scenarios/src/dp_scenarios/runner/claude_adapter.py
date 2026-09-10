@@ -126,7 +126,9 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "get_workflow_capabilities to report execution_enabled true, and call "
     "prepare_workflow for that exact blueprint. Ask the operator for explicit "
     "approval of the prepared blueprint; treat only that explicit operator "
-    "approval as authorization to generate or modify the closure, and relay "
+    "approval as authorization to generate or modify the closure. A scope "
+    "correction, answer, or additional instruction is not approval unless the "
+    "operator explicitly approves proceeding; wait for that approval and relay "
     "it with the returned session_decision action.",
     "An answer marked as approval is usable only after prepare_workflow has "
     "bound the complete written blueprint and returned its consent subject. "
