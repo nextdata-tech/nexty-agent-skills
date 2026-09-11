@@ -152,6 +152,22 @@ RELATIVE_RESOLVE_OPERAND_TRANSFORM = MODEL_ROOT_TRANSFORM.replace(
 )
 
 
+UNPINNED_PATH_ESCAPE_TRANSFORMS = (
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / os.path.realpath(".")',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        "model_root = roots[label] / Path.home()",
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / Path("~").expanduser()',
+    ),
+)
+
+
 def _write_public_closure(root: Path, transform: str, readme: str) -> None:
     (root / "transform").mkdir(parents=True)
     (root / "data-orders/orders").mkdir(parents=True)
@@ -393,6 +409,24 @@ def test_model_root_dataflow_rejects_relative_resolve_operand(
     result = _run_public_checker(closure)
     assert result.returncode != 0
     assert "FAIL transform-uses-pinned-root" in result.stdout
+
+
+def test_model_root_dataflow_rejects_unpinned_path_escape_aliases(
+    tmp_path: Path,
+) -> None:
+    for index, transform in enumerate(UNPINNED_PATH_ESCAPE_TRANSFORMS):
+        path = tmp_path / f"main-{index}.py"
+        path.write_text(transform, encoding="utf-8")
+        assert not SUPERVISOR.transform_uses_pinned_roots(path)
+        closure = tmp_path / f"closure-{index}"
+        _write_public_closure(
+            closure,
+            transform,
+            "This closure requires a desktop supervisor with directory-companion support.\n",
+        )
+        result = _run_public_checker(closure)
+        assert result.returncode != 0
+        assert "FAIL transform-uses-pinned-root" in result.stdout
 
 
 def test_public_checker_requires_directory_companion_documentation(tmp_path: Path) -> None:

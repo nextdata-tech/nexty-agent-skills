@@ -312,13 +312,15 @@ def main() -> None:
             isinstance(child, ast.Call)
             and (
                 (isinstance(child.func, ast.Attribute)
-                 and child.func.attr in {"abspath", "cwd", "getcwd"}
+                 and child.func.attr in {"abspath", "realpath", "cwd", "getcwd"}
                  and not (
                      child.func.attr == "abspath"
                      and contains_name(child.func.value, trusted_names)
                  ))
                 or (isinstance(child.func, ast.Attribute)
-                    and child.func.attr in {"absolute", "resolve"}
+                    and child.func.attr in {
+                        "absolute", "expanduser", "home", "resolve"
+                    }
                     and not (
                         contains_name(child.func.value, trusted_names)
                         or any(

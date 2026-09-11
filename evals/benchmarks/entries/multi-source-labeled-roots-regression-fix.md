@@ -20,7 +20,7 @@ record: "../records/multi-source-labeled-roots-regression-fix.json"
 
 ## Notes
 
-The pre-change control passed the baseline scenario; two independent uncached post-change runs against the final implementation passed all 9 checks.
+The pre-change control passed the baseline scenario; two independent uncached post-change runs against the final implementation passed all 9 checks. The deterministic checker regression suite is the before/after evidence for the fix: the base checkers reject the pinned labeled-root dataflow, while the final checkers pass it and reject the unpinned-path escape cases. Checker regression coverage: [../../tests/test_labeled_root_checkers.py](../../tests/test_labeled_root_checkers.py).
 
 ## Evidence
 
