@@ -206,6 +206,22 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                 )
             )
 
+        def has_trusted_leading_component(node: ast.AST) -> bool:
+            if is_root_lookup(node):
+                return True
+            if isinstance(node, ast.Name):
+                return node.id in trusted_names
+            if isinstance(node, ast.Subscript):
+                return has_trusted_leading_component(node.value)
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                return has_trusted_leading_component(node.left)
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    return has_trusted_leading_component(node.func.value)
+                if node.args:
+                    return has_trusted_leading_component(node.args[0])
+            return False
+
         return any(
             isinstance(child, ast.Call)
             and (
@@ -216,7 +232,8 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                      and has_trusted_path_argument(child)
                  ))
                 or (isinstance(child.func, ast.Attribute)
-                    and child.func.attr == "expanduser")
+                    and child.func.attr == "expanduser"
+                    and not has_trusted_leading_component(child.func.value))
                 or (isinstance(child.func, ast.Attribute)
                     and child.func.attr in {"absolute", "home", "resolve"}
                     and not has_trusted_path_receiver(child.func.value))
