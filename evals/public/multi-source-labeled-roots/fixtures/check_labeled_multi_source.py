@@ -308,14 +308,25 @@ def main() -> None:
         node: ast.AST, trusted_names: set[str] | None = None
     ) -> bool:
         trusted_names = trusted_names or set()
+
+        def has_trusted_path_argument(call: ast.Call) -> bool:
+            return any(
+                contains_name(argument, trusted_names)
+                or any(
+                    is_pinned_root_lookup(descendant)
+                    for descendant in ast.walk(argument)
+                )
+                for argument in call.args
+            )
+
         return any(
             isinstance(child, ast.Call)
             and (
                 (isinstance(child.func, ast.Attribute)
                  and child.func.attr in {"abspath", "realpath", "cwd", "getcwd"}
                  and not (
-                     child.func.attr == "abspath"
-                     and contains_name(child.func.value, trusted_names)
+                     child.func.attr in {"abspath", "realpath"}
+                     and has_trusted_path_argument(child)
                  ))
                 or (isinstance(child.func, ast.Attribute)
                     and child.func.attr in {
@@ -329,7 +340,13 @@ def main() -> None:
                         )
                     ))
                 or (isinstance(child.func, ast.Name)
-                    and child.func.id in {"abspath", "getcwd"})
+                    and child.func.id in {
+                        "abspath", "realpath", "expanduser", "getcwd"
+                    }
+                    and not (
+                        child.func.id in {"abspath", "realpath", "expanduser"}
+                        and has_trusted_path_argument(child)
+                    ))
             )
             for child in ast.walk(node)
         )

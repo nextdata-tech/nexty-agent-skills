@@ -168,6 +168,43 @@ UNPINNED_PATH_ESCAPE_TRANSFORMS = (
 )
 
 
+PINNED_PATH_NORMALIZATION_TRANSFORMS = (
+    MODEL_ROOT_TRANSFORM.replace(
+        'execution_root = Path(os.environ["NXD_TRANSFORM_ROOT"])',
+        'execution_root = Path(os.path.realpath(os.environ["NXD_TRANSFORM_ROOT"]))',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "import os\n",
+        "import os\nfrom os.path import realpath\n",
+    ).replace(
+        'execution_root = Path(os.environ["NXD_TRANSFORM_ROOT"])',
+        'execution_root = Path(realpath(os.environ["NXD_TRANSFORM_ROOT"]))',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        "model_root = Path(os.path.realpath(roots[label] / model))",
+    ),
+)
+
+
+IMPORTED_UNPINNED_PATH_ESCAPE_TRANSFORMS = (
+    MODEL_ROOT_TRANSFORM.replace(
+        "import os\n",
+        "import os\nfrom os.path import realpath\n",
+    ).replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / realpath(".")',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "import os\n",
+        "import os\nfrom os.path import expanduser\n",
+    ).replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / expanduser("~")',
+    ),
+)
+
+
 def _write_public_closure(root: Path, transform: str, readme: str) -> None:
     (root / "transform").mkdir(parents=True)
     (root / "data-orders/orders").mkdir(parents=True)
@@ -419,6 +456,38 @@ def test_model_root_dataflow_rejects_unpinned_path_escape_aliases(
         path.write_text(transform, encoding="utf-8")
         assert not SUPERVISOR.transform_uses_pinned_roots(path)
         closure = tmp_path / f"closure-{index}"
+        _write_public_closure(
+            closure,
+            transform,
+            "This closure requires a desktop supervisor with directory-companion support.\n",
+        )
+        result = _run_public_checker(closure)
+        assert result.returncode != 0
+        assert "FAIL transform-uses-pinned-root" in result.stdout
+
+
+def test_model_root_dataflow_handles_path_normalization_aliases(
+    tmp_path: Path,
+) -> None:
+    for index, transform in enumerate(PINNED_PATH_NORMALIZATION_TRANSFORMS):
+        path = tmp_path / f"pinned-main-{index}.py"
+        path.write_text(transform, encoding="utf-8")
+        assert SUPERVISOR.transform_uses_pinned_roots(path)
+        closure = tmp_path / f"pinned-closure-{index}"
+        _write_public_closure(
+            closure,
+            transform,
+            "This closure requires a desktop supervisor with directory-companion support.\n",
+        )
+        result = _run_public_checker(closure)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ALL CHECKS PASSED" in result.stdout
+
+    for index, transform in enumerate(IMPORTED_UNPINNED_PATH_ESCAPE_TRANSFORMS):
+        path = tmp_path / f"imported-main-{index}.py"
+        path.write_text(transform, encoding="utf-8")
+        assert not SUPERVISOR.transform_uses_pinned_roots(path)
+        closure = tmp_path / f"imported-closure-{index}"
         _write_public_closure(
             closure,
             transform,
