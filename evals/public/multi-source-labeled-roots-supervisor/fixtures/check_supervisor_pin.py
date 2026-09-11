@@ -155,6 +155,15 @@ def transform_uses_pinned_roots(path: Path) -> bool:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         return {target.id for target in targets if isinstance(target, ast.Name)}
 
+    def assignment_subscript_containers(node: ast.AST) -> set[str]:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return {
+            target.value.id
+            for target in targets
+            if isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+        }
+
     def contains_name(node: ast.AST, names: set[str]) -> bool:
         return any(isinstance(child, ast.Name) and child.id in names
                    for child in ast.walk(node))
@@ -167,17 +176,66 @@ def transform_uses_pinned_roots(path: Path) -> bool:
             for child in ast.walk(node)
         )
 
+    def contains_unpinned_path(
+        node: ast.AST, trusted_names: set[str] | None = None
+    ) -> bool:
+        trusted_names = trusted_names or set()
+
+        def has_trusted_path_argument(call: ast.Call) -> bool:
+            return any(
+                contains_name(argument, trusted_names)
+                or any(
+                    is_root_lookup(descendant)
+                    for descendant in ast.walk(argument)
+                )
+                for argument in call.args
+            )
+
+        return any(
+            isinstance(child, ast.Call)
+            and (
+                (isinstance(child.func, ast.Attribute)
+                 and child.func.attr in {"abspath", "realpath", "cwd", "getcwd"}
+                 and not (
+                     child.func.attr in {"abspath", "realpath"}
+                     and has_trusted_path_argument(child)
+                 ))
+                or (isinstance(child.func, ast.Attribute)
+                    and child.func.attr in {
+                        "absolute", "expanduser", "home", "resolve"
+                    }
+                    and not (
+                        contains_name(child.func.value, trusted_names)
+                        or any(
+                            is_root_lookup(grandchild)
+                            for grandchild in ast.walk(child.func.value)
+                        )
+                    ))
+                or (isinstance(child.func, ast.Name)
+                    and child.func.id in {
+                        "abspath", "realpath", "expanduser", "getcwd"
+                    }
+                    and not (
+                        child.func.id in {"abspath", "realpath", "expanduser"}
+                        and has_trusted_path_argument(child)
+                    ))
+            )
+            for child in ast.walk(node)
+        )
+
     root_names: set[str] = set()
     for node in assignments:
         if (any(is_root_lookup(child) for child in ast.walk(node.value))
-                and not contains_text_read(node.value)):
+                and not contains_text_read(node.value)
+                and not contains_unpinned_path(node.value, root_names)):
             root_names.update(assignment_names(node))
     changed = True
     while changed:
         changed = False
         for node in assignments:
             if (contains_name(node.value, root_names)
-                    and not contains_text_read(node.value)):
+                    and not contains_text_read(node.value)
+                    and not contains_unpinned_path(node.value, root_names)):
                 before = len(root_names)
                 root_names.update(assignment_names(node))
                 changed |= len(root_names) != before
@@ -191,13 +249,19 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                                 if isinstance(child, (ast.Assign, ast.AnnAssign))]
         function_root_names: set[str] = set()
         for assignment in function_assignments:
-            if any(is_root_lookup(child) for child in ast.walk(assignment.value)):
+            if (any(is_root_lookup(child) for child in ast.walk(assignment.value))
+                    and not contains_unpinned_path(
+                        assignment.value, function_root_names
+                    )):
                 function_root_names.update(assignment_names(assignment))
         changed = True
         while changed:
             changed = False
             for assignment in function_assignments:
-                if contains_name(assignment.value, function_root_names):
+                if (contains_name(assignment.value, function_root_names)
+                        and not contains_unpinned_path(
+                            assignment.value, function_root_names
+                        )):
                     before = len(function_root_names)
                     function_root_names.update(assignment_names(assignment))
                     changed |= len(function_root_names) != before
@@ -242,6 +306,8 @@ def transform_uses_pinned_roots(path: Path) -> bool:
 
     path_file_arg_names: dict[str, set[str]] = {label: set() for label in path_file_names}
     path_derived_names: dict[str, set[str]] = {label: set() for label in path_file_names}
+    path_definition_labels: dict[tuple[int, str], set[str]] = {}
+    poisoned_container_names: set[str] = set()
     path_container_labels: dict[str, dict[str, set[str]]] = {}
     path_container_root_labels: dict[str, dict[str, set[str]]] = {}
     label_iterator_values: dict[str, set[str]] = {}
@@ -420,6 +486,7 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                 index = index.value
             if isinstance(index, ast.Constant) and isinstance(index.value, str):
                 if (label in path_container_labels.get(child.value.id, {}).get(index.value, set())
+                        and child.value.id not in poisoned_container_names
                         and (roots is None
                              or child.value.id in roots
                              or label in path_container_root_labels.get(
@@ -429,6 +496,7 @@ def transform_uses_pinned_roots(path: Path) -> bool:
             elif isinstance(index, ast.Name):
                 for key, labels in path_container_labels.get(child.value.id, {}).items():
                     if (key == label and label in labels
+                            and child.value.id not in poisoned_container_names
                             and key in label_iterator_values.get(index.id, set())
                             and (roots is None
                                  or child.value.id in roots
@@ -438,24 +506,93 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                         return True
         return False
 
-    def reader_matches_label(candidate: ast.AST, label: str) -> bool:
+    node_order: dict[int, int] = {}
+    node_scope: dict[int, ast.AST | None] = {}
+
+    def index_nodes(node: ast.AST, scope: ast.AST | None = None) -> None:
+        current_scope = node if isinstance(node, ast.FunctionDef) else scope
+        node_order[id(node)] = len(node_order)
+        node_scope[id(node)] = current_scope
+        for child in ast.iter_child_nodes(node):
+            index_nodes(child, current_scope)
+
+    index_nodes(tree)
+
+    def reaching_definition_matches_label(
+        name: str, label: str, reference: ast.AST
+    ) -> bool:
+        reference_order = node_order.get(id(reference), -1)
+        scope = node_scope.get(id(reference))
+        definitions = [
+            assignment for assignment in assignments
+            if name in assignment_names(assignment)
+            and node_scope.get(id(assignment)) is scope
+            and node_order.get(id(assignment), -1) < reference_order
+        ]
+        if not definitions and scope is not None:
+            definitions = [
+                assignment for assignment in assignments
+                if name in assignment_names(assignment)
+                and node_scope.get(id(assignment)) is None
+                and node_order.get(id(assignment), -1) < reference_order
+            ]
+        if not definitions:
+            return False
+        reaching = max(definitions, key=lambda assignment: node_order[id(assignment)])
+        if any(
+            isinstance(child, ast.Subscript)
+            and isinstance(child.value, ast.Name)
+            and child.value.id in poisoned_container_names
+            for child in ast.walk(reaching.value)
+        ):
+            return False
+        if contains_unpinned_path(reaching.value, root_names):
+            return False
+        return label in path_definition_labels.get((id(reaching), name), set())
+
+    def reader_matches_label(
+        candidate: ast.AST, label: str, reference: ast.AST
+    ) -> bool:
+        reaching_labels = {
+            candidate_label
+            for child in ast.walk(candidate)
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+            for candidate_label in path_file_names
+            if reaching_definition_matches_label(child.id, candidate_label, reference)
+        }
         subscripts = [
             child for child in ast.walk(candidate)
             if isinstance(child, ast.Subscript) and isinstance(child.value, ast.Name)
         ]
         if subscripts:
             key_matches = False
+            subscript_labels: set[str] = set()
             for child in subscripts:
                 index = child.slice
                 if isinstance(index, ast.Index):
                     index = index.value
-                if isinstance(index, ast.Constant) and index.value == label:
-                    key_matches = True
+                if (isinstance(index, ast.Constant)
+                        and child.value.id not in poisoned_container_names):
+                    if index.value == label:
+                        key_matches = True
+                    if index.value in path_file_names:
+                        subscript_labels.add(index.value)
                 if isinstance(index, ast.Name):
                     keys = path_container_labels.get(child.value.id, {})
-                    if (label in keys
+                    if (child.value.id not in poisoned_container_names
+                            and label in keys
                             and label in label_iterator_values.get(index.id, set())):
                         key_matches = True
+                    if child.value.id not in poisoned_container_names:
+                        subscript_labels.update(
+                            key_name for key_name in keys
+                            if key_name in label_iterator_values.get(index.id, set())
+                        )
+            if subscript_labels:
+                return ((not reaching_labels or reaching_labels == {label})
+                        and subscript_labels == {label})
+            if reaching_labels:
+                return reaching_labels == {label}
             if not key_matches:
                 return False
             container_literals = {
@@ -475,6 +612,8 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                 for values in iterator_bindings.get(child.id, {}).values()
             )
             return not model_literals or label in model_literals or iterator_label
+        if reaching_labels:
+            return reaching_labels == {label}
         if any(isinstance(child, ast.Constant) and child.value == label
                for child in ast.walk(candidate)):
             return True
@@ -500,7 +639,7 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                     changed |= len(path_file_arg_names[label]) != before
 
                 if (reads_label_path(node.value, label)
-                        or has_label_container_access(node.value, label)
+                        or has_label_container_access(node.value, label, root_names)
                         or uses_path_value(node.value, path_derived_names[label])):
                     before = len(path_derived_names[label])
                     is_multi_label_dict = (
@@ -514,6 +653,10 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                     )
                     if not is_multi_label_dict:
                         path_derived_names[label].update(names)
+                        for name in names:
+                            path_definition_labels.setdefault(
+                                (id(node), name), set()
+                            ).add(label)
                     changed |= len(path_derived_names[label]) != before
 
                 if isinstance(node.value, ast.Dict):
@@ -553,6 +696,32 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                                  and contains_name(function_call, root_names)))):
                     root_names.update(names)
 
+    poisoned_container_names.update(
+        container
+        for node in assignments
+        for container in assignment_subscript_containers(node)
+        if container in path_container_labels
+    )
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            names = assignment_names(node)
+            if not isinstance(node.value, ast.Name):
+                continue
+            source = node.value.id
+            if source not in path_container_labels:
+                continue
+            for name in names:
+                if name not in path_container_labels:
+                    continue
+                if ((source in poisoned_container_names
+                     or name in poisoned_container_names)
+                        and (source not in poisoned_container_names
+                             or name not in poisoned_container_names)):
+                    poisoned_container_names.update({source, name})
+                    changed = True
+
     def preserves_pinned_root(value: ast.AST) -> bool:
         if contains_text_read(value):
             return False
@@ -581,6 +750,32 @@ def transform_uses_pinned_roots(path: Path) -> bool:
         and any(isinstance(child, ast.IfExp) for child in ast.walk(node.value))
     }
     valid_root_names = root_names - invalidated_root_names - conditional_root_names
+    conditional_path_names = {
+        label: {
+            name
+            for node in assignments
+            for name in assignment_names(node)
+            if name in path_derived_names[label]
+            and any(isinstance(child, ast.IfExp) for child in ast.walk(node.value))
+        }
+        for label in path_file_names
+    }
+    valid_path_names = {
+        label: path_derived_names[label] - conditional_path_names[label]
+        for label in path_file_names
+    }
+    poisoned_path_names = {
+        name
+        for node in assignments
+        for name in assignment_names(node)
+        if name in set().union(*path_derived_names.values())
+        and (not path_definition_labels.get((id(node), name), set())
+             or contains_unpinned_path(node.value, root_names))
+    }
+    valid_path_names = {
+        label: names - poisoned_path_names
+        for label, names in valid_path_names.items()
+    }
 
     def uses_root_in_reader(label: str) -> bool:
         path_file_name = path_file_names[label]
@@ -597,14 +792,20 @@ def transform_uses_pinned_roots(path: Path) -> bool:
             for keyword in node.keywords:
                 if keyword.arg != "bucket_url" or keyword.value is None:
                     continue
-                if not reader_matches_label(keyword.value, label):
+                if not reader_matches_label(keyword.value, label, node):
+                    continue
+                if any(isinstance(child, ast.IfExp)
+                       for child in ast.walk(keyword.value)):
+                    continue
+                if contains_unpinned_path(keyword.value, root_names):
                     continue
                 if ((contains_name(keyword.value, valid_root_names)
+                     or contains_name(keyword.value, valid_path_names[label])
                      or has_label_container_access(
                          keyword.value, label, valid_root_names
                      ))
                         and (uses_path_value(
-                            keyword.value, path_derived_names[label]
+                            keyword.value, valid_path_names[label]
                         )
                         or has_label_container_access(
                             keyword.value, label, valid_root_names

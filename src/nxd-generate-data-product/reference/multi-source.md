@@ -306,6 +306,45 @@ can make an unpinned checkout appear valid. This closure requires a desktop
 supervisor with directory-companion support; never silently fall back to an
 undeclared root.
 
+### Canonical transform dataflow
+
+Use one pinned execution root, read each label's relative path file from that
+root, and carry the resulting labeled paths through the reader configuration.
+Keep the label-to-model relationship explicit so each filesystem reader can be
+checked against its own path file:
+
+```python
+execution_root = Path(os.environ["NXD_TRANSFORM_ROOT"]).resolve()
+
+
+def _root_from_path_file(execution_root: Path, label: str) -> Path:
+    path_file = execution_root / f"csv-source-{label}-path"
+    relative_root = path_file.read_text(encoding="utf-8").strip()
+    relative = Path(relative_root)
+    if (not relative_root
+            or relative.is_absolute()
+            or relative.parts != (f"data-{label}",)):
+        raise RuntimeError(f"invalid labeled root for {label}")
+    return execution_root / relative
+
+
+labeled_roots = {
+    label: _root_from_path_file(execution_root, label)
+    for label in ("orders", "users")
+}
+resources = []
+for label, model in (("orders", "orders"), ("users", "users")):
+    model_root = labeled_roots[label] / model
+    reader = filesystem(
+        bucket_url=str(model_root),
+        file_glob="*.csv",
+    ) | read_csv()
+    resources.append(reader.with_name(duckdb.model_tables[model]))
+```
+
+Generated `README.md` must state exactly: `This closure requires a desktop
+supervisor with directory-companion support.`
+
 ## What does NOT change
 
 - The physical-model naming invariant (`models.py` == `.promise` ==
