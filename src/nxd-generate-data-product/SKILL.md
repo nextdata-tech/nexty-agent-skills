@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.49.1
+  version: 0.49.2
 ---
 
 # nxd-generate-data-product skill
@@ -289,6 +289,8 @@ through dlt in one run, then asserts the produced tables. The handle is named
 names first; resolve names only through `duckdb.model_tables` (semantic views
 may also be present there). The complete template is in
 [reference/transform-template.md](reference/transform-template.md).
+For 2+ labeled CSV/file sources, use the canonical pinned-root dataflow in
+[reference/multi-source.md](reference/multi-source.md#canonical-transform-dataflow).
 
 Contract facts baked into that template — keep every one (each is restated in the Invariants, where the full reasoning lives):
 

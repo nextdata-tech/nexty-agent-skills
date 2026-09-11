@@ -14,7 +14,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Cross-DP joins** | `evals/cross-dp-joins/harness/run_eval.py` | local only | Compiler-strategy and agent trials for cross-data-product join fan-out safety. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 20 of the 37 public scenarios.**
+installs and covers 19 of the 37 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -112,14 +112,12 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-18 of 37 public scenarios. The remaining 19 declare `ci_skip` in their
+19 of 37 public scenarios. The remaining 18 declare `ci_skip` in their
 `checks.json`. Fifteen need a Tier 2 or Tier 3 install; two are gated on the agent
-backend; one requires an operator-provided source-isolation wrapper; and one
-is temporarily excluded for an operator-approved demo exception:
+backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
 |---|---|
-| `multi-source-labeled-roots` | investigation of a confirmed regression; restore automatic coverage on 2026-09-11 |
 | `authenticated-api-source-supervisor` | local desktop supervisor (Tier 3) |
 | `pharma-cross-dp-mesh-query` | semantic MCP server (Tier 2) |
 | `pharma-mesh-query-hard` | semantic MCP server (Tier 2) |

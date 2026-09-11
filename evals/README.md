@@ -44,7 +44,7 @@ There are three ways the suite runs, and only one of them is unconditional:
 | | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 19 `ci_skip` | every runnable scenario (18 of 37; the 19 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 18 `ci_skip` | every runnable scenario (19 of 37; the 18 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. the 12 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
@@ -116,7 +116,7 @@ one is responsible when a change ships unmeasured:
   scenarios whose `checks.json` names a changed skill (computed by
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
-- **The 19 `ci_skip` scenarios never run automatically**, so the skills they
+- **The 18 `ci_skip` scenarios never run automatically**, so the skills they
   cover are unguarded. `nxd-query-data-product` is covered *only* by skipped
   scenarios and `nxd-analyze-mesh` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
@@ -566,11 +566,10 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Nineteen scenarios are currently skipped:
+Eighteen scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
-| `multi-source-labeled-roots` | temporary operator-approved demo exception for a confirmed regression; restore automatic coverage after investigation on 2026-09-11 |
 | `job-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
 | `job-loop-export-handoff` | needs a live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
 | `treasury-yield-curve` | same |
@@ -815,7 +814,7 @@ the diff since the previous tag can span the whole pack — and this is the one 
 whose result is published as the version's evidence, so it should not be scoped
 by a heuristic.
 
-"Runnable" excludes the 19 `ci_skip` scenarios. It has to: `run.py` does not read
+"Runnable" excludes the 18 `ci_skip` scenarios. It has to: `run.py` does not read
 `ci_skip` (only `affected_scenarios.py` does), so a bare `--suite public` would
 run the scenarios that need a live desktop supervisor or a semantic MCP server,
 they would all ERROR, and since none of them are in the baseline
