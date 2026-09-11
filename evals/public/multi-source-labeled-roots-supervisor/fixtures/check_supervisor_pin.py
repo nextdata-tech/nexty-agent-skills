@@ -182,13 +182,19 @@ def transform_uses_pinned_roots(path: Path) -> bool:
         trusted_names = trusted_names or set()
 
         def has_trusted_path_argument(call: ast.Call) -> bool:
+            path_arguments = list(call.args[:1])
+            path_arguments.extend(
+                keyword.value
+                for keyword in call.keywords
+                if keyword.arg in {"path", "filename"}
+            )
             return any(
                 contains_name(argument, trusted_names)
                 or any(
                     is_root_lookup(descendant)
                     for descendant in ast.walk(argument)
                 )
-                for argument in call.args
+                for argument in path_arguments
             )
 
         return any(
@@ -216,7 +222,7 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                         "abspath", "realpath", "expanduser", "getcwd"
                     }
                     and not (
-                        child.func.id in {"abspath", "realpath", "expanduser"}
+                        child.func.id in {"abspath", "realpath"}
                         and has_trusted_path_argument(child)
                     ))
             )

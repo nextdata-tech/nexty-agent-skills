@@ -159,6 +159,14 @@ UNPINNED_PATH_ESCAPE_TRANSFORMS = (
     ),
     MODEL_ROOT_TRANSFORM.replace(
         "model_root = roots[label] / model",
+        'model_root = roots[label] / os.path.realpath(".", execution_root)',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / os.path.realpath(filename=".")',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
         "model_root = roots[label] / Path.home()",
     ),
     MODEL_ROOT_TRANSFORM.replace(
@@ -172,6 +180,14 @@ PINNED_PATH_NORMALIZATION_TRANSFORMS = (
     MODEL_ROOT_TRANSFORM.replace(
         'execution_root = Path(os.environ["NXD_TRANSFORM_ROOT"])',
         'execution_root = Path(os.path.realpath(os.environ["NXD_TRANSFORM_ROOT"]))',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        'execution_root = Path(os.environ["NXD_TRANSFORM_ROOT"])',
+        'execution_root = Path(os.path.abspath(path=os.environ["NXD_TRANSFORM_ROOT"]))',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        'execution_root = Path(os.environ["NXD_TRANSFORM_ROOT"])',
+        'execution_root = Path(os.path.realpath(filename=os.environ["NXD_TRANSFORM_ROOT"]))',
     ),
     MODEL_ROOT_TRANSFORM.replace(
         "import os\n",
@@ -201,6 +217,20 @@ IMPORTED_UNPINNED_PATH_ESCAPE_TRANSFORMS = (
     ).replace(
         "model_root = roots[label] / model",
         'model_root = roots[label] / expanduser("~")',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "import os\n",
+        "import os\nfrom os.path import expanduser\n",
+    ).replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / expanduser(f"~/{execution_root.name}")',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "import os\n",
+        "import os\nfrom os.path import expanduser\n",
+    ).replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / expanduser("~" + str(execution_root))',
     ),
 )
 
