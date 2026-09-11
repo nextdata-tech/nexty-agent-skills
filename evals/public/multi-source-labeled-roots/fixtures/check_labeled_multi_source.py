@@ -325,14 +325,6 @@ def main() -> None:
                 for argument in path_arguments
             )
 
-        def contains_tilde_literal(node: ast.AST) -> bool:
-            return any(
-                isinstance(child, ast.Constant)
-                and isinstance(child.value, str)
-                and child.value.startswith("~")
-                for child in ast.walk(node)
-            )
-
         def has_trusted_path_receiver(node: ast.AST) -> bool:
             return (
                 contains_name(node, trusted_names)
@@ -343,7 +335,7 @@ def main() -> None:
             )
 
         return any(
-                isinstance(child, ast.Call)
+            isinstance(child, ast.Call)
             and (
                 (isinstance(child.func, ast.Attribute)
                  and child.func.attr in {"abspath", "realpath", "cwd", "getcwd"}
@@ -352,11 +344,7 @@ def main() -> None:
                      and has_trusted_path_argument(child)
                  ))
                 or (isinstance(child.func, ast.Attribute)
-                    and child.func.attr == "expanduser"
-                    and (
-                        contains_tilde_literal(child.func.value)
-                        or not has_trusted_path_receiver(child.func.value)
-                    ))
+                    and child.func.attr == "expanduser")
                 or (isinstance(child.func, ast.Attribute)
                     and child.func.attr in {"absolute", "home", "resolve"}
                     and not has_trusted_path_receiver(child.func.value))
