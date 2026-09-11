@@ -173,6 +173,18 @@ UNPINNED_PATH_ESCAPE_TRANSFORMS = (
         "model_root = roots[label] / model",
         'model_root = roots[label] / Path("~").expanduser()',
     ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / Path("~", execution_root.name).expanduser()',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / (Path("~") / execution_root.name).expanduser()',
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        'model_root = roots[label] / Path("~" + str(execution_root)).expanduser()',
+    ),
 )
 
 
@@ -199,6 +211,10 @@ PINNED_PATH_NORMALIZATION_TRANSFORMS = (
     MODEL_ROOT_TRANSFORM.replace(
         "model_root = roots[label] / model",
         "model_root = Path(os.path.realpath(roots[label] / model))",
+    ),
+    MODEL_ROOT_TRANSFORM.replace(
+        "model_root = roots[label] / model",
+        "model_root = (roots[label] / model).expanduser()",
     ),
 )
 
