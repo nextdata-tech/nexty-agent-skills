@@ -257,11 +257,10 @@ directory.** Put it under a directory named by the workflow id, with the IR
 beside it: `…/nxd-jobs/<workflow>/dp-blueprint.md` and
 `…/nxd-jobs/<workflow>/closure/`. The supervisor captures that closure through
 the returned v2 action. Use whichever base the host-visible-path rules in Step 1
-make legal, and state the durable `…/nxd-jobs/<workflow>/` location in the
-user-facing handoff when the user needs to open or back up the generated files.
-Give the user the durable result and, when needed to resume, the documented
-user-facing workflow handle. Never expose temporary, scratch, or
-supervisor-owned staging paths. The bearer never
+make legal, and give the user the durable result and, when needed to resume,
+the documented user-facing workflow handle. Do not expose internal filesystem
+paths. Never expose temporary, scratch, or supervisor-owned staging paths. The
+bearer never
 persists, so a later session reattaches to an admission-linked publication by
 **workflow id** (`list_data_products` → `resume_data_product`); if no valid
 publication remains, start a fresh v2 construction rather than a legacy rebuild

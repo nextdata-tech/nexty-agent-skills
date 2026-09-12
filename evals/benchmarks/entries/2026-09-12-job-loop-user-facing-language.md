@@ -22,5 +22,11 @@ not claim a measured PASS or FAIL for the skill change.
 - `evals/tests/test_user_facing_language_contract.py` — carrying assertions for
   the new user-facing language reference and the durable-handoff boundary.
 
+- `evals/public/consent-failure-plain-language/checks.json` — semantic checks
+  for approval state, saved-state preservation, one safe next action, and
+  sanitized technical explanation.
+- `evals/tests/test_workflow_v2_job_loop_contract.py` — existing carrying tests
+  for the job-loop's structured handoff and internal-record boundaries.
+
 The consent scenario remains in the public suite as regression coverage, but it
- is intentionally not listed as a measured scenario for this `NO_EVAL` entry.
+is intentionally not listed as a measured scenario for this `NO_EVAL` entry.
