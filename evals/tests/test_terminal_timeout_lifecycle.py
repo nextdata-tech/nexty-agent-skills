@@ -923,6 +923,37 @@ def _trace_with_name_identified_failed_publication(tmp_path: Path) -> Path:
     return mutated
 
 
+def _trace_with_nested_available_artifact(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    response = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 6
+    )
+    response["message"]["result"]["content"][0]["text"] = json.dumps({
+        "status": "ready",
+        "products": [{
+            "workflow": "terminal-timeout-lifecycle",
+            "artifact": {
+                "artifact_status": "available",
+                "publish_seq": 1,
+            },
+        }],
+    })
+    mutated = tmp_path / "nested-available-artifact-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
 def test_checker_grades_non_object_json_rpc_message_without_crashing(
     tmp_path: Path,
 ) -> None:
@@ -1101,6 +1132,11 @@ def test_checker_accepts_nested_inspect_diagnostics(tmp_path: Path) -> None:
         ),
         ("workflow_counters", {"duplicate_builds": 2}, {}),
         ("workflow_counters", {"duplicate_builds": 2}, {"run_id": "run-1"}),
+        (
+            "workflow_counters",
+            {"duplicate_builds": 2},
+            {"workflow": "terminal-timeout-lifecycle"},
+        ),
     ],
 )
 def test_checker_ignores_nested_inspect_branch_metadata(
@@ -1175,6 +1211,16 @@ def test_checker_catches_failed_publication_with_name_identity(tmp_path: Path) -
     )
     assert result.returncode != 0
     assert "failure/failed-workflow-was-published" in result.stdout
+
+
+def test_checker_accepts_nested_available_artifact_under_status_bearing_product(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_nested_available_artifact(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: Path) -> None:

@@ -261,6 +261,7 @@ def _failed_response(records: list[dict[str, Any]]) -> bool:
 
 
 PUBLICATION_IDENTITY_FIELDS = ("workflow", "name", "product", "data_product")
+PUBLICATION_STATUS_FIELDS = ("artifact_status", "status", "published")
 
 
 def _publication_identity(value: dict[str, Any]) -> str | None:
@@ -275,43 +276,38 @@ def _has_available_publication(
     value: Any,
     workflow: str | None = None,
     inherited_workflow: str | None = None,
-    publication_scope_closed: bool = False,
+    shadowed_fields: frozenset[str] = frozenset(),
 ) -> bool:
     if isinstance(value, dict):
-        own_identity = (
-            None if publication_scope_closed else _publication_identity(value)
-        )
+        own_identity = _publication_identity(value)
         node_workflow = own_identity if own_identity is not None else inherited_workflow
-        scoped = not publication_scope_closed and (
-            workflow is None or node_workflow == workflow
-        )
+        scoped = workflow is None or node_workflow == workflow
         if scoped and (
-            str(value.get("artifact_status", "")).casefold() == "available"
-            or str(value.get("status", "")).casefold() == "published"
-            or value.get("published") is True
+            (
+                "artifact_status" not in shadowed_fields
+                and str(value.get("artifact_status", "")).casefold() == "available"
+            )
+            or (
+                "status" not in shadowed_fields
+                and str(value.get("status", "")).casefold() == "published"
+            )
+            or ("published" not in shadowed_fields and value.get("published") is True)
         ):
             return True
-        declares_publication_status = any(
-            key in value
-            for key in ("artifact_status", "status", "published")
+        declared_fields = frozenset(
+            key for key in PUBLICATION_STATUS_FIELDS if key in value
         )
-        closes_scope = (
-            not publication_scope_closed
-            and scoped
-            and own_identity is not None
-            and declares_publication_status
-        )
-        child_workflow = (
-            None
-            if closes_scope
-            else node_workflow
+        child_shadowed_fields = (
+            shadowed_fields | declared_fields
+            if scoped and own_identity is not None and declared_fields
+            else shadowed_fields
         )
         return any(
             _has_available_publication(
                 child,
                 workflow,
-                child_workflow,
-                publication_scope_closed or closes_scope,
+                node_workflow,
+                child_shadowed_fields,
             )
             for child in value.values()
         )
@@ -321,7 +317,7 @@ def _has_available_publication(
                 child,
                 workflow,
                 inherited_workflow,
-                publication_scope_closed,
+                shadowed_fields,
             )
             for child in value
         )
@@ -334,7 +330,7 @@ def _has_available_publication(
             decoded,
             workflow,
             inherited_workflow,
-            publication_scope_closed,
+            shadowed_fields,
         )
     return False
 
@@ -681,6 +677,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
             for obj, ancestors in primary_branch_entries
             for key, value in obj.items()
             if key in names
+            and value is not None
             and not any(
                 any(ancestor_key in shadow_names for ancestor_key in ancestor)
                 for ancestor in ancestors
