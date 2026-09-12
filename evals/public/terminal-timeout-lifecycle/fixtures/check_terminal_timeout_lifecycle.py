@@ -261,7 +261,15 @@ def _failed_response(records: list[dict[str, Any]]) -> bool:
 
 
 PUBLICATION_IDENTITY_FIELDS = ("workflow", "name", "product", "data_product")
-PUBLICATION_STATUS_FIELDS = ("artifact_status", "status", "published")
+PUBLICATION_HISTORY_KEYS = frozenset({
+    "last_published",
+    "previous_version",
+    "previous",
+    "history",
+    "prior_version",
+    "versions",
+    "revisions",
+})
 
 
 def _publication_identity(value: dict[str, Any]) -> str | None:
@@ -276,40 +284,26 @@ def _has_available_publication(
     value: Any,
     workflow: str | None = None,
     inherited_workflow: str | None = None,
-    shadowed_fields: frozenset[str] = frozenset(),
+    in_history: bool = False,
 ) -> bool:
     if isinstance(value, dict):
         own_identity = _publication_identity(value)
         node_workflow = own_identity if own_identity is not None else inherited_workflow
         scoped = workflow is None or node_workflow == workflow
-        if scoped and (
-            (
-                "artifact_status" not in shadowed_fields
-                and str(value.get("artifact_status", "")).casefold() == "available"
-            )
-            or (
-                "status" not in shadowed_fields
-                and str(value.get("status", "")).casefold() == "published"
-            )
-            or ("published" not in shadowed_fields and value.get("published") is True)
+        if not in_history and scoped and (
+            str(value.get("artifact_status", "")).casefold() == "available"
+            or str(value.get("status", "")).casefold() == "published"
+            or value.get("published") is True
         ):
             return True
-        declared_fields = frozenset(
-            key for key in PUBLICATION_STATUS_FIELDS if key in value
-        )
-        child_shadowed_fields = (
-            shadowed_fields | declared_fields
-            if scoped and own_identity is not None and declared_fields
-            else shadowed_fields
-        )
         return any(
             _has_available_publication(
                 child,
                 workflow,
                 node_workflow,
-                child_shadowed_fields,
+                in_history or key in PUBLICATION_HISTORY_KEYS,
             )
-            for child in value.values()
+            for key, child in value.items()
         )
     if isinstance(value, list):
         return any(
@@ -317,7 +311,7 @@ def _has_available_publication(
                 child,
                 workflow,
                 inherited_workflow,
-                shadowed_fields,
+                in_history,
             )
             for child in value
         )
@@ -330,7 +324,7 @@ def _has_available_publication(
             decoded,
             workflow,
             inherited_workflow,
-            shadowed_fields,
+            in_history,
         )
     return False
 

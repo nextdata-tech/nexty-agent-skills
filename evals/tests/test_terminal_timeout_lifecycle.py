@@ -461,6 +461,18 @@ def test_checker_rejects_nonzero_duplicate_count_alias(tmp_path: Path) -> None:
     assert "retry/duplicate-build-count-not-zero" in result.stdout
 
 
+def test_checker_reports_missing_duplicate_count_separately_from_nonzero(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace(tmp_path, duplicate_value=None),
+    )
+    assert result.returncode != 0
+    assert "lifecycle/run-identity-or-duplicate-count-missing" in result.stdout
+    assert "retry/duplicate-build-count-not-zero" in result.stdout
+
+
 def test_checker_accepts_float_zero_duplicate_count(tmp_path: Path) -> None:
     result = _run_checker(
         tmp_path,
@@ -930,22 +942,31 @@ def _trace_with_nested_available_artifact(tmp_path: Path) -> Path:
         for line in source.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    response = next(
-        record
-        for record in records
-        if record.get("direction") == "response"
-        and record.get("message", {}).get("id") == 6
-    )
-    response["message"]["result"]["content"][0]["text"] = json.dumps({
-        "status": "ready",
-        "products": [{
-            "workflow": "terminal-timeout-lifecycle",
-            "artifact": {
-                "artifact_status": "available",
-                "publish_seq": 1,
-            },
-        }],
-    })
+    for response_id, payload in {
+        6: {
+            "products": [{
+                "workflow": "terminal-timeout-lifecycle",
+                "status": "ready",
+                "artifact": {
+                    "artifact_status": "available",
+                    "publish_seq": 1,
+                },
+            }],
+        },
+        10: {
+            "products": [{
+                "workflow": "terminal-timeout-lifecycle-failed",
+                "status": "failed",
+            }],
+        },
+    }.items():
+        response = next(
+            record
+            for record in records
+            if record.get("direction") == "response"
+            and record.get("message", {}).get("id") == response_id
+        )
+        response["message"]["result"]["content"][0]["text"] = json.dumps(payload)
     mutated = tmp_path / "nested-available-artifact-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
@@ -1172,6 +1193,21 @@ def test_checker_ignores_nested_inspect_branch_metadata(
                     "status": "published",
                 }
             },
+        ),
+        (
+            "status",
+            "building",
+            {"last_published": {"artifact_status": "available"}},
+        ),
+        (
+            "artifact_status",
+            "building",
+            {"previous_version": {"status": "published"}},
+        ),
+        (
+            "status",
+            "building",
+            {"last_published": {"published": True}},
         ),
     ],
 )
