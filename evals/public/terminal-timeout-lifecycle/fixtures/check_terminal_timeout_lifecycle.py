@@ -261,6 +261,8 @@ def _failed_response(records: list[dict[str, Any]]) -> bool:
 
 
 PUBLICATION_IDENTITY_FIELDS = ("workflow", "name", "product", "data_product")
+# `versions` and `revisions` may contain the current record alongside older
+# records, so they remain live publication evidence even in pre-retry listings.
 PUBLICATION_HISTORY_KEYS = frozenset({
     "last_published",
     "previous_version",

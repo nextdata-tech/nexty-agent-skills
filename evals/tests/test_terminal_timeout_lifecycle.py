@@ -890,7 +890,7 @@ def _trace_with_nested_listing_history(
 
 
 def _trace_with_current_publication_collection(
-    tmp_path: Path, *, collection_key: str
+    tmp_path: Path, *, collection_key: str, include_pre_retry: bool = False
 ) -> Path:
     source = _trace(tmp_path, include_resume=False)
     records = [
@@ -920,6 +920,20 @@ def _trace_with_current_publication_collection(
             and record.get("message", {}).get("id") == response_id
         )
         response["message"]["result"]["content"][0]["text"] = json.dumps(payload)
+    if include_pre_retry:
+        response = next(
+            record
+            for record in records
+            if record.get("direction") == "response"
+            and record.get("message", {}).get("id") == 3
+        )
+        response["message"]["result"]["content"][0]["text"] = json.dumps({
+            "products": [{
+                "workflow": "terminal-timeout-lifecycle",
+                "status": "building",
+                collection_key: [{"artifact_status": "available", "publish_seq": 1}],
+            }],
+        })
     mutated = tmp_path / f"current-publication-{collection_key}-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
@@ -1284,6 +1298,22 @@ def test_checker_accepts_current_publication_record_in_collection(
         ),
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("collection_key", ["versions", "revisions"])
+def test_checker_keeps_current_collection_as_pre_retry_evidence(
+    tmp_path: Path,
+    collection_key: str,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_current_publication_collection(
+            tmp_path, collection_key=collection_key, include_pre_retry=True
+        ),
+    )
+    assert result.returncode != 0
+    assert "retry/duplicate-build-count-not-zero" in result.stdout
+    assert "resume/resume-request-missing" in result.stdout
 
 
 def test_checker_does_not_guess_between_ambiguous_explicit_inspections(
