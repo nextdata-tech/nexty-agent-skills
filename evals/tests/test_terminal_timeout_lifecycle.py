@@ -810,7 +810,7 @@ def _trace_with_nested_publication_metadata(tmp_path: Path) -> Path:
 
 
 def _trace_with_nested_inspect_branch_metadata(
-    tmp_path: Path, *, field: str, value: object
+    tmp_path: Path, *, field: str, value: object, arguments: dict[str, object] | None = None
 ) -> Path:
     source = _trace(tmp_path, include_resume=False)
     records = [
@@ -827,6 +827,14 @@ def _trace_with_nested_inspect_branch_metadata(
     payload = json.loads(response["message"]["result"]["content"][0]["text"])
     payload[field] = value
     response["message"]["result"]["content"][0]["text"] = json.dumps(payload)
+    if arguments is not None:
+        request = next(
+            record
+            for record in records
+            if record.get("direction") == "request"
+            and record.get("message", {}).get("id") == 2
+        )
+        request["message"]["params"]["arguments"] = arguments
     mutated = tmp_path / f"nested-inspect-{field}-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
@@ -880,6 +888,34 @@ def _trace_with_ambiguous_explicit_inspections(tmp_path: Path) -> Path:
     )
     primary_request["message"]["params"]["arguments"] = {"run_id": "run-1"}
     mutated = tmp_path / "ambiguous-explicit-inspections-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_name_identified_failed_publication(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    response = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 10
+    )
+    response["message"]["result"]["content"][0]["text"] = json.dumps({
+        "products": [{
+            "name": "terminal-timeout-lifecycle-failed",
+            "artifact_status": "available",
+            "publish_seq": 1,
+        }]
+    })
+    mutated = tmp_path / "name-identified-failed-publication-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
         encoding="utf-8",
@@ -1054,19 +1090,29 @@ def test_checker_accepts_nested_inspect_diagnostics(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("field", "value", "arguments"),
     [
-        ("semantic_model", {"status": "published"}),
-        ("workflow_counters", {"duplicate_builds": 2}),
+        ("semantic_model", {"status": "published"}, {}),
+        ("semantic_model", {"status": "published"}, {"run_id": "run-1"}),
+        (
+            "semantic_model",
+            {"status": "published"},
+            {"workflow": "terminal-timeout-lifecycle"},
+        ),
+        ("workflow_counters", {"duplicate_builds": 2}, {}),
+        ("workflow_counters", {"duplicate_builds": 2}, {"run_id": "run-1"}),
     ],
 )
 def test_checker_ignores_nested_inspect_branch_metadata(
-    tmp_path: Path, field: str, value: object
+    tmp_path: Path,
+    field: str,
+    value: object,
+    arguments: dict[str, object],
 ) -> None:
     result = _run_checker(
         tmp_path,
         trace=_trace_with_nested_inspect_branch_metadata(
-            tmp_path, field=field, value=value
+            tmp_path, field=field, value=value, arguments=arguments
         ),
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1080,6 +1126,16 @@ def test_checker_ignores_nested_inspect_branch_metadata(
             "artifact_status",
             "building",
             {"last_published": {"artifact_status": "available"}},
+        ),
+        (
+            "status",
+            "in_progress",
+            {
+                "previous_version": {
+                    "name": "terminal-timeout-lifecycle",
+                    "status": "published",
+                }
+            },
         ),
     ],
 )
@@ -1110,6 +1166,15 @@ def test_checker_does_not_guess_between_ambiguous_explicit_inspections(
     )
     assert result.returncode != 0
     assert "lifecycle/authoritative-inspect-response-missing" in result.stdout
+
+
+def test_checker_catches_failed_publication_with_name_identity(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_name_identified_failed_publication(tmp_path),
+    )
+    assert result.returncode != 0
+    assert "failure/failed-workflow-was-published" in result.stdout
 
 
 def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: Path) -> None:

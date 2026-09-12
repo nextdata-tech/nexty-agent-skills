@@ -124,32 +124,56 @@ def _object_contexts(
     value: Any,
     inherited_workflow: str | None = None,
     inherited_run_id: Any = None,
-) -> Iterable[tuple[dict[str, Any], str | None, Any, bool]]:
-    """Yield objects with effective identity and own-identity provenance."""
-    if isinstance(value, dict):
-        own_workflow = value.get("workflow")
-        own_workflow = own_workflow if isinstance(own_workflow, str) else None
-        own_run_id = value.get("run_id")
-        own_run_id = (
-            own_run_id
-            if isinstance(own_run_id, (str, int, float)) and not isinstance(own_run_id, bool)
-            else None
-        )
-        workflow = own_workflow if own_workflow is not None else inherited_workflow
-        run_id = own_run_id if own_run_id is not None else inherited_run_id
-        yield value, workflow, run_id, own_workflow is not None or own_run_id is not None
-        for child in value.values():
-            yield from _object_contexts(child, workflow, run_id)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _object_contexts(child, inherited_workflow, inherited_run_id)
-    elif isinstance(value, str):
-        try:
-            decoded = json.loads(value)
-        except json.JSONDecodeError:
-            return
-        if isinstance(decoded, (dict, list)):
-            yield from _object_contexts(decoded, inherited_workflow, inherited_run_id)
+) -> Iterable[
+    tuple[
+        dict[str, Any],
+        str | None,
+        Any,
+        tuple[tuple[dict[str, Any], str | None, Any], ...],
+    ]
+]:
+    """Yield objects with effective identity and their ancestor contexts."""
+    def walk(
+        current: Any,
+        current_workflow: str | None,
+        current_run_id: Any,
+        ancestors: tuple[tuple[dict[str, Any], str | None, Any], ...],
+    ) -> Iterable[
+        tuple[
+            dict[str, Any],
+            str | None,
+            Any,
+            tuple[tuple[dict[str, Any], str | None, Any], ...],
+        ]
+    ]:
+        if isinstance(current, dict):
+            own_workflow = current.get("workflow")
+            own_workflow = own_workflow if isinstance(own_workflow, str) else None
+            own_run_id = current.get("run_id")
+            own_run_id = (
+                own_run_id
+                if isinstance(own_run_id, (str, int, float))
+                and not isinstance(own_run_id, bool)
+                else None
+            )
+            workflow = own_workflow if own_workflow is not None else current_workflow
+            run_id = own_run_id if own_run_id is not None else current_run_id
+            yield current, workflow, run_id, ancestors
+            child_ancestors = (*ancestors, (current, workflow, run_id))
+            for child in current.values():
+                yield from walk(child, workflow, run_id, child_ancestors)
+        elif isinstance(current, list):
+            for child in current:
+                yield from walk(child, current_workflow, current_run_id, ancestors)
+        elif isinstance(current, str):
+            try:
+                decoded = json.loads(current)
+            except json.JSONDecodeError:
+                return
+            if isinstance(decoded, (dict, list)):
+                yield from walk(decoded, current_workflow, current_run_id, ancestors)
+
+    yield from walk(value, inherited_workflow, inherited_run_id, ())
 
 
 def _contains_key(objects: Iterable[dict[str, Any]], names: set[str]) -> bool:
@@ -236,16 +260,31 @@ def _failed_response(records: list[dict[str, Any]]) -> bool:
     return False
 
 
+PUBLICATION_IDENTITY_FIELDS = ("workflow", "name", "product", "data_product")
+
+
+def _publication_identity(value: dict[str, Any]) -> str | None:
+    for key in PUBLICATION_IDENTITY_FIELDS:
+        identity = value.get(key)
+        if isinstance(identity, str):
+            return identity
+    return None
+
+
 def _has_available_publication(
     value: Any,
     workflow: str | None = None,
     inherited_workflow: str | None = None,
+    publication_scope_closed: bool = False,
 ) -> bool:
     if isinstance(value, dict):
-        own_workflow = value.get("workflow")
-        own_workflow = own_workflow if isinstance(own_workflow, str) else None
-        node_workflow = own_workflow if own_workflow is not None else inherited_workflow
-        scoped = workflow is None or node_workflow == workflow
+        own_identity = (
+            None if publication_scope_closed else _publication_identity(value)
+        )
+        node_workflow = own_identity if own_identity is not None else inherited_workflow
+        scoped = not publication_scope_closed and (
+            workflow is None or node_workflow == workflow
+        )
         if scoped and (
             str(value.get("artifact_status", "")).casefold() == "available"
             or str(value.get("status", "")).casefold() == "published"
@@ -256,18 +295,34 @@ def _has_available_publication(
             key in value
             for key in ("artifact_status", "status", "published")
         )
+        closes_scope = (
+            not publication_scope_closed
+            and scoped
+            and own_identity is not None
+            and declares_publication_status
+        )
         child_workflow = (
             None
-            if scoped and declares_publication_status
+            if closes_scope
             else node_workflow
         )
         return any(
-            _has_available_publication(child, workflow, child_workflow)
+            _has_available_publication(
+                child,
+                workflow,
+                child_workflow,
+                publication_scope_closed or closes_scope,
+            )
             for child in value.values()
         )
     if isinstance(value, list):
         return any(
-            _has_available_publication(child, workflow, inherited_workflow)
+            _has_available_publication(
+                child,
+                workflow,
+                inherited_workflow,
+                publication_scope_closed,
+            )
             for child in value
         )
     if isinstance(value, str):
@@ -275,7 +330,12 @@ def _has_available_publication(
             decoded = json.loads(value)
         except json.JSONDecodeError:
             return False
-        return _has_available_publication(decoded, workflow, inherited_workflow)
+        return _has_available_publication(
+            decoded,
+            workflow,
+            inherited_workflow,
+            publication_scope_closed,
+        )
     return False
 
 
@@ -345,7 +405,11 @@ def _call_objects(
 
 
 def _call_has_published_primary(
-    trace: list[Any], call: dict[str, Any], workflow: str, *, before_index: int | None = None
+    trace: list[Any],
+    call: dict[str, Any],
+    workflow: str | None,
+    *,
+    before_index: int | None = None,
 ) -> bool:
     return any(
         _has_available_publication(
@@ -500,8 +564,14 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     inspect_entries: list[
         tuple[
             dict[str, Any],
-            list[dict[str, Any]],
-            list[tuple[dict[str, Any], str | None, Any, bool]],
+            list[
+                tuple[
+                    dict[str, Any],
+                    str | None,
+                    Any,
+                    tuple[tuple[dict[str, Any], str | None, Any], ...],
+                ]
+            ],
         ]
     ] = []
     primary_inspect_objects: list[dict[str, Any]] = []
@@ -509,7 +579,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         (
             value
             for record in late_build
-            for _object, _workflow, value, _has_own_identity in _object_contexts(
+            for _object, _workflow, value, _ancestors in _object_contexts(
                 _message_value(record, "result", {})
             )
             if value is not None
@@ -524,17 +594,17 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
             for record in records
             for context in _object_contexts(_message_value(record, "result", {}))
         ]
-        inspect_entries.append((call, records, response_contexts))
+        inspect_entries.append((call, response_contexts))
 
     if primary_run_id is None:
         # A workflow-qualified response is the strongest response-side fallback
         # when the timed-out build's late reply did not carry a run id.
-        for call, _call_records, response_contexts in inspect_entries:
+        for call, response_contexts in inspect_entries:
             call_run_id = _call_run_id(call)
             workflow_run_id = next(
                 (
                     run_id
-                    for _obj, workflow, run_id, _has_own_identity in response_contexts
+                    for _obj, workflow, run_id, _ancestors in response_contexts
                     if workflow == primary_workflow and run_id is not None
                 ),
                 None,
@@ -550,13 +620,13 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         # Prefer an unscoped inspection as the durable run discovery step. This
         # prevents an earlier explicit inspection of another run from becoming
         # the primary identity merely because it happened to be first.
-        for call, _call_records, response_contexts in inspect_entries:
+        for call, response_contexts in inspect_entries:
             if _call_run_id(call) is not None:
                 continue
             primary_run_id = next(
                 (
                     run_id
-                    for _obj, workflow, run_id, _has_own_identity in response_contexts
+                    for _obj, workflow, run_id, _ancestors in response_contexts
                     if run_id is not None
                     and (workflow is None or workflow == primary_workflow)
                 ),
@@ -570,16 +640,17 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         # late-response and unscoped-discovery candidates were exhausted.
         explicit_run_ids = [
             _call_run_id(call)
-            for call, _call_records, _response_contexts in inspect_entries
+            for call, _response_contexts in inspect_entries
             if _call_run_id(call) is not None
         ]
         if len({_id_key(run_id) for run_id in explicit_run_ids}) == 1:
             primary_run_id = explicit_run_ids[0]
 
-    primary_branch_objects: list[dict[str, Any]] = []
-    for call, _call_records, response_contexts in inspect_entries:
-        call_has_identity = _call_run_id(call) is not None or bool(_call_workflow(call))
-        for obj, object_workflow, object_run_id, has_own_identity in response_contexts:
+    primary_branch_entries: list[
+        tuple[dict[str, Any], tuple[dict[str, Any], ...]]
+    ] = []
+    for call, response_contexts in inspect_entries:
+        for obj, object_workflow, object_run_id, ancestors in response_contexts:
             if _inspect_object_matches_primary(
                 call,
                 primary_workflow,
@@ -588,25 +659,50 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
                 object_run_id,
             ):
                 primary_inspect_objects.append(obj)
-                if has_own_identity or call_has_identity:
-                    primary_branch_objects.append(obj)
+                matched_ancestors = tuple(
+                    ancestor
+                    for ancestor, ancestor_workflow, ancestor_run_id in ancestors
+                    if _inspect_object_matches_primary(
+                        call,
+                        primary_workflow,
+                        primary_run_id,
+                        ancestor_workflow,
+                        ancestor_run_id,
+                    )
+                )
+                primary_branch_entries.append((obj, matched_ancestors))
+
+    def _branch_values(
+        names: set[str], shadow_names: set[str] | None = None
+    ) -> list[Any]:
+        shadow_names = shadow_names or names
+        return [
+            value
+            for obj, ancestors in primary_branch_entries
+            for key, value in obj.items()
+            if key in names
+            and not any(
+                any(ancestor_key in shadow_names for ancestor_key in ancestor)
+                for ancestor in ancestors
+            )
+        ]
 
     if not authoritative_inspect_records or not primary_inspect_objects:
         failures.append("lifecycle/authoritative-inspect-response-missing")
     else:
         joined = json.dumps(primary_inspect_objects, sort_keys=True)
         published_primary_from_inspect = any(
-            str(obj.get("status", "")).casefold() == "published"
-            for obj in primary_branch_objects
+            str(value).casefold() == "published"
+            for value in _branch_values(
+                {"status"}, {"state", "lifecycle_state", "status"}
+            )
         )
         if "run_id" not in joined or (
             not published_primary_from_inspect
-            and not _contains_key(primary_branch_objects, DUPLICATE_BUILD_COUNT_FIELDS)
+            and not _branch_values(DUPLICATE_BUILD_COUNT_FIELDS)
         ):
             failures.append("lifecycle/run-identity-or-duplicate-count-missing")
-        duplicate_counts = _values(
-            primary_branch_objects, DUPLICATE_BUILD_COUNT_FIELDS
-        )
+        duplicate_counts = _branch_values(DUPLICATE_BUILD_COUNT_FIELDS)
         if (
             not published_primary_from_inspect
             and (
@@ -616,8 +712,9 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         ):
             failures.append("retry/duplicate-build-count-not-zero")
         states = [
-            str(value).casefold() for value in _values(
-                primary_branch_objects, {"state", "lifecycle_state", "status"}
+            str(value).casefold()
+            for value in _branch_values(
+                {"state", "lifecycle_state", "status"}
             )
         ]
         if not any(value in {"continued", "terminal", "published"} for value in states):
@@ -642,7 +739,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
 
     published_primary = published_primary_from_inspect or any(
         _call_has_published_primary(
-            trace, call, primary_workflow, before_index=retry_boundary
+            trace, call, primary_workflow or None, before_index=retry_boundary
         )
         for call in calls
         if call["name"] == "list_data_products"
@@ -708,7 +805,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         publication_lists = [
             call for call in list_calls
             if call["index"] > timeout_trace_position
-            and _call_has_published_primary(trace, call, primary_workflow)
+            and _call_has_published_primary(trace, call, primary_workflow or None)
         ]
         first_publication_index = min(
             (call["index"] for call in publication_lists), default=-1
@@ -735,7 +832,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         _call_has_published_primary(
             trace,
             call,
-            primary_workflow or "",
+            primary_workflow or None,
             before_index=successful_retry_index if not published_primary else None,
         )
         for call in pre_publish_lists
@@ -744,7 +841,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     if not post_publish_lists:
         failures.append("publish/post-success-listing-missing")
     elif not any(
-        _call_has_published_primary(trace, call, primary_workflow or "")
+        _call_has_published_primary(trace, call, primary_workflow or None)
         for call in post_publish_lists
     ):
         failures.append("publish/available-artifact-not-observed")
