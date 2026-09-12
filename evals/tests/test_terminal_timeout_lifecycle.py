@@ -856,7 +856,11 @@ def _trace_with_nested_inspect_branch_metadata(
 
 
 def _trace_with_nested_listing_history(
-    tmp_path: Path, *, status_field: str, status_value: str, history: dict[str, object]
+    tmp_path: Path,
+    *,
+    status_field: str,
+    status_value: str,
+    history: dict[str, object],
 ) -> Path:
     source = _trace(tmp_path, include_resume=False)
     records = [
@@ -878,6 +882,45 @@ def _trace_with_nested_listing_history(
         }]
     })
     mutated = tmp_path / f"nested-listing-{status_field}-history-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_current_publication_collection(
+    tmp_path: Path, *, collection_key: str
+) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    for response_id, payload in {
+        6: {
+            "products": [{
+                "workflow": "terminal-timeout-lifecycle",
+                "status": "building",
+                collection_key: [{"artifact_status": "available", "publish_seq": 1}],
+            }],
+        },
+        10: {
+            "products": [{
+                "workflow": "terminal-timeout-lifecycle-failed",
+                "status": "failed",
+            }],
+        },
+    }.items():
+        response = next(
+            record
+            for record in records
+            if record.get("direction") == "response"
+            and record.get("message", {}).get("id") == response_id
+        )
+        response["message"]["result"]["content"][0]["text"] = json.dumps(payload)
+    mutated = tmp_path / f"current-publication-{collection_key}-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
         encoding="utf-8",
@@ -1224,6 +1267,20 @@ def test_checker_ignores_nested_listing_publication_history(
             status_field=status_field,
             status_value=status_value,
             history=history,
+        ),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("collection_key", ["versions", "revisions"])
+def test_checker_accepts_current_publication_record_in_collection(
+    tmp_path: Path,
+    collection_key: str,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_current_publication_collection(
+            tmp_path, collection_key=collection_key
         ),
     )
     assert result.returncode == 0, result.stdout + result.stderr

@@ -267,8 +267,6 @@ PUBLICATION_HISTORY_KEYS = frozenset({
     "previous",
     "history",
     "prior_version",
-    "versions",
-    "revisions",
 })
 
 
