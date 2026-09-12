@@ -10,6 +10,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIO = ROOT / "evals/public/terminal-timeout-lifecycle"
@@ -30,7 +32,14 @@ def _record(direction: str, message: dict, **metadata: object) -> dict:
     }
 
 
-def _trace(tmp_path: Path, *, include_late: bool = True) -> Path:
+def _trace(
+    tmp_path: Path,
+    *,
+    include_late: bool = True,
+    include_resume: bool = True,
+    duplicate_field: str = "duplicate_builds",
+    duplicate_value: object = 0,
+) -> Path:
     build_request = _record(
         "request",
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "build_data_product", "arguments": {}}},
@@ -50,7 +59,7 @@ def _trace(tmp_path: Path, *, include_late: bool = True) -> Path:
         "response",
         {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": json.dumps({
             "run_id": "run-1",
-            "duplicate_builds": 0,
+            duplicate_field: duplicate_value,
             "state": "continued",
             "configured_budget_ms": 3000,
             "elapsed_ms": 90,
@@ -87,7 +96,8 @@ def _trace(tmp_path: Path, *, include_late: bool = True) -> Path:
     post_retry_inspect_response = _record(
         "response",
         {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": json.dumps({
-            "run_id": "run-2", "duplicate_builds": 0, "state": "terminal",
+            "run_id": "run-2", duplicate_field: duplicate_value,
+            "state": "terminal",
             "configured_budget_ms": 6000, "elapsed_ms": 180,
             "active_stage": "read-back", "resource": "events", "retry_count": 1,
             "page_count": 3, "request_count": 3,
@@ -152,8 +162,6 @@ def _trace(tmp_path: Path, *, include_late: bool = True) -> Path:
         post_retry_inspect_response,
         post_publish_list_request,
         post_publish_list_response,
-        resume_request,
-        resume_response,
         failed_build_request,
         failed_build_response,
         failed_inspect_request,
@@ -161,6 +169,8 @@ def _trace(tmp_path: Path, *, include_late: bool = True) -> Path:
         failed_listing_request,
         failed_listing_response,
     ]
+    if include_resume:
+        records[12:12] = [resume_request, resume_response]
     if include_late:
         records.append(
             _record(
@@ -410,6 +420,148 @@ def test_checker_accepts_timeout_then_authoritative_inspect(tmp_path: Path) -> N
     result = _run_checker(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ALL CHECKS PASSED" in result.stdout
+
+
+def test_checker_accepts_not_published_timeout_without_resume(tmp_path: Path) -> None:
+    trace = _trace(tmp_path, include_resume=False)
+    result = _run_checker(tmp_path, trace=trace)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ALL CHECKS PASSED" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "duplicate_field", ["duplicate_builds", "duplicate_build_count", "duplicates"]
+)
+def test_checker_accepts_zero_duplicate_count_aliases(
+    tmp_path: Path, duplicate_field: str
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace(tmp_path, duplicate_field=duplicate_field),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_checker_rejects_nonzero_duplicate_count_alias(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace(
+            tmp_path,
+            duplicate_field="duplicate_build_count",
+            duplicate_value=1,
+        ),
+    )
+    assert result.returncode != 0
+    assert "retry/duplicate-build-count-not-zero" in result.stdout
+
+
+def _trace_with_message_mutation(
+    tmp_path: Path, *, record_index: int, message: object
+) -> Path:
+    source = _trace(tmp_path)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    records[record_index]["message"] = message
+    mutated = tmp_path / f"mutated-{record_index}.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_post_retry_published(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    for record in records:
+        message = record.get("message", {})
+        if record.get("direction") != "response" or message.get("id") != 5:
+            continue
+        payload = json.loads(message["result"]["content"][0]["text"])
+        payload["status"] = "Published"
+        message["result"]["content"][0]["text"] = json.dumps(payload)
+        break
+    mutated = tmp_path / "post-retry-published-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_unhashable_inspect_id(tmp_path: Path) -> Path:
+    source = _trace(tmp_path)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    records[2]["message"]["id"] = []
+    mutated = tmp_path / "unhashable-inspect-id-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def test_checker_grades_non_object_json_rpc_message_without_crashing(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_message_mutation(
+            tmp_path, record_index=1, message=[{"jsonrpc": "2.0"}]
+        ),
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "trace/non-object-json-rpc-message" in result.stdout
+
+
+def test_checker_grades_positional_json_rpc_params_without_crashing(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_message_mutation(
+            tmp_path,
+            record_index=2,
+            message={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": ["inspect_run", {}],
+            },
+        ),
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "trace/positional-json-rpc-params" in result.stdout
+
+
+def test_checker_binds_branch_to_pre_retry_inspection(tmp_path: Path) -> None:
+    result = _run_checker(tmp_path, trace=_trace_with_post_retry_published(tmp_path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ALL CHECKS PASSED" in result.stdout
+
+
+def test_checker_rejects_unhashable_json_rpc_id_without_crashing(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path, trace=_trace_with_unhashable_inspect_id(tmp_path)
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "trace/invalid-json-rpc-id" in result.stdout
 
 
 def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: Path) -> None:

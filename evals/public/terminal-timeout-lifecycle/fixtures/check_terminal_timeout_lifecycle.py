@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 TIMEOUT_CODE = -32098
+DUPLICATE_BUILD_COUNT_FIELDS = frozenset({
+    "duplicate_build_count",
+    "duplicate_builds",
+    "duplicates",
+})
 # Fallback for a standalone invocation. The runner passes the authoritative
 # list from checks.json through --secret-marker-file; keep the two in sync.
 #
@@ -28,7 +33,7 @@ def _marker_labels(markers: list[str]) -> dict[str, str]:
     return {marker: f"marker-{index + 1}" for index, marker in enumerate(markers)}
 
 
-def _records(path: Path) -> list[dict[str, Any]]:
+def _records(path: Path) -> list[Any]:
     return [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
@@ -36,13 +41,49 @@ def _records(path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _message_text(record: dict[str, Any]) -> str:
-    return json.dumps(record.get("message", {}), sort_keys=True)
+def _record_value(record: Any, key: str, default: Any = None) -> Any:
+    return record.get(key, default) if isinstance(record, dict) else default
+
+
+def _message(record: Any) -> dict[str, Any] | None:
+    message = _record_value(record, "message")
+    return message if isinstance(message, dict) else None
+
+
+def _params(message: dict[str, Any] | None) -> dict[str, Any] | None:
+    params = message.get("params") if message is not None else None
+    return params if isinstance(params, dict) else None
+
+
+def _tool_name(record: Any) -> str | None:
+    params = _params(_message(record))
+    name = params.get("name") if params is not None else None
+    return name if isinstance(name, str) else None
+
+
+def _message_value(record: Any, key: str, default: Any = None) -> Any:
+    message = _message(record)
+    return message.get(key, default) if message is not None else default
+
+
+def _mapping_value(value: Any, key: str, default: Any = None) -> Any:
+    return value.get(key, default) if isinstance(value, dict) else default
+
+
+def _message_text(record: Any) -> str:
+    return json.dumps(_record_value(record, "message", {}), sort_keys=True)
 
 
 def _id_key(value: Any) -> str:
     """Make JSON-RPC ids comparable without collapsing 1 and 1.0."""
     return json.dumps([type(value).__name__, value], sort_keys=True, separators=(",", ":"))
+
+
+def _valid_jsonrpc_id(value: Any) -> bool:
+    """Accept only the scalar JSON-RPC id types (or an explicit null)."""
+    return value is None or (
+        type(value) in {str, int, float}
+    )
 
 
 def _objects(value: Any) -> Iterable[dict[str, Any]]:
@@ -80,14 +121,14 @@ def _values(objects: Iterable[dict[str, Any]], names: set[str]) -> list[Any]:
     ]
 
 
-def _tool_calls(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _tool_calls(trace: list[Any]) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     for index, record in enumerate(trace):
-        if record.get("direction") != "request":
+        if _record_value(record, "direction") != "request":
             continue
-        message = record.get("message", {})
-        params = message.get("params", {}) if isinstance(message, dict) else {}
-        if message.get("method") != "tools/call" or not isinstance(params, dict):
+        message = _message(record)
+        params = _params(message)
+        if message is None or message.get("method") != "tools/call" or params is None:
             continue
         name = params.get("name")
         if isinstance(name, str):
@@ -100,32 +141,35 @@ def _tool_calls(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return calls
 
 
-def _response_records(trace: list[dict[str, Any]], call: dict[str, Any]) -> list[dict[str, Any]]:
+def _response_records(trace: list[Any], call: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         record
         for record in trace
-        if record.get("direction") == "response"
-        and not record.get("synthetic")
-        and _id_key(record.get("message", {}).get("id")) == call["id"]
+        if _record_value(record, "direction") == "response"
+        and not _record_value(record, "synthetic")
+        and _id_key(_message_value(record, "id")) == call["id"]
+        and isinstance(record, dict)
     ]
 
 
-def _response_objects(record: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(_objects(record.get("message", {}).get("result", {})))
+def _response_objects(record: Any) -> list[dict[str, Any]]:
+    return list(_objects(_message_value(record, "result", {})))
 
 
 def _successful_response(records: list[dict[str, Any]]) -> bool:
     return any(
-        isinstance(record.get("message", {}).get("result"), dict)
-        and not record["message"]["result"].get("isError")
-        and not record["message"]["result"].get("is_error")
+        isinstance(result := _message_value(record, "result"), dict)
+        and not result.get("isError")
+        and not result.get("is_error")
         for record in records
     )
 
 
 def _failed_response(records: list[dict[str, Any]]) -> bool:
     for record in records:
-        message = record.get("message", {})
+        message = _message(record)
+        if message is None:
+            continue
         if isinstance(message.get("error"), dict):
             return True
         result = message.get("result")
@@ -154,12 +198,13 @@ def _has_available_publication(
 
 
 def _call_workflow(call: dict[str, Any]) -> str:
-    arguments = call.get("message", {}).get("params", {}).get("arguments", {})
+    params = _params(call.get("message"))
+    arguments = params.get("arguments", {}) if params is not None else {}
     workflow = arguments.get("workflow") if isinstance(arguments, dict) else None
     return workflow if isinstance(workflow, str) else ""
 
 
-def _call_objects(trace: list[dict[str, Any]], call: dict[str, Any]) -> list[dict[str, Any]]:
+def _call_objects(trace: list[Any], call: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         obj
         for record in _response_records(trace, call)
@@ -168,7 +213,7 @@ def _call_objects(trace: list[dict[str, Any]], call: dict[str, Any]) -> list[dic
 
 
 def _call_has_published_primary(
-    trace: list[dict[str, Any]], call: dict[str, Any], workflow: str
+    trace: list[Any], call: dict[str, Any], workflow: str
 ) -> bool:
     return _has_available_publication(_call_objects(trace, call), workflow)
 
@@ -177,6 +222,18 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     failures: list[str] = []
     trace = _records(trace_path)
     trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
+    for record in trace:
+        if not isinstance(record, dict):
+            failures.append("trace/non-object-record")
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict):
+            failures.append("trace/non-object-json-rpc-message")
+        else:
+            if "id" in message and not _valid_jsonrpc_id(message["id"]):
+                failures.append("trace/invalid-json-rpc-id")
+            if "params" in message and not isinstance(message["params"], dict):
+                failures.append("trace/positional-json-rpc-params")
     markers = sorted(SECRET_MARKERS)
     if marker_file is not None:
         # Naming a marker file and then scanning nothing would report a clean
@@ -215,48 +272,53 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
                 failures.append(f"redaction/{marker_labels[marker]}")
 
     if not all(
-        record.get("source") == "runner" and record.get("protocol") == "mcp"
+        _record_value(record, "source") == "runner"
+        and _record_value(record, "protocol") == "mcp"
         for record in trace
     ):
         failures.append("trace/not-runner-authored-mcp")
 
     timeout_responses = [
         record for record in trace
-        if record.get("synthetic")
-        and record.get("timeout_fault")
-        and record.get("message", {}).get("error", {}).get("code") == TIMEOUT_CODE
+        if _record_value(record, "synthetic")
+        and _record_value(record, "timeout_fault")
+        and _mapping_value(
+            _message_value(record, "error", {}), "code"
+        ) == TIMEOUT_CODE
     ]
     if len(timeout_responses) != 1:
         failures.append("timeout/exactly-one-client-deadline")
     elif (
-        timeout_responses[0]
-        .get("message", {})
-        .get("error", {})
-        .get("data", {})
-        .get("method")
+        _mapping_value(
+            _mapping_value(_message_value(timeout_responses[0], "error", {}), "data", {}),
+            "method",
+        )
         != "build_data_product"
     ):
         failures.append("timeout/method-not-recorded")
 
     late_build = [
         record for record in trace
-        if record.get("late")
-        and record.get("forwarded") is False
-        and record.get("message", {}).get("id") == timeout_responses[0].get("message", {}).get("id")
+        if _record_value(record, "late")
+        and _record_value(record, "forwarded") is False
+        and _message_value(record, "id") == _message_value(timeout_responses[0], "id")
     ] if timeout_responses else []
     if not late_build:
         failures.append("timeout/late-server-response-not-traced-and-suppressed")
 
-    request_records = [record for record in trace if record.get("direction") == "request"]
+    request_records = [
+        record for record in trace if _record_value(record, "direction") == "request"
+    ]
     inspect_trace_position = next(
         (index for index, record in enumerate(trace)
-         if record.get("direction") == "request"
-         and record.get("message", {}).get("params", {}).get("name") == "inspect_run"),
+         if _record_value(record, "direction") == "request"
+         and _tool_name(record) == "inspect_run"),
         -1,
     )
     timeout_trace_position = next(
         (index for index, record in enumerate(trace)
-         if record.get("synthetic") and record.get("timeout_fault")),
+         if _record_value(record, "synthetic")
+         and _record_value(record, "timeout_fault")),
         -1,
     )
     if not request_records or inspect_trace_position < 0:
@@ -273,23 +335,48 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     ]
     published_primary_from_inspect = False
 
+    retry_boundary = (
+        primary_build_calls[1]["index"]
+        if len(primary_build_calls) > 1
+        else len(trace)
+    )
+    authoritative_inspect_call = next(
+        (
+            call for call in calls
+            if call["name"] == "inspect_run"
+            and timeout_trace_position < call["index"] < retry_boundary
+        ),
+        None,
+    )
+
     inspect_ids = {
-        record.get("message", {}).get("id")
+        _id_key(_message_value(record, "id"))
         for record in trace
-        if record.get("direction") == "request"
-        and record.get("message", {}).get("params", {}).get("name") == "inspect_run"
+        if _record_value(record, "direction") == "request"
+        and _tool_name(record) == "inspect_run"
     }
     inspect_responses = [
         record for record in trace
-        if record.get("direction") == "response"
-        and not record.get("synthetic")
-        and record.get("message", {}).get("id") in inspect_ids
+        if _record_value(record, "direction") == "response"
+        and not _record_value(record, "synthetic")
+        and _id_key(_message_value(record, "id")) in inspect_ids
     ]
-    if not inspect_responses:
+    authoritative_inspect_records = (
+        _response_records(trace, authoritative_inspect_call)
+        if authoritative_inspect_call is not None
+        else []
+    )
+    if not inspect_responses or not authoritative_inspect_records:
         failures.append("lifecycle/authoritative-inspect-response-missing")
     else:
-        inspect_objects = [obj for record in inspect_responses for obj in _response_objects(record)]
-        joined = "\n".join(_message_text(record) for record in inspect_responses)
+        inspect_objects = [
+            obj
+            for record in authoritative_inspect_records
+            for obj in _response_objects(record)
+        ]
+        joined = "\n".join(
+            _message_text(record) for record in authoritative_inspect_records
+        )
         primary_inspect_objects = [
             obj for obj in inspect_objects
             if obj.get("workflow") == primary_workflow
@@ -299,13 +386,23 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
             for obj in primary_inspect_objects
         )
         if "run_id" not in joined or (
-            not published_primary_from_inspect and "duplicate_builds" not in joined
+            not published_primary_from_inspect
+            and not _contains_key(primary_inspect_objects, DUPLICATE_BUILD_COUNT_FIELDS)
         ):
             failures.append("lifecycle/run-identity-or-duplicate-count-missing")
-        duplicate_counts = _values(primary_inspect_objects, {"duplicate_builds"})
+        duplicate_counts = _values(
+            primary_inspect_objects, DUPLICATE_BUILD_COUNT_FIELDS
+        )
         if (
             not published_primary_from_inspect
-            and not any(value in {0, "0"} for value in duplicate_counts)
+            and (
+                not duplicate_counts
+                or not all(
+                    (isinstance(value, int) and not isinstance(value, bool) and value == 0)
+                    or value == "0"
+                    for value in duplicate_counts
+                )
+            )
         ):
             failures.append("retry/duplicate-build-count-not-zero")
         states = [
@@ -444,11 +541,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     if failed_probe_calls:
         failed_probe_index = failed_probe_calls[0]["index"]
         failed_listing = [call for call in list_calls if call["index"] > failed_probe_index]
-        failed_workflow = str(
-            failed_probe_calls[0]["message"].get("params", {})
-            .get("arguments", {})
-            .get("workflow", "")
-        )
+        failed_workflow = _call_workflow(failed_probe_calls[0])
         if not failed_workflow:
             failures.append("failure/failed-workflow-not-declared")
         elif not failed_listing:
@@ -461,28 +554,29 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         ):
             failures.append("failure/failed-workflow-was-published")
 
-    resume_calls = [call for call in calls if call["name"] == "resume_data_product"]
-    if not resume_calls:
-        failures.append("resume/resume-request-missing")
-    else:
-        resume = resume_calls[0]
-        if not any(call["index"] < resume["index"] for call in post_publish_lists):
-            failures.append("resume/list-before-resume-missing")
-        resume_records = _response_records(trace, resume)
-        if not _successful_response(resume_records):
-            failures.append("resume/successful-resume-missing")
-        elif not _contains_key(
-            [obj for record in resume_records for obj in _response_objects(record)],
-            {"semantic_endpoint", "endpoint"},
-        ):
-            failures.append("resume/fresh-endpoint-missing")
-        if any(
-            call["index"] > resume["index"]
-            and call["name"] == "build_data_product"
-            and _call_workflow(call) == primary_workflow
-            for call in calls
-        ):
-            failures.append("resume/rebuild-used-instead-of-resume")
+    if published_primary:
+        resume_calls = [call for call in calls if call["name"] == "resume_data_product"]
+        if not resume_calls:
+            failures.append("resume/resume-request-missing")
+        else:
+            resume = resume_calls[0]
+            if not any(call["index"] < resume["index"] for call in post_publish_lists):
+                failures.append("resume/list-before-resume-missing")
+            resume_records = _response_records(trace, resume)
+            if not _successful_response(resume_records):
+                failures.append("resume/successful-resume-missing")
+            elif not _contains_key(
+                [obj for record in resume_records for obj in _response_objects(record)],
+                {"semantic_endpoint", "endpoint"},
+            ):
+                failures.append("resume/fresh-endpoint-missing")
+            if any(
+                call["index"] > resume["index"]
+                and call["name"] == "build_data_product"
+                and _call_workflow(call) == primary_workflow
+                for call in calls
+            ):
+                failures.append("resume/rebuild-used-instead-of-resume")
 
     observations_path = os.environ.get("NXD_STUB_OBSERVATIONS", "")
     observations = (

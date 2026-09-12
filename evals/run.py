@@ -2857,6 +2857,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     ws_fact: str | None = None
     det_fact: str | None = None
     agent_runtime_secret_leak = False
+    runtime_secrets = redaction_values
     http_stub_teardown_error: str | None = None
     if cache_file and cache_file.exists():
         try:
@@ -2985,9 +2986,6 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         )
                         runtime_secrets = redaction_values or _runtime_secret_values(
                             http_stub_spec, env_over
-                        )
-                        trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
-                            trace, metrics, runtime_secrets
                         )
                         runner_mcp_trace = session.trace_path.read_text(encoding="utf-8")
                         metrics["stdio_mcp_trace_source"] = "runner"
@@ -3125,6 +3123,13 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 failure = source_audit_failure(metrics)
                 if failure is not None:
                     return failure
+
+            # Redact every fresh agent artifact with the same marker set used by
+            # cache replays. This must sit outside the runtime-specific branches:
+            # deterministic-check markers are valid for non-stdio scenarios too.
+            trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
+                trace, metrics, runtime_secrets
+            )
 
             if ok and name == "incremental-transform-state":
                 _remove_incremental_delta_after_agent(scenario_dir, ws)

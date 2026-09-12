@@ -560,6 +560,60 @@ def test_a_leaked_fixture_literal_is_reported_and_never_cached(tmp_path, monkeyp
     assert not cache_dir.exists() or not list(cache_dir.glob("agent-*.json"))
 
 
+def test_marker_redaction_applies_to_a_fresh_non_stdio_run(tmp_path, monkeypatch):
+    scenario = tmp_path / "scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    (scenario / "prompt.md").write_text("Do the thing.\n", encoding="utf-8")
+    marker = "synthetic-non-stdio-marker"
+    (scenario / "checks.json").write_text(
+        json.dumps({
+            "deterministic_check": {
+                "script": "unused.py",
+                "deps": [],
+                "redaction_markers": [marker],
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    calls = 0
+
+    class FakeBackend:
+        name = "fake"
+        supports_multi_turn = False
+
+        def run_agent(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return True, f"echoed {marker}", {"final_answer": marker}
+
+    monkeypatch.setattr(run, "get_agent_backend", lambda _name: FakeBackend())
+    monkeypatch.setattr(run, "get_judge_backend", lambda _name: object())
+    monkeypatch.setattr(
+        run,
+        "deterministic_check_fact",
+        lambda *_args, **_kwargs: run.DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": True}
+        ),
+    )
+    monkeypatch.setattr(run, "run_judge", lambda *_args, **_kwargs: {"overall_pass": True})
+
+    cache_dir = tmp_path / "cache"
+    args = _run_one_args()
+    args.cache_dir = str(cache_dir)
+
+    first = run.run_one(run.SkillSet("none", "", []), scenario, args)
+    second = run.run_one(run.SkillSet("none", "", []), scenario, args)
+
+    for result in (first, second):
+        assert marker not in result.transcript
+        assert "<redacted>" in result.transcript
+        assert any("AGENT FIXTURE REDACTION: FAIL" in fact for fact in result.facts)
+    assert calls == 2
+    assert not cache_dir.exists() or not list(cache_dir.glob("agent-*.json"))
+
+
 def test_run_one_combined_http_teardown_is_not_desktop_setup(tmp_path, monkeypatch):
     scenario = tmp_path / "scenario"
     fixtures = scenario / "fixtures"
