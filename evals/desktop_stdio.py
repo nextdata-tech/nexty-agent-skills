@@ -15,6 +15,7 @@ import contextlib
 import dataclasses
 import datetime as _dt
 import json
+import math
 import os
 import re
 import signal
@@ -108,6 +109,101 @@ class DesktopStdioError(RuntimeError):
     """Invalid runner setup or a proxy lifecycle failure."""
 
 
+@dataclasses.dataclass
+class _PendingRequest:
+    """One runner-injected deadline that is still waiting for the child."""
+
+    request_key: str
+    request_id: Any
+    method: str
+    timeout_ms: int
+    started_at: float
+    timer: threading.Timer | None = None
+    timed_out: bool = False
+
+
+@dataclasses.dataclass
+class _TimeoutFault:
+    after_ms: int
+    remaining: int | None = None
+    workflow: str | None = None
+
+
+def _rpc_id_key(value: Any) -> str | None:
+    """Return a collision-safe key for JSON-RPC scalar request IDs."""
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return f"{type(value).__name__}:{json.dumps(value, separators=(',', ':'), sort_keys=True)}"
+
+
+def _timeout_faults(raw: Any) -> dict[str, _TimeoutFault]:
+    """Validate the opt-in operation -> deadline configuration from server-spec."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("request_timeout_faults must be an object")
+    faults: dict[str, _TimeoutFault] = {}
+    for method, value in raw.items():
+        if not isinstance(method, str) or not method:
+            raise ValueError("request_timeout_faults method names must be non-empty strings")
+        once = False
+        workflow: str | None = None
+        if isinstance(value, Mapping):
+            once = value.get("once", False)
+            workflow_value = value.get("workflow")
+            if workflow_value is not None:
+                if not isinstance(workflow_value, str) or not workflow_value:
+                    raise ValueError(
+                        f"request_timeout_faults[{method!r}] workflow must be a non-empty string"
+                    )
+                workflow = workflow_value
+            value = value.get("after_ms")
+        if not isinstance(once, bool):
+            raise ValueError(f"request_timeout_faults[{method!r}] once must be boolean")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"request_timeout_faults[{method!r}] must contain after_ms")
+        if not math.isfinite(float(value)) or value <= 0 or value > 600_000:
+            raise ValueError(f"request_timeout_faults[{method!r}] after_ms is out of bounds")
+        faults[method] = _TimeoutFault(
+            int(value), remaining=1 if once else None, workflow=workflow
+        )
+    return faults
+
+
+def _request_operation(request: Mapping[str, Any]) -> str | None:
+    """Return the operation name used by timeout-fault configuration.
+
+    Direct JSON-RPC test servers use the request method as their operation
+    name. MCP tool calls carry the operation in ``params.name`` instead.
+    Keeping this normalization in the runner makes a fault target the public
+    tool regardless of which JSON-RPC envelope the child receives.
+    """
+    method = request.get("method")
+    if method == "tools/call":
+        params = request.get("params")
+        if isinstance(params, Mapping):
+            name = params.get("name")
+            if isinstance(name, str) and name:
+                return name
+    return method if isinstance(method, str) else None
+
+
+def _request_workflow(request: Mapping[str, Any]) -> str | None:
+    """Return an MCP tool call's workflow argument, when present."""
+    params = request.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    arguments = params.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return None
+    workflow = arguments.get("workflow")
+    return workflow if isinstance(workflow, str) else None
+
+
 class DesktopStdioSession:
     """Own one isolated Desktop MCP config, proxy, trace, and cleanup scope.
 
@@ -128,6 +224,7 @@ class DesktopStdioSession:
         root: Path | None = None,
         server_name: str = SERVER_NAME,
         allowed_tools: Sequence[str] | None = None,
+        request_timeout_faults: Mapping[str, Any] | None = None,
         startup_timeout_s: float = 15.0,
         shutdown_timeout_s: float = 5.0,
     ) -> None:
@@ -147,6 +244,7 @@ class DesktopStdioSession:
             if allowed_tools is not None
             else (f"mcp__{server_name}__*",)
         )
+        self.request_timeout_faults = dict(request_timeout_faults or {})
         self.startup_timeout_s = startup_timeout_s
         self.shutdown_timeout_s = shutdown_timeout_s
         self._provided_root = Path(root) if root is not None else None
@@ -205,6 +303,7 @@ class DesktopStdioSession:
                 "trace_path": str(self.trace_path),
                 "result_path": str(self.server_result_path),
                 "shutdown_timeout_s": self.shutdown_timeout_s,
+                "request_timeout_faults": self.request_timeout_faults,
             }
             spec_path = self.root / "server-spec.json"
             _write_private_text(spec_path, json.dumps(spec, sort_keys=True))
@@ -355,7 +454,7 @@ def _write_proxy_result(path: Path, **payload: Any) -> None:
         _write_private_text(path, json.dumps(redact_json_rpc(payload), sort_keys=True))
 
 
-def _trace_line(path: Path, direction: str, line: bytes) -> None:
+def _trace_line(path: Path, direction: str, line: bytes, **metadata: Any) -> None:
     """Persist only parsed, recursively-redacted JSON-RPC messages."""
     try:
         value = json.loads(line.decode("utf-8"))
@@ -368,6 +467,8 @@ def _trace_line(path: Path, direction: str, line: bytes) -> None:
         "direction": direction,
         "message": redact_json_rpc(value),
     }
+    if metadata:
+        record.update(redact_json_rpc(metadata))
     with _TRACE_LOCK:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(
@@ -382,6 +483,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
         command = [str(x) for x in spec["command"]]
         trace_path = Path(spec["trace_path"])
         result_path = Path(spec["result_path"])
+        timeout_faults = _timeout_faults(spec.get("request_timeout_faults"))
         # Do not inherit the runner's or user's credential-bearing environment
         # into the supervisor child. The private spec is the supported
         # injection point for explicitly trusted runtime credentials; keep
@@ -415,7 +517,127 @@ def run_stdio_proxy(spec_path: Path) -> int:
         )
         child_pid = child.pid
 
+        state_lock = threading.Lock()
+        pending: dict[str, _PendingRequest] = {}
+        fault_lock = threading.Lock()
+        timers_lock = threading.Lock()
+        active_timers: set[threading.Timer] = set()
+        output_lock = threading.Lock()
+        closing = threading.Event()
         shutting_down = False
+
+        def next_timeout_ms(operation: str, request: Mapping[str, Any]) -> int | None:
+            with fault_lock:
+                fault = timeout_faults.get(operation)
+                if fault is None:
+                    return None
+                if fault.workflow is not None and _request_workflow(request) != fault.workflow:
+                    return None
+                if fault.remaining == 0:
+                    return None
+                if fault.remaining is not None:
+                    fault.remaining -= 1
+                return fault.after_ms
+
+        def write_client(line: bytes) -> bool:
+            try:
+                with output_lock:
+                    sys.stdout.buffer.write(line)
+                    sys.stdout.buffer.flush()
+                return True
+            except (BrokenPipeError, OSError):
+                return False
+
+        def cancel_timers() -> None:
+            with timers_lock:
+                timers = list(active_timers)
+            for timer in timers:
+                timer.cancel()
+            current = threading.current_thread()
+            for timer in timers:
+                if timer is not current:
+                    timer.join(timeout=1)
+
+        def timeout_response(state: _PendingRequest) -> None:
+            try:
+                with state_lock:
+                    if (
+                        closing.is_set()
+                        or pending.get(state.request_key) is not state
+                        or state.timed_out
+                    ):
+                        return
+                    state.timed_out = True
+                line = (
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": state.request_id,
+                            "error": {
+                                "code": -32098,
+                                "message": "client deadline exceeded",
+                                "data": {
+                                    "method": state.method,
+                                    "timeout_ms": state.timeout_ms,
+                                    "elapsed_ms": max(
+                                        0, round((time.monotonic() - state.started_at) * 1000)
+                                    ),
+                                },
+                            },
+                        },
+                        separators=(",", ":"),
+                    ).encode()
+                    + b"\n"
+                )
+                _trace_line(
+                    trace_path,
+                    "response",
+                    line,
+                    forwarded=True,
+                    synthetic=True,
+                    timeout_fault=True,
+                )
+                write_client(line)
+            finally:
+                with timers_lock:
+                    active_timers.discard(threading.current_thread())
+
+        def schedule_timeout(state: _PendingRequest) -> None:
+            timer = threading.Timer(
+                state.timeout_ms / 1000,
+                timeout_response,
+                args=(state,),
+            )
+            timer.daemon = True
+            state.timer = timer
+            with timers_lock:
+                active_timers.add(timer)
+            timer.start()
+
+        def reject_duplicate(request: Mapping[str, Any]) -> None:
+            line = (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "error": {
+                            "code": -32600,
+                            "message": "duplicate request id while request is pending",
+                        },
+                    },
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
+            _trace_line(
+                trace_path,
+                "response",
+                line,
+                forwarded=True,
+                synthetic=True,
+                duplicate_id=True,
+            )
+            write_client(line)
 
         def reap_child(timeout_s: float) -> bool:
             """Reap the direct child without taking Popen's wait lock."""
@@ -443,6 +665,8 @@ def run_stdio_proxy(spec_path: Path) -> int:
             if shutting_down:
                 return
             shutting_down = True
+            closing.set()
+            cancel_timers()
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             # The proxy and server intentionally have separate sessions. The
@@ -468,12 +692,32 @@ def run_stdio_proxy(spec_path: Path) -> int:
         def forward_responses() -> None:
             assert child is not None and child.stdout is not None
             for line in child.stdout:
-                with contextlib.suppress(OSError):
-                    _trace_line(trace_path, "response", line)
+                state: _PendingRequest | None = None
+                message: Any = None
                 try:
-                    sys.stdout.buffer.write(line)
-                    sys.stdout.buffer.flush()
-                except (BrokenPipeError, OSError):
+                    message = json.loads(line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+                if isinstance(message, Mapping) and "id" in message:
+                    request_key = _rpc_id_key(message.get("id"))
+                    if request_key is not None:
+                        with state_lock:
+                            state = pending.pop(request_key, None)
+                        if state is not None and state.timer is not None:
+                            state.timer.cancel()
+                            with timers_lock:
+                                active_timers.discard(state.timer)
+                with contextlib.suppress(OSError):
+                    _trace_line(
+                        trace_path,
+                        "response",
+                        line,
+                        forwarded=not (state is not None and state.timed_out),
+                        late=bool(state is not None and state.timed_out),
+                    )
+                if state is not None and state.timed_out:
+                    continue
+                if not write_client(line):
                     return
 
         def drain_stderr() -> None:
@@ -491,12 +735,59 @@ def run_stdio_proxy(spec_path: Path) -> int:
         assert child.stdin is not None
         for line in sys.stdin.buffer:
             _trace_line(trace_path, "request", line)
+            request: Any = None
+            try:
+                request = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            if isinstance(request, Mapping):
+                operation = _request_operation(request)
+                request_key = (
+                    _rpc_id_key(request.get("id"))
+                    if "id" in request and operation is not None
+                    else None
+                )
+                # Only a request that can actually carry a deadline may consume
+                # the fault budget, and a duplicate is settled before that
+                # budget is touched. Consuming it earlier lets a notification
+                # or a re-used id silently burn a ``once`` deadline that then
+                # never fires, and the scenario reports a missing timeout
+                # instead of the reason there was none. Screening duplicates
+                # first also keeps them rejected once the budget is spent,
+                # rather than forwarding one whose reply is then swallowed as
+                # the pending request's suppressed late response.
+                if request_key is not None:
+                    with state_lock:
+                        duplicate = request_key in pending
+                    if duplicate:
+                        reject_duplicate(request)
+                        continue
+                    timeout_ms = next_timeout_ms(operation, request)
+                    if timeout_ms is not None:
+                        state = _PendingRequest(
+                            request_key=request_key,
+                            request_id=request.get("id"),
+                            method=operation,
+                            timeout_ms=timeout_ms,
+                            started_at=time.monotonic(),
+                        )
+                        # Only this thread inserts into ``pending``; the reader
+                        # thread only pops, so the check above cannot go stale
+                        # in the direction that would admit a duplicate.
+                        with state_lock:
+                            pending[request_key] = state
+                        schedule_timeout(state)
             try:
                 child.stdin.write(line)
                 child.stdin.flush()
             except (BrokenPipeError, OSError):
                 child_error.append("server closed stdin")
                 break
+        # EOF is the client's shutdown boundary: stop emitting synthetic
+        # deadlines while the child drains or exits, but still let the reader
+        # trace any response that was already produced.
+        closing.set()
+        cancel_timers()
         with contextlib.suppress(OSError):
             child.stdin.close()
         try:

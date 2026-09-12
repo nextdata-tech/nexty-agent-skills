@@ -1,0 +1,14 @@
+{
+  "server_name": "nxd-desktop",
+  "workflow": "terminal-timeout-lifecycle",
+  "profile_builder": "prepare_stdio_profile.py",
+  "request_timeout_faults": {
+    "build_data_product": {
+      "after_ms": 80,
+      "once": true,
+      "workflow": "terminal-timeout-lifecycle"
+    }
+  },
+  "allowed_tools": ["mcp__nxd-desktop__*"],
+  "agent_allowed_tools": "Bash,Read,Write,Edit,Glob,Grep,Skill,mcp__nxd-desktop__*"
+}

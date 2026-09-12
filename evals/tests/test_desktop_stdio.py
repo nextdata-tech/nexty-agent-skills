@@ -35,6 +35,28 @@ for raw in sys.stdin:
                                  "echo": msg.get("method")}}), flush=True)
 """
 
+TIMEOUT_SERVER = r"""
+import json, sys, threading, time
+
+def respond(message):
+    method = message.get("method")
+    operation = method
+    if method == "tools/call":
+        operation = message.get("params", {}).get("name")
+    if operation == "build_data_product":
+        time.sleep(0.25)
+        result = {"state": "terminal", "run_id": "run-1"}
+    elif operation == "inspect_run":
+        result = {"state": "terminal", "run_id": "run-1", "duplicate_builds": 0}
+    else:
+        result = {"method": method}
+    print(json.dumps({"jsonrpc": "2.0", "id": message.get("id"), "result": result}), flush=True)
+
+for raw in sys.stdin:
+    message = json.loads(raw)
+    threading.Thread(target=respond, args=(message,)).start()
+"""
+
 FAKE_CLAUDE = r"""
 import json, os, sys
 args = sys.argv[1:]
@@ -133,6 +155,257 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
         assert all(record["message"] for record in records)
         result = json.loads(session.server_result_path.read_text())
         assert result["status"] == "passed"
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_proxy_timeout_fault_allows_followup_and_suppresses_late_response(tmp_path):
+    child = _script(tmp_path / "timeout-server.py", TIMEOUT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        request_timeout_faults={"build_data_product": {"after_ms": 50, "once": True}},
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdin is not None and proxy.stdout is not None
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "build_data_product"}) + "\n")
+        proxy.stdin.flush()
+        timeout = json.loads(proxy.stdout.readline())
+        assert timeout["id"] == 1
+        assert timeout["error"]["code"] == -32098
+        assert timeout["error"]["message"] == "client deadline exceeded"
+        assert timeout["error"]["data"]["method"] == "build_data_product"
+        assert timeout["error"]["data"]["timeout_ms"] == 50
+        assert timeout["error"]["data"]["elapsed_ms"] >= 50
+
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "inspect_run"}) + "\n")
+        proxy.stdin.flush()
+        inspect = json.loads(proxy.stdout.readline())
+        assert inspect["id"] == 2
+        assert inspect["result"]["duplicate_builds"] == 0
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "build_data_product"}) + "\n")
+        proxy.stdin.flush()
+        second_build = json.loads(proxy.stdout.readline())
+        assert second_build["id"] == 3
+        assert "error" not in second_build
+        proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+
+        records = [json.loads(line) for line in session.trace_path.read_text().splitlines()]
+        assert any(
+            record.get("synthetic") and record["message"].get("id") == 1
+            for record in records
+        )
+        assert any(
+            record.get("late") and not record["forwarded"] and record["message"].get("id") == 1
+            for record in records
+        )
+        assert not any(
+            record.get("late") and record["message"].get("id") == 1
+            for record in records
+            if record.get("forwarded")
+        )
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_proxy_timeout_fault_targets_mcp_tool_and_workflow(tmp_path):
+    child = _script(tmp_path / "timeout-server.py", TIMEOUT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        request_timeout_faults={
+            "build_data_product": {
+                "after_ms": 50,
+                "once": True,
+                "workflow": "target-workflow",
+            }
+        },
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdin is not None and proxy.stdout is not None
+        unrelated = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "build_data_product", "arguments": {"workflow": "other-workflow"}},
+        }
+        proxy.stdin.write(json.dumps(unrelated) + "\n")
+        proxy.stdin.flush()
+        response = json.loads(proxy.stdout.readline())
+        assert response["id"] == 1
+        assert "error" not in response
+
+        targeted = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "build_data_product", "arguments": {"workflow": "target-workflow"}},
+        }
+        proxy.stdin.write(json.dumps(targeted) + "\n")
+        proxy.stdin.flush()
+        timeout = json.loads(proxy.stdout.readline())
+        assert timeout["id"] == 2
+        assert timeout["error"]["code"] == -32098
+        assert timeout["error"]["data"]["method"] == "build_data_product"
+        proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_timeout_fault_rejects_duplicate_pending_ids_and_ignores_notifications(tmp_path):
+    child = _script(tmp_path / "timeout-server.py", TIMEOUT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        request_timeout_faults={"build_data_product": {"after_ms": 40}},
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdin is not None and proxy.stdout is not None
+        request = {"jsonrpc": "2.0", "id": "same", "method": "build_data_product"}
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        assert json.loads(proxy.stdout.readline())["error"]["code"] == -32098
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        assert json.loads(proxy.stdout.readline())["error"]["code"] == -32600
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "build_data_product"}) + "\n")
+        proxy.stdin.flush()
+        time.sleep(0.08)
+        assert proxy.stdin is not None
+        proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+        records = [json.loads(line) for line in session.trace_path.read_text().splitlines()]
+        assert not any(record.get("timeout_fault") and record["message"].get("id") is None for record in records)
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_one_shot_deadline_survives_a_notification_and_a_duplicate_id(tmp_path):
+    """A request that cannot carry a deadline must not spend the ``once`` budget.
+
+    A notification has no id and a duplicate is rejected without reaching the
+    child, so neither can be timed out. If either consumed the budget, the one
+    deadline the scenario depends on would silently never fire and the checker
+    would report a missing timeout rather than the reason there was none.
+    """
+    child = _script(tmp_path / "timeout-server.py", TIMEOUT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        request_timeout_faults={"build_data_product": {"after_ms": 40, "once": True}},
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdin is not None and proxy.stdout is not None
+        # A notification for the faulted operation: no id, so no deadline.
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "build_data_product"}) + "\n")
+        proxy.stdin.flush()
+        time.sleep(0.12)
+        # The real request still gets the one configured deadline.
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "build_data_product"}) + "\n")
+        proxy.stdin.flush()
+        first = json.loads(proxy.stdout.readline())
+        while "error" not in first:  # skip the notification's echoed reply
+            first = json.loads(proxy.stdout.readline())
+        assert first["id"] == 1
+        assert first["error"]["code"] == -32098
+        # ...and it is spent: the next build is forwarded untouched.
+        proxy.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "build_data_product"}) + "\n")
+        proxy.stdin.flush()
+        second = json.loads(proxy.stdout.readline())
+        while second.get("id") != 2:
+            second = json.loads(proxy.stdout.readline())
+        assert "error" not in second
+        proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+        records = [json.loads(line) for line in session.trace_path.read_text().splitlines()]
+        deadlines = [record for record in records if record.get("timeout_fault")]
+        assert len(deadlines) == 1
+        assert deadlines[0]["message"]["id"] == 1
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_duplicate_id_is_rejected_after_the_one_shot_deadline_is_spent(tmp_path):
+    """Duplicate detection must not depend on the fault budget still existing.
+
+    The first request is already pending and timed out, so the child's eventual
+    reply is suppressed. If the duplicate were only screened while a deadline
+    was still available, it would be forwarded, and its reply would be consumed
+    as the suppressed late response — leaving the client with no answer at all.
+    """
+    child = _script(tmp_path / "timeout-server.py", TIMEOUT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        request_timeout_faults={"build_data_product": {"after_ms": 40, "once": True}},
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdin is not None and proxy.stdout is not None
+        request = {"jsonrpc": "2.0", "id": "same", "method": "build_data_product"}
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        assert json.loads(proxy.stdout.readline())["error"]["code"] == -32098
+        # The budget is spent, but the duplicate must still be rejected by the
+        # proxy rather than forwarded to the child.
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        assert json.loads(proxy.stdout.readline())["error"]["code"] == -32600
+        proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+        records = [json.loads(line) for line in session.trace_path.read_text().splitlines()]
+        assert len([r for r in records if r.get("timeout_fault")]) == 1
     finally:
         if proxy.poll() is None:
             proxy.kill()
