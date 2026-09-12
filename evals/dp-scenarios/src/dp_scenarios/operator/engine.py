@@ -543,7 +543,6 @@ def _injection_delivered(
 _SUPPRESSIBLE_RULE_PREFIXES = (
     "ground_truth.",
     "source.answer.",
-    "decision.answer.",
     "status.answer.",
 )
 
@@ -551,14 +550,16 @@ _SUPPRESSIBLE_RULE_PREFIXES = (
 def _served_reply_key(rule_id: str) -> str | None:
     """Return the answer-sheet key of a match that states a declared fact.
 
-    Only answer-sheet lookups are suppressible. A persona reply
-    (``persona.approval_request``) or a fallback (``fallback.no-leading``) is
-    not a fact: repeating "go ahead" or the no-leading deflection is in
-    character, while repeating the same declared fact verbatim is the defect
-    this key exists to catch. Memory is keyed to the *selected* sheet key, not
-    to the text that went out, because a generated operator paraphrases the
-    reply -- no fact text survives as a substring, so a text scan would leave
-    the memory permanently empty and the suppression inert.
+    Source, ground-truth, and status answer-sheet lookups are suppressible. A
+    declared decision answer is deliberately excluded: a fresh review
+    generation may ask for the same authorization again and must receive the
+    same answer. Persona replies (``persona.approval_request``) and fallbacks
+    (``fallback.no-leading``) are not facts either: repeating "go ahead" or
+    the no-leading deflection is in character. Memory is keyed to the
+    *selected* sheet key, not to the text that went out, because a generated
+    operator paraphrases the reply -- no fact text survives as a substring,
+    so a text scan would leave the memory permanently empty and the
+    suppression inert.
     """
 
     return rule_id if rule_id.startswith(_SUPPRESSIBLE_RULE_PREFIXES) else None
@@ -1570,14 +1571,17 @@ class OperatorEngine:
             # the brief" from "0 of 7", not just read a byte-identical reply.
             if not match.matched:
                 claim["operator_unmatched"] = True
-            # Serving the same declared fact twice is what a live run actually
-            # did: three identical ground-truth lines in a row, which the agent
-            # called out. Suppress the re-serve and let the scripted turn carry
-            # the conversation instead. The claim records that the fact was
-            # withheld; ``operator_answered_from_ground_truth`` is deliberately
-            # NOT recorded, because nothing from the brief went out this turn
-            # (see qualification._ungraded_reasons for the precedent: a claim
-            # the code never checked must not stand).
+            # Serving the same suppressible declared fact twice is what a live
+            # run actually did: three identical ground-truth lines in a row,
+            # which the agent called out. Suppress that re-serve and let the
+            # scripted turn carry the conversation instead. Decision answers
+            # are excluded from ``_served_reply_key`` because a fresh review
+            # generation may legitimately ask for the same authorization
+            # again. The claim records that a suppressible fact was withheld;
+            # ``operator_answered_from_ground_truth`` is deliberately NOT
+            # recorded, because nothing from the brief went out this turn (see
+            # qualification._ungraded_reasons for the precedent: a claim the
+            # code never checked must not stand).
             sheet_key = _served_reply_key(match.rule_id)
             repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
             if repeat_suppressed:

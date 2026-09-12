@@ -9,6 +9,9 @@ from pathlib import Path
 from aiohttp import ClientSession
 
 from dp_scenarios.mockrest import MockRestServer
+from dp_scenarios.operator.answer_sheet import script_turn_text
+from dp_scenarios.operator.matcher import MatcherBank
+from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.runner.environment import PinnedVersions, RunEnvironment
 from dp_scenarios.runner.tier import _follow_up_artifact
 from dp_scenarios.scenario import load_scenario
@@ -55,6 +58,83 @@ def test_b1_loads_as_core_with_a_real_mock_route_table() -> None:
     assert SCENARIO.tier == "core"
     assert SCENARIO.route_table is not None
     assert SCENARIO.events.planted_card_ids() == {"crm_pipeline_pagination"}
+
+
+def test_b1_requests_governed_build_scope_before_approval() -> None:
+    """The opening must request a governed build while resolving attention scope."""
+
+    assert SCENARIO.answer_sheet.opening_message == (
+        "Please build and publish a governed current CRM pipeline data product "
+        "from the supplied source; use current records only, keep owner and "
+        "email details redacted, and do not rank records by attention because "
+        "no threshold is provided."
+    )
+    assert script_turn_text(SCENARIO.answer_sheet.turns[0]) == (
+        SCENARIO.answer_sheet.opening_message
+    )
+    assert script_turn_text(SCENARIO.answer_sheet.turns[2]) == (
+        "Approved. Pull every deal across all pages and keep the stage values in "
+        "the declared enum: prospecting, qualification, negotiation, closed_won, "
+        "closed_lost. Return the redacted current snapshot and do not infer "
+        "stage-entry time, time-in-stage, or an attention threshold from updatedAt."
+    )
+
+
+def test_b1_declares_review_findings_adjudication_without_coaching_the_fix() -> None:
+    """A non-clear review gets operator authority before remediation can start."""
+
+    answer = SCENARIO.answer_sheet.decision_answers["review_fix_authorization"]
+    assert answer.terms == ("review", "finding")
+    assert answer.answer == (
+        "I accept the specific corrections just reported and authorize only those "
+        "corrections. Reset, correct, recapture, and run one fresh independent "
+        "review; optional agent-side checks may be recorded but must not block "
+        "shellless capture or admission. Do not validate, admit, or publish until "
+        "that review is clear. Ask me again before any new behavior-changing "
+        "decision."
+    )
+
+    matcher = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
+    review_request = matcher.reply_for(
+        "The independent review found a blocking finding and a fix is needed. "
+        "Do you want me to proceed with the fix?"
+    )
+    assert review_request.rule_id == "decision.answer.review_fix_authorization"
+    assert review_request.reply == answer.answer
+
+    late_review_request = matcher.reply_for(
+        "Round-5 review has one LOW finding. Would you like me to add the "
+        "documentation comment or accept the gap?"
+    )
+    assert late_review_request.rule_id == "decision.answer.review_fix_authorization"
+
+    # Ordinary workflow narration must not consume this answer before a review
+    # finding is actually reported.
+    for message in (
+        "Do you approve this plan so I can proceed to generation?",
+        "The build is ready to proceed; no review finding was reported and no fix is needed.",
+    ):
+        assert matcher.reply_for(message).rule_id != "decision.answer.review_fix_authorization"
+
+
+def test_b1_answers_physical_redaction_question_deterministically() -> None:
+    """The physical/governed-surface question gets the safe redaction answer."""
+
+    answer = SCENARIO.answer_sheet.decision_answers["physical_redaction"]
+    assert answer.terms == ("physical", "governed")
+    assert answer.answer == (
+        "Keep owner and email out of every physical and governed output surface "
+        "because one supervisor DuckDB file makes internal landed data directly "
+        "reachable; proceed with redacted fields."
+    )
+
+    matcher = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
+    result = matcher.reply_for(
+        "Should owner and email stay out of every physical and governed output surface?"
+    )
+    assert result.rule_id == "decision.answer.physical_redaction"
+    assert result.reply == answer.answer
+    assert SCENARIO.answer_sheet.decision_answers["privacy_scope"].terms == ("owner", "contact")
 
 
 def test_good_pagination_retry_and_redacted_contract_pass() -> None:

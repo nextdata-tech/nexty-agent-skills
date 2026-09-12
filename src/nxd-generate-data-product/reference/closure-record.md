@@ -15,8 +15,8 @@
 `dp-blueprint.md` is the plan, and it lives **beside** the closure: hand-edited, with
 its drafting history, its rejected options and its open questions. The closure
 needs the plan too — a cold reader, an export handoff or a later session has only
-the closure — but it must never *depend on a file outside itself* to get it. So
-at generation time, **after** approval, the approved spec is copied in and hashed.
+the closure — but it must never *depend on a file outside itself* to get it. For
+workflow-v2, the supervisor copies and hashes the approved spec during capture.
 
 For a new local construction, generation is not admission. When the connected
 desktop runtime advertises workflow-v2 execution, the owning job loop must use
@@ -27,14 +27,17 @@ self-check cannot bypass that sequence.
 
 | file | what it is | written by |
 |---|---|---|
-| `dp-blueprint.approved.md` | byte-identical copy of the approved `dp-blueprint.md` | `cp` / `shutil.copyfile` |
-| `dp-blueprint.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | `dp_diagnostics.py lock write` |
-| `dp-blueprint.lock.json` | its canonical hash, snapshot hash, and compiler version | `dp_diagnostics.py lock write` |
-| `build-record.json` | what happened: stages, attempts, concessions, blockers | `dp_diagnostics.py record …` |
+| `dp-blueprint.approved.md` | byte-identical copy of the approved `dp-blueprint.md` | supervisor capture |
+| `dp-blueprint.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | supervisor capture from inline `typed_proposal` |
+| `dp-blueprint.lock.json` | its canonical hash, snapshot hash, and compiler version | supervisor capture |
+| `build-record.json` | what happened: stages, attempts, concessions, blockers | supervisor capture |
 | `README.md` | the reopen recipe, and a credentials block when one is needed | this skill, from the template below |
 | `contracts/<name>.md` | the contract for a model still to be built | this skill, from the template below |
 
-Nothing under `closure/` is hand-authored plan text. Self-containment used to be
+Nothing under `closure/` is hand-authored plan text or reserved metadata. The
+shellless agent must not run the materialization commands below before capture;
+the supervisor owns the reserved snapshots, hashes, lock, record, and trusted
+checker. Self-containment used to be
 a prose discipline — *copy the rulings in, never point at the spec* — enforced by
 nothing at all. It is now a **hash-checkable snapshot**: the self-check compares
 the copy's bytes against `lock.snapshot_sha256`, so a plan edited inside the
@@ -45,7 +48,7 @@ stage emits is **nxd-run-job-loop**'s `reference/build-record.md`. Read it there
 This file is only the emission procedure; restating a schema in two places is how
 two schemas start to differ.
 
-## 1. Byte-copy the approved spec
+## 1. Byte-copy the approved spec (supervisor capture implementation)
 
 ```bash
 cp "…/nxd-jobs/<workflow>/dp-blueprint.md" "<closure>/dp-blueprint.approved.md"
@@ -66,7 +69,7 @@ Three preconditions, all hard:
   precisely what keeps the gate's bright line intact — "nothing under `closure/`"
   before approval still holds, because there is nothing under `closure/` yet.
 
-## 2. Write the lock
+## 2. Write the lock (supervisor capture implementation)
 
 ```bash
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir> \
@@ -88,7 +91,7 @@ separate axis — it lives in `build-record.json` `evidence.source_state` and ne
 merges with this one, because a correctly built product whose input is a day old
 is not a broken product.
 
-## 3. Open the build record
+## 3. Open the build record (supervisor capture implementation)
 
 ```bash
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init \

@@ -714,6 +714,30 @@ def test_repeated_source_answer_selection_is_suppressed() -> None:
     assert "operator_answered_from_ground_truth" not in result.ledger_rows[1]["claim"]
 
 
+def test_repeated_declared_decision_answer_is_transmitted_again() -> None:
+    script = make_script(
+        turns=(
+            "Improve weekly visibility.",
+            "Please continue.",
+            "Please continue again.",
+            "Please wrap up.",
+        )
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Which source is authoritative?"),
+            TurnResult(agent_message="Should we use option A or option B?"),
+            TurnResult(agent_message="Should we use option A or option B?"),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts[2:4] == ("Yes.", "Yes.")
+    assert [turn.operator_repeat_suppressed for turn in result.turns[2:4]] == [False, False]
+
+
 def test_fresh_session_clears_served_source_answers_before_a_later_transmission() -> None:
     event = event_from_mapping(
         {

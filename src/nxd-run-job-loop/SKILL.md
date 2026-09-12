@@ -164,17 +164,12 @@ python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-blueprint.md --j
 python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <path>/dp-blueprint.md --json
 ```
 
-The deterministic parser only checks headings, free prose, source spans, and
-lifecycle metadata. Then have the AI produce a typed proposal with
-`explicit`, `inferred`, or `platform_fixed` provenance, source spans, compiled
-contracts, the fixed delivery profile, and a complete natural-language
-echo-back. Deterministic proposal validation must turn underspecification into
-an Open Question; it must never accept confidence as correctness.
+The deterministic parser only checks headings, free prose, source spans, and lifecycle metadata. Then have the AI write the complete caller-authored typed proposal JSON beside it as `dp-blueprint.proposal.json`, omitting `source_hash` and carrying `explicit`, `inferred`, or `platform_fixed` provenance, source spans, compiled contracts, the fixed delivery profile, and a complete natural-language echo-back. Validate and bind its proposal content against the parsed blueprint before prepare. The supervisor owns the canonical `source_hash`: it inserts or replaces that value from the retained Markdown before validation and binding. Do not guess or hand-compute it when shell access is unavailable. Deterministic proposal validation must turn underspecification into an Open Question; it must never accept confidence as correctness.
 
 **Approval is approval of the echo-back.** A validator pass is not approval,
 and `status: approved` is the user's decision. Approval binds the Markdown and
-typed proposal hashes plus Terms, contract-inventory, compiler, and delivery
-metadata. Lock each approved Decision by id and hash; extraction may not
+supervisor-derived typed proposal hashes plus Terms, contract-inventory, compiler,
+and delivery metadata. Lock each approved Decision by id and hash; extraction may not
 overwrite it. A conflicting edit becomes an explicit change proposal and
 revokes approval. The approved Markdown and typed proposal are byte-snapshotted
 into the closure, never referenced through `../dp-blueprint.md`.
@@ -202,10 +197,7 @@ repeat inference within this boundary.
 
 ### Step 3 — Enroll, approve, then generate the runnable closure
 
-Before the approval turn, the main thread must establish the connected
-supervisor's v2 execution capability and enroll this exact prose blueprint:
-call `get_workflow_capabilities`, require structured `execution_enabled: true`,
-then call `prepare_workflow` against the host-visible `dp-blueprint.md` with `kind: "generated-data-product"`. Keep the blueprint at `status: proposed` during prepare. Never set `status: approved` or invent approval hashes; the supervisor binds approval only after the returned consent action succeeds. Use
+Before the approval turn, the main thread must establish the connected supervisor's v2 execution capability and enroll this exact prose/proposal pair: write and validate `dp-blueprint.proposal.json` beside the host-visible `dp-blueprint.md`, parse that complete object, call `get_workflow_capabilities`, require structured `execution_enabled: true`, then call `prepare_workflow` with `kind: "generated-data-product"`, the blueprint path, and the inline `typed_proposal` object. Omit `source_hash` from the caller-authored file and inline object; the supervisor inserts or replaces its canonical value. Proposal validation and binding happen before consent; the prepare request must carry the complete typed proposal object, not a path or placeholder. Keep the blueprint at `status: proposed` during prepare. Never set `status: approved` or invent approval hashes; approval remains only through the returned `session_decision` consent action. Use
 only its returned revision, invalidation epoch, requirement identities and
 `next_actions`. Do not present an approval prompt or ask for approval until
 `prepare_workflow` succeeds. Then present the prepared echo-back and relay the user's exact
@@ -214,27 +206,37 @@ failed prepare/consent action stops construction; it does not route to a legacy
 tool or a local substitute.
 
 The successful returned `session_decision` action is the generation gate.
-Invoke **nxd-generate-data-product** through its **Step 7** self-check only
-after that gate succeeds, to assemble
-the complete Python-authored closure — `spec.py`, `models.py`, `infra-profile.yaml`,
+Invoke **nxd-generate-data-product** after that gate succeeds to assemble
+the executable closure inputs — `spec.py`, `models.py`, `infra-profile.yaml`,
 `transform/main.py`, `requirements.txt`, the approved-plan snapshot,
 `build-record.json`, `README.md`, and the connector artifact — from the approved
 `dp-blueprint.md`, inferred model, and connector config. Pass every source, its
-label and provenance, plus the resolved absolute `job_helper_dir`.
-The generator compiles the approved plan; it does not re-derive it, author supervisor
-YAML, or open a new policy turn. Follow its connector references and `reference/dlt.md` for the exact closure shape.
-Generation runs the local self-check and lock verification before supervisor
-capture; neither is execution authority. Generation starts only after the
-supervisor records the approval. Steps 2–3
-may be split between a built-in profile subagent and a separate generate subagent,
-but policy read-back, review relay, credential injection and host-path
-verification remain on the main thread. A new result-changing gap returns
+label and provenance, plus the resolved absolute `job_helper_dir`. The generator
+compiles the approved plan; it does not re-derive it, author supervisor YAML, or open a new policy turn. Follow its connector references and `reference/dlt.md` for the exact closure shape.
+The typed v3 contract inventory is executable handoff, not optional metadata: every
+Input expectation and Output promise must become exactly one closure verifier and
+one matching `custom(...)` wiring at its declared attachment and phase. Preserve
+the contract id, attachment, model, phase, guarantee, rule, and fields exactly;
+ordinary `.promise(model)` never satisfies a custom contract.
+Copy exact parser coordinates for every source span (a `###` subsection `.text`
+range excludes its heading but may include separator blank lines); use
+`validation_issue.expected_source_span` on a mismatch and never trim or widen
+the range or alter the typed value.
+Under the shellless v2 contract, the agent must not run lock write, hand-author reserved v3 metadata, or copy a checker into the closure before capture. The supervisor owns capture-time materialization and verification of those reserved surfaces. If helper tools exist, agent-side self-check and lock checks are optional evidence only and are never execution authority. Generation starts only after the supervisor records the approval. Steps 2–3
+stay on the main thread for an activated workflow-v2 session. Do not delegate
+semantic inference, closure generation, or any workflow MCP action to a child;
+the only conversation child is the single retained-capture review in Step 3b.
+Policy read-back, review relay, credential injection, and host-path verification
+also remain on the main thread. The main thread must verify the host-visible
+definition path before capture. A new result-changing gap returns
 `gap_found` and triggers a fresh read-back and generation-only bounce. See [reference/scheduling.md](reference/scheduling.md). Resolve `job_helper_dir` from the exact staged skill pack for this run. Its skill metadata version must match the loaded `nxd-run-job-loop` version and it must contain the expected helper scripts. A missing or mismatched helper path stops the workflow; never fall back to another cached plugin release.
 
 ### Step 3b — Capture, review, and adjudicate
 
-After self-check finishes mutating its local record, follow only the supervisor's returned `capture` action with its
-host-visible authoring root. Never modify the captured tree afterward. Run **exactly one mandatory review per capture generation**:
+After generation authors the executable closure inputs, and after any optional
+agent-side evidence, follow only the supervisor's returned `capture` action with
+its host-visible authoring root. Never modify the captured tree afterward. Run
+**exactly one mandatory review per capture generation**:
 immediately dispatch one built-in `Agent` or `Task` conversation subagent (a `general-purpose` subagent is fine).
 Its prompt tells it to load and follow `nxd-review-closure`, supplies the supervisor-returned retained
 `review_input` paths and sanitized request, and uses the canonical dispatch marker defined in
@@ -243,7 +245,7 @@ Its prompt tells it to load and follow `nxd-review-closure`, supplies the superv
 MCP/supervisor. The reviewer is a conversation subagent, never supervisor-launched. The main thread waits for the
 child claims, keeps the rich ledger and adjudication in `…/nxd-jobs/<workflow>/review-record.json` outside `closure/`, relays only the bounded projection through the returned `report_requirement` action, and when `NXD_EVAL_ATTESTATIONS_PATH` is present writes the required root-array construction sidecar there before `start_run` (exact path and schema: [reference/workflow-v2.md](reference/workflow-v2.md)).
 There is no skip under the activated v2 contract and no duplicate review against a mutable closure. A rejected,
-indeterminate, or scope-refused report remains unsatisfied. A fix requires reset, local correction, self-check,
+indeterminate, or scope-refused report remains unsatisfied. A fix requires reset, local correction, optional evidence if available,
 recapture, and one fresh review for the new generation. See
 [reference/workflow-v2.md](reference/workflow-v2.md).
 
@@ -264,9 +266,7 @@ persists, so a later session reattaches to an admission-linked publication by
 **workflow id** (`list_data_products` → `resume_data_product`); if no valid
 publication remains, start a fresh v2 construction rather than a legacy rebuild
 ([reference/context-and-resume.md](reference/context-and-resume.md)). The durable
-record a later session reads is **generated, never hand-written**: the approved
-spec byte-copied in as `dp-blueprint.approved.md`, `dp-blueprint.lock.json` carrying its
-hash and the compiler version, and `build-record.json` carrying what happened —
+record a later session reads is **generated, never hand-written**: supervisor capture materializes and verifies `dp-blueprint.approved.md`, `dp-blueprint.proposal.approved.json`, `dp-blueprint.lock.json`, and the trusted `self_check.py`; it also records `build-record.json` carrying what happened —
 stages, attempts, concessions, blockers, the read-back. Conversation review
 rounds live in the adjacent `review-record.json` so reporting cannot mutate the
 captured closure. Self-containment is
@@ -283,8 +283,8 @@ A green self-check means the closure is structurally sound and the transform ran
 ### Step 4 — Build and serve through MCP
 
 Steps 3–3b already completed capability gating, preparation, consent, capture,
-and the single retained-input review. After Step 7 self-check, continue the same
-v2 workflow from its latest response: follow the returned `start_requirement`
+and the single retained-input review. Continue the same v2 workflow from its
+latest response: follow the returned `start_requirement`
 action for supervisor validation, then the returned `start_run` action for
 admission and publication. Use the exact envelopes in
 [reference/workflow-v2.md](reference/workflow-v2.md); never reuse stale action
@@ -471,14 +471,13 @@ current owners.
   unavailable artifact does not authorize legacy reconstruction; current v2
   enrollment supports only a fresh workflow build
   ([reference/context-and-resume.md](reference/context-and-resume.md)).
-- **Hand off only host-visible paths.** Pass the returned `capture` action an
-  absolute generated-definition path explicitly exposed by the file-writing
-  surface; never infer one from an attachment ID or isolated Linux path, and
-  verify a generation subagent's returned path host-side before capture.
-- **A subagent never owns the policy turn and never holds a credential.** When
-  generation is offloaded (Step 3), the policy read-back stays a main-thread user
-  turn — a subagent returns `gap_found` on a new gap instead of opening one; a
-  live credential is placeholdered in the subagent and injected host-side before capture and validation, never in its prompt, return, or narration ([reference/scheduling.md](reference/scheduling.md)).
+- **Keep workflow-v2 authoring on the main thread.** Pass the returned `capture`
+  action an absolute generated-definition path explicitly exposed by the
+  file-writing surface; never infer one from an attachment ID or isolated Linux
+  path. Semantic inference, generation, host-path verification, credential
+  injection, and every workflow MCP action stay in the owning thread. The only
+  conversation child is the mandatory retained-capture review, which receives no
+  credential ([reference/scheduling.md](reference/scheduling.md)).
 - **Query is by measure/dimension name, and a standing ruling materializes — a
   filter never enforces one.** Ground the NL→selection translation in
   `describe_models`; `filters[]`, `order_by[]` and `limit` are for **per-question

@@ -45,15 +45,16 @@ runtime or for inspecting an already-authored closure outside an enrolled v2
 construction. They are read-only checks: they publish nothing, open no run, and
 take no supervisor ownership lock.
 
-This compatibility preflight and the generator's closure-root `self_check.py` are
+This compatibility preflight and the supervisor's trusted capture checks are
 complementary gates, not two names for the same check. The preflight is the
 host-owned admission decision for the exact definition and workflow: it runs
 structure, runtime, contract, and semantic checks in the supervisor's
-environment before a legacy compatibility build. The generator-owned [Step 7 self-check](../../nxd-generate-data-product/SKILL.md#step-7--self-check-before-handing-off-mandatory)
-is copied into the generated closure and records its local structural,
-scratch-transform, reach, policy, and read-back evidence in `build-record.json`.
-A green self-check does not admit or publish a product, and a passing preflight
-does not create the closure's self-check record or lock evidence.
+environment before a legacy compatibility build. For workflow-v2, capture
+materializes the approved blueprint, typed proposal snapshot, lock, build
+record, and trusted `self_check.py`, then verifies them. Agent-side Step 7 checks
+may provide optional evidence when tools exist; they do not create or replace
+the supervisor-owned record. A green local check does not admit or publish a
+product.
 
 The result reports:
 

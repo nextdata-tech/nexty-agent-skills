@@ -1,21 +1,9 @@
-"""Offloading generation to a subagent must be TAUGHT with its safety boundaries.
+"""Pin the workflow-v2 ownership and review-child boundaries.
 
-The job loop's heaviest context cost is source profiling + code generation
-(Steps 2-3). Moving that into an isolated subagent keeps it out of the main
-conversation — but only safely if the skill text pins four properties that a
-naive "just fan out generation" would violate:
-
-1. The policy read-back stays a MAIN-THREAD user turn; a subagent never opens
-   one. On a new gap the subagent RETURNS `gap_found` instead of guessing.
-2. A live credential never enters a subagent (prompt / return / narration); the
-   subagent writes a placeholder and the real value is injected host-side.
-3. The subagent-returned closure path is VERIFIED host-side before build — a
-   subagent writes to its own surface and cannot guarantee host-visibility.
-4. Offloading is PERMITTED, not required (a trivial 1-source loop authors inline),
-   and build/serve stays single-flight on the main thread.
-
-A live end-to-end run needs a real supervisor (`ci_skip`), so this plain-pytest
-gate pins the guidance itself — the only thing that makes the agent behave.
+The owning conversation must keep inference, generation, capture, and every
+workflow MCP action together. The only allowed construction child is the
+mandatory retained-capture reviewer. A live end-to-end run needs a real
+supervisor (`ci_skip`), so this plain-pytest gate pins the guidance itself.
 """
 
 from __future__ import annotations
@@ -51,32 +39,27 @@ def _strip_markdown(text: str) -> str:
     return re.sub(r"[*`_]", "", text).lower()
 
 
-def test_scheduling_teaches_profile_generate_split():
-    text = _strip_markdown(SCHEDULING.read_text())
-    # The dispatch is split at the inference/authoring seam, not one Steps-2-3
-    # unit — otherwise a bounce re-runs the expensive profiling.
-    assert "profile subagent" in text, "scheduling.md must name a profile subagent"
-    assert "generate subagent" in text, "scheduling.md must name a generate subagent"
-    # And the reason for the split is stated: re-dispatch generation only.
-    assert "never re-profiles" in text or "re-dispatches generation only" in text or (
-        "re-dispatches" in text and "generation only" in text
-    ), "scheduling.md must say a generation bounce re-dispatches generation only, not re-profile"
+def test_scheduling_keeps_inference_and_generation_on_the_main_thread():
+    text = re.sub(r"\s+", " ", _strip_markdown(SCHEDULING.read_text()))
+    assert "main-thread workflow-v2 scheduling" in text
+    assert "main thread: inference" in text
+    assert "main thread: generation" in text
+    assert "do not fan out steps 2–3" in text or "do not delegate or fan out steps 2–3" in text
+    assert "no child may perform a workflow mcp action" in text
 
 
-def test_scheduling_keeps_build_single_flight_and_offload_permitted():
+def test_scheduling_keeps_build_single_flight_and_review_as_the_only_child():
     text = _strip_markdown(SCHEDULING.read_text())
     # Build/serve stays single-flight main-thread — never fanned out.
     assert "single-flight" in text
     assert "never fan out a build" in text
-    # Offloading generation is permitted, not mandatory.
-    assert "permitted, not required" in text, (
-        "offloading generation must be permitted, not required"
-    )
+    assert "only permitted conversation child" in text
+    assert "single retained-capture review" in text
 
 
 def test_scheduling_pins_gate_on_main_thread_and_bounce():
     raw = SCHEDULING.read_text()
-    text = _strip_markdown(raw)
+    text = re.sub(r"\s+", " ", _strip_markdown(raw))
     # The policy read-back is a MAIN-THREAD user turn; the subagent never opens
     # one and bounces on a new gap.
     assert "user turn is the orchestrator" in text or (
@@ -87,14 +70,12 @@ def test_scheduling_pins_gate_on_main_thread_and_bounce():
 
 
 def test_scheduling_pins_credential_boundary():
-    text = _strip_markdown(SCHEDULING.read_text())
-    # A live credential never enters a subagent; placeholder + host-side inject.
-    assert "credential" in text and "placeholder" in text, (
-        "scheduling.md must state the placeholder credential boundary"
-    )
-    assert "never receive" in text or "never enters a subagent" in text or (
-        "host-side" in text and "before the build" in text
-    ), "scheduling.md must forbid a live credential in a subagent and inject host-side"
+    text = re.sub(r"\s+", " ", _strip_markdown(SCHEDULING.read_text()))
+    # A live credential never enters a conversation child; the main thread
+    # performs the host-side injection after authoring.
+    assert "credential" in text and "never enters a conversation child" in text
+    assert "main thread writes the real credential" in text
+    assert "host-side" in text and "before capture" in text
 
 
 def test_scheduling_pins_host_side_path_verification():
@@ -108,30 +89,27 @@ def test_scheduling_pins_host_side_path_verification():
     )
 
 
-def test_scheduling_pins_reference_scoping():
-    text = _strip_markdown(SCHEDULING.read_text())
-    # The subagent loads only the connector references it needs — the point of
-    # offloading is that heavy references never touch the main thread.
-    assert "loads only the matching" in text or (
-        "connector type" in text and "loads only" in text
-    ), "scheduling.md must scope each subagent's loaded references to the work at hand"
+def test_scheduling_pins_main_thread_workflow_ownership():
+    text = re.sub(r"\s+", " ", _strip_markdown(SCHEDULING.read_text()))
+    assert "owning main conversation" in text
+    assert "no child may perform a workflow mcp action" in text
+    assert "do not delegate steps 2–3" in text or "do not delegate or fan out steps 2–3" in text
 
 
-def test_skill_wires_subagent_and_verify_before_capture():
-    text = _strip_markdown(SKILL.read_text())
-    # SKILL.md Step 3 offers the generation subagent and verifies its path before
+def test_skill_wires_main_thread_generation_and_verify_before_capture():
+    text = re.sub(r"\s+", " ", _strip_markdown(SKILL.read_text()))
+    # SKILL.md keeps generation in the owning thread and verifies its path before
     # the supervisor captures the immutable review/validation input.
-    # Collapse whitespace so a line-wrapped "generation\nsubagent" still matches.
-    collapsed = re.sub(r"\s+", " ", text)
-    assert "generation subagent" in collapsed, (
-        "SKILL.md must offer the generation subagent in Step 3"
+    collapsed = text
+    assert "stay on the main thread for an activated workflow-v2 session" in collapsed, (
+        "SKILL.md must keep workflow-v2 generation on the main thread"
     )
     assert "verify" in text and "host" in text and "before capture" in text, (
         "SKILL.md must verify the returned path host-side before v2 capture"
     )
-    # The safety invariant is present: subagent never owns the policy turn / holds a credential.
-    assert "never owns the policy turn and never holds a credential" in text, (
-        "SKILL.md must carry the subagent policy-turn / credential invariant"
+    # The review child remains the only child and receives no credential.
+    assert "only conversation child is the mandatory retained-capture review" in collapsed, (
+        "SKILL.md must keep the review child boundary"
     )
 
 
@@ -147,15 +125,17 @@ def test_job_loop_declares_reviewer_tools_and_orders_review_before_admission():
     assert "reportrequirement" in checkpoint
 
 
-def test_offloaded_generation_returns_for_host_self_check_before_capture_and_review():
+def test_main_thread_generation_returns_to_supervisor_capture_before_review():
     raw = SCHEDULING.read_text()
-    generation = raw.index("3. **Generate subagent")
-    awaiting = raw.index('status: "awaiting_host_finalize"', generation)
-    self_check = raw.index("runs generator Step 7", generation)
-    capture = raw.index("only then captures", generation)
+    generation = raw.index("3. **Main thread: generation")
+    optional_checks = raw.index("Step 7 checks are optional", generation)
+    capture = raw.index("verification and capture", generation)
     review = raw.index("## Main-thread review checkpoint")
-    assert generation < awaiting < self_check < capture < review
-    assert "does **not** dispatch" in raw[generation:review]
+    assert generation < optional_checks < capture < review
+    assert "supervisor materializes trusted metadata and checks during capture" in re.sub(
+        r"\s+", " ", raw[generation:review]
+    )
+    assert "do not delegate" in raw[generation:review]
 
 
 def test_build_record_review_round_example_is_strict_json_and_validated():
@@ -227,44 +207,27 @@ def test_bounce_covers_both_categories_not_just_absence():
         assert "ambiguous or conditional" in text, (
             f"{doc.name} must keep the category-(b) ambiguity bounce, not just absence"
         )
-        assert "absent from the enumeration" in text or "element the enumeration never covered" in text, (
+        collapsed = re.sub(r"\s+", " ", text)
+        assert "absent from the enumeration" in collapsed or "element the enumeration never covered" in collapsed, (
             f"{doc.name} must keep the category-(a) absence bounce"
         )
 
 
-def test_structured_return_contract_names_its_fields():
-    # H2: the return must be structured and carry the fields the main thread
-    # needs to narrate + build WITHOUT re-reading the closure. Pin each field by
-    # name (raw text — _strip_markdown eats the underscores).
+def test_main_thread_verification_names_the_required_closure_files():
     raw = SCHEDULING.read_text()
-    for field in ("closure_path", "promised_models", "policy_fingerprint",
-                  "self_check", "credential_slots", "gap_found"):
-        assert field in raw, f"scheduling.md return contract must name `{field}`"
-    # The surface-tag distinction (a subagent cannot guarantee host-visibility).
-    assert "host_absolute" in raw and "workspace_relative" in raw, (
-        "the return must carry a surface tag distinguishing host vs workspace paths"
-    )
+    collapsed = collapse(raw)
+    assert "The main thread verifies the handoff path before capture" in raw
+    assert collapse(FILE_LIST) in collapsed
+    assert "handoff failure" in raw
 
 
 def test_credential_slots_are_key_names_only():
-    # H3: credential_slots must be key NAMES, never a value.
     text = _strip_markdown(SCHEDULING.read_text())
-    assert "key names only" in text, (
-        "scheduling.md must state credential_slots are key names only, never a value"
-    )
-    # A live credential is never given to a subagent; injected host-side instead.
-    assert "never enters a subagent" in text or "never receive" in text, (
-        "scheduling.md must forbid a live credential entering a subagent"
-    )
-    assert "host-side" in text and ("after the hand-back" in text or "before the build" in text), (
-        "scheduling.md must inject the real credential host-side after hand-back"
-    )
-    # And the generator's own doc must restate it inline (reference-scoping steers
-    # the subagent away from scheduling.md).
+    assert "credential" in text and "never enters a conversation child" in text
+    assert "main thread writes the real credential" in text
+    assert "host-side" in text and "before capture" in text
     gen = _strip_markdown(GENERATE_DP.read_text())
-    assert "hold no credential" in gen and "placeholder" in gen, (
-        "nxd-generate-data-product's subagent block must restate the placeholder credential rule inline"
-    )
+    assert "hold no credential" in gen and "placeholder" in gen
 
 
 def test_verify_list_enumerates_the_required_files():
@@ -279,27 +242,19 @@ def test_verify_list_enumerates_the_required_files():
     )
 
 
-def test_skill_offloads_two_subagents_not_one_unit():
-    # Finding 4: SKILL.md must describe the profile/generate SPLIT, not one
-    # combined Steps-2-3 subagent (which would re-profile on every bounce).
+def test_skill_keeps_steps_two_and_three_on_the_main_thread():
     collapsed = re.sub(r"\s+", " ", _strip_markdown(SKILL.read_text()))
-    assert "profile subagent and a separate generate subagent" in collapsed or (
-        "profile subagent" in collapsed and "generate subagent" in collapsed
-        and "never one combined unit" in collapsed
-    ), "SKILL.md must offload Steps 2-3 as two subagents split at the seam, not one unit"
+    assert "stay on the main thread for an activated workflow-v2 session" in collapsed
+    assert "do not delegate semantic inference, closure generation, or any workflow mcp action" in collapsed
+    assert "only conversation child is the single retained-capture review" in collapsed
 
 
-def test_file_profile_dispatch_is_builtin_read_only_and_non_mutating():
-    # The Desktop experiment proved that explicit skill prose can dispatch a
-    # built-in agent. Keep file profiling on that narrow surface rather than
-    # smuggling a custom plugin agent or a writer into the source-profile step.
+def test_file_profile_stays_in_the_main_thread():
     text = _strip_markdown(SCHEDULING.read_text())
     collapsed = re.sub(r"\s+", " ", text)
-    assert "built-in read-only" in text
-    assert "file source (csv/json/jsonl/parquet)" in text
-    assert "source path" in text and "inference instructions" in text
-    assert "writes no closure" in collapsed and "does not transform the source" in collapsed
-    assert "asks the user nothing" in text
+    assert "main thread: inference" in text
+    assert "do not write the runnable closure" in collapsed
+    assert "do not delegate profiling" in collapsed
 
 
 def test_multi_question_dispatch_never_transfers_runtime_credentials():

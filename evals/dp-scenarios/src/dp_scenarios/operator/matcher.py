@@ -6,6 +6,9 @@ scenario's planted judgement cannot be shadowed by incidental infrastructure
 vocabulary. The exemption is per question: an obstacle term is exempt only
 when that same message matches every term of a declared decision; declaring a
 compound decision does not globally remove its words from unrelated questions.
+The same declared decision answer is intentionally selected again when a
+later review turn asks for that authorization again; repeat suppression is an
+engine delivery policy for source, ground-truth, and status answers only.
 """
 
 from __future__ import annotations
@@ -402,7 +405,10 @@ class MatcherBank:
     def _classify(self, message: str) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         decision = self.answer_sheet.answer_for_decision(message)
-        if decision is not None:
+        # A decision answer is an operator response, not a keyword-triggered
+        # status line.  Require an actual solicitation so a report such as
+        # "no review finding was reported" cannot consume a later decision.
+        if decision is not None and solicits_operator(message):
             return MatchResult(
                 Category.DECISION_REQUEST,
                 f"decision.answer.{decision.decision_id}",

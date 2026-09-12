@@ -21,9 +21,10 @@
 
 ## What this file is
 
-`dp-blueprint.md` is the plan. `build-record.json` is **what happened while the
-plan was compiled and self-checked before capture**. Runtime stages append later
-through the supervisor-controlled job loop. Conversation review is deliberately
+`dp-blueprint.md` is the plan. `build-record.json` is **what the supervisor
+materialized and verified during capture and later runtime stages**. Optional
+agent-side checks may contribute evidence, but are not required before capture.
+Conversation review is deliberately
 separate because it begins only after the closure has been captured and made
 immutable.
 

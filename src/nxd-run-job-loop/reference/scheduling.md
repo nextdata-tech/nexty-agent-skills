@@ -7,7 +7,7 @@
 - [Bounded-loop caps](#bounded-loop-caps)
 - [One data product in flight](#one-data-product-in-flight)
 - [Subagent fan-out](#subagent-fan-out)
-- [Offloading generation to a subagent](#offloading-generation-to-a-subagent)
+- [Main-thread workflow-v2 scheduling](#main-thread-workflow-v2-scheduling)
 - [Main-thread review checkpoint](#main-thread-review-checkpoint)
 
 This is the **task-scheduling** half of the job loop: which path a request
@@ -33,7 +33,7 @@ smallest path that can give an honest answer:
 | **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | **Reattach, don't rebuild.** Use `list_data_products` for discovery only, then `resume_data_product`, render the release with `nxd-render-static-artifact`, then describe/query. A fresh endpoint and bearer arrive in seconds with no regeneration. Rebuild is the fallback only when the published artifact is gone. |
 | **Endpoint + bearer + workflow** | Render the pinned static artifact first, then describe/query. The artifact is release-scoped and does not consume the bearer. |
 | **Share / hand off a product** — the user wants to give it to another person or machine | Call `mcp__nxd-desktop__export_data_product` with the same `definition` path used to build it. Read-only and on demand — not part of the build/query loop. It zips the closure, strips credentials fail-closed, and emits a guided `IMPORT.md` for the recipient to rebuild. Full playbook: [handoff-export.md](handoff-export.md). |
-| **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them — **except a live credential, which never enters an offloaded generate subagent (see the credential boundary under "Offloading generation to a subagent"); it is injected host-side**. Never modify a supplied original. |
+| **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them — **a live credential stays in the owning main thread and is injected host-side**. Never modify a supplied original. |
 | **No product and no source** | Ask one concise question naming the missing thing: the local data file/folder or an existing product to query. Do not manufacture a dataset, create a throwaway database, or probe Cowork uploads/workspaces with Bash in hope of finding one. |
 | **Trivial, non-durable calculation** — for example, arithmetic over values pasted in the request, with no request to analyze or reuse data | Answer directly. Do not start a supervisor or build a product. |
 | **Local analysis requested but runtime unavailable** | Stop before fallback work. State that the local analysis runtime is unavailable, identify the missing MCP connection or host-local runtime prerequisite, and point to `nxd-desktop-setup.sh` / the Desktop connection repair. Do not substitute SQLite, raw SQL, pandas, or shell aggregation. |
@@ -129,10 +129,10 @@ not add, select, or rely on a custom/plugin agent definition. Fan out only when
 the work is genuinely independent:
 
 - **Step 2, multi-source profiling** — when a data product draws on several
-  sources, each source's profile (`schema.json`) is independent. Profiling them
-  concurrently keeps each source's sample reads out of the main thread. Carry
-  every source's label forward on the model it produces, exactly as the
-  single-thread path would.
+  sources, each source's profile (`schema.json`) is independent. In an
+  activated workflow-v2 session, the main thread profiles each source and
+  carries every source's label forward; do not delegate profiling because the
+  main thread owns the workflow-v2 sequence and its policy handoff.
 - **Step 5, multi-question answering** — dispatch a built-in read-only query
   subagent for each independent question *only when* the governed
   `describe_models` and `run_semantic_query` MCP tools are available directly
@@ -151,151 +151,68 @@ Two hard boundaries on fan-out:
   subagent that cannot answer through the governed query returns that, it does
   not reach for a fallback.
 
-## Offloading generation to a subagent
+## Main-thread workflow-v2 scheduling
 
 Profiling (Step 2) and code generation (Step 3) are the loop's heaviest context
 consumers: source sample reads, model inference, and authoring `spec.py` /
-`models.py` / `transform/main.py` plus the generated record files
-(`dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`,
-`README.md`). None of that touches the
-supervisor — it is pure file authoring against a durable closure directory — so
-it MAY run in an isolated subagent whose intermediate reads never enter the main
-conversation. The main thread keeps the things it alone can do: the **policy
-read-back user turn**, the **single-flight build**, and the host-side path
-verification and credential injection that precede that build.
+`models.py` / `transform/main.py` plus the typed proposal and authored README.
+The reserved v3 record files are supervisor capture outputs. None of the
+authoring touches the supervisor — it is pure file authoring against a durable
+closure directory — but an activated workflow-v2 session keeps
+both steps in the owning main conversation. This preserves the thread that owns
+the policy, workflow revision, capture, and review relay. No child may perform a
+workflow MCP action or return a generation handoff for the main thread to trust.
 
-This is **permitted, not required.** A single-source, single-question loop with
-no supplied procedure should author in the main thread — the dispatch, the
-structured hand-back, and the host-side path re-verification cost more than the
-context a trivial closure would have spent. Reach for it when generation would
-otherwise dominate the main context: multiple sources, a procedure-bearing
-closure, or a long codegen.
+Do not delegate or fan out Steps 2–3, even when the source is large or there are multiple
+sources. The only permitted conversation child in the workflow-v2 construction
+path is the single retained-capture review described below.
 
-**Split the dispatch at the inference/authoring seam — do not fan out Steps 2–3
-as one unit.** A gap discovered after generation would otherwise re-run the
-expensive profiling on every bounce:
-
-1. **Profile subagent (Step 2, read-only).** Dispatch a built-in read-only
-   subagent for a **file** source (CSV/JSON/JSONL/Parquet), giving it only the
-   source path and the `nxd-build-semantic-data-product` inference instructions. It
-   profiles each source into `schema.json`, derives the semantic model into the
-   data-only `semantic-model-plan.json` handoff beside `dp-blueprint.md`, and —
-   crucially — surfaces any way the source data makes the user's supplied
-   procedure ambiguous or under-determined. It returns the inferred model, the
-   per-source schemas (each with its label), and a `gap_found` field naming any
-   policy gap the profile exposed. It writes no closure and specifically never
-   writes `models.py`, `spec.py`, `transform/`, or `requirements.txt`; it does
-   not invoke the generator, does not transform the source, and asks the user nothing. A
-   live database/API source is profiled on
-   the main thread or from the user's description only (table/endpoint list,
-   sample shape) — never fan out a profile that would need a live credential to
-   connect (same credential boundary as generation, below).
+1. **Main thread: inference.** Invoke `nxd-build-semantic-data-product` in its
+   inference mode, profile each source into `schema.json`, derive the semantic
+   model into `semantic-model-plan.json`, and surface any result-changing gap.
+   Do not write the runnable closure or invoke the generator during this step.
 2. **Main thread: the policy read-back.** With the profile in hand, run the
    Step 1a read-back for any result-changing gap — including one the profile
    surfaced — and wait for the user's approval. This user turn is the
    orchestrator's; it never happens inside a subagent.
-3. **Generate subagent (Step 3).** Receives the already-computed model and the
-   **verbatim approved policy** — never re-profiles, never re-opens the gate as a
-   user turn. It authors through generator **Step 6a**, then stops and returns an
-   explicit `status: "awaiting_host_finalize"` handoff. It does **not** dispatch
-   the reviewer. The main thread injects any credential, runs generator Step 7
-   self-check, verifies the host path, and only then captures. If it finds a result-changing gap
-   the approved policy does not resolve — either a policy element the enumeration never covered,
-   or a profiling finding that makes an approved element ambiguous or conditional
-   — it stops and returns `gap_found` instead; the main thread does
-   a fresh read-back and re-dispatches **generation only**, against the **same**
-   workflow id and closure directory. It also receives `job_helper_dir`, the
-   main thread's resolved absolute desktop helper directory; it does not
-   rediscover that path.
+3. **Main thread: generation.** Invoke `nxd-generate-data-product` with the
+   already-computed model and **verbatim approved policy**. It authors the
+   executable closure and returns control to the same main thread. If helper
+   tools exist, Step 7 checks are optional evidence only; the supervisor
+   materializes trusted metadata and checks during capture. The main thread then
+   performs host-path verification and capture. If it finds a result-changing
+   gap the approved policy does not resolve — either a policy element absent
+   from the enumeration or a profiling finding that makes an approved element
+   ambiguous or conditional — stop and perform a fresh read-back and
+   generation-only bounce in the same workflow; do not delegate the bounce. The
+   generation handoff returns `gap_found` when that bounce is required.
 
-Scope each subagent's context to the work at hand: the dispatch names the
-connector type(s) in play so the generate subagent loads only the matching
-`nxd-generate-data-product` connector references (a CSV closure needs none of
-`database-source.md` / `api-source.md`), and the profile subagent loads only
-`nxd-build-semantic-data-product`'s inference path. The heavy references then load in
-the subagent that needs them and never in the main thread — the whole reason to
-offload the step rather than run it inline.
+**The main thread verifies the handoff path before capture.** Never pass an
+unverified path to the supervisor: confirm the authored executable files and
+connector inputs resolve on the supervisor's **host** surface. Supervisor
+capture verifies the complete closure file set: `spec.py`, `models.py`,
+`infra-profile.yaml`, `transform/main.py`, `requirements.txt`,
+`dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`,
+`README.md`, the connector companion artifact where the type has one — and, for
+a credentialed source, `SENSITIVE` and `.gitignore`. Do not require
+agent-authored copies of `dp-blueprint.approved.md`,
+`dp-blueprint.proposal.approved.json`, `dp-blueprint.lock.json`,
+`build-record.json`, or `self_check.py`; supervisor capture materializes and
+verifies those reserved surfaces. A path that does not resolve host-side is a
+handoff failure, not a capture input.
 
-Because the generate subagent hands back a record instead of leaving its work in
-the main thread's context, that record must carry everything the main thread
-needs to report a truthful status and reach Step 3b **without re-reading the
-closure**. Translate those facts using [user-facing-language.md](user-facing-language.md).
-Its return is **structured, not prose**, and must begin with this handoff state:
-
-```json
-{
-  "status": "awaiting_host_finalize",
-  "closure_path": "/host-visible/nxd-jobs/<workflow>/closure",
-  "surface": "host_absolute",
-  "promised_models": ["base_model"],
-  "policy_fingerprint": {},
-  "credential_slots": [],
-  "gap_found": null,
-  "self_check": {"status": "not_started", "owner": "main_thread"}
-}
-```
-
-`self_check.status` is deliberately pending; the subagent must not claim a
-result it has not run. The main thread changes it before capture, after any
-host-side credential injection. Review starts only after capture.
-The remaining fields carry the following:
-
-- `closure_path` **plus a surface tag** (`host_absolute` or `workspace_relative`)
-  — a subagent writes to its own session surface and cannot itself guarantee the
-  host sees that path;
-- `promised_models` (base + derived names) so the main thread can state grain
-  without opening `spec.py`;
-- `policy_fingerprint` — the bands / anchors / precedence **as encoded** — so the
-  main thread can confirm what shipped matches what the user approved;
-- `credential_slots` for a db/API source — the credential **key names only**,
-  never a value (see the credential boundary below);
-- `gap_found` (or null) as a first-class field distinct from success.
-
-Before Step 3b capture, the main thread appends the self-check fields — Phase-C / Phase-D
-pass/fail, transform dry-run result, and the `distributions` / `unverified` /
-`absent` arrays verbatim. Relay them unchanged; `UNIFORM` still means a value
-supplied by the plan, not one produced by the data.
-
-**The main thread verifies before capture.** Never pass a subagent-returned
-path to the supervisor unverified: confirm the path resolves on the
-supervisor's **host** surface and that
-`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
-`build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
-for a credentialed source, `SENSITIVE` and `.gitignore`
-— all exist under it. The connector companion artifact is a file source's `data/`
-export, or a database source's mapping file; an **API source has none** — its
-endpoint map is `endpoint_<model>` attributes in the profile, so there is nothing
-extra to look for. `infra-profile.yaml` matters most: it is the
-file host-side credential injection writes into, so a closure missing it passes a
-naive check and then fails the build. The three generated record files matter
-next: `dp-blueprint.approved.md` is the byte copy of the approved plan the closure was
-compiled from, `dp-blueprint.lock.json` carries its hash, and `build-record.json`
-carries what happened — without them nothing downstream can tell whether the
-closure still matches the plan. A path that does not resolve host-side, or is
-missing a required file, is a handoff failure, not a capture input.
-
-**Credential boundary — a live credential never enters a subagent.** For a
-database or REST API source the closure carries a real credential in
-`infra-profile.yaml`. Handing that value to a subagent in its prompt would copy a
-secret into a second transcript — a new leak the main-thread flow does not have.
-So the generate subagent writes a **placeholder** for the credential and returns
-`credential_slots` (the key names); the real value is written into
-`infra-profile.yaml` **host-side after the hand-back and before self-check and capture**, where
-`SENSITIVE` / `.gitignore` / `chmod 0600` are asserted. A subagent must never
-receive, echo, or narrate a live credential. When post-hand-back injection is not
-available, keep credentialed generation on the main thread and fan out only
-file-source (CSV/JSON/JSONL/Parquet) generation — those carry `attributes: []`
-and have no secret to leak. A db/API dry-run therefore reports **not run** from
-the subagent — expected, not a defect, because it holds no credential. The live
-connectivity check runs host-side after injection **instead, and must run
-there** — a `not_run` after injection is a real gap, not the subagent's benign
-one.
+**Credential boundary — a live credential never enters a conversation child.**
+For a database or REST API source, the main thread writes the real credential
+into `infra-profile.yaml` only after authoring and before capture;
+`SENSITIVE`, `.gitignore`, and `chmod 0600` remain required. A review child
+receives only the sanitized request and retained paths, never a credential or
+credential-looking value. The live connectivity check runs on the host after
+injection and must not be replaced by a child-side dry run.
 
 ## Main-thread review checkpoint
 
-Step 3b belongs to the main thread for both inline and offloaded generation.
-Finish generator Step 7 before capture, then never mutate the captured closure.
+Step 3b belongs to the main thread after main-thread generation.
+Finish the generator handoff before capture, then never mutate the captured closure.
 The activated v2 contract requires exactly one built-in read-only `Agent` or
 `Task` review per capture generation over the supervisor-returned retained
 paths. The owning/main thread must dispatch that one conversation child (a
@@ -315,8 +232,8 @@ bounded `report_requirement` projection, remediation loop, and wire fields are
 canonical in [workflow-v2.md](workflow-v2.md) and
 [adversarial-review.md](../../nxd-generate-data-product/reference/adversarial-review.md).
 
-An accepted behavior-changing finding requires reset, local correction,
-self-check, recapture, and one fresh review for the new generation. Evidence
+An accepted behavior-changing finding requires reset, local correction, optional
+agent-side evidence when tools exist, recapture, and one fresh review for the new generation. Evidence
 from sibling captures or abandoned workflows never combines. Step 4 proceeds
 only when the supervisor reports the review requirement satisfied and returns
 the validation action; no local ledger or self-check asserts completion.

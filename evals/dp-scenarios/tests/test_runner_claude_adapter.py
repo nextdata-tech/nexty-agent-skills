@@ -153,9 +153,14 @@ def test_real_build_result_shape_keeps_identity_while_redacting_bearer_values() 
     assert "secret-value" not in json.dumps(turn_result_to_dict(result))
 
 
-def test_default_prompt_only_describes_the_attestation_channel_not_review_behavior() -> None:
+def test_default_prompt_describes_channels_and_review_dispatch_mechanics_not_scenario_conduct() -> None:
     prompt = adapter_module.DEFAULT_SYSTEM_PROMPT
     collapsed = " ".join(prompt.split())
+    canonical_marker = (
+        'NXD_REVIEW_DISPATCH {"closure_path":"closure",'
+        '"request_contract":"sanitized_original_request",'
+        '"return":"claims_only","review_round_index":0}'
+    )
 
     assert "agent-attestations.json at your workspace root" in collapsed
     assert "a non-authoritative attestation channel" in collapsed
@@ -170,10 +175,90 @@ def test_default_prompt_only_describes_the_attestation_channel_not_review_behavi
     assert "review_round_index is a non-negative JSON integer, never a boolean" in collapsed
     assert "#self_check" in collapsed
     assert "#review_rounds/<review_round_index>" in collapsed
+    assert "write the complete caller-authored typed proposal JSON" in collapsed
+    assert "omitting source_hash" in collapsed
+    assert "dp-blueprint.proposal.json" in collapsed
+    assert "include the same object inline as typed_proposal" in collapsed
+    assert "Only the returned session_decision consent action is approval" in collapsed
+    assert "Supervisor capture materializes and verifies" in collapsed
+    assert "dp-blueprint.proposal.approved.json" in collapsed
+    assert "do not hand-author hashes" in collapsed
+    assert "supervisor owns the canonical source_hash" in collapsed
     assert "Background execution is disabled" in collapsed
-    assert "NXD_REVIEW_DISPATCH" not in collapsed
-    assert "sanitized_original_request" not in collapsed
+    assert prompt.splitlines().count(canonical_marker) == 1
+    assert (
+        "Replace only closure_path and review_round_index: use a relative closure path "
+        "and the next zero-based index; keep the other constants unchanged."
+    ) in collapsed
+    assert "ask the operator for explicit approval" not in collapsed
+    assert "do not report numeric or status results" not in collapsed
+    assert "must not invoke Skill(nxd-review-closure)" not in collapsed
+    assert "do not call Skill, Read, Glob, or another review tool" not in collapsed
     assert "[CREDENTIAL:" not in collapsed
+
+
+def test_default_prompt_documents_the_bounded_review_report_protocol() -> None:
+    prompt = adapter_module.DEFAULT_SYSTEM_PROMPT
+    collapsed = " ".join(prompt.split())
+
+    for phrase in (
+        "rich review ledger in the job-level review-record.json",
+        "action.parameters.report",
+        '"schema": "nxd-conversation-review-v1"',
+        '"verdict": "clear"',
+        '"findings": []',
+        '"rejection_code": null',
+        "clear has an empty findings list and no rejection code",
+        "findings has one or more projected findings and no rejection code",
+        'rejected has an empty findings list and uses rejection_code: "scope_refused"',
+        "indeterminate has no rejection code and may preserve bounded partial findings",
+        'exactly {"id", "severity", "description"}',
+        "HIGH or MEDIUM claims to blocking",
+        "LOW claims to advisory",
+        'report severity values must be the lowercase wire literals "blocking" or "advisory"',
+        "never send reviewer values HIGH, MEDIUM, or LOW",
+        "Never send claims, high_severity_count, or outcome directly",
+        "action.parameters",
+        "requirement_id, generation, subject_sha256, dependency_evidence_sha256, and session_ref as siblings of report",
+        "do not put those binding fields inside report",
+        "values returned by the supervisor",
+        "supervisor derives evidence identity from its current binding",
+        "caller-provided claims are not execution authority",
+    ):
+        assert phrase in collapsed
+
+    report_example = prompt.split(
+        "That value must be an object with exactly this\nschema and no other keys:\n",
+        1,
+    )[1].split("\nUse these exact combinations:", 1)[0]
+    assert json.loads(report_example) == {
+        "schema": "nxd-conversation-review-v1",
+        "verdict": "clear",
+        "findings": [],
+        "rejection_code": None,
+    }
+    assert "claims, high_severity_count, or outcome" in collapsed
+    assert "hidden gold" not in collapsed
+    assert "ask the operator for explicit approval" not in collapsed
+    assert "do not report numeric or status results" not in collapsed
+
+
+def test_default_prompt_returns_control_after_non_clear_review_reports() -> None:
+    prompt = adapter_module.DEFAULT_SYSTEM_PROMPT
+    collapsed = " ".join(prompt.split())
+
+    assert (
+        "After a report_requirement result, inspect its report verdict before using the "
+        "returned next_actions. For findings, rejected, or indeterminate, relay the "
+        "bounded report to the operator and return control for user adjudication."
+    ) in collapsed
+    assert (
+        "In that same turn, do not reset, edit the closure, recapture, re-review, "
+        "validate, admit, or start_run."
+    ) in collapsed
+    assert "Only a clear report permits following the returned next_actions toward validation and admission" in collapsed
+    assert "not permission to auto-fix" in collapsed
+    assert "never turn claims into permission or suppress the findings" in collapsed
 
 
 def test_unpaired_mcp_tool_use_is_an_environment_wedge_not_a_build_failure() -> None:
@@ -833,6 +918,17 @@ def test_session_tools_are_denied_on_spawned_argv_for_both_bash_branches(
         assert set(SHELL_TOOLS) <= denied
 
 
+def test_spawned_claude_receives_run_scoped_review_guard_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv = _spawned_claude_argv(tmp_path, monkeypatch, allow_bash=False)
+    settings_paths = _flag_values(argv, "--settings")
+    assert len(settings_paths) == 1
+    assert Path(settings_paths[0]).name == "settings.json"
+    assert "--include-hook-events" in argv
+    assert "--forward-subagent-text" in argv
+
+
 def test_granting_bash_denies_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A normal run must not acquire a deny rule that blocks its own shell."""
 
@@ -931,6 +1027,7 @@ def test_openai_key_is_stripped_from_the_spawned_agent_environment(
     # The strip is targeted, not a blanket environment reset.
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
     assert environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+    assert environment["NXD_EVAL_REVIEW_GUARD_STATE"].endswith("/state.json")
 
 
 def test_the_adapter_environment_is_unchanged_when_no_key_is_present(

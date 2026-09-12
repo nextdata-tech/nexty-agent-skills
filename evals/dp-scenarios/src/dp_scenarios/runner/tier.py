@@ -2186,8 +2186,9 @@ class TierRunner:
         observations = _load_json(artifact_root / "operator-observations.json")
         if not isinstance(observations, Mapping):
             raise TierError("operator observations were not persisted before grading")
+        agent_root = environment.workspace_dir
         attestation_read = _agent_attestations(
-            environment.base_dir / "agent",
+            agent_root,
             fallback_root=artifact_root,
         )
         attestations = attestation_read.values
@@ -2201,7 +2202,7 @@ class TierRunner:
             published_closure=_published_closure(
                 observations,
                 facts,
-                agent_root=environment.base_dir / "agent",
+                agent_root=agent_root,
                 desktop_server_name=environment.desktop_server_name,
             ),
             require_observed=True,
@@ -2218,6 +2219,7 @@ class TierRunner:
             "intake": gate_intake(
                 {"rows": read_ledger(environment.ledger_path), "observations": observations},
                 desktop_server_name=environment.desktop_server_name,
+                agent_root=agent_root,
             ),
             "capability": _capability_gate_result(
                 artifact_root, spec, capability, environment, scenario

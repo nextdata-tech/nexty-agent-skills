@@ -1,6 +1,6 @@
 ---
 name: nxd-review-closure
-description: ADVERSARIAL REVIEWER for an immutable data-product capture whose generator self-check has already finished. Reads the supervisor-retained capture, exact retained blueprint, and sanitized original request, then hunts for LOGICAL and SEMANTIC defects the structural self-check cannot see. Returns CLAIMS, never verdicts; the owning conversation adjudicates and reports them. Use when exactly one review is required for a capture generation after supervisor capture and before trusted validation. Not a structural checker and never receives a mutable authoring path.
+description: ADVERSARIAL REVIEWER for an immutable data-product capture whose supervisor-owned capture has completed. Reads the supervisor-retained capture, exact retained blueprint, and sanitized original request, then hunts for LOGICAL and SEMANTIC defects the structural checks cannot see. Returns CLAIMS, never verdicts; the owning conversation adjudicates and reports them. Use when exactly one review is required for a capture generation after supervisor capture and before trusted validation. Not a structural checker and never receives a mutable authoring path.
 allowed-tools:
   - Read
   - Glob
@@ -54,10 +54,11 @@ substitute the mutable authoring root. Reviewing a closure without knowing what
 it was meant to answer is the one failure mode this role exists to avoid: a
 closure can be internally immaculate and still answer the wrong question.
 
-The generator self-check and canonical lock verification completed before
-capture. Do not rerun them and do not write their results. This review happens
+Supervisor capture materialized and verified the reserved metadata and trusted
+`self_check.py` before this review. Do not rerun the trusted checker or write
+its results. Optional agent-side checks are only evidence. This review happens
 exactly once for this capture generation; a behavior-changing correction
-requires the owning conversation to reset, correct locally, self-check,
+requires the owning conversation to reset, correct locally, optionally check,
 recapture, and dispatch a fresh reviewer for the new generation.
 
 ## What to hunt for
@@ -144,12 +145,12 @@ bytes still match the lock's `snapshot_sha256`, that `README.md` is present, and
 that `build-record.json` exists with `compiled_from` equal to the lock's
 `spec_hash`.
 
-Those are mechanical, settled before capture by generator-run `self_check.py`
-and canonical lock verification. This read-only review **does not execute either
-helper** and receives only the supervisor-retained capture path, retained
-blueprint path, and sanitized request; inspect their recorded evidence in the
-capture. If evidence is absent, say it is unverified rather than inventing a
-failure or requesting a helper path.
+Those are mechanical, settled during supervisor capture by the trusted
+`self_check.py` and canonical lock verification. This read-only review **does
+not execute either helper** and receives only the supervisor-retained capture
+path, retained blueprint path, and sanitized request; inspect their recorded
+evidence in the capture. If evidence is absent, say it is unverified rather
+than inventing a failure or requesting a helper path.
 
 If you notice a structural problem, mention it in one line under
 `structural_note` and move on. Do not spend the round on it.
