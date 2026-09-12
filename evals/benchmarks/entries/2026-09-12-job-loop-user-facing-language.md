@@ -23,4 +23,4 @@ not claim a measured PASS or FAIL for the skill change.
   the new user-facing language reference and the durable-handoff boundary.
 
 The consent scenario remains in the public suite as regression coverage, but it
-is intentionally not listed as a measured scenario for this `NO_EVAL` entry.
+ is intentionally not listed as a measured scenario for this `NO_EVAL` entry.

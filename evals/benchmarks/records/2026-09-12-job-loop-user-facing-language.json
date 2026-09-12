@@ -1,0 +1,153 @@
+{
+  "id": "2026-09-12-job-loop-user-facing-language",
+  "date": "2026-09-12",
+  "label": "nxd-run-job-loop: user-facing language boundary",
+  "notes": "One clean-main before run and one final-pack after run used the same neutral local job-loop scenario and fixture; both passed all 5 checks. This is non-regression evidence, not a claim that the small fixture uniquely separates the versions. The final run also used fewer tool calls and output tokens in this sample; efficiency is not a release claim.",
+  "plugin_version": "0.49.3",
+  "report_tags": {
+    "before": "before",
+    "after": "after"
+  },
+  "reports": {
+    "before": {
+      "elapsed_s": 49.7,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "consent-failure-plain-language": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "consent-failure-plain-language",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 184289,
+            "output_tokens": 1637,
+            "reasoning_output_tokens": 657,
+            "cached_input_tokens": 119552,
+            "tool_calls": 4,
+            "shell_calls": 4,
+            "sandbox_failures": 0,
+            "shell_successes": 3,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "plain-impact-and-state",
+                "pass": true,
+                "why": "It clearly says the approval failed, the build never started, and nothing was published."
+              },
+              {
+                "id": "preserves-state",
+                "pass": true,
+                "why": "It states that the saved plan and current state are unchanged and that no plan changes are needed."
+              },
+              {
+                "id": "one-next-action",
+                "pass": true,
+                "why": "It gives exactly one next action: retry the approval once using the same saved plan."
+              },
+              {
+                "id": "sanitized-technical-detail",
+                "pass": true,
+                "why": "It explains that the information arrived in a format the next step could not use without exposing internal diagnostics or identifiers."
+              },
+              {
+                "id": "friendly-user-facing-language",
+                "pass": true,
+                "why": "The response is concise, plain-language, and focused on current user impact and state."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All success checks pass."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after": {
+      "elapsed_s": 31.0,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "consent-failure-plain-language": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "consent-failure-plain-language",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 88698,
+            "output_tokens": 670,
+            "reasoning_output_tokens": 206,
+            "cached_input_tokens": 62720,
+            "tool_calls": 2,
+            "shell_calls": 2,
+            "sandbox_failures": 0,
+            "shell_successes": 2,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "plain-impact-and-state",
+                "pass": true,
+                "why": "It plainly states that approval failed, the build never started, and nothing was published."
+              },
+              {
+                "id": "preserves-state",
+                "pass": true,
+                "why": "It says the saved plan is unchanged and that the current state remains as before the attempt."
+              },
+              {
+                "id": "one-next-action",
+                "pass": true,
+                "why": "It gives exactly one relevant next action: retry the approval once."
+              },
+              {
+                "id": "sanitized-technical-detail",
+                "pass": true,
+                "why": "It briefly explains that approval information was in a format the next step could not understand without exposing internal details."
+              },
+              {
+                "id": "friendly-user-facing-language",
+                "pass": true,
+                "why": "The answer is concise, friendly, and focused on the user's saved state and practical impact."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The response satisfies every required plain-language status and next-step check."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}
