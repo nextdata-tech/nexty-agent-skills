@@ -120,6 +120,35 @@ def _objects(value: Any) -> Iterable[dict[str, Any]]:
             yield from _objects(decoded)
 
 
+def _object_contexts(
+    value: Any,
+    inherited_workflow: str | None = None,
+    inherited_run_id: Any = None,
+) -> Iterable[tuple[dict[str, Any], str | None, Any]]:
+    """Yield objects with workflow/run identity inherited through nesting."""
+    if isinstance(value, dict):
+        workflow = value.get("workflow")
+        workflow = workflow if isinstance(workflow, str) else inherited_workflow
+        run_id = value.get("run_id")
+        if not (
+            isinstance(run_id, (str, int, float)) and not isinstance(run_id, bool)
+        ):
+            run_id = inherited_run_id
+        yield value, workflow, run_id
+        for child in value.values():
+            yield from _object_contexts(child, workflow, run_id)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _object_contexts(child, inherited_workflow, inherited_run_id)
+    elif isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return
+        if isinstance(decoded, (dict, list)):
+            yield from _object_contexts(decoded, inherited_workflow, inherited_run_id)
+
+
 def _contains_key(objects: Iterable[dict[str, Any]], names: set[str]) -> bool:
     return any(
         key in names and value is not None
@@ -209,13 +238,14 @@ def _has_available_publication(
 ) -> bool:
     materialized = list(objects)
     return any(
-        (workflow is None or obj.get("workflow") == workflow)
+        (workflow is None or object_workflow == workflow)
         and (
             str(obj.get("artifact_status", "")).casefold() == "available"
             or str(obj.get("status", "")).casefold() == "published"
             or obj.get("published") is True
         )
-        for obj in materialized
+        for source in materialized
+        for obj, object_workflow, _run_id in _object_contexts(source)
     )
 
 
@@ -242,39 +272,35 @@ def _same_identity(left: Any, right: Any) -> bool:
 
 
 def _inspect_object_matches_primary(
-    obj: dict[str, Any],
     call: dict[str, Any],
     primary_workflow: str,
     primary_run_id: Any,
+    object_workflow: str | None,
+    object_run_id: Any,
 ) -> bool:
-    workflows = [
-        value for value in _values([obj], {"workflow"})
-        if isinstance(value, str)
-    ]
-    run_ids = [
-        value for value in _values([obj], {"run_id"})
-        if isinstance(value, (str, int, float)) and not isinstance(value, bool)
-    ]
     call_workflow = _call_workflow(call)
     call_run_id = _call_run_id(call)
-    if workflows and primary_workflow not in workflows:
+    if object_workflow is not None and object_workflow != primary_workflow:
         return False
     if primary_run_id is not None:
-        if run_ids and not any(
-            _same_identity(run_id, primary_run_id) for run_id in run_ids
+        if object_run_id is not None and not _same_identity(
+            object_run_id, primary_run_id
         ):
             return False
         if call_run_id is not None and not _same_identity(call_run_id, primary_run_id):
             return False
         return (
-            primary_workflow in workflows
-            or any(_same_identity(run_id, primary_run_id) for run_id in run_ids)
+            object_workflow == primary_workflow
+            or (
+                object_run_id is not None
+                and _same_identity(object_run_id, primary_run_id)
+            )
             or call_workflow == primary_workflow
         )
     return (
-        primary_workflow in workflows
+        object_workflow == primary_workflow
         or call_workflow == primary_workflow
-        or (not workflows and call_run_id is None and bool(run_ids))
+        or (object_workflow is None and call_run_id is None and object_run_id is not None)
     )
 
 
@@ -438,49 +464,110 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     ]
 
     authoritative_inspect_records: list[dict[str, Any]] = []
+    inspect_entries: list[
+        tuple[
+            dict[str, Any],
+            list[dict[str, Any]],
+            list[tuple[dict[str, Any], str | None, Any]],
+            list[str],
+            list[Any],
+        ]
+    ] = []
     primary_inspect_objects: list[dict[str, Any]] = []
     primary_run_id: Any = next(
         (
             value
             for record in late_build
-            for value in _values(
-                _response_objects(record), {"run_id"}
+            for _object, _workflow, value in _object_contexts(
+                _message_value(record, "result", {})
             )
-            if isinstance(value, (str, int, float)) and not isinstance(value, bool)
+            if value is not None
         ),
         None,
     )
     for call in authoritative_inspect_calls:
         records = _response_records(trace, call, before_index=retry_boundary)
         authoritative_inspect_records.extend(records)
-        response_objects = [
-            obj for record in records for obj in _response_objects(record)
+        response_contexts = [
+            context
+            for record in records
+            for context in _object_contexts(_message_value(record, "result", {}))
         ]
-        if primary_run_id is None:
-            response_workflows = [
-                value for value in _values(response_objects, {"workflow"})
-                if isinstance(value, str)
-            ]
-            response_run_ids = [
-                value for value in _values(response_objects, {"run_id"})
-                if isinstance(value, (str, int, float)) and not isinstance(value, bool)
-            ]
-            if _call_workflow(call) == primary_workflow or primary_workflow in response_workflows:
-                call_run_id = _call_run_id(call)
-                primary_run_id = (
-                    call_run_id
-                    if call_run_id is not None
-                    else (response_run_ids[0] if response_run_ids else None)
-                )
-            elif not response_workflows and _call_run_id(call) is None and not primary_inspect_objects:
-                primary_run_id = response_run_ids[0] if response_run_ids else None
-        primary_inspect_objects.extend(
-            obj
-            for obj in response_objects
-            if _inspect_object_matches_primary(
-                obj, call, primary_workflow, primary_run_id
-            )
+        response_workflows = [
+            workflow
+            for _obj, workflow, _run_id in response_contexts
+            if workflow is not None
+        ]
+        response_run_ids = [
+            run_id
+            for _obj, _workflow, run_id in response_contexts
+            if run_id is not None
+        ]
+        inspect_entries.append(
+            (call, records, response_contexts, response_workflows, response_run_ids)
         )
+
+    if primary_run_id is None:
+        # A workflow-qualified response is the strongest response-side fallback
+        # when the timed-out build's late reply did not carry a run id.
+        for call, _call_records, response_contexts, _response_workflows, _response_run_ids in inspect_entries:
+            call_run_id = _call_run_id(call)
+            workflow_run_id = next(
+                (
+                    run_id
+                    for _obj, workflow, run_id in response_contexts
+                    if workflow == primary_workflow and run_id is not None
+                ),
+                None,
+            )
+            if workflow_run_id is not None or (
+                _call_workflow(call) == primary_workflow and call_run_id is not None
+            ):
+                primary_run_id = (
+                    call_run_id if call_run_id is not None else workflow_run_id
+                )
+                break
+    if primary_run_id is None:
+        # Prefer an unscoped inspection as the durable run discovery step. This
+        # prevents an earlier explicit inspection of another run from becoming
+        # the primary identity merely because it happened to be first.
+        for call, _call_records, response_contexts, _response_workflows, _response_run_ids in inspect_entries:
+            if _call_run_id(call) is not None:
+                continue
+            primary_run_id = next(
+                (
+                    run_id
+                    for _obj, workflow, run_id in response_contexts
+                    if run_id is not None
+                    and (workflow is None or workflow == primary_workflow)
+                ),
+                None,
+            )
+            if primary_run_id is not None:
+                break
+    if primary_run_id is None:
+        # If the agent obtained the durable id before its first inspection, the
+        # request-side id is still authoritative; use it only after the safer
+        # late-response and unscoped-discovery candidates were exhausted.
+        primary_run_id = next(
+            (
+                _call_run_id(call)
+                for call, _call_records, _response_contexts, _workflows, _run_ids in inspect_entries
+                if _call_run_id(call) is not None
+            ),
+            None,
+        )
+
+    for call, _call_records, response_contexts, _workflows, _run_ids in inspect_entries:
+        for obj, object_workflow, object_run_id in response_contexts:
+            if _inspect_object_matches_primary(
+                call,
+                primary_workflow,
+                primary_run_id,
+                object_workflow,
+                object_run_id,
+            ):
+                primary_inspect_objects.append(obj)
 
     if not authoritative_inspect_records or not primary_inspect_objects:
         failures.append("lifecycle/authoritative-inspect-response-missing")

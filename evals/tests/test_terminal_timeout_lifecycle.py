@@ -703,6 +703,22 @@ def _trace_with_post_retry_publication_response(tmp_path: Path) -> Path:
     return mutated
 
 
+def _trace_with_explicit_primary_inspection(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    records[2]["message"]["params"]["arguments"] = {"run_id": "run-1"}
+    mutated = tmp_path / "explicit-primary-inspection-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
 def _trace_with_mixed_workflow_listing(tmp_path: Path) -> Path:
     source = _trace(tmp_path, include_resume=False)
     records = [
@@ -723,6 +739,69 @@ def _trace_with_mixed_workflow_listing(tmp_path: Path) -> Path:
         ]
     })
     mutated = tmp_path / "mixed-workflow-listing-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_nested_inspect_diagnostics(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    response = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 2
+    )
+    payload = json.loads(response["message"]["result"]["content"][0]["text"])
+    diagnostic_fields = {
+        field: payload.pop(field)
+        for field in (
+            "configured_budget_ms",
+            "elapsed_ms",
+            "active_stage",
+            "resource",
+            "retry_count",
+            "page_count",
+            "request_count",
+        )
+    }
+    payload["diagnostics"] = diagnostic_fields
+    response["message"]["result"]["content"][0]["text"] = json.dumps(payload)
+    mutated = tmp_path / "nested-inspect-diagnostics-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_nested_publication_metadata(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    listing = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 6
+    )
+    listing["message"]["result"]["content"][0]["text"] = json.dumps({
+        "products": [{
+            "workflow": "terminal-timeout-lifecycle",
+            "artifact": {"artifact_status": "available", "publish_seq": 1},
+        }]
+    })
+    mutated = tmp_path / "nested-publication-metadata-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
         encoding="utf-8",
@@ -852,6 +931,14 @@ def test_checker_does_not_bind_an_unrelated_inspection_as_primary(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_checker_accepts_an_explicit_primary_inspection(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_explicit_primary_inspection(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_checker_ignores_listing_response_arriving_after_retry(
     tmp_path: Path,
 ) -> None:
@@ -868,6 +955,22 @@ def test_checker_keeps_listing_publication_bound_to_the_primary_workflow(
     result = _run_checker(
         tmp_path,
         trace=_trace_with_mixed_workflow_listing(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_checker_accepts_nested_publication_metadata(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_nested_publication_metadata(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_checker_accepts_nested_inspect_diagnostics(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_nested_inspect_diagnostics(tmp_path),
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
