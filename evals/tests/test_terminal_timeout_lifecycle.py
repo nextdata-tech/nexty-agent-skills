@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import stat
@@ -12,14 +13,13 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIO = ROOT / "evals/public/terminal-timeout-lifecycle"
 CHECKER = SCENARIO / "fixtures/check_terminal_timeout_lifecycle.py"
 PROFILE_BUILDER = SCENARIO / "fixtures/prepare_stdio_profile.py"
 if str(ROOT / "evals") not in sys.path:
     sys.path.insert(0, str(ROOT / "evals"))
-import run as eval_run  # noqa: E402
+eval_run = importlib.import_module("run")
 
 
 def _record(direction: str, message: dict, **metadata: object) -> dict:
@@ -42,7 +42,7 @@ def _trace(
 ) -> Path:
     build_request = _record(
         "request",
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "build_data_product", "arguments": {}}},
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "build_data_product", "arguments": {"workflow": "terminal-timeout-lifecycle"}}},
     )
     timeout = _record(
         "response",
@@ -82,7 +82,7 @@ def _trace(
     )
     retry_request = _record(
         "request",
-        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "build_data_product", "arguments": {"budget_ms": 6000}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "build_data_product", "arguments": {"workflow": "terminal-timeout-lifecycle", "budget_ms": 6000}}},
     )
     retry_response = _record(
         "response",
@@ -305,21 +305,27 @@ def _run_checker(
     *,
     include_late: bool = True,
     trace: Path | None = None,
+    observation_records: list[object] | None = None,
+    observation_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     trace = trace or _trace(tmp_path, include_late=include_late)
     observations = tmp_path / "observations.jsonl"
-    observations.write_text(
-        "\n".join(
-            json.dumps({
+    if observation_records is None:
+        observation_records = [
+            {
                 "path": f"/v1/events?page={page}&per_page=10",
                 "status": 200,
                 "authorized": True,
                 "page": page,
                 "rows": rows,
                 "total": 23,
-            })
+            }
             for page, rows in ((1, 10), (2, 10), (3, 3))
-        ) + "\n",
+        ]
+    observations.write_text(
+        observation_text
+        if observation_text is not None
+        else "\n".join(json.dumps(record) for record in observation_records) + "\n",
         encoding="utf-8",
     )
     return subprocess.run(
@@ -455,6 +461,14 @@ def test_checker_rejects_nonzero_duplicate_count_alias(tmp_path: Path) -> None:
     assert "retry/duplicate-build-count-not-zero" in result.stdout
 
 
+def test_checker_accepts_float_zero_duplicate_count(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace(tmp_path, duplicate_value=0.0),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def _trace_with_message_mutation(
     tmp_path: Path, *, record_index: int, message: object
 ) -> Path:
@@ -549,13 +563,22 @@ def _trace_with_delayed_inspect_response(tmp_path: Path) -> Path:
     return mutated
 
 
-def _trace_with_second_pre_retry_published_inspection(tmp_path: Path) -> Path:
+def _trace_with_second_pre_retry_published_inspection(
+    tmp_path: Path, *, include_workflow: bool
+) -> Path:
     source = _trace(tmp_path, include_resume=False)
     records = [
         json.loads(line)
         for line in source.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    payload = {
+        "run_id": "run-1",
+        "status": "Published",
+        "state": "terminal",
+    }
+    if include_workflow:
+        payload["workflow"] = "terminal-timeout-lifecycle"
     records[6:6] = [
         _record(
             "request",
@@ -563,7 +586,7 @@ def _trace_with_second_pre_retry_published_inspection(tmp_path: Path) -> Path:
                 "jsonrpc": "2.0",
                 "id": 11,
                 "method": "tools/call",
-                "params": {"name": "inspect_run", "arguments": {}},
+                "params": {"name": "inspect_run", "arguments": {"run_id": "run-1"}},
             },
         ),
         _record(
@@ -577,9 +600,7 @@ def _trace_with_second_pre_retry_published_inspection(tmp_path: Path) -> Path:
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "run_id": "run-1",
-                                    "status": "Published",
-                                    "state": "terminal",
+                                    **payload,
                                 }
                             ),
                         }
@@ -590,6 +611,118 @@ def _trace_with_second_pre_retry_published_inspection(tmp_path: Path) -> Path:
         ),
     ]
     mutated = tmp_path / "second-pre-retry-published-inspection-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_unrelated_pre_retry_inspection(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    records[2:2] = [
+        _record(
+            "request",
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_run",
+                    "arguments": {"run_id": "run-unrelated"},
+                },
+            },
+        ),
+        _record(
+            "response",
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({
+                                "run_id": "run-unrelated",
+                                "status": "Published",
+                                "state": "terminal",
+                            }),
+                        }
+                    ]
+                },
+            },
+            forwarded=True,
+        ),
+    ]
+    mutated = tmp_path / "unrelated-pre-retry-inspection-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_post_retry_publication_response(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    delayed = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 3
+    )
+    delayed["message"]["result"]["content"][0]["text"] = json.dumps({
+        "products": [{
+            "workflow": "terminal-timeout-lifecycle",
+            "artifact_status": "available",
+            "publish_seq": 1,
+        }]
+    })
+    records.remove(delayed)
+    retry_response_index = next(
+        index
+        for index, record in enumerate(records)
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 4
+    )
+    records.insert(retry_response_index + 1, delayed)
+    mutated = tmp_path / "post-retry-publication-response-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_mixed_workflow_listing(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    listing = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 3
+    )
+    listing["message"]["result"]["content"][0]["text"] = json.dumps({
+        "products": [
+            {"workflow": "terminal-timeout-lifecycle", "status": "in_progress"},
+            {"workflow": "other-workflow", "artifact_status": "available"},
+        ]
+    })
+    mutated = tmp_path / "mixed-workflow-listing-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
         encoding="utf-8",
@@ -630,6 +763,25 @@ def test_checker_grades_positional_json_rpc_params_without_crashing(
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
     assert "trace/positional-json-rpc-params" in result.stdout
+
+
+def test_checker_accepts_null_json_rpc_params_without_crashing(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_message_mutation(
+            tmp_path,
+            record_index=2,
+            message={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": None,
+            },
+        ),
+    )
+    assert result.returncode != 0
+    assert "trace/positional-json-rpc-params" not in result.stdout
+    assert "Traceback" not in result.stderr
 
 
 def test_checker_binds_branch_to_pre_retry_inspection(tmp_path: Path) -> None:
@@ -676,15 +828,48 @@ def test_checker_rejects_inspect_response_arriving_after_retry(
     assert "lifecycle/authoritative-inspect-response-missing" in result.stdout
 
 
+@pytest.mark.parametrize("include_workflow", [False, True])
 def test_checker_uses_all_pre_retry_inspections_for_branch_selection(
+    tmp_path: Path, include_workflow: bool
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_second_pre_retry_published_inspection(
+            tmp_path, include_workflow=include_workflow
+        ),
+    )
+    assert result.returncode != 0
+    assert "resume/resume-request-missing" in result.stdout
+
+
+def test_checker_does_not_bind_an_unrelated_inspection_as_primary(
     tmp_path: Path,
 ) -> None:
     result = _run_checker(
         tmp_path,
-        trace=_trace_with_second_pre_retry_published_inspection(tmp_path),
+        trace=_trace_with_unrelated_pre_retry_inspection(tmp_path),
     )
-    assert result.returncode != 0
-    assert "resume/resume-request-missing" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_checker_ignores_listing_response_arriving_after_retry(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_post_retry_publication_response(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_checker_keeps_listing_publication_bound_to_the_primary_workflow(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_mixed_workflow_listing(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: Path) -> None:
@@ -723,6 +908,45 @@ def test_checker_fails_closed_on_an_empty_marker_file(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "redaction/marker-file-unusable" in result.stdout
+
+
+def test_checker_requires_sensitive_profile_mode_0600(tmp_path: Path) -> None:
+    profile = tmp_path / "infra-profile.yaml"
+    profile.write_text("token: <redacted>\n", encoding="utf-8")
+    profile.chmod(0o644)
+    result = _run_checker(tmp_path)
+    assert result.returncode != 0
+    assert "redaction/infra-profile-not-mode-0600" in result.stdout
+
+
+def test_checker_grades_malformed_observations_without_crashing(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        observation_records=[
+            {
+                "path": "/v1/events?page=1",
+                "status": 200,
+                "authorized": True,
+                "page": "not-a-number",
+                "rows": 10,
+            },
+            ["not an observation object"],
+        ],
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "observations/invalid-page" in result.stdout
+    assert "observations/non-object-record" in result.stdout
+
+
+def test_checker_grades_malformed_observation_json_without_crashing(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        observation_text='{"status": 200}\nnot-json\n',
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "observations/malformed-json" in result.stdout
 
 
 def test_checker_rejects_missing_late_response_evidence(tmp_path: Path) -> None:

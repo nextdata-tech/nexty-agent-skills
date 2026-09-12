@@ -6,8 +6,10 @@ import argparse
 import json
 import math
 import os
+import stat
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 TIMEOUT_CODE = -32098
 DUPLICATE_BUILD_COUNT_FIELDS = frozenset({
@@ -85,6 +87,19 @@ def _valid_jsonrpc_id(value: Any) -> bool:
     return value is None or type(value) in {str, int} or (
         type(value) is float and math.isfinite(value)
     )
+
+
+def _is_zero(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value == 0
+    ) or value == "0"
+
+
+def _valid_observation_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _objects(value: Any) -> Iterable[dict[str, Any]]:
@@ -193,15 +208,14 @@ def _has_available_publication(
     objects: Iterable[dict[str, Any]], workflow: str | None = None
 ) -> bool:
     materialized = list(objects)
-    if workflow is not None and not any(
-        obj.get("workflow") == workflow for obj in materialized
-    ):
-        return False
-    text = json.dumps(materialized, sort_keys=True).casefold()
-    return (
-        '"artifact_status": "available"' in text
-        or '"status": "published"' in text
-        or '"published": true' in text
+    return any(
+        (workflow is None or obj.get("workflow") == workflow)
+        and (
+            str(obj.get("artifact_status", "")).casefold() == "available"
+            or str(obj.get("status", "")).casefold() == "published"
+            or obj.get("published") is True
+        )
+        for obj in materialized
     )
 
 
@@ -212,18 +226,74 @@ def _call_workflow(call: dict[str, Any]) -> str:
     return workflow if isinstance(workflow, str) else ""
 
 
-def _call_objects(trace: list[Any], call: dict[str, Any]) -> list[dict[str, Any]]:
+def _call_run_id(call: dict[str, Any]) -> Any:
+    params = _params(call.get("message"))
+    arguments = params.get("arguments", {}) if params is not None else {}
+    run_id = arguments.get("run_id") if isinstance(arguments, dict) else None
+    return (
+        run_id
+        if isinstance(run_id, (str, int, float)) and not isinstance(run_id, bool)
+        else None
+    )
+
+
+def _same_identity(left: Any, right: Any) -> bool:
+    return _id_key(left) == _id_key(right)
+
+
+def _inspect_object_matches_primary(
+    obj: dict[str, Any],
+    call: dict[str, Any],
+    primary_workflow: str,
+    primary_run_id: Any,
+) -> bool:
+    workflows = [
+        value for value in _values([obj], {"workflow"})
+        if isinstance(value, str)
+    ]
+    run_ids = [
+        value for value in _values([obj], {"run_id"})
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool)
+    ]
+    call_workflow = _call_workflow(call)
+    call_run_id = _call_run_id(call)
+    if workflows and primary_workflow not in workflows:
+        return False
+    if primary_run_id is not None:
+        if run_ids and not any(
+            _same_identity(run_id, primary_run_id) for run_id in run_ids
+        ):
+            return False
+        if call_run_id is not None and not _same_identity(call_run_id, primary_run_id):
+            return False
+        return (
+            primary_workflow in workflows
+            or any(_same_identity(run_id, primary_run_id) for run_id in run_ids)
+            or call_workflow == primary_workflow
+        )
+    return (
+        primary_workflow in workflows
+        or call_workflow == primary_workflow
+        or (not workflows and call_run_id is None and bool(run_ids))
+    )
+
+
+def _call_objects(
+    trace: list[Any], call: dict[str, Any], *, before_index: int | None = None
+) -> list[dict[str, Any]]:
     return [
         obj
-        for record in _response_records(trace, call)
+        for record in _response_records(trace, call, before_index=before_index)
         for obj in _response_objects(record)
     ]
 
 
 def _call_has_published_primary(
-    trace: list[Any], call: dict[str, Any], workflow: str
+    trace: list[Any], call: dict[str, Any], workflow: str, *, before_index: int | None = None
 ) -> bool:
-    return _has_available_publication(_call_objects(trace, call), workflow)
+    return _has_available_publication(
+        _call_objects(trace, call, before_index=before_index), workflow
+    )
 
 
 def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list[str]:
@@ -240,7 +310,11 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         else:
             if "id" in message and not _valid_jsonrpc_id(message["id"]):
                 failures.append("trace/invalid-json-rpc-id")
-            if "params" in message and not isinstance(message["params"], dict):
+            if (
+                "params" in message
+                and message["params"] is not None
+                and not isinstance(message["params"], dict)
+            ):
                 failures.append("trace/positional-json-rpc-params")
     markers = sorted(SECRET_MARKERS)
     if marker_file is not None:
@@ -264,11 +338,17 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     for candidate in root.rglob("*") if root.is_dir() else ():
         if not candidate.is_file():
             continue
-        # The brief intentionally supplies the fixture credential, and the
-        # supported closure stores it only in the sensitive profile. Neither
-        # is public diagnostic output; every generated/source artifact remains
-        # subject to the scan.
-        if candidate.name in {"BRIEF.md", "infra-profile.yaml"}:
+        # BRIEF.md is source material and remains subject to the scan. The
+        # profile is runtime credential input, so only its mode is inspected;
+        # its contents must never become checker output.
+        if candidate.name == "infra-profile.yaml":
+            try:
+                mode = stat.S_IMODE(candidate.stat().st_mode)
+            except OSError:
+                failures.append("redaction/infra-profile-unreadable")
+                continue
+            if mode != 0o600:
+                failures.append("redaction/infra-profile-not-mode-0600")
             continue
         try:
             candidate_text = candidate.read_text(encoding="utf-8", errors="replace")
@@ -309,7 +389,10 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         record for record in trace
         if _record_value(record, "late")
         and _record_value(record, "forwarded") is False
-        and _message_value(record, "id") == _message_value(timeout_responses[0], "id")
+        and _same_identity(
+            _message_value(record, "id"),
+            _message_value(timeout_responses[0], "id"),
+        )
     ] if timeout_responses else []
     if not late_build:
         failures.append("timeout/late-server-response-not-traced-and-suppressed")
@@ -354,28 +437,55 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         and timeout_trace_position < call["index"] < retry_boundary
     ]
 
-    authoritative_inspect_records = [
-        record
-        for call in authoritative_inspect_calls
-        for record in _response_records(
-            trace, call, before_index=retry_boundary
+    authoritative_inspect_records: list[dict[str, Any]] = []
+    primary_inspect_objects: list[dict[str, Any]] = []
+    primary_run_id: Any = next(
+        (
+            value
+            for record in late_build
+            for value in _values(
+                _response_objects(record), {"run_id"}
+            )
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool)
+        ),
+        None,
+    )
+    for call in authoritative_inspect_calls:
+        records = _response_records(trace, call, before_index=retry_boundary)
+        authoritative_inspect_records.extend(records)
+        response_objects = [
+            obj for record in records for obj in _response_objects(record)
+        ]
+        if primary_run_id is None:
+            response_workflows = [
+                value for value in _values(response_objects, {"workflow"})
+                if isinstance(value, str)
+            ]
+            response_run_ids = [
+                value for value in _values(response_objects, {"run_id"})
+                if isinstance(value, (str, int, float)) and not isinstance(value, bool)
+            ]
+            if _call_workflow(call) == primary_workflow or primary_workflow in response_workflows:
+                call_run_id = _call_run_id(call)
+                primary_run_id = (
+                    call_run_id
+                    if call_run_id is not None
+                    else (response_run_ids[0] if response_run_ids else None)
+                )
+            elif not response_workflows and _call_run_id(call) is None and not primary_inspect_objects:
+                primary_run_id = response_run_ids[0] if response_run_ids else None
+        primary_inspect_objects.extend(
+            obj
+            for obj in response_objects
+            if _inspect_object_matches_primary(
+                obj, call, primary_workflow, primary_run_id
+            )
         )
-    ]
-    if not authoritative_inspect_records:
+
+    if not authoritative_inspect_records or not primary_inspect_objects:
         failures.append("lifecycle/authoritative-inspect-response-missing")
     else:
-        inspect_objects = [
-            obj
-            for record in authoritative_inspect_records
-            for obj in _response_objects(record)
-        ]
-        joined = "\n".join(
-            _message_text(record) for record in authoritative_inspect_records
-        )
-        primary_inspect_objects = [
-            obj for obj in inspect_objects
-            if obj.get("workflow") == primary_workflow
-        ] if primary_workflow else inspect_objects
+        joined = json.dumps(primary_inspect_objects, sort_keys=True)
         published_primary_from_inspect = any(
             str(obj.get("status", "")).casefold() == "published"
             for obj in primary_inspect_objects
@@ -392,11 +502,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
             not published_primary_from_inspect
             and (
                 not duplicate_counts
-                or not all(
-                    (isinstance(value, int) and not isinstance(value, bool) and value == 0)
-                    or value == "0"
-                    for value in duplicate_counts
-                )
+                or not all(_is_zero(value) for value in duplicate_counts)
             )
         ):
             failures.append("retry/duplicate-build-count-not-zero")
@@ -426,7 +532,9 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
                     failures.append(f"timeout/{label}-missing-from-inspect")
 
     published_primary = published_primary_from_inspect or any(
-        _call_has_published_primary(trace, call, primary_workflow)
+        _call_has_published_primary(
+            trace, call, primary_workflow, before_index=retry_boundary
+        )
         for call in calls
         if call["name"] == "list_data_products"
         and call["index"] > timeout_trace_position
@@ -515,7 +623,14 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
     if not published_primary and not pre_publish_lists:
         failures.append("publish/pre-publish-listing-missing")
     elif any(
-        _has_available_publication(_call_objects(trace, call), primary_workflow or None)
+        _has_available_publication(
+            _call_objects(
+                trace,
+                call,
+                before_index=successful_retry_index if not published_primary else None,
+            ),
+            primary_workflow or None,
+        )
         for call in pre_publish_lists
     ):
         failures.append("publish/partial-publication-visible-before-success")
@@ -574,27 +689,41 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
                 failures.append("resume/rebuild-used-instead-of-resume")
 
     observations_path = os.environ.get("NXD_STUB_OBSERVATIONS", "")
-    observations = (
-        _records(Path(observations_path))
-        if observations_path and Path(observations_path).is_file()
-        else []
-    )
+    observations: list[Any] = []
+    if observations_path and Path(observations_path).is_file():
+        try:
+            observations = _records(Path(observations_path))
+        except (OSError, json.JSONDecodeError):
+            failures.append("observations/malformed-json")
     page_rows: dict[int, set[int]] = {}
     for item in observations:
-        if (
-            item.get("status") == 200
-            and item.get("authorized") is True
-            and item.get("path", "").split("?", 1)[0] == "/v1/events"
-        ):
-            page = int(item.get("page", 0))
-            page_rows.setdefault(page, set()).add(int(item.get("rows", 0)))
+        if not isinstance(item, dict):
+            failures.append("observations/non-object-record")
+            continue
+        status = _record_value(item, "status")
+        authorized = _record_value(item, "authorized")
+        path = _record_value(item, "path")
+        if status == 200 and authorized is True and not isinstance(path, str):
+            failures.append("observations/invalid-path")
+            continue
+        if status == 200 and authorized is True and path.split("?", 1)[0] == "/v1/events":
+            page = _record_value(item, "page")
+            rows = _record_value(item, "rows")
+            if not _valid_observation_integer(page):
+                failures.append("observations/invalid-page")
+                continue
+            if not _valid_observation_integer(rows):
+                failures.append("observations/invalid-row-count")
+                continue
+            page_rows.setdefault(page, set()).add(rows)
     expected_page_rows = {1: {10}, 2: {10}, 3: {3}}
     if (
         set(page_rows) != set(expected_page_rows)
         or any(page_rows.get(page) != rows for page, rows in expected_page_rows.items())
     ):
         observed = ", ".join(
-            f"status={item.get('status')} page={item.get('page')} rows={item.get('rows')}"
+            f"status={_record_value(item, 'status')} "
+            f"page={_record_value(item, 'page')} rows={_record_value(item, 'rows')}"
             for item in observations
         ) or "none"
         failures.append(
@@ -602,6 +731,7 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
             f"(observed: {observed})"
         )
 
+    failures = list(dict.fromkeys(failures))
     if not failures:
         print("ALL CHECKS PASSED")
     else:
