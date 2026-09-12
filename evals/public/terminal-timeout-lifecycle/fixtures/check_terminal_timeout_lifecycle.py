@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Iterable
@@ -81,8 +82,8 @@ def _id_key(value: Any) -> str:
 
 def _valid_jsonrpc_id(value: Any) -> bool:
     """Accept only the scalar JSON-RPC id types (or an explicit null)."""
-    return value is None or (
-        type(value) in {str, int, float}
+    return value is None or type(value) in {str, int} or (
+        type(value) is float and math.isfinite(value)
     )
 
 
@@ -141,10 +142,17 @@ def _tool_calls(trace: list[Any]) -> list[dict[str, Any]]:
     return calls
 
 
-def _response_records(trace: list[Any], call: dict[str, Any]) -> list[dict[str, Any]]:
+def _response_records(
+    trace: list[Any],
+    call: dict[str, Any],
+    *,
+    before_index: int | None = None,
+) -> list[dict[str, Any]]:
     return [
         record
-        for record in trace
+        for index, record in enumerate(trace)
+        if index > call["index"]
+        and (before_index is None or index < before_index)
         if _record_value(record, "direction") == "response"
         and not _record_value(record, "synthetic")
         and _id_key(_message_value(record, "id")) == call["id"]
@@ -340,33 +348,20 @@ def check(root: Path, trace_path: Path, marker_file: Path | None = None) -> list
         if len(primary_build_calls) > 1
         else len(trace)
     )
-    authoritative_inspect_call = next(
-        (
-            call for call in calls
-            if call["name"] == "inspect_run"
-            and timeout_trace_position < call["index"] < retry_boundary
-        ),
-        None,
-    )
-
-    inspect_ids = {
-        _id_key(_message_value(record, "id"))
-        for record in trace
-        if _record_value(record, "direction") == "request"
-        and _tool_name(record) == "inspect_run"
-    }
-    inspect_responses = [
-        record for record in trace
-        if _record_value(record, "direction") == "response"
-        and not _record_value(record, "synthetic")
-        and _id_key(_message_value(record, "id")) in inspect_ids
+    authoritative_inspect_calls = [
+        call for call in calls
+        if call["name"] == "inspect_run"
+        and timeout_trace_position < call["index"] < retry_boundary
     ]
-    authoritative_inspect_records = (
-        _response_records(trace, authoritative_inspect_call)
-        if authoritative_inspect_call is not None
-        else []
-    )
-    if not inspect_responses or not authoritative_inspect_records:
+
+    authoritative_inspect_records = [
+        record
+        for call in authoritative_inspect_calls
+        for record in _response_records(
+            trace, call, before_index=retry_boundary
+        )
+    ]
+    if not authoritative_inspect_records:
         failures.append("lifecycle/authoritative-inspect-response-missing")
     else:
         inspect_objects = [

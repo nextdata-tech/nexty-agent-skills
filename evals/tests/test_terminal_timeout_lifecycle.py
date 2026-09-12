@@ -496,15 +496,100 @@ def _trace_with_post_retry_published(tmp_path: Path) -> Path:
     return mutated
 
 
-def _trace_with_unhashable_inspect_id(tmp_path: Path) -> Path:
+def _trace_with_invalid_inspect_id(
+    tmp_path: Path, *, value: object, filename: str
+) -> Path:
     source = _trace(tmp_path)
     records = [
         json.loads(line)
         for line in source.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    records[2]["message"]["id"] = []
-    mutated = tmp_path / "unhashable-inspect-id-trace.jsonl"
+    records[2]["message"]["id"] = value
+    mutated = tmp_path / filename
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_unhashable_inspect_id(tmp_path: Path) -> Path:
+    return _trace_with_invalid_inspect_id(
+        tmp_path, value=[], filename="unhashable-inspect-id-trace.jsonl"
+    )
+
+
+def _trace_with_delayed_inspect_response(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    delayed = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 2
+    )
+    records.remove(delayed)
+    retry_inspect_response_index = next(
+        index
+        for index, record in enumerate(records)
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 5
+    )
+    records.insert(retry_inspect_response_index + 1, delayed)
+    mutated = tmp_path / "delayed-inspect-response-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_second_pre_retry_published_inspection(tmp_path: Path) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    records[6:6] = [
+        _record(
+            "request",
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "inspect_run", "arguments": {}},
+            },
+        ),
+        _record(
+            "response",
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "run_id": "run-1",
+                                    "status": "Published",
+                                    "state": "terminal",
+                                }
+                            ),
+                        }
+                    ]
+                },
+            },
+            forwarded=True,
+        ),
+    ]
+    mutated = tmp_path / "second-pre-retry-published-inspection-trace.jsonl"
     mutated.write_text(
         "\n".join(json.dumps(record) for record in records) + "\n",
         encoding="utf-8",
@@ -562,6 +647,44 @@ def test_checker_rejects_unhashable_json_rpc_id_without_crashing(
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
     assert "trace/invalid-json-rpc-id" in result.stdout
+
+
+@pytest.mark.parametrize("invalid_id", [float("nan"), float("inf")])
+def test_checker_rejects_nonfinite_json_rpc_id(
+    tmp_path: Path, invalid_id: float
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_invalid_inspect_id(
+            tmp_path,
+            value=invalid_id,
+            filename="nonfinite-inspect-id-trace.jsonl",
+        ),
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "trace/invalid-json-rpc-id" in result.stdout
+
+
+def test_checker_rejects_inspect_response_arriving_after_retry(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path, trace=_trace_with_delayed_inspect_response(tmp_path)
+    )
+    assert result.returncode != 0
+    assert "lifecycle/authoritative-inspect-response-missing" in result.stdout
+
+
+def test_checker_uses_all_pre_retry_inspections_for_branch_selection(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_second_pre_retry_published_inspection(tmp_path),
+    )
+    assert result.returncode != 0
+    assert "resume/resume-request-missing" in result.stdout
 
 
 def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: Path) -> None:
