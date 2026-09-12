@@ -809,6 +809,84 @@ def _trace_with_nested_publication_metadata(tmp_path: Path) -> Path:
     return mutated
 
 
+def _trace_with_nested_inspect_branch_metadata(
+    tmp_path: Path, *, field: str, value: object
+) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    response = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 2
+    )
+    payload = json.loads(response["message"]["result"]["content"][0]["text"])
+    payload[field] = value
+    response["message"]["result"]["content"][0]["text"] = json.dumps(payload)
+    mutated = tmp_path / f"nested-inspect-{field}-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_nested_listing_history(
+    tmp_path: Path, *, status_field: str, status_value: str, history: dict[str, object]
+) -> Path:
+    source = _trace(tmp_path, include_resume=False)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    response = next(
+        record
+        for record in records
+        if record.get("direction") == "response"
+        and record.get("message", {}).get("id") == 3
+    )
+    response["message"]["result"]["content"][0]["text"] = json.dumps({
+        "products": [{
+            "workflow": "terminal-timeout-lifecycle",
+            status_field: status_value,
+            **history,
+        }]
+    })
+    mutated = tmp_path / f"nested-listing-{status_field}-history-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
+def _trace_with_ambiguous_explicit_inspections(tmp_path: Path) -> Path:
+    source = _trace_with_unrelated_pre_retry_inspection(tmp_path)
+    records = [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    primary_request = next(
+        record
+        for record in records
+        if record.get("direction") == "request"
+        and record.get("message", {}).get("id") == 2
+    )
+    primary_request["message"]["params"]["arguments"] = {"run_id": "run-1"}
+    mutated = tmp_path / "ambiguous-explicit-inspections-trace.jsonl"
+    mutated.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return mutated
+
+
 def test_checker_grades_non_object_json_rpc_message_without_crashing(
     tmp_path: Path,
 ) -> None:
@@ -973,6 +1051,65 @@ def test_checker_accepts_nested_inspect_diagnostics(tmp_path: Path) -> None:
         trace=_trace_with_nested_inspect_diagnostics(tmp_path),
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("semantic_model", {"status": "published"}),
+        ("workflow_counters", {"duplicate_builds": 2}),
+    ],
+)
+def test_checker_ignores_nested_inspect_branch_metadata(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_nested_inspect_branch_metadata(
+            tmp_path, field=field, value=value
+        ),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("status_field", "status_value", "history"),
+    [
+        ("status", "in_progress", {"previous_version": {"status": "published"}}),
+        (
+            "artifact_status",
+            "building",
+            {"last_published": {"artifact_status": "available"}},
+        ),
+    ],
+)
+def test_checker_ignores_nested_listing_publication_history(
+    tmp_path: Path,
+    status_field: str,
+    status_value: str,
+    history: dict[str, object],
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_nested_listing_history(
+            tmp_path,
+            status_field=status_field,
+            status_value=status_value,
+            history=history,
+        ),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_checker_does_not_guess_between_ambiguous_explicit_inspections(
+    tmp_path: Path,
+) -> None:
+    result = _run_checker(
+        tmp_path,
+        trace=_trace_with_ambiguous_explicit_inspections(tmp_path),
+    )
+    assert result.returncode != 0
+    assert "lifecycle/authoritative-inspect-response-missing" in result.stdout
 
 
 def test_checker_accepts_published_timeout_and_resume_without_rebuild(tmp_path: Path) -> None:
