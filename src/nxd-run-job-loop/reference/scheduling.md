@@ -209,15 +209,6 @@ receives only the sanitized request and retained paths, never a credential or
 credential-looking value. The live connectivity check runs on the host after
 injection and must not be replaced by a child-side dry run.
 
-
-**Credential boundary — a live credential never enters a conversation child.**
-For a database or REST API source, the main thread writes the real credential
-into `infra-profile.yaml` only after authoring and before capture;
-`SENSITIVE`, `.gitignore`, and `chmod 0600` remain required. A review child
-receives only the sanitized request and retained paths, never a credential or
-credential-looking value. The live connectivity check runs on the host after
-injection and must not be replaced by a child-side dry run.
-
 ## Main-thread review checkpoint
 
 Step 3b belongs to the main thread after main-thread generation.
