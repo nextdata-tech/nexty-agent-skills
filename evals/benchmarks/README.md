@@ -7,8 +7,8 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
-| 2026-09-12 | nxd-run-job-loop: user-facing language boundary | NO_EVAL | — | [`2026-09-12-job-loop-user-facing-language`](entries/2026-09-12-job-loop-user-facing-language.md) |
 | 2026-09-12 | workflow-v2: bind proposal-file evidence to preparation | NO_EVAL | — | [`2026-09-12-workflow-v2-proposal-evidence`](entries/2026-09-12-workflow-v2-proposal-evidence.md) |
+| 2026-09-12 | nxd-run-job-loop: user-facing language boundary | NO_EVAL | — | [`2026-09-12-job-loop-user-facing-language`](entries/2026-09-12-job-loop-user-facing-language.md) |
 | 2026-09-11 | nxd-generate-data-product: multi-source labeled-root regression fix | PASS | multi-source-labeled-roots | [`multi-source-labeled-roots-regression-fix`](entries/multi-source-labeled-roots-regression-fix.md) |
 | 2026-09-10 | workflow-v2: official zero-row live attempt | NO_EVAL | — | [`2026-09-10-workflow-v2-zero-row-live-attempt`](entries/2026-09-10-workflow-v2-zero-row-live-attempt.md) |
 | 2026-09-09 | supervisor v2 admission path in the job loop and generator | NO_EVAL | — | [`2026-09-09-workflow-v2-construction-contract`](entries/2026-09-09-workflow-v2-construction-contract.md) |
