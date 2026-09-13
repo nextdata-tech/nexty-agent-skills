@@ -306,7 +306,7 @@ open tracked issue or a documented note in the eval ledger:
 - **`reference/context-and-resume.md` (reattach) and `reference/query-grammar.md`
   (the Omission Test) have thin scenario coverage.** Both are carefully worked
   reference docs — the reattach playbook's resume-first ordering,
-  credential-recovery branches and honesty-clause narration rules, the Omission
+  credential-recovery branches and user-facing narration rules, the Omission
   Test's ruling-vs-filter classification. A plain-pytest gate in `evals/tests/`
   now pins the resume-first tool ordering (`list_data_products` before
   `resume_data_product` before `build_data_product`), but the full playbook and

@@ -16,6 +16,11 @@ may retry, and where independent work may run in parallel. The **context**
 half — reattaching to a product across sessions, what persists, what dies — lives
 in [context-and-resume.md](context-and-resume.md).
 
+Workflow and status wording is canonical in
+[user-facing-language.md](user-facing-language.md). This file defines routing,
+sequencing, caps, fan-out, and structured handoff facts; it does not add another
+narration policy.
+
 ## Route the request before doing work
 
 Classify the request before provisioning, generation, or querying. Prefer the
@@ -95,10 +100,11 @@ of keeping a tally in your head:
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closure>/build-record.json --unresolved
 ```
 
-If the loop does not converge within the caps, report what you tried, what the
-product currently declares, and where the gap is. What the user hears about a
-failed attempt — and what they never hear — is in
-[failure-handling.md](failure-handling.md).
+If the loop does not converge within the caps, keep attempt details in the
+record and report the user-facing impact and next action from
+[user-facing-language.md](user-facing-language.md). Failure classification and
+recovery remain in [failure-handling.md](failure-handling.md); do not turn an
+internal retry history into a chat transcript.
 
 ## One data product in flight
 
@@ -212,7 +218,8 @@ offload the step rather than run it inline.
 
 Because the generate subagent hands back a record instead of leaving its work in
 the main thread's context, that record must carry everything the main thread
-needs to narrate honestly and reach Step 3b **without re-reading the closure**.
+needs to report a truthful status and reach Step 3b **without re-reading the
+closure**. Translate those facts using [user-facing-language.md](user-facing-language.md).
 Its return is **structured, not prose**, and must begin with this handoff state:
 
 ```json

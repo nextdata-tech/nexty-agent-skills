@@ -9,17 +9,22 @@
 - [Typed exits, and caps you count instead of estimate](#typed-exits-and-caps-you-count-instead-of-estimate)
 - [A blocker is an open question found late](#a-blocker-is-an-open-question-found-late)
 - [After a failed supervisor operation: inspect once, then classify](#after-a-failed-supervisor-operation-inspect-once-then-classify)
-- [What the user hears](#what-the-user-hears)
+- [User-facing narration](#user-facing-narration)
 - [The commands](#the-commands)
 
 ## What this file is
 
 The loop's **operating procedure** for a failing step: how to tell whose fault a
-failure is, what you are allowed to do about it, when you must stop and ask, and
-what the user hears. The record it operates over — the diagnostic shape, the
-build record's fields, the materialization predicate — is defined in
+failure is, what you are allowed to do about it, and when you must stop and ask.
+The record it operates over — the diagnostic shape, the build record's fields,
+the materialization predicate — is defined in
 [build-record.md](build-record.md). **Link, don't re-derive**: if this file and
 that one disagree about a field, that one is right.
+
+User-facing workflow and status wording is defined separately in
+[user-facing-language.md](user-facing-language.md). This file owns failure
+classification, typed exits, retry boundaries, and the evidence needed to make
+those decisions.
 
 One rule sits above everything here, and it is the compiler framing made
 operational: **a heal may change generated code; it may never change the plan.**
@@ -102,7 +107,7 @@ re-run, and ends in exactly one typed exit:
 |---|---|
 | `healed` | the re-run of the failing step passed, nothing was given up |
 | `healed_with_concessions` | it passed, but you did something the skills discourage — `concessions[]` grew and the user must hear it |
-| `caps_exhausted` | the bound was reached; report what you tried and hand it to the user |
+| `caps_exhausted` | the bound was reached; report the user-visible impact and next action |
 | `blocked` | a ruling only the user can make; the spec un-approves |
 | `retry_environmental` | supervisor-reported evidence of an environment fault; retry |
 
@@ -212,37 +217,19 @@ fixed.
 - Label the patched one **failed evidence**, and keep it alongside its
   diagnostic.
 
-## What the user hears
+## User-facing narration
 
-You are the **middleman**. The user does not need — and must not be given — any
-of the internals above. The rules, in full, are R1–R8 in
-[build-record.md](build-record.md#telling-the-user-the-middleman-rules), with
-worked examples. The operating summary:
+This file decides what a failure means and whether it may be healed, retried, or
+raised to the user. It does not define a fixed set of message classes or a
+blacklist of ordinary words. Apply [user-facing-language.md](user-facing-language.md)
+for progress, approval and clarification requests, blockers, retries,
+concessions, partial results, and final outcomes.
 
-- **R1 — two classes only.** The user hears **blockers** ("I need something from
-  you") and **concessions** ("I did something you should know about"). Nothing
-  else reaches them.
-- **R2 — who owns it decides, not how severe it is.** A hard error you can fix
-  yourself is absorbed. A mere warning that is a concession is spoken.
-- **R3 — everything else is one plain line of outcome.** Not a tour of what broke
-  and got fixed. One line.
-- **R4 — banned vocabulary.** Never say a stage name or number, a phase letter, a
-  diagnostic code, a hash, "the IR", or the words `owner`, `origin`, `severity`,
-  `provenance`, `not_reached`, "canonicalization". Say what happened in the
-  user's own words.
-- **R5 — never present green as right.** "Built and checked" — never "the numbers
-  are correct."
-- **R6 — a blocker is one sentence with the smallest possible ask**, plus what
-  still works. Never a menu of internals, never options they did not ask for.
-- **R7 — a concession states what was done, what it costs, and the alternative,
-  in that order**, and offers to redo it the other way.
-- **R8 — never assert "environment issue" without supervisor-reported evidence.**
-  Say the honest thing: *"the build didn't complete and I can't yet tell whether
-  that's my code or the machine — so I'm treating it as mine."* Fail-closed
-  applies to speech as much as to classification.
-
-**A green run carrying a concession the user has not heard is the worst state in
-this design**, because it reads as finished. Say it, then claim.
+Automatically repaired diagnostics remain internal. Disclose a change only when
+it changes the result, discards or limits data, spends user resources, or leaves
+the user with a meaningful choice. Never copy raw tool output into chat. A
+failure that is not settled by the evidence must be described as unsettled, not
+called an environment problem.
 
 ## The commands
 

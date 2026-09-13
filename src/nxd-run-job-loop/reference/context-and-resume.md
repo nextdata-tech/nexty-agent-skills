@@ -8,7 +8,7 @@
 - [When resume is not possible — rebuild fallback](#when-resume-is-not-possible--rebuild-fallback)
 - [Credential recovery for SENSITIVE closures](#credential-recovery-for-sensitive-closures)
 - [Optional session ledger](#optional-session-ledger)
-- [Honesty clause — what to tell the user](#honesty-clause--what-to-tell-the-user)
+- [User-facing narration](#user-facing-narration)
 
 This is the **context** half of the job loop: how a later turn or a later
 session recovers a product it did not build in this session. The
@@ -182,7 +182,8 @@ reopen of one product rather than
 the creation of a second one. Rebuild is sound because the closure is
 deterministic and embeds its own copy of the source: the rebuilt product carries
 identical rulings and identical rows, including any landed decisions model. It
-costs a full build — narrate it as such (see the honesty clause).
+costs a full build; use [user-facing-language.md](user-facing-language.md) for
+the user-facing wording.
 
 If the closure path itself is gone, say so and treat the request as a fresh
 build from source — do not guess a definition path or probe the filesystem for
@@ -228,18 +229,18 @@ copy is exactly the drift this design removed.
 
 Never write the bearer token to this or any file. It is a tool parameter only.
 
-## Honesty clause — what to tell the user
+## User-facing narration
 
-Keep the user's mental model of the runtime accurate:
+This file owns the mechanical distinction between resume, rebuild, and the
+durable or session-only state. Use [user-facing-language.md](user-facing-language.md)
+for the wording:
 
-- **Resume genuinely reattaches.** When you resume, say so plainly — "I found
-  the product in the catalog and resumed it; here's a fresh connection." You are
-  reusing the published artifact, not rebuilding it.
-- **Rebuild has a real cost.** When you fall back to a rebuild, say that too —
-  "The published data was collected, so I'm rebuilding it from its closure at
-  `<path>`; this takes about as long as the original build." Do not present a
-  rebuild as a reattach.
-- **Do not promise persistence of the connection.** The endpoint and bearer die
-  with the session; a later session resumes for a fresh pair. What persists is
-  the closure on disk and the published catalog — say that, and say where the
-  closure is.
+- Resume is a genuine reattachment to the existing published result. Do not
+  describe it as a rebuild.
+- Rebuild is a new run from the saved closure and plan. State its real time and
+  resource cost; do not describe it as a reattachment.
+- The connection is session-only. The saved closure and published catalog are
+  what persist. Do not promise that a connection or credential will persist.
+- If a saved copy cannot be refreshed while the published data remains
+  queryable, use the reference's saved-copy failure wording and keep the two
+  states separate.

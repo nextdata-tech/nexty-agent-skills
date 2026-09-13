@@ -8,7 +8,7 @@
 - [Writing `import_notes`](#writing-import_notes)
 - [Read the result](#read-the-result)
 - [What the recipient gets, and how they import it](#what-the-recipient-gets-and-how-they-import-it)
-- [Honesty clause](#honesty-clause)
+- [User-facing handoff](#user-facing-handoff)
 
 ## Export vs. reopen
 
@@ -41,7 +41,8 @@ mcp__nxd-desktop__export_data_product(
 ```
 
 - `definition` is the closure's durable, host-visible absolute path — the one
-  stated in the handoff and named by the workflow id (`…/nxd-jobs/<workflow>/closure/`).
+  stored in the structured handoff and named by the workflow id
+  (`…/nxd-jobs/<workflow>/closure/`).
   It is the path used by the v2 capture action. A legacy `build_data_product`
   import may use the same path only in an explicitly feature-off or non-enrolled
   compatibility runtime.
@@ -102,11 +103,12 @@ the header's job.
 
 The call returns:
 
-- **`archive_path` — where the bundle landed.** Relay this absolute path in the
-  handoff; it is the one thing the user needs to actually give the bundle to
-  anyone. When `destination` is omitted the path is tool-chosen and known *only*
-  from this field (the result also carries `archive_sha256` and the archive's
-  entry count if you want to confirm integrity).
+- **`archive_path` — the verified user-deliverable bundle location.** Relay this
+  absolute path in the user-facing handoff when the user needs to retrieve or
+  share the bundle. Never expose temporary or supervisor-owned staging paths.
+  When `destination` is omitted the path is tool-chosen and known *only* from
+  this field (the result also carries `archive_sha256` and the archive's entry
+  count if you want to confirm integrity).
 - **`redacted` — everything it stripped**, each entry naming the service, key,
   and reason (`non_public` by the default rule, or `requested` via `redact`).
   Relay it so the user can confirm the bundle carries no live credential.
@@ -158,7 +160,7 @@ bare missing `infra-profile.yaml`, the
 recipient gets placeholder values in place and a header naming exactly what to
 refill.
 
-## Honesty clause
+## User-facing handoff
 
 - **A live-source product will not connect until the recipient refills the
   credentials** the header lists. Say so in the handoff; the export deliberately

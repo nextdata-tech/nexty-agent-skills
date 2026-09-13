@@ -13,7 +13,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.49.2
+  version: 0.49.3
 ---
 
 # nxd-run-job-loop skill
@@ -255,7 +255,11 @@ directory.** Put it under a directory named by the workflow id, with the IR
 beside it: `…/nxd-jobs/<workflow>/dp-blueprint.md` and
 `…/nxd-jobs/<workflow>/closure/`. The supervisor captures that closure through
 the returned v2 action. Use whichever base the host-visible-path rules in Step 1
-make legal, and **state both paths to the user in the handoff**. The bearer never
+make legal, and state the durable `…/nxd-jobs/<workflow>/` location in the
+user-facing handoff when the user needs to open or back up the generated files.
+Give the user the durable result and, when needed to resume, the documented
+user-facing workflow handle. Never expose temporary, scratch, or
+supervisor-owned staging paths. The bearer never
 persists, so a later session reattaches to an admission-linked publication by
 **workflow id** (`list_data_products` → `resume_data_product`); if no valid
 publication remains, start a fresh v2 construction rather than a legacy rebuild
@@ -337,7 +341,10 @@ natural-language translation is yours to do. For each question:
    if a dimension grouped by or filtered on carries a `describe_models`
    description naming a ruling (a mapping, an exclusion, a reclassification),
    state it in the answer — the consumer trusts it whether or not they know it
-   exists. Label any partial or unverified result as a preview.
+   exists. If the result depends on proposed classifications rather than
+   confirmed decisions, say so plainly and name the relevant rule version when
+   it matters; report the unscored share alongside it. Label any partial or
+   unverified result as a preview.
 
 ### Step 6 — Refine wrong answers back into the loop
 
@@ -362,38 +369,31 @@ exit: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`,
   routed through a legacy rebuild. After a later supported fresh publication,
   discard cached artifact resources and current file, render the new release,
   then re-describe before mapping again. If the loop doesn't
-  converge within the caps, report what you tried, what the product declares, and
-  where the gap is ([reference/scheduling.md](reference/scheduling.md)) — never
-  loop indefinitely or give up silently.
+  converge within the caps, keep the attempt history in the build record and
+  report the user-visible impact, current state, and next action using
+  [user-facing-language.md](reference/user-facing-language.md) — never loop
+  indefinitely or give up silently.
 - **Blocked** — the fix is a ruling only the user can make (a missing rate, an
   ambiguous scope, a measurement no source carries). That is an open question
   found late, not a heal: write it back into `dp-blueprint.md`'s `## Open Questions`
   with what it blocks, which **un-approves** the spec; ask the one smallest
   question and re-enter Step 1b. Never reach green by changing the plan.
 
-## Narration discipline (always)
+## User-facing narration
 
-You are the middleman. The user hears **exactly two classes** — **blockers** ("I
-need something from you") and **concessions** ("I did something you should know
-about"); everything else you absorb into one plain line of outcome. **Who owns a
-problem decides whether it is spoken, not how severe it is**: an error you can
-fix yourself is absorbed, a warning that is a concession is said out loud. Never
-put a stage name, phase letter, diagnostic code or hash in front of the user.
-Full rules: [reference/failure-handling.md](reference/failure-handling.md).
+Own the conversation and use the canonical [user-facing language](reference/user-facing-language.md)
+reference for workflow and status wording. The user may receive meaningful
+progress, approval or clarification requests, blockers, retries, concessions,
+and final outcomes. Automatically repaired diagnostics stay internal.
 
-- **Warm up** before any multi-minute step (inference, generation, serve), and
-  report entering each phase — never a silent stall.
-- **Label previews as previews, and never present green as right.** A sampled,
-  partial, or `truncated` result is a preview, not a verified answer; a build
-  that passed is "built and checked", never "the numbers are correct".
-- **Show the query behind the answer, and the ruling behind the query** — every
-  answer states the measure/dimension selection that produced it, plus the ruling
-  behind any dimension whose catalog description names one.
-- **Disclose proposed judgement, and quantify the unscored bucket.** An answer
-  resting on a model an agent judgement `applies_to` says so ("built on proposed
-  agent judgements, rubric v1"), never as confirmed fact, and reports the unscored
-  share like a `needs_review` share — a score over a silently-incomplete
-  population is a preview.
+Do not expose internal labels, identifiers, hashes, internal paths, credentials,
+or raw tool output. Verified user-facing handles and deliverable paths are
+allowed when needed to use or retrieve the result. Preserve ordinary business
+terms, including `schema` when it is needed to describe the user's data;
+translate implementation framing instead.
+If the user asks for technical detail, give only the necessary sanitized
+explanation. Query-answer wording and failure classification remain in their
+current owners.
 
 ## Invariants — never violate these
 
@@ -497,4 +497,4 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
 - **Bearer only as a tool parameter** — keep it out of narration, never persist or print it. **Never present a preview or truncated result as verified data**, and never stall silently.
 
 ## Reference docs (this skill)
-Use [dp-blueprint](reference/dp-blueprint.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.
+Use [dp-blueprint](reference/dp-blueprint.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [user-facing language](reference/user-facing-language.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.

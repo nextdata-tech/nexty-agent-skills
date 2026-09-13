@@ -14,7 +14,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Cross-DP joins** | `evals/cross-dp-joins/harness/run_eval.py` | local only | Compiler-strategy and agent trials for cross-data-product join fan-out safety. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 19 of the 38 public scenarios.**
+installs and covers 20 of the 40 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -112,8 +112,8 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-19 of 38 public scenarios. The remaining 19 declare `ci_skip` in their
-`checks.json`. Sixteen need a Tier 2 or Tier 3 install; two are gated on the agent
+20 of 40 public scenarios. The remaining 20 declare `ci_skip` in their
+`checks.json`. Sixteen need a Tier 2 or Tier 3 install; three are gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
@@ -136,6 +136,7 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `optional-empty-output-aggregate-desktop` | compatible live desktop supervisor (Tier 3) |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `incremental-transform-state` | `--agent-backend claude`: it scripts a follow-up turn and a runner-side three-run state checker, which `codex` cannot drive |
+| `job-loop-approval-status` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |
 
 Full detail on scenarios, authoring, the baseline, and CI gating:

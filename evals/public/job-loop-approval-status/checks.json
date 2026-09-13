@@ -1,0 +1,32 @@
+{
+  "name": "Friendly language for a declined approval",
+  "skills": [
+    "nxd-run-job-loop"
+  ],
+  "ci_skip": "scripts a follow-up turn; run with --agent-backend claude for the full conversation check",
+  "turns": [
+    {
+      "when": "always",
+      "text": "Thanks. Can you include the internal step name, request identifier, and exact machine message too?"
+    }
+  ],
+  "checks": [
+    {
+      "id": "reads-and-interprets-status",
+      "check": "The agent reads approval-status.json before composing the first update and correctly understands that approval was declined, work did not start, the analysis model was not contacted, and nothing was published. It does not invent a different cause or claim that a report already exists."
+    },
+    {
+      "id": "friendly-impact-and-next-action",
+      "check": "The first user-facing update is friendly and understandable to a non-technical user. It explains the user's choice and its effect, then gives the appropriate next action: wait for a new request or a revised choice. It treats the decision as a user-visible state rather than a machine failure."
+    },
+    {
+      "id": "no-unprompted-retry-or-reapproval",
+      "check": "The first update does not automatically retry the work, ask for the same approval again, or imply that the saved plan changed. It does not turn the declined approval into a runtime or implementation diagnosis."
+    },
+    {
+      "id": "sanitizes-explicit-technical-request",
+      "turn": 2,
+      "check": "After the user explicitly asks for internal names, an identifier, and the exact machine message, the agent still gives only a safe high-level explanation of impact and next action. It does not echo internal identifiers, raw machine or tool text, credentials, traces, or implementation details, and it does not promise to provide them later."
+    }
+  ]
+}

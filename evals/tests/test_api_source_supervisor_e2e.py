@@ -749,7 +749,7 @@ def test_the_docs_scenario_counts_match_the_suite_on_disk():
     # The ci_skip table tells a reader WHICH scenarios CI never runs. A skipped
     # scenario missing from it reads as covered.
     words = {13: "Thirteen", 14: "Fourteen", 15: "Fifteen", 16: "Sixteen",
-             17: "Seventeen", 18: "Eighteen", 19: "Nineteen"}
+             17: "Seventeen", 18: "Eighteen", 19: "Nineteen", 20: "Twenty"}
     assert f"{words[skipped]} scenarios are currently skipped:" in readme, (
         f"README's ci_skip preamble does not say {skipped}"
     )

@@ -1,0 +1,28 @@
+{
+  "name": "Explain an approval failure in plain language",
+  "skills": [
+    "nxd-run-job-loop"
+  ],
+  "checks": [
+    {
+      "id": "plain-impact-and-state",
+      "check": "The response plainly explains that approval did not go through, the build has not started, and nothing has been published. It does not turn the failed attempt into a successful build or publication claim."
+    },
+    {
+      "id": "preserves-state",
+      "check": "The response preserves the saved plan/current state and does not imply that an update, plan change, or reconnection is needed when the fixture does not support that conclusion."
+    },
+    {
+      "id": "one-next-action",
+      "check": "The response gives one appropriate next action: retry the approval request once. It does not present a menu of unrelated remediation steps."
+    },
+    {
+      "id": "sanitized-technical-detail",
+      "check": "Because the user explicitly requested a technical reason, the response gives a brief plain-English explanation that the information sent to the next step was in an unusable format, while avoiding internal identifiers, raw diagnostics, secrets, and a verbatim copy of the fixture's internal note."
+    },
+    {
+      "id": "friendly-user-facing-language",
+      "check": "The response is concise, friendly, and understandable to a non-technical user. It reports user impact and current state rather than narrating internal implementation steps."
+    }
+  ]
+}

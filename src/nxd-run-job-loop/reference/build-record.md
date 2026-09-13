@@ -15,7 +15,7 @@
 - [The concession split: forbidden vs discouraged](#the-concession-split-forbidden-vs-discouraged)
 - [Typed heal exits](#typed-heal-exits)
 - [Materialization is a predicate, not a status](#materialization-is-a-predicate-not-a-status)
-- [Telling the user: the middleman rules](#telling-the-user-the-middleman-rules)
+- [User-facing narration boundary](#user-facing-narration-boundary)
 - [The CLI](#the-cli)
 - [What is honestly weak in this record](#what-is-honestly-weak-in-this-record)
 
@@ -737,7 +737,7 @@ Every attempt ends in exactly one of five exits.
 |---|---|
 | `healed` | the re-run of the failing stage passed, no concession |
 | `healed_with_concessions` | passed, `concessions[]` grew; `disclosed` must flip before anything is claimed |
-| `caps_exhausted` | the bound was reached; re-emit as `blocker.caps_exhausted` with `owner: user` and report what was tried |
+| `caps_exhausted` | the bound was reached; re-emit as `blocker.caps_exhausted` with `owner: user`, keep attempt details in the record, and report the user-visible impact and next action |
 | `blocked` | a blocker was hit; the user is asked and the spec un-approves. Recorded **before** the write-back, with equal hashes |
 | `retry_environmental` | the failure was `owner: environment` with supervisor-reported evidence meeting the relay criterion; consumes the retry cap and never a remap or a regenerate |
 
@@ -797,105 +797,23 @@ exit stand in for "the numbers are right"*. `materialized` means the approved
 plan was compiled, the compiled artifact ran, and it published. It says nothing
 about whether the numbers are right.
 
-## Telling the user: the middleman rules
+## User-facing narration boundary
 
-Everything above is internal. **The builder agent is the middleman**, and the
-user needs to know none of it — not a stage number, not a phase letter, not a
-diagnostic code, not the hash. The loop's own operating procedure for narrating
-a run lives in [`failure-handling.md`](failure-handling.md); the rules here are
-the ones that hang directly off fields in this record.
+The record is internal evidence, not a chat transcript. The owning loop renders
+workflow and status updates through
+[user-facing-language.md](user-facing-language.md): translate the recorded
+impact into a plain-language next action, and never copy `message`, `path`,
+`code`, or raw tool output into chat. Automatic repairs remain internal;
+meaningful progress, approvals or clarifications, declined or cancelled
+approval, blockers, concessions, retries, and final outcomes may be
+communicated. This boundary changes no record field or classification rule.
 
-- **R1 — Two classes only.** The user hears about exactly two things:
-  **BLOCKERS** ("I need something from you") and **CONCESSIONS** ("I did
-  something you should know about"). Nothing else.
-- **R2 — `owner`, not `severity`, decides.** A `severity: error` with
-  `owner: agent` is absorbed. A `severity: warning` with a `concession.` code is
-  spoken. The field is the rule.
-- **R3 — Everything else is one plain line of outcome.** Not a list of what went
-  wrong and got fixed. One line.
-- **R4 — Banned vocabulary.** Never say a stage id or number, a phase letter, a
-  diagnostic code, a hash, `compiled_from`, `owner`, `origin`, `severity`,
-  `provenance`, `not_reached`, "the IR", or "canonicalization".
-- **R5 — Never present green as right.** "Built and checked", never "the numbers
-  are correct".
-- **R6 — A blocker is one sentence with the smallest possible ask**, plus what
-  still works. Never a menu of internals.
-- **R7 — A concession states what was done, what it costs, and the alternative,
-  in that order**, and offers to redo it.
-- **R8 — Never assert "environment issue" without supervisor-reported
-  evidence.** Fail-closed applies to speech as well as to classification.
+Supervisor evidence may retain an internal detail such as
+`workflow/validation_failed` for classification and later inspection; it stays
+in the record and is not copied into user chat.
 
-### Worked examples
-
-**(a) Absorbed — one line of outcome.**
-
-```jsonc
-{"stage":"s2_transform","code":"runtime.assert_failed","severity":"error",
- "owner":"agent","origin":"tool_computed","path":"closure:transform/main.py:214",
- "message":"per-candidate uniqueness assert fired: 12 duplicate ashby_candidate_id",
- "evidence":{"count":12},"fix":"deduplicate before the join"}
-```
-
-The agent heals, re-runs, and says:
-
-> Built and checked. 856 candidates scored, 7,704 criterion scores.
-
-Not which assert fired, not that there was an attempt, not that it was caught by
-a dry run. R3.
-
-**(b) Blocker — `owner: user`, so the user hears it.**
-
-```jsonc
-{"stage":"s6_run","code":"blocker.open_question","severity":"error",
- "owner":"user","origin":"agent_observed","path":"v2:open_questions[fx_rates]",
- "message":"total_opex mixes EUR and USD invoices; no rate column exists in any source",
- "evidence":{"models":["total_opex"],"currencies":["EUR","USD"]},
- "fix":"ask for the rate source and date range"}
-```
-
-> I can't finish the total-spend figure: the invoices are in both euros and
-> dollars and there's no exchange rate anywhere in the data. Which rate should I
-> use, and over what date range? Everything else is built and you can query it
-> now.
-
-One ask, the smallest one, plus what still works. R6.
-
-**(c) Concession — spoken, with the cost and the alternative.**
-
-```jsonc
-{"code":"concession.assert_weakened","class":"discouraged","stage":"s2_transform",
- "path":"closure:transform/main.py:214",
- "what":"kept the most recent row per candidate instead of failing on 12 duplicate ids",
- "why":"the source feed carries genuine duplicate applications",
- "alternative_rejected":"fail the build and surface the 12 rows",
- "disclosed":false,"origin":"llm_authored"}
-```
-
-> One thing you should know: twelve candidates have more than one application in
-> the feed, so the per-candidate uniqueness check wouldn't pass. I kept the most
-> recent application for each and built on that — it drops twelve rows. If you'd
-> rather see those twelve, I can make the build stop there instead.
-
-`disclosed` flips to `true` only after this is said. Until then the product is
-not materialized. R7.
-
-**(d) Unsettled — the honest thing, not "environment issue".**
-
-```jsonc
-{"stage":"s4_pin","code":"pin.build_failed","severity":"error",
- "owner":"agent","origin":"supervisor_reported","path":"tool:inspect_workflow.operation",
- "message":"trusted validation failed before admission",
- "evidence":{"supervisor_detail":{"status":"failed","code":"workflow/validation_failed"}},"fix":null}
-```
-
-> Validation didn't complete, and I can't yet tell whether that's my code or the
-> machine — so I'm treating it as mine and taking another look at the
-> definition.
-
-Never "that's an environment problem". Stage 4 masquerades as environment, there
-is not enough evidence here to reclassify ownership, and R8 applies. Continue
-only through the next action returned by `inspect_workflow`; never retry by
-calling a separate construction tool.
+Use `materialized`, never `correct`: a green run means the approved plan was
+compiled, ran, and published. It does not establish that the numbers are right.
 
 ## The CLI
 
