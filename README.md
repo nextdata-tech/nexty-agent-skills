@@ -104,8 +104,10 @@ This repository also includes Claude Code plugin metadata:
 
 `nexty-desktop` contains the local supervisor workflow. `nexty-datamesh` contains the
 deployed-platform workflow. `nxd-build-semantic-data-product` is shared because it
-supports local inference and the deployed semantic-model flow. `nxd-analyze-mesh` is
-DataMesh-only because its live inspection flow requires a connected mesh. The
+supports local inference and the deployed semantic-model flow, and
+`nxd-semantic-query-intent` is shared because both query adapters use the same
+platform-neutral intent gate. `nxd-analyze-mesh` is DataMesh-only because its live
+inspection flow requires a connected mesh. The
 `nexty-agent-skills` compatibility aggregate remains available for existing installs.
 
 #### Own marketplace
@@ -293,7 +295,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nexty-datamesh` | Deployed DataMesh workflows | `build/nexty-datamesh-v<version>.zip` |
 | `nexty-agent-skills` | Compatibility aggregate for existing installs | `build/nexty-agent-skills-v<version>.zip` |
 
-The two named plugins share the semantic-product foundation skill by design. Their
+The two named plugins share the semantic-product and semantic-intent foundations by design. Their
 membership is declared once in `.claude-plugin/marketplace.json` and the build script
 projects those lists from `src/`.
 
@@ -308,6 +310,7 @@ projects those lists from `src/`.
 | `nxd-fix-policy-failures` | Diagnose policy violations and update the data product to comply |
 | `nxd-debug-data-product` | Diagnose failed data products from describe/logs/init logs/verify output |
 | `nxd-query-data-product` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
+| `nxd-semantic-query-intent` | Validate a semantic question-to-selection mapping with catalog coverage, a catalog-aware critic, a round-trip echo, and clarify/abstain before governed execution |
 | `nxd-analyze-mesh` | Inspect an infra profile's data-bearing services read-only (S3, Snowflake and ADLS have inspection drivers; others report as unsupported) and report candidate data product inputs/outputs grouped by domain |
 | `nxd-toggle-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
 | `nxd-build-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |

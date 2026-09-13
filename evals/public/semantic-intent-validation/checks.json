@@ -1,7 +1,8 @@
 {
   "name": "Validate Intent Before Executing a Semantic Query",
   "skills": [
-    "nxd-query-data-product"
+    "nxd-query-data-product",
+    "nxd-semantic-query-intent"
   ],
   "ci_skip": "needs a live semantic MCP server (EVAL_MCP_PYTHON with the nxd semantic compiler) reaching lower-env Snowflake; CI cannot provision it. Run locally or via workflow_dispatch",
   "checks": [

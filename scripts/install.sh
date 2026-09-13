@@ -27,10 +27,22 @@ ASSUME_YES=0
 DRY_RUN=0
 VERBOSE=0
 SKILL_LIST_FILE=""
+REQUESTED_SKILL_LIST_FILE=""
+REMOVAL_SKILL_LIST_FILE=""
+MARKER_UPDATE_FILE=""
 
 cleanup_skill_list() {
   if [[ -n "${SKILL_LIST_FILE:-}" ]]; then
     rm -f "$SKILL_LIST_FILE"
+  fi
+  if [[ -n "${REQUESTED_SKILL_LIST_FILE:-}" ]]; then
+    rm -f "$REQUESTED_SKILL_LIST_FILE"
+  fi
+  if [[ -n "${REMOVAL_SKILL_LIST_FILE:-}" ]]; then
+    rm -f "$REMOVAL_SKILL_LIST_FILE"
+  fi
+  if [[ -n "${MARKER_UPDATE_FILE:-}" ]]; then
+    rm -f "$MARKER_UPDATE_FILE"
   fi
 }
 trap cleanup_skill_list EXIT
@@ -142,7 +154,31 @@ require_cmd() {
 
 selected_skills() {
   if [[ -n "${SKILLS[0]+set}" ]]; then
-    printf '%s\n' "${SKILLS[@]}"
+    # The query adapters link to the shared intent foundation. Keep explicit
+    # installs self-contained while preserving request order and avoiding
+    # duplicate copies when the dependency was named as well.
+    local seen="" skill dependency
+    for skill in "${SKILLS[@]}"; do
+      case "$seen" in
+        *"|$skill|"*) ;;
+        *)
+          printf '%s\n' "$skill"
+          seen="$seen|$skill|"
+          ;;
+      esac
+      case "$skill" in
+        nxd-run-job-loop|nxd-query-data-product)
+          dependency="nxd-semantic-query-intent"
+          case "$seen" in
+            *"|$dependency|"*) ;;
+            *)
+              printf '%s\n' "$dependency"
+              seen="$seen|$dependency|"
+              ;;
+          esac
+          ;;
+      esac
+    done
   elif [[ "$PLUGIN_SET" == "all" ]]; then
     for directory in "$SRC_DIR"/*/; do basename "$directory"; done
   else
@@ -188,6 +224,11 @@ prepare_selected_skills() {
   [[ -n "${SKILL_LIST_FILE:-}" ]] && return 0
   SKILL_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/nexty-agent-skills-selected.XXXXXX")" \
     || die "could not create temporary selected-skill list"
+  if [[ "$SKILLS_REQUESTED" -eq 1 ]]; then
+    REQUESTED_SKILL_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/nexty-agent-skills-requested.XXXXXX")" \
+      || die "could not create temporary requested-skill list"
+    printf '%s\n' "${SKILLS[@]}" >"$REQUESTED_SKILL_LIST_FILE"
+  fi
   if ! selected_skills >"$SKILL_LIST_FILE"; then
     die "failed to resolve selected skills for --plugin $PLUGIN_SET"
   fi
@@ -320,7 +361,7 @@ skills = marker.get("skills")
 if not isinstance(skills, list) or not skills:
     raise SystemExit("managed skill marker has no skills list")
 pattern = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-for field in ("skills", "projection_skills", "extra_skills"):
+for field in ("skills", "projection_skills", "extra_skills", "requested_skills"):
     values = marker.get(field)
     if values is None:
         continue
@@ -395,9 +436,22 @@ if any(not pattern.fullmatch(skill) for skill in selected):
 
 if "projection_skills" in marker or "extra_skills" in marker:
     extras = checked("extra_skills")
+    requested_roots = checked("requested_skills")
 else:
     extras = managed if marker.get("plugin_set", "all") == "custom" else []
-desired = set(selected) | set(extras)
+    requested_roots = []
+desired = set(selected) | set(extras) | set(requested_roots)
+dependencies = {
+    "nxd-run-job-loop": ("nxd-semantic-query-intent",),
+    "nxd-query-data-product": ("nxd-semantic-query-intent",),
+}
+pending = list(requested_roots)
+while pending:
+    consumer = pending.pop()
+    for dependency in dependencies.get(consumer, ()):
+        if dependency not in desired:
+            desired.add(dependency)
+            pending.append(dependency)
 for skill in managed:
     if skill not in desired:
         print(skill)
@@ -420,12 +474,12 @@ write_code_install_marker() {
     printf '\033[35m[dry-run]\033[0m write %s for %s\n' "$marker" "$PLUGIN_SET" >&2
     return 0
   }
-  python3 - "$PLUGIN_JSON" "$SKILL_LIST_FILE" "$marker" "$PLUGIN_SET" "$SKILLS_REQUESTED" <<'PY'
+  python3 - "$PLUGIN_JSON" "$SKILL_LIST_FILE" "$marker" "$PLUGIN_SET" "$SKILLS_REQUESTED" "${REQUESTED_SKILL_LIST_FILE:-}" <<'PY'
 import json
 import os
 import sys
 
-plugin_path, skill_list_path, marker_path, plugin_set, requested = sys.argv[1:]
+plugin_path, skill_list_path, marker_path, plugin_set, requested, requested_path = sys.argv[1:]
 with open(plugin_path, encoding="utf-8") as fh:
     plugin = json.load(fh)
 with open(skill_list_path, encoding="utf-8") as fh:
@@ -437,22 +491,48 @@ if os.path.isfile(marker_path):
         previous = json.load(fh)
 
 previous_skills = previous.get("skills", [])
+dependencies = {
+    "nxd-run-job-loop": ("nxd-semantic-query-intent",),
+    "nxd-query-data-product": ("nxd-semantic-query-intent",),
+}
 if "projection_skills" in previous or "extra_skills" in previous:
     projection = list(previous.get("projection_skills", []))
     extras = list(previous.get("extra_skills", []))
+    requested_roots = list(previous.get("requested_skills", extras))
 elif previous.get("plugin_set", "all") == "custom":
     projection = []
     extras = list(previous_skills)
+    requested_roots = list(previous.get("requested_skills", extras))
 else:
     projection = list(previous_skills)
     extras = []
+    requested_roots = []
 
 if requested == "1":
+    with open(requested_path, encoding="utf-8") as fh:
+        requested_now = [line.strip() for line in fh if line.strip()]
     for skill in selected:
         if skill not in projection and skill not in extras:
             extras.append(skill)
+    for skill in requested_now:
+        if skill not in requested_roots:
+            requested_roots.append(skill)
 else:
     projection = selected
+    # An explicit root can be hidden inside the current projection. Keep it
+    # materialized as an extra when switching to a projection that omits it,
+    # together with any dependencies it still needs.
+    pending = list(requested_roots)
+    preserved = set(projection) | set(extras)
+    while pending:
+        consumer = pending.pop(0)
+        if consumer not in preserved:
+            extras.append(consumer)
+            preserved.add(consumer)
+        for dependency in dependencies.get(consumer, ()):
+            if dependency not in preserved:
+                extras.append(dependency)
+                preserved.add(dependency)
 
 skills = []
 for skill in projection + extras:
@@ -468,6 +548,7 @@ with open(marker_path, "w", encoding="utf-8") as fh:
             "skills": skills,
             "projection_skills": projection,
             "extra_skills": extras,
+            "requested_skills": requested_roots,
         },
         fh,
         indent=2,
@@ -485,50 +566,109 @@ use_managed_code_marker_if_present() {
   fi
 }
 
-update_code_install_marker_after_explicit_uninstall() {
+plan_code_uninstall() {
   local destination="$1" marker="$destination/$CODE_INSTALL_MARKER"
   [[ -f "$marker" ]] || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '\033[35m[dry-run]\033[0m update %s after explicit uninstall\n' "$marker" >&2
-    return 0
-  fi
   if ! read_managed_code_skills "$marker" >/dev/null; then
     die "refusing to update skills: managed marker is invalid: $marker"
   fi
-  python3 - "$marker" "$SKILL_LIST_FILE" <<'PY'
+  REMOVAL_SKILL_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/nexty-agent-skills-removal.XXXXXX")" \
+    || die "could not create temporary removal-skill list"
+  local marker_template="$destination/.nexty-plugin-install.XXXXXX"
+  [[ "$DRY_RUN" -eq 1 ]] && marker_template="${TMPDIR:-/tmp}/nexty-agent-skills-marker.XXXXXX"
+  MARKER_UPDATE_FILE="$(mktemp "$marker_template")" \
+    || die "could not create temporary marker update"
+  python3 - "$marker" "$REQUESTED_SKILL_LIST_FILE" "$REMOVAL_SKILL_LIST_FILE" "$MARKER_UPDATE_FILE" <<'PY'
 import json
 import os
 import sys
 
-marker_path, skill_list_path = sys.argv[1:]
+marker_path, requested_path, removal_path, marker_update_path = sys.argv[1:]
 with open(marker_path, encoding="utf-8") as fh:
     marker = json.load(fh)
-with open(skill_list_path, encoding="utf-8") as fh:
+with open(requested_path, encoding="utf-8") as fh:
     removed = {line.strip() for line in fh if line.strip()}
 
+dependencies = {
+    "nxd-run-job-loop": ("nxd-semantic-query-intent",),
+    "nxd-query-data-product": ("nxd-semantic-query-intent",),
+}
+
 if "projection_skills" in marker or "extra_skills" in marker:
-    projection = [skill for skill in marker.get("projection_skills", []) if skill not in removed]
-    extras = [skill for skill in marker.get("extra_skills", []) if skill not in removed]
+    old_projection = list(marker.get("projection_skills", []))
+    old_extras = list(marker.get("extra_skills", []))
+    requested_roots = list(marker.get("requested_skills", old_extras))
 elif marker.get("plugin_set", "all") == "custom":
-    projection = []
-    extras = [skill for skill in marker["skills"] if skill not in removed]
+    old_projection = []
+    old_extras = list(marker["skills"])
+    requested_roots = list(marker.get("requested_skills", old_extras))
 else:
-    projection = [skill for skill in marker["skills"] if skill not in removed]
-    extras = []
+    old_projection = list(marker["skills"])
+    old_extras = []
+    requested_roots = []
+
+projection = [skill for skill in old_projection if skill not in removed]
+extras = [skill for skill in old_extras if skill not in removed]
+remaining_roots = [skill for skill in requested_roots if skill not in removed]
+
+# A dependency is retained when any remaining explicit root or named
+# projection member still consumes it. This keeps uninstalling one query
+# adapter from breaking the other adapter that is still installed.
+consumers = set(remaining_roots) | set(projection)
+required = set()
+pending = list(consumers)
+while pending:
+    consumer = pending.pop()
+    for dependency in dependencies.get(consumer, ()):
+        if dependency not in required:
+            required.add(dependency)
+            pending.append(dependency)
+for dependency in required:
+    if dependency in removed and dependency not in projection + extras:
+        if dependency in old_projection:
+            projection.append(dependency)
+        elif dependency in old_extras:
+            extras.append(dependency)
+
+for consumer in removed:
+    for dependency in dependencies.get(consumer, ()):
+        if dependency in remaining_roots or dependency in required:
+            continue
+        # In a custom install this dependency was materialized only for the
+        # removed root. A named projection owns its listed skills directly,
+        # so leave a projection member in place unless it is itself removed.
+        if dependency in old_extras:
+            extras = [skill for skill in extras if skill != dependency]
+
 remaining = []
 for skill in projection + extras:
     if skill not in remaining:
         remaining.append(skill)
+
+with open(removal_path, "w", encoding="utf-8") as fh:
+    removals = []
+    for skill in marker.get("skills", []):
+        if skill not in remaining and skill not in removals:
+            removals.append(skill)
+    # An explicit uninstall may name an unmanaged skill alongside a managed
+    # marker. Remove that exact request, but never its dependency-expanded
+    # closure; only marker-owned skills have enough provenance for closure
+    # based removal.
+    for skill in removed:
+        if skill not in remaining and skill not in removals:
+            removals.append(skill)
+    for skill in removals:
+        fh.write(f"{skill}\n")
+
 if remaining:
     marker["skills"] = remaining
     marker["projection_skills"] = projection
     marker["extra_skills"] = extras
+    marker["requested_skills"] = remaining_roots
     marker["plugin_set"] = "custom"
-    with open(marker_path, "w", encoding="utf-8") as fh:
+    with open(marker_update_path, "w", encoding="utf-8") as fh:
         json.dump(marker, fh, indent=2)
         fh.write("\n")
-else:
-    os.unlink(marker_path)
 PY
 }
 
@@ -557,15 +697,32 @@ install_code() {
 uninstall_code() {
   local destination; destination="$(cc_dest)"
   info "removing skills from $destination"
+  local removal_list="$SKILL_LIST_FILE"
+  if [[ "$SKILLS_REQUESTED" -eq 1 ]]; then
+    if [[ -f "$destination/$CODE_INSTALL_MARKER" ]]; then
+      plan_code_uninstall "$destination"
+      [[ -n "${REMOVAL_SKILL_LIST_FILE:-}" ]] && removal_list="$REMOVAL_SKILL_LIST_FILE"
+    else
+      # Without a managed marker, the dependency-expanded list is not known to
+      # be installer-owned. Remove only the explicit request so a shared
+      # foundation or sibling adapter installed by another path is preserved.
+      removal_list="$REQUESTED_SKILL_LIST_FILE"
+    fi
+  fi
   while IFS= read -r skill; do
     if [[ -d "$destination/$skill" ]]; then
       run "rm -rf '$destination/$skill'"
       ok "removed: $skill"
     fi
-  done < "$SKILL_LIST_FILE"
-  if [[ "$SKILLS_REQUESTED" -eq 1 ]]; then
-    update_code_install_marker_after_explicit_uninstall "$destination"
-  elif [[ -f "$destination/$CODE_INSTALL_MARKER" ]]; then
+  done < "$removal_list"
+  if [[ "$SKILLS_REQUESTED" -eq 1 && "$DRY_RUN" -eq 0 && -n "${MARKER_UPDATE_FILE:-}" ]]; then
+    if [[ -s "$MARKER_UPDATE_FILE" ]]; then
+      mv -f "$MARKER_UPDATE_FILE" "$destination/$CODE_INSTALL_MARKER"
+    else
+      rm -f "$destination/$CODE_INSTALL_MARKER" "$MARKER_UPDATE_FILE"
+    fi
+  fi
+  if [[ "$SKILLS_REQUESTED" -eq 0 && -f "$destination/$CODE_INSTALL_MARKER" ]]; then
     run "rm -f '$destination/$CODE_INSTALL_MARKER'"
   fi
   [[ -d "$destination" ]] && run "rmdir '$destination' 2>/dev/null || true"

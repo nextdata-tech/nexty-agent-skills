@@ -2,7 +2,8 @@
   "name": "Publish, resume and query an authenticated REST data product",
   "skills": [
     "nxd-generate-data-product",
-    "nxd-run-job-loop"
+    "nxd-run-job-loop",
+    "nxd-semantic-query-intent"
   ],
   "ci_skip": "needs the local desktop supervisor binaries (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON); CI provisions neither. Run locally or via workflow_dispatch",
   "desktop_verify": true,
