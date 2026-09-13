@@ -733,6 +733,44 @@ def test_no_conduct_rule_countermands_the_skills_under_test() -> None:
     assert "do not ask for another confirmation" in rules
 
 
+def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -> None:
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    rules = " ".join(SCENARIO_CONDUCT_RULES)
+    canonical_marker = (
+        'NXD_REVIEW_DISPATCH {"closure_path":"closure",'
+        '"request_contract":"sanitized_original_request",'
+        '"return":"claims_only","review_round_index":0}'
+    )
+    review_rule = next(rule for rule in SCENARIO_CONDUCT_RULES if canonical_marker in rule)
+    review_rule_lines = review_rule.splitlines()
+    assert review_rule_lines.count(canonical_marker) == 1
+    assert [line for line in review_rule_lines if line.startswith("NXD_REVIEW_DISPATCH ")] == [
+        canonical_marker
+    ]
+    assert (
+        "Replace only closure_path and review_round_index: use the relative "
+        "closure path and the next zero-based index"
+    ) in rules
+    assert (
+        "The main thread must not invoke Skill(nxd-review-closure) or inspect the retained "
+        "capture itself; after the child returns, treat that result as the complete review, "
+        "do not call Skill, Read, Glob, or another review tool in the main thread, and relay "
+        "its bounded report with the returned report_requirement action before following the "
+        "next_actions response."
+    ) in review_rule
+    for phrase in (
+        "dispatch exactly one general-purpose Agent or Task conversation child",
+        "supervisor-provided review_input",
+        "reviewer must run inline (run_in_background=false)",
+        "marker line must use exactly the NXD_REVIEW_DISPATCH keys and constant values",
+        "This is an owning-thread instruction",
+        "review child must not invoke Agent or Task",
+        "uses only its read-only tools",
+    ):
+        assert phrase in rules
+
+
 def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> None:
     """"Author the closure with the available file tools" read as "skip the skill".
 

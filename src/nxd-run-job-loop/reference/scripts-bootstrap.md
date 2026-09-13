@@ -131,8 +131,8 @@ test -n "$JOB_HELPER_DIR"
 ```
 
 Pass this absolute value as `job_helper_dir` whenever Step 3 invokes
-`nxd-generate-data-product`, including a generation-subagent handoff. The generator must
-use that exact path; it must not resolve a second copy.
+`nxd-generate-data-product`. The generator must use that exact path; it must not
+resolve a second copy.
 
 ## Run the helpers
 

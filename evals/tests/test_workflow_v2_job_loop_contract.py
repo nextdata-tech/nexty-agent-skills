@@ -86,7 +86,7 @@ def test_executable_job_loop_matches_v2_order_and_has_one_mandatory_review():
         "call `get_workflow_capabilities`",
         "call `prepare_workflow`",
         "returned `session_decision` action",
-        "Invoke **nxd-generate-data-product** through its **Step 7** self-check",
+        "Invoke **nxd-generate-data-product** after that gate succeeds",
         "returned `capture` action",
         "Run **exactly one mandatory review per capture generation**",
         "returned `report_requirement` action",
@@ -99,7 +99,7 @@ def test_executable_job_loop_matches_v2_order_and_has_one_mandatory_review():
     assert "There is no skip" in checkpoint
     assert "mutable closure" in checkpoint
     assert "review-record.json" in checkpoint
-    assert "reset, local correction, self-check, recapture" in checkpoint
+    assert "reset, local correction, optional evidence if available, recapture" in checkpoint
 
 
 def test_prepare_uses_exact_kind_and_supervisor_owned_approval_lifecycle():
@@ -109,10 +109,115 @@ def test_prepare_uses_exact_kind_and_supervisor_owned_approval_lifecycle():
         '`kind: "generated-data-product"`',
         '`status: proposed`',
         "Never set `status: approved` or invent approval hashes",
-        "returned consent action succeeds",
+        "write and validate `dp-blueprint.proposal.json`",
+        "Omit `source_hash` from the caller-authored file and inline object",
+        "the prepare request must carry the complete typed proposal object",
+        "approval remains only through the returned `session_decision` consent action",
+        "`session_decision` consent action",
     ):
         assert marker in step
-    assert step.index("call `prepare_workflow`") < step.index("returned consent action succeeds")
+    assert step.index("call `prepare_workflow`") < step.index("returned `session_decision` consent action")
+
+
+def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
+    text = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    prepare = text[text.index("## Prepare the prose blueprint") : text.index("## Relay consent and capture")]
+    for marker in (
+        "exact, real typed proposal JSON",
+        "`dp-blueprint.proposal.json`",
+        '"blueprint_path": "/host-visible/nxd-jobs/<workflow>/dp-blueprint.md"',
+        '"typed_proposal": {',
+        "Parse that complete object",
+        "Parse that complete object and validate/bind it to the blueprint before consent",
+        "Source spans are exact coordinates from the trusted parser",
+        "the `.text` span covers the subsection body only",
+        "Copy all four integers",
+        "may include separator blank lines",
+        "Do not trim or widen that range",
+        "validation_issue.expected_source_span",
+        "replace only that path's coordinates",
+    ):
+        assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
+    assert "typed_proposal_path" not in prepare
+
+    capture = text[text.index("## Relay consent and capture") : text.index("## Run and report the review")]
+    assert capture.index("approval authorizes") < capture.index('"type": "capture"')
+    for marker in (
+        "dp-blueprint.approved.md",
+        "dp-blueprint.proposal.approved.json",
+        "dp-blueprint.lock.json",
+        "trusted `self_check.py`",
+        "agent-authored copies",
+    ):
+        assert marker in capture
+
+
+def test_workflow_v2_contract_inventory_is_executable_and_exact():
+    """The live B1 omission must be caught by the shipped instructions."""
+    workflow = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    job = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    generator = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
+
+    workflow_markers = (
+        "typed-v3 proposal's contract inventory is part of generation",
+        "every `proposal.inputs[*].expectations[*]` and `proposal.outputs[*].promises[*]` entry",
+        "exactly one verifier script",
+        "exactly one matching `custom(...)` chain at its declared attachment and phase",
+        "Carry the contract `id`, attachment, model, phase, guarantee, rule, and fields unchanged",
+        "ordinary `.promise(model)` is only the schema/model promise",
+        "capture/preflight reject a missing or extra inventory",
+        "custom input expectation cannot execute on the CSV-first runtime",
+        "never emit it as decorative unwired code",
+        "do not invent contracts from inferred schema facts",
+    )
+    for marker in workflow_markers:
+        assert marker in workflow, f"workflow-v2 contract inventory rule lost: {marker}"
+
+    generation_step = job[job.index("### Step 3") : job.index("### Step 3b")]
+    for marker in (
+        "typed v3 contract inventory is executable handoff, not optional metadata",
+        "every Input expectation and Output promise must become exactly one closure verifier",
+        "matching `custom(...)` wiring at its declared attachment and phase",
+        "ordinary `.promise(model)` never satisfies a custom contract",
+    ):
+        assert marker in generation_step, f"job-loop handoff contract lost: {marker}"
+
+    generator_workflow = generator[generator.index("## Workflow") : generator.index("### Step 1")]
+    for marker in (
+        "Workflow-v2 contract inventory is a hard generation invariant.",
+        "exactly one verifier script under `contracts/`",
+        "matching `custom(...)` wiring at its declared attachment and phase",
+        "supervisor capture and preflight reject both missing and extra inventory",
+        "custom input expectation is unsupported on the CSV-first runtime",
+        "Wire each output promise when its runtime is supported",
+        "do not invent contracts from inferred schema facts",
+    ):
+        assert marker in generator_workflow, f"generator contract invariant lost: {marker}"
+
+    invariants = generator[generator.index("## Invariants") :]
+    assert "never optional decoration" in invariants
+    assert "Capture/preflight reject missing, extra, placeholder, or unwired contracts" in invariants
+
+
+def test_generator_invariants_separate_authored_and_capture_owned_files():
+    """Workflow-v2 must not ask the agent to create supervisor-owned records."""
+    text = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
+    invariants = text[text.index("## Invariants") :]
+    for marker in (
+        "After supervisor capture, the retained closure contains the complete file set",
+        "This is the captured result, not the pre-capture authored-tree requirement",
+        "under workflow-v2, emit only",
+        "Do not emit, initialize, verify, or require",
+        "the supervisor materializes and validates those files during capture",
+    ):
+        assert marker in invariants, f"workflow-v2 ownership boundary lost: {marker}"
+
+    authored = invariants[
+        invariants.index("under workflow-v2, emit only") : invariants.index("Do not emit")
+    ]
+    assert "dp-blueprint.approved.md" not in authored
+    assert "dp-blueprint.lock.json" not in authored
+    assert "build-record.json" not in authored
 
 
 def test_job_helper_is_bound_to_the_exact_staged_skill_release():
@@ -334,8 +439,15 @@ def test_admission_and_reset_never_use_local_completion_or_undo_claims():
 
 def test_capture_is_immutable_and_remediation_creates_a_new_review_generation():
     text = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
-    assert text.index("Complete the generator self-check") < text.index('"type": "capture"')
-    assert "do not mutate that authoring tree" in text
+    assert text.index("approval authorizes") < text.index('"type": "capture"')
+    for marker in (
+        "dp-blueprint.proposal.approved.json",
+        "the trusted `self_check.py`",
+        "Agent-authored copies of those reserved surfaces are rejected",
+        "agent-side self-check and lock verification are optional evidence only",
+    ):
+        assert marker in text
+    assert "Do not mutate that authoring tree" in text
     assert "one retained-input review per capture generation" in text
     assert "reset the returned capture requirement" in text
     assert "recapture it, and run a fresh review" in text
@@ -372,10 +484,10 @@ def test_scheduling_reference_uses_the_same_mandatory_immutable_review_contract(
         "Step 4 must refuse check_data_product and build_data_product",
     ):
         assert obsolete not in checkpoint
-    assert "Finish generator Step 7 before capture" in checkpoint
+    assert "Finish the generator handoff before capture" in checkpoint
     assert "external `review-record.json` ledger" in checkpoint
     assert "exactly one built-in read-only `Agent` or `Task` review per capture generation" in checkpoint
-    assert "reset, local correction, self-check, recapture" in checkpoint
+    assert "reset, local correction, optional" in checkpoint
 
 
 def test_build_record_never_places_post_capture_review_inside_the_closure():
@@ -402,12 +514,12 @@ def test_build_record_diagnostics_use_only_v2_supervisor_operations():
 def test_reviewer_skill_runs_only_on_supervisor_retained_post_check_inputs():
     text = " ".join(REVIEW_SKILL.read_text(encoding="utf-8").split())
     for marker in (
-        "generator self-check has already finished",
+        "Supervisor capture materialized and verified the reserved metadata and trusted `self_check.py`",
         "exactly one review is required for a capture generation after supervisor capture",
         "`review_input.retained_capture_root`",
         "`review_input.retained_blueprint_path`",
         "Never substitute the mutable authoring root",
-        "reset, correct locally, self-check, recapture",
+        "reset, correct locally, optionally check, recapture",
     ):
         assert marker in text, f"reviewer retained-input contract lost: {marker}"
     assert "before nxd-generate-data-product runs its Step 7 self-check" not in text

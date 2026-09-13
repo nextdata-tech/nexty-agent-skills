@@ -30,6 +30,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
+from dp_scenarios.runner.review_guard import settings_payload, write_initial_state
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
@@ -55,11 +56,64 @@ closure in the workspace's closure/ directory and keep any blueprint at the
 workspace root. Use the nxd-desktop MCP tools for workflow capability,
 preparation, consent relay, capture, review reporting, validation, admission,
 serving, inspection, and governed queries; do not invoke
-nxd-desktop-supervisor from Bash. Follow the installed Nexty skills and answer
-the operator directly after each turn. The runner owns machine evidence; do
-not create or edit artifacts/ files or ledger-extra.json.
+nxd-desktop-supervisor from Bash. When a supervisor response requires a
+retained-capture review, the Agent/Task prompt must contain this exact
+standalone marker line with no punctuation:
+NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
+Replace only closure_path and review_round_index: use a relative closure path
+and the next zero-based index; keep the other constants unchanged. Follow the
+installed Nexty skills and answer the operator directly after each turn. The
+runner owns machine evidence; do not create or edit artifacts/ files or
+ledger-extra.json.
 
-If you perform the self-check and adversarial review, write only their short
+For generated-data-product workflow-v2 construction, after the prose blueprint
+passes deterministic validation, write the complete caller-authored typed
+proposal JSON beside it as dp-blueprint.proposal.json, omitting source_hash.
+Parse and validate its proposal content before prepare, and include the same object inline as typed_proposal in the
+prepare_workflow request. The supervisor owns the canonical source_hash: do
+not compute or guess it in a shellless session, and do not treat that one
+supervisor-owned field as a blocker. Only the returned session_decision consent
+action is approval. Bash may be unavailable under OAuth: do not hand-author
+hashes, locks, reserved metadata, or checker copies. Supervisor capture materializes
+and verifies dp-blueprint.approved.md, dp-blueprint.proposal.approved.json,
+dp-blueprint.lock.json, and the trusted self_check.py; a placeholder or
+agent-authored copy is rejected.
+
+After the review child returns claims, keep the rich review ledger in the
+job-level review-record.json. Relay only the bounded report in
+action.parameters.report. That value must be an object with exactly this
+schema and no other keys:
+{
+  "schema": "nxd-conversation-review-v1",
+  "verdict": "clear",
+  "findings": [],
+  "rejection_code": null
+}
+Use these exact combinations: clear has an empty findings list and no
+rejection code; findings has one or more projected findings and no rejection
+code; rejected has an empty findings list and uses rejection_code:
+"scope_refused"; indeterminate has no rejection code and may preserve bounded
+partial findings. Project each finding to exactly {"id", "severity",
+"description"}; map HIGH or MEDIUM claims to blocking and LOW claims to
+advisory. The report severity values must be the lowercase wire literals
+"blocking" or "advisory"; never send reviewer values HIGH, MEDIUM, or LOW.
+Never send claims, high_severity_count, or outcome directly. In the
+enclosing action.parameters, keep requirement_id, generation, subject_sha256,
+dependency_evidence_sha256, and session_ref as siblings of report, using the
+values returned by the supervisor; do not put those binding fields inside
+report. The supervisor derives evidence identity from its current binding;
+caller-provided claims are not execution authority.
+
+After a report_requirement result, inspect its report verdict before using the
+returned next_actions. For findings, rejected, or indeterminate, relay the
+bounded report to the operator and return control for user adjudication. In
+that same turn, do not reset, edit the closure, recapture, re-review, validate,
+admit, or start_run. Only a clear report permits following the returned
+next_actions toward validation and admission. A finding or reviewer claim is
+not permission to auto-fix: never turn claims into permission or suppress the
+findings. Preserve the exact schema, binding, and credential rules above.
+
+If you perform an optional agent-side self-check and adversarial review, write only their short
 outcomes to agent-attestations.json at your workspace root -- the same file
 NXD_EVAL_ATTESTATIONS_PATH names, given here by name because a run without Bash
 has no way to expand that variable. This is a non-authoritative attestation
@@ -122,9 +176,11 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "WebFetch: WebFetch against the loopback URL bypasses the connector under "
     "test, so its traffic is not the thing this run is measuring. Probing the "
     "source is expected and is not restricted.",
-    "Before authoring a closure, draft the blueprint, require "
+    "Before authoring a closure, draft the blueprint and its real typed proposal "
+    "file, parse the proposal object, require "
     "get_workflow_capabilities to report execution_enabled true, and call "
-    "prepare_workflow for that exact blueprint. Ask the operator for explicit "
+    "prepare_workflow for that exact blueprint/proposal pair, including its "
+    "inline typed_proposal object. Ask the operator for explicit "
     "approval of the prepared blueprint; treat only that explicit operator "
     "approval as authorization to generate or modify the closure. A scope "
     "correction, answer, or additional instruction is not approval unless the "
@@ -140,10 +196,30 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "After the operator approves the blueprint, do not ask for another "
     "confirmation; proceed with the work under the installed Nexty skills' "
     "own flow.",
-    "After the approved closure passes its generator self-check, follow only "
-    "the workflow response's current next_actions through capture, one "
+    "After consent, follow only the workflow response's current next_actions "
+    "through supervisor capture, one "
     "retained-input conversation review, trusted validation, and start_run. "
     "Never fall back to check_data_product or build_data_product.",
+    "When capture returns a review action, dispatch exactly one general-purpose "
+    "Agent or Task conversation child with the supervisor-provided review_input "
+    "and this exact canonical NXD_REVIEW_DISPATCH marker syntax:\n"
+    "NXD_REVIEW_DISPATCH {\"closure_path\":\"closure\",\"request_contract\":\"sanitized_original_request\",\"return\":\"claims_only\",\"review_round_index\":0}\n"
+    "Replace only closure_path and review_round_index: use the relative "
+    "closure path and the next zero-based index; keep request_contract and "
+    "return unchanged, never use the absolute retained-capture path, and then "
+    "wait for its claims; the reviewer must run inline (run_in_background=false). "
+    "The main marker line must use exactly the NXD_REVIEW_DISPATCH keys and "
+    "constant values; the example's 0 is only the first-round index, and actual "
+    "dispatches use the next zero-based index. "
+    "The main thread must not invoke "
+    "Skill(nxd-review-closure) or inspect the retained capture itself; after the "
+    "child returns, treat that result as the complete review, do not call Skill, "
+    "Read, Glob, or another review tool in the main thread, and relay its bounded "
+    "report with the returned report_requirement action before following the "
+    "next_actions response. This is an owning-thread instruction: the dispatched "
+    "review child must not invoke Agent or Task, workflow/MCP tools, or any other "
+    "child; it loads nxd-review-closure once, uses only its read-only tools, and "
+    "returns claims to the owner.",
     "If workflow validation or admission fails, inspect the returned workflow "
     "state once, make a targeted repair through reset and a new capture when "
     "required, and retry rather than repeating an identical action.",
@@ -1028,6 +1104,9 @@ class ClaudeCodeAdapter:
         self.allowed_tools = allowed_tools
         self._stdio: Any = None
         self._temp: tempfile.TemporaryDirectory[str] | None = None
+        self._review_guard_temp: tempfile.TemporaryDirectory[str] | None = None
+        self._review_guard_state: Path | None = None
+        self._review_guard_settings: Path | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr: deque[str] = deque(maxlen=200)
         self._stderr_thread: threading.Thread | None = None
@@ -1068,6 +1147,7 @@ class ClaudeCodeAdapter:
         mcp_config: Path | str,
         strict_mcp_config: bool,
         mcp_allowed_tools: str,
+        settings_path: Path | str | None = None,
     ) -> list[str]:
         """Return the exact Claude Code argv this adapter would spawn.
 
@@ -1095,6 +1175,10 @@ class ClaudeCodeAdapter:
             self._session_id,
             "--output-format",
             "stream-json",
+            # Forward child messages with parent_tool_use_id so the run-scoped
+            # review guard can distinguish the retained-capture child from
+            # the owning conversation's pending-relay state.
+            "--forward-subagent-text",
             "--verbose",
             "--model",
             self.model,
@@ -1116,6 +1200,9 @@ class ClaudeCodeAdapter:
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        effective_settings = settings_path or self._review_guard_settings
+        if effective_settings is not None:
+            command.extend(("--settings", str(effective_settings), "--include-hook-events"))
         denied_tools = self.denied_tools()
         if denied_tools:
             command.extend(("--disallowedTools", ",".join(denied_tools)))
@@ -1146,6 +1233,23 @@ class ClaudeCodeAdapter:
             if not path.exists():
                 raise ClaudeAdapterError(f"{label} does not exist: {path}")
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self._review_guard_temp = tempfile.TemporaryDirectory(prefix="dp-scenario-review-guard-")
+        guard_dir = Path(self._review_guard_temp.name)
+        self._review_guard_state = guard_dir / "state.json"
+        self._review_guard_settings = guard_dir / "settings.json"
+        write_initial_state(self._review_guard_state, workspace_root=Path.cwd())
+        self._review_guard_settings.write_text(
+            json.dumps(
+                settings_payload(
+                    python=sys.executable,
+                    script=Path(__file__).resolve().with_name("review_guard.py"),
+                ),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         if self.mcp_config is None:
             self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
             state_dir = Path(self._temp.name) / "desktop-state"
@@ -1189,6 +1293,7 @@ class ClaudeCodeAdapter:
         # with a matched probe: unset launches in the background, this set
         # returns the child's reply inline in the same tool result.
         environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        environment["NXD_EVAL_REVIEW_GUARD_STATE"] = str(self._review_guard_state)
         if self.claude_config_dir is not None:
             environment["CLAUDE_CONFIG_DIR"] = str(self.claude_config_dir)
         self._process = subprocess.Popen(
@@ -1341,6 +1446,7 @@ class ClaudeCodeAdapter:
                 workflow=workflow if isinstance(workflow, str) and workflow else None,
             )
         _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
+        self._record_review_guard_state()
         with contextlib.suppress(OSError):
             trace_path = getattr(self._stdio, "trace_path", None)
             if trace_path is not None and Path(trace_path).is_file():
@@ -1370,6 +1476,30 @@ class ClaudeCodeAdapter:
             terminal_result_subtype=result.terminal_result_subtype,
             terminal_result_is_error=result.terminal_result_is_error,
         )
+
+    def _record_review_guard_state(self) -> None:
+        """Persist a credential-free hook-state diagnostic for the run."""
+
+        guard_state = getattr(self, "_review_guard_state", None)
+        if guard_state is None:
+            return
+        try:
+            state = json.loads(guard_state.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return
+        if not isinstance(state, Mapping):
+            return
+        safe = {
+            key: state[key]
+            for key in ("version", "state", "workflow", "revision", "generation", "review_round_index")
+            if key in state and isinstance(state[key], (str, int)) and not isinstance(state[key], bool)
+        }
+        with contextlib.suppress(OSError):
+            self.artifact_dir.mkdir(parents=True, exist_ok=True)
+            (self.artifact_dir / "review-guard-state.json").write_text(
+                json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
 
     def send(self, request: Mapping[str, object]) -> TurnResult:
         """Forward one harness request and return one typed observation."""
@@ -1460,6 +1590,11 @@ class ClaudeCodeAdapter:
         if self._temp is not None:
             self._temp.cleanup()
             self._temp = None
+        if self._review_guard_temp is not None:
+            self._review_guard_temp.cleanup()
+            self._review_guard_temp = None
+            self._review_guard_state = None
+            self._review_guard_settings = None
 
 
 def _write_result(value: TurnResult) -> None:

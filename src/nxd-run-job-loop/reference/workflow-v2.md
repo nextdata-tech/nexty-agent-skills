@@ -25,9 +25,12 @@ catalog, a binary, or a previous session.
 
 ## Prepare the prose blueprint
 
-Write and validate the prose `dp-blueprint.md` first. Then call
-`prepare_workflow` against that exact file, before the approval turn and before
-generating the closure:
+Write and deterministically validate the prose `dp-blueprint.md` first. Then
+write the exact, real typed proposal JSON beside it as
+`dp-blueprint.proposal.json`. Parse that complete object and validate/bind it to
+the blueprint before consent, then call `prepare_workflow` with the inline
+`typed_proposal` object, before the approval turn and before generating the
+closure:
 
 ```json
 {
@@ -35,9 +38,51 @@ generating the closure:
   "workflow": "<workflow>",
   "kind": "generated-data-product",
   "blueprint_path": "/host-visible/nxd-jobs/<workflow>/dp-blueprint.md",
+  "typed_proposal": {
+    "schema": "nxd-dp-spec-proposal-v3",
+    "authoring_version": "nxd-dp-spec-authoring-v1",
+    "proposal": { "<complete typed proposal payload>": "from dp-blueprint.proposal.json" },
+    "provenance": { "<complete provenance map>": "from dp-blueprint.proposal.json" },
+    "source_spans": { "<complete source-span map>": "from dp-blueprint.proposal.json" },
+    "anchors": { "<complete anchors map>": "from dp-blueprint.proposal.json" },
+    "echo": { "text": "<complete natural-language echo-back>", "coverage": ["<all covered paths>"] }
+  },
   "requested_transform_budget_secs": 60
 }
 ```
+
+The typed-v3 proposal's contract inventory is part of generation, not optional
+closure decoration. Compile every `proposal.inputs[*].expectations[*]` and
+`proposal.outputs[*].promises[*]` entry into exactly one verifier script and
+exactly one matching `custom(...)` chain at its declared attachment and phase.
+Carry the contract `id`, attachment, model, phase, guarantee, rule, and fields
+unchanged. An ordinary `.promise(model)` is only the schema/model promise; it
+does not satisfy a custom contract. Do not add extra custom contracts,
+placeholders, or unwired scripts: capture/preflight reject a missing or extra
+inventory. For an API source, fail and ask for a supported phase when a custom
+input expectation cannot execute on the CSV-first runtime; never emit it as
+decorative unwired code. Wire output promises when their runtime is supported,
+and do not invent contracts from inferred schema facts.
+
+Source spans are exact coordinates from the trusted parser, not approximate
+Markdown locations. Copy all four integers (`line_start`, `line_end`,
+`offset_start`, and `offset_end`) from the parser's source map for the matching
+path. For a `###` subsection, the `.text` span covers the subsection body only:
+the heading has its own source-map path, while the parser's exact block range
+may include separator blank lines. Do not trim or widen that range. An anchor
+maps the parser source path to a typed proposal path; omit it when the paths
+already match. Do not calculate spans from memory; rerun the parser after every
+blueprint edit and validate the exact proposal before calling `prepare_workflow`.
+
+If `prepare_workflow` returns `v3.provenance.span_mismatch` with a structured
+`validation_issue.expected_source_span`, replace only that path's coordinates
+with the returned four integers and retry the exact proposal. Treat the hint as
+coordinates, not permission to widen the span or alter the typed value.
+
+Omit `source_hash` from the caller-authored object. The supervisor inserts or
+replaces it with the canonical hash of the retained Markdown before validating
+and binding the proposal; callers must not guess, hand-compute, or send a
+pseudo-hash for this field.
 
 Use the returned `revision`, `invalidation_epoch`, requirement identities,
 subjects, and `next_actions` as the current state. The response is a durable
@@ -75,13 +120,19 @@ request.
 }
 ```
 
-The approval authorizes the already presented plan. Generate the closure only
-after this action succeeds. Complete the generator self-check and lock verify
-before capture so all `build-record.json` mutations are already durable. Then
-follow the returned `next_actions` and call the indicated `capture` action with
-the generated closure's host-visible authoring root. Capture is the supervisor's
-retained, sealed input for all later work; do not mutate that authoring tree or
-run review/validation against a mutable path after capture.
+The approval authorizes the already presented plan and the proposal bound during
+prepare. Generate the closure only after this action succeeds. Under the
+shellless contract, do not run `dp_diagnostics.py lock write`, hand-author
+reserved v3 metadata, or copy a checker into the closure before capture. Follow
+the returned `next_actions` and call the indicated `capture` action with the
+generated closure's host-visible authoring root. Capture is the supervisor's
+retained, sealed input for all later work: it materializes and verifies
+`dp-blueprint.approved.md`, `dp-blueprint.proposal.approved.json`,
+`dp-blueprint.lock.json`, and the trusted `self_check.py`. Agent-authored copies
+of those reserved surfaces are rejected. If helper tools exist, agent-side
+self-check and lock verification are optional evidence only; they do not
+replace supervisor capture or strict admission. Do not mutate that authoring
+tree or run review/validation against a mutable path after capture.
 
 When this flow is being run by the dp-scenarios harness, persist the short
 construction attestations before `start_run`. Write the root JSON array to the
@@ -116,6 +167,14 @@ non-authoritative harness observation; it never replaces the durable
 }
 ```
 
+Capture is supervisor-owned materialization, not an agent-authored snapshot.
+The supervisor generates and verifies the reserved v3 metadata
+`dp-blueprint.approved.md`, `dp-blueprint.proposal.approved.json`,
+`dp-blueprint.lock.json`, and the trusted `self_check.py`; agent-authored copies
+of those files, hashes, or locks are rejected. The agent may run available
+self-check or lock tools as optional evidence, but those checks do not replace
+capture or strict admission.
+
 ## Run and report the review
 
 When capture returns a review action, use its `review_input` exactly as supplied
@@ -125,7 +184,11 @@ of the returned review action, then take `review_input` from the matching
 `RequirementView`. Never
 take a `review_input` from another requirement, infer one from its array
 position, or substitute the mutable authoring root. Use only that matching view.
-The owning/main thread must
+The owning/main thread owns the complete workflow-v2 sequence: it performs
+semantic inference and closure generation, captures the closure, dispatches the
+review child, and relays every workflow action. Do not delegate Steps 2–3,
+`advance_workflow`, or `report_requirement` to a child. The owning/main thread
+must
 now make exactly one built-in `Agent` or `Task` dispatch for this capture
 generation. A `general-purpose` subagent is acceptable; the reviewer is a
 conversation child, not a supervisor/MCP operation. Its prompt must tell the
@@ -184,7 +247,8 @@ never turn them into `clear` or treat a missing report as approval.
 There is exactly one retained-input review per capture generation, not one per
 workflow lifetime. When an accepted finding changes behavior, record the user
 decision in the external ledger, reset the returned capture requirement, edit
-and self-check the mutable closure, recapture it, and run a fresh review for the
+and optionally check the mutable closure when tools exist, recapture it, and run
+a fresh review for the
 new generation. Do not report the old generation as clear.
 
 Relay the report with the requirement's returned generation, subject digest,

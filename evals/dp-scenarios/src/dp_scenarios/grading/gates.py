@@ -198,6 +198,111 @@ def _result(
 
 CLOSURE_DIR = "closure"
 
+_INLINE_TYPED_PROPOSAL_KEYS = frozenset(
+    {"schema", "authoring_version", "proposal", "provenance", "source_spans", "anchors", "echo"}
+)
+
+
+def _is_real_inline_typed_proposal(value: object) -> bool:
+    """Recognize the complete inline v3 envelope without grading its contents."""
+
+    return (
+        isinstance(value, Mapping)
+        and _INLINE_TYPED_PROPOSAL_KEYS.issubset(value)
+        and isinstance(value.get("proposal"), Mapping)
+        and bool(value.get("proposal"))
+    )
+
+
+def _same_observed_path(
+    expected: str, observed: str, *, workspace_root: Path | None
+) -> bool:
+    """Resolve both paths against the known agent workspace and compare exactly."""
+
+    expected_path = Path(expected.replace("\\", "/"))
+    observed_path = Path(observed.replace("\\", "/"))
+    if workspace_root is None:
+        return not expected_path.is_absolute() and expected_path == observed_path
+    root = workspace_root.resolve()
+    expected_resolved = (
+        expected_path if expected_path.is_absolute() else root / expected_path
+    ).resolve()
+    observed_resolved = (
+        observed_path if observed_path.is_absolute() else root / observed_path
+    ).resolve()
+    return expected_resolved == observed_resolved
+
+
+def _proposal_file_matches(
+    file: Mapping[str, object],
+    *,
+    expected_path: str,
+    typed_proposal: Mapping[str, object],
+    workspace_root: Path | None,
+) -> bool:
+    path = file.get("path")
+    if not isinstance(path, str) or not _same_observed_path(
+        expected_path, path, workspace_root=workspace_root
+    ):
+        return False
+    content = file.get("content")
+    if isinstance(content, bytes):
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            return False
+    return isinstance(content, Mapping) and dict(content) == dict(typed_proposal)
+
+
+def _proposal_file_was_observed_by_prepare(
+    observations: object,
+    prepare_position: EventPosition,
+    *,
+    blueprint_path: str,
+    typed_proposal: Mapping[str, object],
+    workspace_root: Path | None,
+) -> bool:
+    """Require the exact proposal file by the turn containing preparation.
+
+    ``files_touched`` is an end-of-turn workspace snapshot, so it cannot prove
+    whether a same-turn write happened before or after the MCP call.  Accepting
+    the prepare turn is therefore the honest boundary; the supervisor remains
+    the authority for validating and binding the inline proposal itself.
+    """
+
+    blueprint = PurePosixPath(blueprint_path.replace("\\", "/"))
+    expected_path = str(blueprint.with_name("dp-blueprint.proposal.json"))
+
+    if not isinstance(observations, Mapping):
+        return False
+    turns = observations.get("turns")
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return False
+    for turn in turns:
+        if not isinstance(turn, Mapping) or not _is_int(turn.get("turn")):
+            continue
+        if int(turn["turn"]) > prepare_position.turn:
+            break
+        files = turn.get("files_touched")
+        if not isinstance(files, Sequence) or isinstance(files, (str, bytes, bytearray)):
+            continue
+        for file in files:
+            if not isinstance(file, Mapping):
+                continue
+            if _proposal_file_matches(
+                file,
+                expected_path=expected_path,
+                typed_proposal=typed_proposal,
+                workspace_root=workspace_root,
+            ):
+                return True
+    return False
+
 
 def _authored_closure(files: object) -> bool:
     """Report whether a turn wrote into the authored data-product closure.
@@ -248,6 +353,7 @@ def gate_intake(
     ledger: object,
     *,
     desktop_server_name: str = "nxd-desktop",
+    agent_root: Path | None = None,
 ) -> GateResult:
     """Require approval no later than codegen and bind v2 publication to it."""
 
@@ -357,8 +463,8 @@ def gate_intake(
                 and isinstance(row.get("artifact_ref"), str)
                 and row.get("artifact_ref")
             ]
-            prepared = [
-                (position, arguments["workflow"])
+            prepare_candidates = [
+                (position, arguments["workflow"], arguments)
                 for position, call in positioned
                 if isinstance(call.get("name"), str)
                 and call["name"].casefold() == prepare_name
@@ -368,6 +474,11 @@ def gate_intake(
                 and isinstance((result := call.get("result")), Mapping)
                 and isinstance((content := result.get("content")), Mapping)
                 and content.get("workflow") == arguments["workflow"]
+            ]
+            prepared = [
+                (position, arguments["workflow"])
+                for position, workflow, arguments in prepare_candidates
+                if _is_real_inline_typed_proposal(arguments.get("typed_proposal"))
             ]
             decisions: list[tuple[EventPosition, str, str]] = []
             for position, call in positioned:
@@ -413,6 +524,33 @@ def gate_intake(
                 )
             else:
                 first_approval = min(int(row["turn"]) for row in approval_rows)
+                if prepare_candidates and not prepared:
+                    findings.append(
+                        Finding(
+                            "intake_workflow_typed_proposal_missing",
+                            "prepare_workflow did not carry a complete inline typed_proposal object",
+                        )
+                    )
+                for position, _, arguments in prepare_candidates:
+                    if not _is_real_inline_typed_proposal(arguments.get("typed_proposal")):
+                        continue
+                    blueprint_path = arguments.get("blueprint_path")
+                    typed_proposal = arguments.get("typed_proposal")
+                    if not isinstance(blueprint_path, str) or not isinstance(
+                        typed_proposal, Mapping
+                    ) or not _proposal_file_was_observed_by_prepare(
+                        observations,
+                        position,
+                        blueprint_path=blueprint_path,
+                        typed_proposal=typed_proposal,
+                        workspace_root=agent_root,
+                    ):
+                        findings.append(
+                            Finding(
+                                "intake_workflow_typed_proposal_file_missing",
+                                "the exact dp-blueprint.proposal.json was not observed by prepare_workflow",
+                            )
+                        )
                 if not any(
                     position.turn < first_approval
                     and workflow in publication_workflows

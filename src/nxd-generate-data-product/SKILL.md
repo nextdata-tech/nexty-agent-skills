@@ -51,10 +51,12 @@ The owning loop translates status, failures, costs, and publication state into p
 
 ## The closure layout
 
-Choose and normalize one absolute `<dp-root>` — the exact directory submitted through the supervisor's returned `capture` action — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`. For an `api-source`, the sole initial-write exception is the closure-local `connectivity_check.py`: author it first from the settled plan so it can perform the payload-inspection gate described in [reference/api-source.md](reference/api-source.md#payload-inspection-gate--before-authoring).
-Never place credentials, `SENSITIVE`, `.gitignore`, or the profile beside/above `<dp-root>`; split artifacts must be consolidated first. Use this same root for capture, self-check, and lock verification.
+Choose and normalize one absolute `<dp-root>` — the exact directory submitted through the supervisor's returned `capture` action — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`. A declared custom contract additionally requires exactly one verifier under `contracts/expectations/` or `contracts/promises/` plus its matching `spec.py` wiring; an empty inventory has no contract placeholder. For an `api-source`, the sole initial-write exception is the closure-local `connectivity_check.py`: author it first from the settled plan so it can perform the payload-inspection gate described in [reference/api-source.md](reference/api-source.md#payload-inspection-gate--before-authoring).
+Never place credentials, `SENSITIVE`, `.gitignore`, or the profile beside/above `<dp-root>`; split artifacts must be consolidated first. Use this same root for capture; supervisor capture owns reserved metadata and trusted checks.
 
-The author emits **Python and prerequisite config only**:
+The author emits **executable closure inputs only**. Supervisor capture
+materializes and verifies the reserved snapshots, lock, build record, and
+trusted checker:
 
 ```
 …/nxd-jobs/<workflow>/
@@ -66,10 +68,10 @@ The author emits **Python and prerequisite config only**:
     ├── transform/
     │   └── main.py              # the dlt-through-port ingest (standalone entrypoint)
     ├── requirements.txt         # proven pins (below)
-    ├── dp-blueprint.approved.md # Step 6a: byte copy of the approved IR
-    ├── dp-blueprint.lock.json   # its canonical hash + compiler version
-    ├── build-record.json        # generated: stages, attempts, concessions, blockers
-    ├── README.md                # generated: reopen recipe (+ capability preconditions when applicable) + credentials block ONLY
+    ├── dp-blueprint.approved.md # supervisor capture: byte copy of approved IR
+    ├── dp-blueprint.lock.json   # supervisor capture: canonical hash + compiler version
+    ├── build-record.json        # supervisor capture: stages, attempts, concessions, blockers
+    ├── README.md                # author output: reopen recipe + credentials block ONLY; declared contracts/ verifiers are exact, not placeholders
     ├── csv-source-path          # one line: relative path to the CSV export root
     └── data/                    # the connector export: data/<base_model>/*.csv
         └── <base_model>/…       # base models only — derived models have no data dir
@@ -111,6 +113,19 @@ keys.
 ## Workflow
 
 When the connected desktop supervisor advertises v2 execution, the owning job-loop must use its capability-gated construction sequence in the nxd-run-job-loop skill's `reference/workflow-v2.md`: call `get_workflow_capabilities` and `prepare_workflow`, relay `session_decision` exactly, capture and review retained paths, report through `report_requirement`, and follow `next_actions` through admitted `start_run`. This skill never supplies a legacy construction fallback.
+**Workflow-v2 contract inventory is a hard generation invariant.** Every typed-v3
+Input expectation and Output promise (and every proposal contract derived from
+them) produces exactly one verifier script under `contracts/` and exactly one
+matching `custom(...)` wiring at its declared attachment and phase. Carry its
+name, attachment, model, phase, guarantee, rule, and fields through unchanged;
+ordinary `.promise(model)` does not satisfy a custom contract. Add no extra
+custom contract, placeholder, or decorative unwired script: supervisor capture
+and preflight reject both missing and extra inventory. For an API source, a
+custom input expectation is unsupported on the CSV-first runtime; fail/ask and
+move the approved guarantee to a supported output promise rather than emitting
+an unwired decorative contract; ask for an approved supported output-promise
+phase or a CSV export. Wire each output promise when its runtime is supported;
+do not invent contracts from inferred schema facts.
 The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value; if it is absent, return to nxd-run-job-loop — never reconstruct it from the closure or this skill's cwd.
 **Selective-install dependency:** this skill needs **nxd-run-job-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-data-product` alone is not a supported substitute for that handoff. For any `api-source`, follow the single authoring gate in [reference/api-source.md](reference/api-source.md#payload-inspection-gate--before-authoring): the closure-local stdlib probe is authored first and, when credentials are available, runs before the remaining closure artifacts. Missing credentials permit structural authoring from the settled plan only; payload inspection and connectivity are then **not run** and **unverified**, so source validation and the complete happy path must not be claimed.
 ### Step 1 — Collect the inputs
@@ -425,57 +440,39 @@ not float them; `pandas` is required by dlt's `read_csv`; Python `>=3.12,<3.13`.
 **Other connector types add to these pins, never replace them** — `reference/` has
 the per-type additions (Parquet extra, `dlt[sql_database]` + a vendor driver, or none).
 
-### Step 6a — Snapshot the approved spec, open the build record (MANDATORY)
+### Step 6a — Declare the capture-owned snapshots
 
-The closure carries a queryable data product but **not** the plan behind it, and a
-cold reader has only the closure. So after approval — and only after — the approved
-spec is **byte-copied in** and hashed, beside a generated record of what the build
-did. Preconditions, procedure, and the `README.md` and `contracts/<name>.md` templates: [reference/closure-record.md](reference/closure-record.md).
-
-1. For a v3 plan, keep the exact typed proposal produced for the echo-back at
-   `<workflow>/dp-blueprint.proposal.json`. Then run
-   `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure> --proposal <workflow>/dp-blueprint.proposal.json`.
-   The command byte-copies both `dp-blueprint.approved.md` and
-   `dp-blueprint.proposal.approved.json`, requires `status: approved`, and verifies
-   the source/proposal hashes. Existing v2 closures continue using the same
-   command without `--proposal`.
-2. Run `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-blueprint.lock.json`, before Step 7 reads the record.
-3. Render `README.md`: the reopen recipe plus, only for a credentialed source, the
-   credentials block. No plan sections, no outcomes.
-
-Self-containment is now a **hash-checkable snapshot**, not a copy-never-point
-discipline, and `build-record.json` is **generated, never hand-authored**: outcomes
-— row counts, blockers, review rounds, concessions — are a pure product of the build
-and never go back into the IR. Neither replaces the machine-enforced surfaces:
-rulings still land as data (`nxd_decisions`, carrying both `status` and `provenance`) and the Step-3b asserts still run.
+For workflow-v2, `nxd-run-job-loop` writes and validates the exact typed proposal
+beside `dp-blueprint.md`, parses it, and passes the complete object inline as
+`typed_proposal` in `prepare_workflow`.
+The shellless generator emits only the executable closure and authored README.
+It must not run `dp_diagnostics.py lock write`, initialize reserved records, or
+hand-author `dp-blueprint.approved.md`, `dp-blueprint.proposal.approved.json`,
+`dp-blueprint.lock.json`, or a copy of `self_check.py` before capture. The
+supervisor materializes and verifies those surfaces during its returned capture
+action. See [reference/closure-record.md](reference/closure-record.md) for the
+capture contract; `build-record.json` remains generated, never hand-authored.
 
 ### Step 6b — Defer adversarial review to the job loop after capture
 
-Under workflow v2, do not dispatch the reviewer here. Continue through Step 7 so every local self-check/build-record mutation finishes, then return the closure to the owning `nxd-run-job-loop`. That job loop captures the immutable tree and dispatches exactly one built-in read-only reviewer through an `Agent` or `Task` conversation subagent per capture generation over the supervisor-provided retained capture and blueprint; its prompt loads `nxd-review-closure` and uses the canonical dispatch marker defined in `nxd-run-job-loop/reference/workflow-v2.md`. The reviewer is never supervisor-launched; the main thread relays its bounded result through `report_requirement`. The activated contract makes this review mandatory; there is no complexity-based skip or mutable-path duplicate.
-The main thread preserves the rich claim ledger outside the captured closure, reports its bounded projection through `report_requirement`, and resets, corrects, rechecks, recaptures, and re-reviews after an accepted change. Exact ordering and wire shapes are in `nxd-run-job-loop/reference/workflow-v2.md`; dispatch, sanitization, claim relay, and authorization remain governed by [reference/adversarial-review.md](reference/adversarial-review.md).
-### Step 7 — Self-check before handing off (MANDATORY)
-The closure-root self-check is the generator's record gate, distinct from the supervisor admission preflight; see [catalog-resources.md](../nxd-run-job-loop/reference/catalog-resources.md#preflight-before-build).
-
-Then the self-check. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the naming invariant (`models.py` == required `.promise` plus optional `.model` == `PHYSICAL_MODELS` == `main.<name>`), then confirm only `BASE_MODELS` matches `data/`, allowing an absent directory only for a listed optional-empty base model; derived models and semantic views have no source directory. **When a `dp-blueprint.md` governed the build, confirm shipped-matches-approved**: every
-promised model, gate, weight, band and `nxd_decisions` row traces to a spec
-section, and none carries a value the spec does not. Confirm the
-supplied export is unchanged, then run BOTH the self-check and the lock verify. **The self-check is shipped as a helper file**: `cp "$JOB_HELPER_DIR/scripts/self_check.py" <closure>/self_check.py`, then run it **from the closure root** (it resolves `models.py`, `spec.py`, `transform/`, ordinary `data/`, and labeled `data-<label>/` roots against its own working directory, so running it elsewhere reports `CANNOT READ`). Skipping this copy leaves nothing to execute, and the reach gate silently never runs. So: `cd <closure> && python3 self_check.py --json --record build-record.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform against a scratch DuckDB; stateful transforms are invoked a second time after a strict JSON state fold, so unchanged reruns must preserve materialization and row counts. **Structurally validates `models.py`/`spec.py` against
-the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
-installable here), runs **Phase E — the reach gate**, which decides BEFORE the transform is imported so the verdict precedes the act (`transform/main.py` may import no model-provider SDK, and no raw network transport unless `spec.py` declares an `api-source`/`db-source`; an import contradicting the declared connector type fails too, and `contracts/**/*.py` is scanned for model-SDK imports as well — a green Phase E is an import-level name check, not proof the transform is offline), runs **Phase C** (`dp-blueprint.approved.md` and `dp-blueprint.lock.json` present with the snapshot's bytes matching the lock, `build-record.json` present with a matching `compiled_from`, `README.md` present, no `../`-rooted contract pointer) and **Phase D — the policy boundary**: a promised
-`nxd_decisions` must be a BASE model with in-vocabulary `status` **and `provenance`** columns (settled-or-not and authored-by are separate required axes),
-and no landed policy value may also be a literal in the transform.
-Then it prints the **distribution** and **ABSENT** read-backs (recorded as data in `build-record.json` `readback`, still non-gating). Read `unverified:`, read the distributions (`UNIFORM`
-= a value you supplied, not one the data produced), and state both.
-Reading a failure: a read-back assert or unquoted `main.<name>` query failure
-means a name diverged — fix the NAME (`models.py`, `.promise`, `PHYSICAL_MODELS`,
-and `data/<name>/` for base models), never quote around it. A derived model's
-reconciliation assert (Step 3b) firing means the derivation is wrong — fix the
-LOGIC, never loosen the assert.
-**Database/API connectors need live credentials to dry-run.** With credentials, run each type's own connectivity check per its reference doc (`database-source.md` asserts `row_count > 0` per model; `api-source.md` makes one bounded request per resource and requires a parseable response) — never an exact fixture count. Without credentials, report source inspection and connectivity as **not run** and **unverified**; structural authoring may continue from a settled plan, but do not claim source validation or a complete happy path.
+Under workflow-v2, the legacy Step 7 self-check is an optional agent-side
+evidence phase, not a shellless gate. If the helper runtime and tools exist, the agent may run the
+closure-root self-check, lock verification, structural checks, and connector
+checks described in the reference docs. Record them as optional evidence only;
+they do not authorize capture, replace the trusted supervisor checker, or relax
+strict admission. Bash may be unavailable under OAuth, so never stall or
+substitute hand-authored hashes, locks, records, or checker copies when those
+tools cannot run. Return the authored executable closure to the job loop, which
+follows the supervisor's capture action before review, validation, and admission.
+That job loop dispatches exactly one built-in read-only reviewer over the
+supervisor-provided retained capture and blueprint; the reviewer remains a
+conversation child and never a supervisor operation.
+Dispatch, sanitization, claim relay, and authorization remain governed by
+[reference/adversarial-review.md](reference/adversarial-review.md).
 ## Invariants — NEVER violate these
-Verify the complete closure file set: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`, `README.md`, the connector companion artifact where the type has one — and, for a credentialed source, `SENSITIVE` and `.gitignore`. For 2+ labeled CSV sources, additionally verify the root-level `companion-files` manifest. For `api-source`, additionally require the closure-local `connectivity_check.py` probe; only its endpoint-map companion is absent because the endpoint map is `endpoint_<model>` attributes on the infra-profile service.
-- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `connectivity_check.py` for `api-source`, `transform/main.py`, `requirements.txt`, `dp-blueprint.approved.md`, the v3 `dp-blueprint.proposal.approved.json` when using the prose-first authoring path, `dp-blueprint.lock.json`, `build-record.json`, `README.md`, the connector companion artifact where the type has one — and, for a credentialed source, `SENSITIVE` and `.gitignore` (for `api-source`, the endpoint-map companion is absent because its map is carried by `endpoint_<model>` profile attributes; the connectivity probe is still required). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. The active `dp-blueprint.md` is v3 prose-first: expectations and promises are authored under Inputs and Outputs, while executable contracts and fixed local delivery remain internal.
-- **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, and a custom promise never replaces the ordinary `.promise(model)`. Create only contracts explicitly requested and wired to the relevant generated input/output; wiring is Step 4 and [reference/custom-contracts.md](reference/custom-contracts.md).
+After supervisor capture, the retained closure contains the complete file set: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`, `README.md`, the connector companion artifact where the type has one — and, for a credentialed source, `SENSITIVE` and `.gitignore`. This is the captured result, not the pre-capture authored-tree requirement. For 2+ labeled CSV sources, additionally verify the root-level `companion-files` manifest. For `api-source`, additionally require the closure-local `connectivity_check.py` probe; only its endpoint-map companion is absent because the endpoint map is `endpoint_<model>` attributes on the infra-profile service.
+- **Python-only closure**: under workflow-v2, emit only `spec.py`, `models.py`, `infra-profile.yaml`, `connectivity_check.py` for `api-source`, `transform/main.py`, `requirements.txt`, `README.md`, the connector companion artifact where the type has one — and, for a credentialed source, `SENSITIVE` and `.gitignore` (for `api-source`, the endpoint-map companion is absent because its map is carried by `endpoint_<model>` profile attributes; the connectivity probe is still required). Do not emit, initialize, verify, or require `dp-blueprint.approved.md`, `dp-blueprint.proposal.approved.json`, `dp-blueprint.lock.json`, or `build-record.json` in the authored tree; the supervisor materializes and validates those files during capture. NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. The active `dp-blueprint.md` and its typed proposal are authored beside the closure by the job loop: expectations and promises are authored under Inputs and Outputs, while executable contracts and fixed local delivery remain internal.
+- **Custom contracts are an exact executable inventory, never optional decoration** — every typed-v3 Input expectation and Output promise produces exactly one verifier and matching `custom(...)` wiring at its declared attachment and phase, carrying the same name, model, guarantee, rule, and fields; ordinary `.promise(model)` does not satisfy one. Capture/preflight reject missing, extra, placeholder, or unwired contracts. Create no contract from inferred schema facts; for API inputs, fail/ask when the runtime cannot execute the declared phase, while supported output promises remain wired. See [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): the approved `dp-blueprint.md` is byte-copied in as `dp-blueprint.approved.md` and bound by `dp-blueprint.lock.json`, so everything a later session needs to continue the work lives INSIDE the closure and self-containment is hash-checkable rather than a discipline anyone has to remember. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in the approved spec, as `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure, `../dp-blueprint.md` included. Phase C fails a missing snapshot, lock, `build-record.json` or `README.md`, a snapshot whose bytes no longer match the lock, and any closure-escaping contract reference.
 - **Scope is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in `Scope` (and so travels in `dp-blueprint.approved.md`), reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends.
 - **The naming invariant**: each physical model name == `models.py` `semantic_model` arg == `PHYSICAL_MODELS` == `main.<name>`, unquoted lowercase snake_case; required models also appear in `spec.py` as `.promise`, while optional-empty models appear there as `.model` and in `OPTIONAL_EMPTY_MODELS`. A physical table is expected for every required model and for every optional model that yields rows; only an absent optional-empty table is allowed. Base models additionally match the connector's per-model reference (`data/<name>/`, see "THE NAMING INVARIANT" table), with an absent optional base directory allowed only when it is listed as optional. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.

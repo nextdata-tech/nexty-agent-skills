@@ -246,6 +246,34 @@ def _workflow_v2_intake(
     desktop_server_name: str = "nxd-desktop",
     decision_response_workflow: str | None = "workflow",
 ) -> dict[str, object]:
+    typed_proposal = {
+        "schema": "nxd-dp-spec-proposal-v3",
+        "authoring_version": "nxd-dp-spec-authoring-v1",
+        "source_hash": "sha256:" + "0" * 64,
+        "proposal": {
+            "intent": "fixture intent",
+            "questions": [],
+            "scope": "fixture scope",
+            "terms": [],
+            "inputs": [],
+            "models": [{"id": "fixture_model", "fields": ["id"]}],
+            "transform": [{"id": "fixture_transform", "operation": "project"}],
+            "outputs": [],
+            "decisions": [],
+            "open_questions": [],
+            "delivery": {
+                "kind": "semantic_query",
+                "profile": "desktop-local",
+                "port": "duckdb",
+                "provenance": "platform_fixed",
+            },
+            "contracts": [],
+        },
+        "provenance": {"v3:intent.text": "explicit"},
+        "source_spans": {},
+        "anchors": {},
+        "echo": {"text": "fixture proposal", "coverage": ["v3:intent.text"]},
+    }
     tool_prefix = f"mcp__{desktop_server_name}__"
     prepare_calls = (
         [
@@ -254,6 +282,7 @@ def _workflow_v2_intake(
                 "arguments": {
                     "workflow": "workflow",
                     "blueprint_path": "dp-blueprint.md",
+                    "typed_proposal": typed_proposal,
                 },
                 "result": {"is_error": False, "content": {"workflow": "workflow"}},
             }
@@ -265,17 +294,27 @@ def _workflow_v2_intake(
         "rows": [
             {"record_type": "run_manifest"},
             {
-                "turn": 2,
+                "turn": 3,
                 "action_kind": "spec_approved",
                 "artifact_ref": "Approved.",
             },
-            {"turn": 2, "action_kind": "codegen"},
+            {"turn": 3, "action_kind": "codegen"},
         ],
         "observations": {
             "turns": [
-                {"turn": 1, "files_touched": [], "tool_calls": prepare_calls},
                 {
-                    "turn": 2,
+                    "turn": 1,
+                    "files_touched": [
+                        {
+                            "path": "dp-blueprint.proposal.json",
+                            "content": json.dumps(typed_proposal),
+                        }
+                    ],
+                    "tool_calls": [],
+                },
+                {"turn": 2, "files_touched": [], "tool_calls": prepare_calls},
+                {
+                    "turn": 3,
                     "files_touched": [{"path": "closure/spec.py"}],
                     "tool_calls": [
                         {
@@ -299,7 +338,7 @@ def _workflow_v2_intake(
                     ],
                 },
                 {
-                    "turn": 3,
+                    "turn": 4,
                     "files_touched": [],
                     "tool_calls": [
                         {
@@ -335,7 +374,7 @@ def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval(
     assert "intake_workflow_prepare_not_before_approval" in missing_prepare.codes
 
     wrong_workflow = _workflow_v2_intake()
-    decision = wrong_workflow["observations"]["turns"][1]["tool_calls"][0]
+    decision = wrong_workflow["observations"]["turns"][2]["tool_calls"][0]
     decision["arguments"]["workflow"] = "other-workflow"
     decision["result"]["content"]["workflow"] = "other-workflow"
     result = gate_intake(wrong_workflow)
@@ -352,12 +391,75 @@ def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval(
     assert "intake_workflow_approval_not_relayed" in missing_decision_workflow.codes
 
     malformed_decision_response = _workflow_v2_intake()
-    malformed_decision = malformed_decision_response["observations"]["turns"][1][
+    malformed_decision = malformed_decision_response["observations"]["turns"][2][
         "tool_calls"
     ][0]
     malformed_decision["result"]["content"] = ["not", "a", "mapping"]
     malformed = gate_intake(malformed_decision_response)
     assert "intake_workflow_approval_not_relayed" in malformed.codes
+
+
+def test_intake_requires_inline_proposal_and_real_file_before_prepare() -> None:
+    missing_inline = _workflow_v2_intake()
+    prepare = missing_inline["observations"]["turns"][1]["tool_calls"][0]
+    prepare["arguments"].pop("typed_proposal")
+    result = gate_intake(missing_inline)
+    assert "intake_workflow_typed_proposal_missing" in result.codes
+
+    missing_file = _workflow_v2_intake()
+    missing_file["observations"]["turns"][0]["files_touched"] = []
+    result = gate_intake(missing_file)
+    assert "intake_workflow_typed_proposal_file_missing" in result.codes
+
+
+def test_intake_binds_the_observed_proposal_to_the_prepared_blueprint() -> None:
+    supervisor_owned_hash = _workflow_v2_intake()
+    inline = supervisor_owned_hash["observations"]["turns"][1]["tool_calls"][0]["arguments"][
+        "typed_proposal"
+    ]
+    file_payload = json.loads(
+        supervisor_owned_hash["observations"]["turns"][0]["files_touched"][0]["content"]
+    )
+    inline.pop("source_hash")
+    file_payload.pop("source_hash")
+    supervisor_owned_hash["observations"]["turns"][0]["files_touched"][0]["content"] = json.dumps(
+        file_payload
+    )
+    assert gate_intake(supervisor_owned_hash).passed
+
+    same_turn = _workflow_v2_intake()
+    proposal_file = same_turn["observations"]["turns"][0]["files_touched"].pop()
+    same_turn["observations"]["turns"][1]["files_touched"] = [proposal_file]
+    assert gate_intake(same_turn).passed
+
+    mismatched = _workflow_v2_intake()
+    payload = json.loads(
+        mismatched["observations"]["turns"][0]["files_touched"][0]["content"]
+    )
+    payload["proposal"]["intent"] = "different from the inline proposal"
+    mismatched["observations"]["turns"][0]["files_touched"][0]["content"] = json.dumps(payload)
+    assert "intake_workflow_typed_proposal_file_missing" in gate_intake(mismatched).codes
+
+    unrelated = _workflow_v2_intake()
+    unrelated["observations"]["turns"][0]["files_touched"][0]["path"] = (
+        "unrelated/deep/dp-blueprint.proposal.json"
+    )
+    assert "intake_workflow_typed_proposal_file_missing" in gate_intake(unrelated).codes
+
+    absolute = _workflow_v2_intake()
+    absolute["observations"]["turns"][0]["files_touched"][0]["path"] = (
+        "agent/nxd-jobs/workflow/dp-blueprint.proposal.json"
+    )
+    absolute["observations"]["turns"][1]["tool_calls"][0]["arguments"][
+        "blueprint_path"
+    ] = "/workspace/agent/nxd-jobs/workflow/dp-blueprint.md"
+    assert gate_intake(absolute, agent_root=Path("/workspace")).passed
+    absolute["observations"]["turns"][0]["files_touched"][0]["path"] = (
+        "agent/agent/nxd-jobs/workflow/dp-blueprint.proposal.json"
+    )
+    assert "intake_workflow_typed_proposal_file_missing" in gate_intake(
+        absolute, agent_root=Path("/workspace")
+    ).codes
 
 
 def test_intake_uses_the_configured_desktop_server_name() -> None:

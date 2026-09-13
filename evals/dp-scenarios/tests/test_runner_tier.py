@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Mapping
@@ -52,6 +53,10 @@ from dp_scenarios.ledger.lint import LintReport
 
 
 ROOT = Path(__file__).parents[1]
+AUTHORING_SCRIPTS = ROOT.parents[1] / "src" / "nxd-run-job-loop" / "scripts"
+sys.path.insert(0, str(AUTHORING_SCRIPTS))
+
+import dp_spec_authoring as v3  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -366,6 +371,92 @@ def test_tier_runs_scenarios_concurrently_and_preserves_declaration_order(tmp_pa
     assert len({run.evidence_bundle_dir for run in runs}) == 2
 
 
+def test_tier_grading_uses_a_custom_live_workspace_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live grading must follow ``workspace_dir`` when it differs from base/agent."""
+
+    scenario = make_scenario("custom-workspace")
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "operator-observations.json").write_text(
+        json.dumps({"turns": [], "terminal_state": "completed", "tool_call_count": 0}),
+        encoding="utf-8",
+    )
+    custom_workspace = tmp_path / "custom-live-cwd"
+    base_dir = tmp_path / "run-base"
+    oracle_dir = tmp_path / "oracle"
+    oracle_dir.mkdir()
+    ledger_path = tmp_path / "ledger.jsonl"
+    ledger_path.write_text("", encoding="utf-8")
+    environment = SimpleNamespace(
+        base_dir=base_dir,
+        workspace_dir=custom_workspace,
+        ledger_path=ledger_path,
+        generated_fixture_manifest={},
+        mock_source=None,
+        oracle_dir=oracle_dir,
+        desktop_server_name="nxd-desktop",
+    )
+    captured: dict[str, Path] = {}
+
+    monkeypatch.setattr(tier_module, "_fixture_integrity_error", lambda _environment: None)
+    monkeypatch.setattr(tier_module, "read_ledger", lambda _path: [])
+    monkeypatch.setattr(
+        tier_module,
+        "_agent_attestations",
+        lambda root, **_kwargs: (
+            captured.__setitem__("attestations", root)
+            or SimpleNamespace(values=(), findings=())
+        ),
+    )
+    monkeypatch.setattr(
+        tier_module,
+        "_published_closure",
+        lambda _observations, _facts, **kwargs: (
+            captured.__setitem__("published", kwargs["agent_root"]) or None
+        ),
+    )
+    clean_gate = lambda name, **_kwargs: GateResult(name, True, 1, examined=True)  # noqa: E731
+    monkeypatch.setattr(
+        tier_module,
+        "gate_construction",
+        lambda *_args, **_kwargs: GateResult("construction", True, 1, examined=True),
+    )
+    monkeypatch.setattr(
+        tier_module,
+        "gate_intake",
+        lambda *_args, **kwargs: (
+            captured.__setitem__("intake", kwargs["agent_root"])
+            or GateResult("intake", True, 1, examined=True)
+        ),
+    )
+    monkeypatch.setattr(tier_module, "_capability_gate_result", lambda *_args: clean_gate("capability"))
+    monkeypatch.setattr(tier_module, "gate_narrowing", lambda *_args, **_kwargs: clean_gate("narrowing"))
+    monkeypatch.setattr(tier_module, "gate_build", lambda *_args: clean_gate("build"))
+    monkeypatch.setattr(
+        tier_module,
+        "gold_access_scan",
+        lambda *_args: SimpleNamespace(passed=True, examined=True, findings=()),
+    )
+    monkeypatch.setattr(tier_module, "gate_honesty", lambda *_args: LintReport(True, []))
+    monkeypatch.setattr(
+        tier_module,
+        "score_run",
+        lambda *_args, **_kwargs: SimpleNamespace(state=ScoreTerminalState.FAILED),
+    )
+
+    TierRunner([], pins=pins(), canary=clean_canary())._grade(
+        scenario,
+        environment,  # type: ignore[arg-type]
+        artifact_root,
+    )
+
+    assert captured == {
+        "attestations": custom_workspace,
+        "published": custom_workspace,
+        "intake": custom_workspace,
+    }
+
+
 def test_parallel_worker_failure_waits_for_and_cleans_all_environments(tmp_path: Path) -> None:
     scenarios = (make_scenario("bad"), make_scenario("good"))
     (tmp_path / "runs").mkdir()
@@ -493,15 +584,154 @@ def _completed_review_call() -> ToolCall:
 
 
 def _completed_prepare_call(workflow: str) -> ToolCall:
+    typed_proposal = _typed_proposal()
     return ToolCall(
         "mcp__nxd-desktop__prepare_workflow",
         arguments={
             "workflow": workflow,
             "kind": "generated-data-product",
-            "blueprint_path": "blueprint.json",
+            "blueprint_path": "dp-blueprint.md",
+            "typed_proposal": typed_proposal,
         },
         result={"is_error": False, "content": {"workflow": workflow}},
     )
+
+
+def _typed_proposal_file() -> TouchedFile:
+    return TouchedFile(
+        "dp-blueprint.proposal.json",
+        json.dumps(_typed_proposal(), sort_keys=True).encode("utf-8"),
+    )
+
+
+def _fixture_blueprint() -> str:
+    """Return the local Markdown source used to derive the replay proposal."""
+
+    return """---
+dp_spec_version: 3
+name: fixture_pipeline
+workflow: fixture-pipeline
+status: proposed
+---
+
+## Intent
+
+Answer the fixture question.
+
+## Questions
+
+### Fixture question
+
+What is the fixture answer?
+
+## Scope
+
+The supplied fixture only.
+
+## Terms
+
+## Inputs
+
+### Fixture input
+
+Use the supplied fixture input.
+
+## Models
+
+### Fixture model
+
+One row per fixture value.
+
+## Transform
+
+Project the fixture input into the fixture model.
+
+## Outputs
+
+### Fixture output
+
+Expose the fixture model.
+
+## Decisions
+
+## Open Questions
+"""
+
+
+def _typed_proposal(*, include_source_hash: bool = False) -> dict[str, object]:
+    """Build a complete v3 envelope from a validator-backed local blueprint.
+
+    The caller-facing fixture omits ``source_hash`` because the supervisor
+    inserts/replaces that field from the retained Markdown before validation.
+    ``include_source_hash`` is used only by the focused validator assertion.
+    """
+
+    parsed = v3.parse(_fixture_blueprint())
+    provenance = {
+        "v3:intent.text": "explicit",
+        "v3:questions[fixture_question].text": "explicit",
+        "v3:scope.text": "explicit",
+        "v3:inputs[fixture_input].text": "explicit",
+        "v3:models[fixture_model].text": "explicit",
+        "v3:transform.text": "explicit",
+        "v3:outputs[fixture_output].text": "explicit",
+        "v3:delivery": "platform_fixed",
+    }
+
+    proposal: dict[str, object] = {
+        "schema": v3.PROPOSAL_SCHEMA_ID,
+        "authoring_version": v3.AUTHORING_VERSION,
+        "proposal": {
+            "intent": "Answer the fixture question.",
+            "questions": [
+                {"id": "fixture_question", "question": "What is the fixture answer?"}
+            ],
+            "scope": "The supplied fixture only.",
+            "terms": [],
+            "inputs": [{"id": "fixture_input", "expectations": []}],
+            "models": [{"id": "fixture_model", "fields": ["id", "value"]}],
+            "transform": [{"id": "fixture_transform", "operation": "project"}],
+            "outputs": [{"id": "fixture_output", "promises": []}],
+            "decisions": [],
+            "open_questions": [],
+            "delivery": {
+                "kind": "semantic_query",
+                "profile": "desktop-local",
+                "port": "duckdb",
+                "provenance": "platform_fixed",
+            },
+            "contracts": [],
+        },
+        "provenance": provenance,
+        "source_spans": {
+            path: parsed.source_map.spans[path].to_dict()
+            for path, origin in provenance.items()
+            if origin != "platform_fixed"
+        },
+        "anchors": {},
+        "echo": {
+            "text": "I understood the fixture question, scope, input, model, transform, output, and fixed local delivery.",
+            "coverage": [
+                "v3:intent.text",
+                "v3:questions[fixture_question].text",
+                "v3:scope.text",
+                "v3:inputs[fixture_input].text",
+                "v3:models[fixture_model].text",
+                "v3:transform.text",
+                "v3:outputs[fixture_output].text",
+                "v3:delivery",
+            ],
+        },
+    }
+    if include_source_hash:
+        proposal["source_hash"] = v3.semantic_hash(parsed)
+    return proposal
+
+
+def test_replay_typed_proposal_fixture_validates_against_its_local_blueprint() -> None:
+    parsed = v3.parse(_fixture_blueprint())
+    issues = v3.validate_proposal(parsed, _typed_proposal(include_source_hash=True))
+    assert not issues, [issue.to_dict() for issue in issues]
 
 
 def _completed_session_decision_call(workflow: str, quote: str) -> ToolCall:
@@ -654,6 +884,7 @@ def populated_parent_child_recordings(
         responses = _completion_capable([
             TurnResult(
                 agent_message="What is the source?",
+                files_touched=(_typed_proposal_file(),),
                 tool_calls=(_completed_prepare_call(scenario.id),),
             ),
             TurnResult(
@@ -751,6 +982,7 @@ def populated_zero_row_recordings(
         responses = _completion_capable([
             TurnResult(
                 agent_message=opening_agent_message or "How did January go?",
+                files_touched=(_typed_proposal_file(),),
                 tool_calls=(_completed_prepare_call(scenario.id),),
             ),
             TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
@@ -3159,6 +3391,7 @@ def test_a_scenario_that_stages_a_definition_change_grades_narrowing_for_real(tm
         responses = _completion_capable([
             TurnResult(
                 agent_message="What is the source?",
+                files_touched=(_typed_proposal_file(),),
                 tool_calls=(_completed_prepare_call(scenario.id),),
             ),
             TurnResult(
