@@ -199,6 +199,27 @@ def test_workflow_v2_contract_inventory_is_executable_and_exact():
     assert "Capture/preflight reject missing, extra, placeholder, or unwired contracts" in invariants
 
 
+def test_generator_invariants_separate_authored_and_capture_owned_files():
+    """Workflow-v2 must not ask the agent to create supervisor-owned records."""
+    text = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
+    invariants = text[text.index("## Invariants") :]
+    for marker in (
+        "After supervisor capture, the retained closure contains the complete file set",
+        "This is the captured result, not the pre-capture authored-tree requirement",
+        "under workflow-v2, emit only",
+        "Do not emit, initialize, verify, or require",
+        "the supervisor materializes and validates those files during capture",
+    ):
+        assert marker in invariants, f"workflow-v2 ownership boundary lost: {marker}"
+
+    authored = invariants[
+        invariants.index("under workflow-v2, emit only") : invariants.index("Do not emit")
+    ]
+    assert "dp-blueprint.approved.md" not in authored
+    assert "dp-blueprint.lock.json" not in authored
+    assert "build-record.json" not in authored
+
+
 def test_job_helper_is_bound_to_the_exact_staged_skill_release():
     text = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
     step = text[text.index("### Step 3") : text.index("### Step 3b")]
