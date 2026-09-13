@@ -14,7 +14,6 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | 2026-09-14 | remove retired supervisor construction fallbacks from skills | NO_EVAL | — | [`2026-09-14-supervisor-admission-only-skills`](entries/2026-09-14-supervisor-admission-only-skills.md) |
 | 2026-09-12 | workflow-v2: bind proposal-file evidence to preparation | NO_EVAL | — | [`2026-09-12-workflow-v2-proposal-evidence`](entries/2026-09-12-workflow-v2-proposal-evidence.md) |
 | 2026-09-12 | nxd-run-job-loop: user-facing language boundary | NO_EVAL | — | [`2026-09-12-job-loop-user-facing-language`](entries/2026-09-12-job-loop-user-facing-language.md) |
-| 2026-09-12 | workflow-v2: bind proposal-file evidence to preparation | NO_EVAL | — | [`2026-09-12-workflow-v2-proposal-evidence`](entries/2026-09-12-workflow-v2-proposal-evidence.md) |
 | 2026-09-11 | nxd-generate-data-product: multi-source labeled-root regression fix | PASS | multi-source-labeled-roots | [`multi-source-labeled-roots-regression-fix`](entries/multi-source-labeled-roots-regression-fix.md) |
 | 2026-09-10 | workflow-v2: official zero-row live attempt | NO_EVAL | — | [`2026-09-10-workflow-v2-zero-row-live-attempt`](entries/2026-09-10-workflow-v2-zero-row-live-attempt.md) |
 | 2026-09-10 | shared semantic intent foundation and query-adapter packaging | NO_EVAL | — | [`2026-09-10-shared-semantic-intent-foundation`](entries/2026-09-10-shared-semantic-intent-foundation.md) |
