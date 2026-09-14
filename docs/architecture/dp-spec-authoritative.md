@@ -64,6 +64,12 @@ The proposal envelope is `nxd-dp-spec-proposal-v3`. It contains:
 The proposal is an internal compiler artifact. It is persisted for approval and
 closure reproducibility, but it is not a second authoring surface.
 
+For workflow-v2, the proposal presented at preparation is the consent candidate:
+every typed Decision is included in the echo-back and may be `proposed`. After
+the supervisor records the subject-bound `session_decision`, trusted
+materialization projects those Decisions to `locked` in the approved snapshot.
+`locked` is an approval-derived snapshot state, not authorization by itself.
+
 The live proposal is persisted beside the document it interprets, at
 `…/nxd-jobs/<workflow>/dp-blueprint.proposal.json`. Neither file names the
 other: `workflow` plus that convention recovers the pair, the same way the lock

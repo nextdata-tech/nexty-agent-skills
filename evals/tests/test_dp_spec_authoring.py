@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ import dp_spec_authoring as v3  # noqa: E402
 import dp_diagnostics as dpd  # noqa: E402
 import dp_spec_v2 as v2  # noqa: E402
 import validate_dp_spec as vds  # noqa: E402
+import workflow_v3_validate_proposal as workflow_v3_validator  # noqa: E402
 
 
 def sample(status: str = "proposed") -> str:
@@ -587,12 +589,84 @@ def test_reapproval_requires_prior_locked_proposal_evidence():
         v3.approve(v3.parse(text), proposed_decision, base_hash=v3.semantic_hash(text))
 
 
+def test_post_consent_decision_projection_changes_only_lifecycle_status():
+    proposal = proposal_for(sample())
+    proposal["proposal"]["decisions"][0]["status"] = "proposed"
+    original = json.loads(json.dumps(proposal))
+
+    projected = v3.lock_decisions_for_approval(proposal)
+
+    assert proposal == original, "projection must not mutate the retained proposal"
+    assert projected["proposal"]["decisions"][0]["status"] == "locked"
+    projected_decision = projected["proposal"]["decisions"][0]
+    original_decision = original["proposal"]["decisions"][0]
+    assert {
+        key: projected_decision[key]
+        for key in projected_decision
+        if key != "status"
+    } == {
+        key: original_decision[key]
+        for key in original_decision
+        if key != "status"
+    }
+
+    locked = proposal_for(sample())
+    assert v3.lock_decisions_for_approval(locked) == locked
+
+    invalid = proposal_for(sample())
+    invalid["proposal"]["decisions"][0]["status"] = "approved"
+    with pytest.raises(ValueError, match="unsupported status"):
+        v3.lock_decisions_for_approval(invalid)
+
+
 def test_proposal_hash_excludes_only_derived_hash_fields():
     proposal = proposal_for(sample())
     first = v3.proposal_hash(proposal)
     proposal["proposal_hash"] = "sha256:" + "0" * 64
     proposal["hashes"] = {"terms": "sha256:" + "1" * 64}
     assert v3.proposal_hash(proposal) == first
+
+
+def test_workflow_v3_validator_resolves_expected_span_through_anchor():
+    text = sample()
+    parsed = v3.parse(text)
+    proposal = proposal_for(text)
+    source_path = "v3:decisions[refund_treatment].text"
+    target_path = "v3:decisions[refund_treatment].ruling"
+    proposal["provenance"][target_path] = proposal["provenance"].pop(source_path)
+    proposal["source_spans"][target_path] = proposal["source_spans"].pop(source_path)
+    proposal["anchors"] = {source_path: target_path}
+    issue = SimpleNamespace(code="v3.provenance.span_mismatch", path=target_path)
+
+    assert workflow_v3_validator.expected_source_span(parsed, proposal, issue) == parsed.source_map.spans[
+        source_path
+    ].to_dict()
+
+
+def test_workflow_v3_validator_fails_closed_for_ambiguous_anchor():
+    text = sample()
+    parsed = v3.parse(text)
+    proposal = proposal_for(text)
+    target_path = "v3:decisions[refund_treatment].ruling"
+    proposal["anchors"] = {
+        "v3:decisions[refund_treatment].text": target_path,
+        "v3:intent.text": target_path,
+    }
+    issue = SimpleNamespace(code="v3.provenance.span_mismatch", path=target_path)
+
+    assert workflow_v3_validator.expected_source_span(parsed, proposal, issue) is None
+
+
+def test_workflow_v3_validator_fails_closed_when_anchored_target_is_unmapped():
+    text = sample()
+    parsed = v3.parse(text)
+    proposal = proposal_for(text)
+    issue = SimpleNamespace(
+        code="v3.provenance.span_mismatch",
+        path="v3:decisions[refund_treatment].ruling",
+    )
+
+    assert workflow_v3_validator.expected_source_span(parsed, proposal, issue) is None
 
 
 def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: Path):
