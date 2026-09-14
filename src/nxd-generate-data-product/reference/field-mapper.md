@@ -172,16 +172,17 @@ budget can produce one-use admission. The MCP peer never receives the
 capability. The browser click alone is insufficient. The OS dialog is local
 presence confirmation, not cryptographic proof of the user's identity.
 
-The supervisor would not use MCP form elicitation for this path: its
-MCP `initialize` request/context is not an admission input. Do not require
-protocol `2025-06-18` form elicitation or claim that the approval surface has
-no second step. A second LLM turn is not an approval mechanism.
+The current supervisor has no Desktop mapper admission handler, so it does not
+currently use MCP form elicitation for this path. If a future handler is added,
+its MCP `initialize` request/context would not be an admission input. Do not
+require protocol `2025-06-18` form elicitation or claim that the approval
+surface has no second step. A second LLM turn is not an approval mechanism.
 
-An accepted request would admit that exact subject for the current supervisor
-session. An unchanged retry would reuse that session approval without another
-interaction; a changed spec or proposed scope would get a new subject and
-must be confirmed again. The supervisor would re-derive the subject immediately
-before admission, so a definition changed while it was open would fail with
+For the documented handler contract, an accepted request admits that exact
+subject for the current supervisor session. An unchanged retry reuses that
+session approval without another interaction; a changed spec or proposed scope
+gets a new subject and must be confirmed again. The supervisor re-derives the
+subject immediately before admission, so a definition changed while it was open fails with
 `mapper_subject_changed` rather than running under the earlier confirmation.
 
 **Every non-accept outcome would fail closed.** Browser decline, OS decline,
