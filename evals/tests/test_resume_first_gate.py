@@ -1,4 +1,4 @@
-"""The job loop must TEACH resume-first reattach, not reopen-by-rebuild.
+"""The job loop must teach resume-first reattach and v2 reconstruction.
 
 The desktop supervisor gained `list_data_products` and `resume_data_product`:
 a fresh session with no live endpoint reattaches to a published workflow in
@@ -9,8 +9,8 @@ supervisor (`ci_skip`), so this plain-pytest gate pins the guidance itself.
 It asserts, over the shipped skill/reference text (no agent, no supervisor):
 
 1. The reattach guidance orders the tools resume-first —
-   `list_data_products` before `resume_data_product` before the
-   `build_data_product` fallback.
+   `list_data_products` before `resume_data_product` before workflow-v2
+   reconstruction.
 2. The stale three-tool / no-list / reopen-by-rebuild framing is gone from the
    job-loop skill and the generate-dp build-record reference.
 """
@@ -33,10 +33,9 @@ BUILD_RECORD = JOB_LOOP / "reference" / "build-record.md"
 SCHEDULING = JOB_LOOP / "reference" / "scheduling.md"
 GENERATE_DP_CLOSURE_RECORD = SRC / "nxd-generate-data-product" / "reference" / "closure-record.md"
 
-# The three tools whose relative order encodes "reattach before rebuild".
+# The discovery and reattach tools whose relative order is contractual.
 LIST = "list_data_products"
 RESUME = "resume_data_product"
-BUILD = "build_data_product"
 
 # Text that would only be present under the old three-tool runtime model.
 STALE_PHRASES = [
@@ -75,36 +74,25 @@ def test_closure_path_and_self_check_contracts_name_the_closure_root():
     assert "python3 self_check.py" in build_record
 
 
-def test_reattach_guidance_orders_list_resume_then_build_fallback():
+def test_reattach_guidance_orders_list_resume_then_v2_reconstruction():
     text = CONTEXT_AND_RESUME.read_text()
-    # All three tools are named in the reattach playbook.
-    for tool in (LIST, RESUME, BUILD):
+    for tool in (LIST, RESUME, "get_workflow_capabilities", "prepare_workflow", "advance_workflow"):
         assert tool in text, f"context-and-resume.md must name {tool}"
-    # Resume-first ordering: list, then resume, then build appears only later
-    # (as the fallback), never as the first-taught recovery step.
+    # Resume-first ordering: list and resume precede reconstruction.
     i_list = _first_index(text, LIST)
     i_resume = _first_index(text, RESUME)
-    i_build = _first_index(text, BUILD)
     assert i_list < i_resume, "list_data_products must be taught before resume"
-    assert i_resume < i_build, (
-        "resume_data_product must be taught before the build_data_product "
-        "rebuild fallback — rebuild is the fallback, not the default"
-    )
+    assert text.index("get_workflow_capabilities") > i_resume
 
 
-def test_fallback_is_gated_on_artifact_gone():
+def test_reconstruction_is_gated_on_artifact_gone():
     text = CONTEXT_AND_RESUME.read_text().lower()
-    # The rebuild fallback must be conditioned on the artifact being gone,
-    # not offered as an unconditional alternative.
     assert "collected" in text and "artifact_unavailable" in text, (
-        "the rebuild fallback must name the collected / artifact_unavailable states"
+        "the reconstruction path must name the collected / artifact_unavailable states"
     )
-    # And the gating must be explicit: rebuild is the fallback / only-when path,
-    # never offered unconditionally. Guard against an edit that keeps the state
-    # names but drops the condition.
-    assert re.search(r"rebuild is the fallback", text) or re.search(
+    assert re.search(
         r"only when the (published )?artifact is (genuinely )?gone", text
-    ), "the rebuild fallback must be explicitly gated, not offered unconditionally"
+    ), "reconstruction must be explicitly gated, not offered unconditionally"
 
 
 def _strip_markdown(text: str) -> str:
@@ -126,7 +114,7 @@ def test_no_stale_three_tool_framing(doc):
         )
 
 
-def test_skill_names_the_six_tools_and_delegates():
+def test_skill_names_reattach_tools_and_delegates():
     text = SKILL.read_text()
     # The skill body must name the reattach tools and point at the two new docs.
     for tool in (LIST, RESUME):

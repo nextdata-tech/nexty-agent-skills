@@ -294,18 +294,18 @@ def test_generator_is_dispatched_only_after_successful_session_decision():
 
 
 def test_v2_path_has_no_legacy_construction_fallback():
-    text = WORKFLOW_V2.read_text(encoding="utf-8")
+    text = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
     gate = text[text.index("## Gate on the connected capability") : text.index("## Prepare the prose blueprint")]
     assert "execution_enabled: true" in gate
-    assert "build_data_product" in gate
-    assert "validate_data_product" in gate
-    assert "Do not call" in gate
-    assert "fallback" in gate
+    assert "build_data_product" not in gate
+    assert "validate_data_product" not in gate
+    assert "local substitute" in gate
+    assert "blocker" in gate
     assert "direct supervisor CLI" in gate
 
 
-def test_no_legacy_construction_bypass_in_all_reachable_installed_docs():
-    """Every installed construction reference must fence legacy commands."""
+def test_removed_construction_tools_are_absent_from_reachable_installed_docs():
+    """Installed construction references must not teach removed MCP tools."""
     reachable = _reachable_installed_docs()
     expected = {
         WORKFLOW_V2.resolve(),
@@ -320,33 +320,18 @@ def test_no_legacy_construction_bypass_in_all_reachable_installed_docs():
     }
     assert expected <= reachable, "the construction references must remain reachable from installed skills"
 
-    construction_terms = (
+    removed_tools = (
         "build_data_product",
-        "check_data_product",
         "validate_data_product",
-        "direct supervisor CLI",
-    )
-    bypass_markers = (
-        "feature-off",
-        "non-enrolled",
-        "workflow-v2",
-        "do not call",
-        "never call",
-        "never invoke",
-        "not the workflow-v2",
-        "construction fallback",
-        "compatibility",
+        "get_mapper_approval_status",
     )
     violations: list[str] = []
     for path in sorted(reachable):
-        paragraphs = re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))
-        for index, paragraph in enumerate(paragraphs):
-            lowered = paragraph.lower()
-            mentioned = [term for term in construction_terms if term in lowered]
-            context = "\n".join(paragraphs[max(0, index - 1) : index + 2]).lower()
-            if mentioned and not any(marker in context for marker in bypass_markers):
-                violations.append(f"{path}: {', '.join(mentioned)}")
-    assert not violations, "unguarded legacy construction guidance: " + "; ".join(violations)
+        lowered = path.read_text(encoding="utf-8").lower()
+        mentioned = [term for term in removed_tools if term in lowered]
+        if mentioned:
+            violations.append(f"{path}: {', '.join(mentioned)}")
+    assert not violations, "removed construction tools remain in installed docs: " + "; ".join(violations)
 
 
 def test_review_relay_preserves_ledger_and_supervisor_boundary():
