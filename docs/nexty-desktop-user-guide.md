@@ -51,14 +51,19 @@ that, and this goes away entirely once the installer is signed.
 When it finishes, that window tells you what is left to do:
 
 1. Check that the nxd-desktop connector is in Claude.
-2. Add the plugin (e.g., nexty-desktop-vx.y.z.zip) to Claude.
-3. Restart Claude.
-
-The version number in the filename matches the release you installed.
+2. In Claude Desktop, open **Settings → Customize → Plugins → Add marketplace**.
+3. Enter `nextdata-tech/nexty-agent-marketplace`, enable **Sync automatically**,
+   and click **Sync**.
+4. Add **Nexty Desktop** from the marketplace, then restart Claude.
 
 The connector and the plugin do different jobs, which is why you need both. The
 connector is how Claude reaches the engine on your Mac. The plugin is what
-teaches Claude how to build a data product.
+teaches Claude how to build a data product. The public marketplace contains
+only the Desktop plugin and keeps it synchronized with the Desktop skill source.
+
+If Claude cannot reach the marketplace, use the versioned ZIP bundled with the
+installer as an offline fallback: open **Settings → Customize → Plugins → Add
+plugin → Upload plugin** and choose `~/.nxd-desktop/nexty-desktop-vx.y.z.zip`.
 
 ### Run
 
@@ -416,4 +421,3 @@ The blueprint and the generated files are plain text you can open, read, and bac
 2. Work it in a session until the number matches the one you already know.
 3. Package it, and ask it again next month without working it out from scratch.
 4. Then add your terms. Shared definitions are what let someone else ask the same question and get your numbers.
-
