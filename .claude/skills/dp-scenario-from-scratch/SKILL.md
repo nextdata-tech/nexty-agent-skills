@@ -85,7 +85,7 @@ the answer sheet the operator replies from; their mid-stream behaviour becomes
 either a persona or an injected event; the right answer becomes the gold the
 run is graded against.
 
-Declare a real tier — `smoke`, `core` or `live`; there is no `draft` tier and
+Declare a real tier — `smoke`, `core`, `full`, or `live`; there is no `draft` tier and
 the loader rejects one. Being under `_proposed/` is what marks it unfinished.
 Say in the scenario's `README.md` that it has not been mutation-tested yet.
 
