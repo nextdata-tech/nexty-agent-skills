@@ -715,7 +715,7 @@ _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
 _DEFINITION_CHANGE_KEYS = {"trigger_turn", "changed_metrics"}
-_SCENARIO_TIERS = frozenset({"smoke", "T0", "core", "live"})
+_SCENARIO_TIERS = frozenset({"smoke", "T0", "core", "full", "live"})
 # The tiers whose scenarios cannot be graded from a recording. A live-tier
 # scenario's pass criteria are what an agent *did* across turns, so replaying
 # a stored session grades the recording rather than the agent. Naming the set
@@ -733,8 +733,8 @@ SCENARIO_TIERS = _SCENARIO_TIERS
 def requires_live_session(tier: str) -> bool:
     """Return whether a tier can only be run against a live agent session.
 
-    ``core`` grades supplied evidence and ``smoke`` can be replayed, so both
-    are runnable without an authenticated session. ``live`` cannot: its
+    ``smoke``, ``core``, and ``full`` scenarios grade supplied evidence and
+    can be replayed without an authenticated session. ``live`` cannot: its
     scenarios grade multi-turn agent behaviour, which a recording cannot
     produce. Callers use this to refuse a replay-mode run rather than to
     produce a clean-looking report over evidence no agent generated.

@@ -50,7 +50,7 @@ What each must contain:
 |---|---|
 | `version` | Integer `1`. |
 | `id` | Must equal the directory name. |
-| `tier` | One of `smoke`, `core`, `live`, `T0`. **There is no `draft` tier.** Being under `_proposed/` is what marks a package unfinished. |
+| `tier` | One of `smoke`, `core`, `full`, `live`, `T0`. **There is no `draft` tier.** Being under `_proposed/` is what marks a package unfinished. |
 | `run_order` | Unique **across the whole root**, not within your tier. Every value 1-6 is already taken, so start at 7 and check first: `grep -h '^run_order:' evals/dp-scenarios/scenarios/*/scenario.yaml`. |
 | `fixture.dataset` | `grain_trap` or `zero_row_optional`. |
 | `fixture.seed` | **Must be `29`.** Asserted for every package, so generated data is comparable. |

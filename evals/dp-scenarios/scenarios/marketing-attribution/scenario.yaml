@@ -1,0 +1,57 @@
+version: 1
+id: marketing-attribution
+tier: full
+run_order: 12
+fixture:
+  dataset: marketing_attribution
+  seed: 29
+  variant: campaign-name-drift-safe-attribution
+  plant: marketing_attribution_unmatched_cpa
+coverage:
+  variant: campaign-name-drift-safe-attribution
+  untested: This package grades deterministic source matching and declared CPA policy; it does not claim a live ad platform, conversion API, or authenticated agent run.
+turn_budget: 8
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/micromanager.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+  8: 7
+required_plants:
+  - marketing_attribution_unmatched_cpa
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: marketing_attribution
+    decision_id: b3-unmatched-cpa-denominator
+    promise_fields:
+      casefold_whitespace: approved
+      unique_50_character_truncation: approved
+      fuzzy_matching: rejected
+      unmatched_cpa_denominator: matched_conversions_only
+# Graded by the follow-up kind. It reads these named source-derived artifacts
+# against the agent's declared evidence; there is intentionally no query gold.
+gold:
+  attribution: gold/marketing_attribution.json
+  diagnostics: gold/marketing_attribution_diagnostics.json
+follow_up_artifact: evidence/marketing_attribution.json
+operator:
+  sentinel: null
+  obstacle_terms: []

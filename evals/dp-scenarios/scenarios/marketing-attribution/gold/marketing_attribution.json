@@ -1,0 +1,51 @@
+{
+  "landed": {
+    "rows": [
+      {
+        "campaign_key": "brand-search",
+        "conversions": 24,
+        "cpa_cents": 500,
+        "spend_cents": 12000
+      },
+      {
+        "campaign_key": "spring-launch-2024",
+        "conversions": 36,
+        "cpa_cents": 500,
+        "spend_cents": 18000
+      },
+      {
+        "campaign_key": "enterprise-retention-na",
+        "conversions": 20,
+        "cpa_cents": 1500,
+        "spend_cents": 30000
+      }
+    ]
+  },
+  "matching": {
+    "matches": [
+      {
+        "conversion_id": "CONV-001",
+        "match_method": "casefold_whitespace",
+        "spend_id": "SPEND-001"
+      },
+      {
+        "conversion_id": "CONV-002",
+        "match_method": "casefold_whitespace",
+        "spend_id": "SPEND-002"
+      },
+      {
+        "conversion_id": "CONV-003",
+        "match_method": "unique_50_character_truncation",
+        "spend_id": "SPEND-003"
+      }
+    ],
+    "unmatched_conversion_ids": [
+      "CONV-004",
+      "CONV-005"
+    ],
+    "unmatched_spend_ids": [
+      "SPEND-004",
+      "SPEND-005"
+    ]
+  }
+}

@@ -169,7 +169,7 @@ def test_a_live_tier_run_in_replay_mode_is_refused_before_anything_loads(
         cli.main(_replay_argv(tmp_path, "live", "replay"))
 
 
-@pytest.mark.parametrize("tier", ["smoke", "core"])
+@pytest.mark.parametrize("tier", ["smoke", "core", "full"])
 def test_a_non_live_tier_is_not_refused_in_replay_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tier: str
 ) -> None:
