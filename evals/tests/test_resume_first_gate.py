@@ -95,6 +95,14 @@ def test_reconstruction_is_gated_on_artifact_gone():
     ), "reconstruction must be explicitly gated, not offered unconditionally"
 
 
+def test_scheduling_reconstruction_uses_workflow_v2_actions():
+    text = SCHEDULING.read_text().lower()
+    assert "rebuild is the fallback" not in text
+    assert "if the published artifact is genuinely gone" in text
+    for marker in ("get_workflow_capabilities", "prepare_workflow", "advance_workflow"):
+        assert marker in text, f"scheduling.md must name {marker} for reconstruction"
+
+
 def _strip_markdown(text: str) -> str:
     # Drop emphasis/code markers so a reintroduction that keeps the markdown
     # (``**no** list, status``) still matches the plain stale phrase.
