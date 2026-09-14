@@ -52,6 +52,7 @@ EXPECTED_TIERS = {
     "inventory-position": "core",
     "application-reconciliation": "core",
     "locale-timezone": "core",
+    "marketing-attribution": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -478,6 +479,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "inventory-position")
     shutil.rmtree(root / "application-reconciliation")
     shutil.rmtree(root / "locale-timezone")
+    shutil.rmtree(root / "marketing-attribution")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -554,6 +556,7 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
 
     smoke = select_tier(scenarios, "smoke")
     core = select_tier(scenarios, "core")
+    full = select_tier(scenarios, "full")
     live = select_tier(scenarios, "live")
 
     # Which tier a scenario belongs to is pinned, not merely partitioned.
@@ -570,17 +573,20 @@ def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
     core_ids = {scenario.id for scenario in core}
     live_ids = {scenario.id for scenario in live}
     assert smoke_ids.isdisjoint(core_ids)
+    assert smoke_ids.isdisjoint(full_ids := {scenario.id for scenario in full})
     assert smoke_ids.isdisjoint(live_ids)
+    assert core_ids.isdisjoint(full_ids)
     assert core_ids.isdisjoint(live_ids)
-    assert {scenario.id for scenario in (*smoke, *core, *live)} == _packages_on_disk()
-    assert smoke and core and live
+    assert full_ids.isdisjoint(live_ids)
+    assert {scenario.id for scenario in (*smoke, *core, *full, *live)} == _packages_on_disk()
+    assert smoke and core and full and live
 
     # What select_tier itself returns, pinned against EXPECTED_TIERS rather
     # than against the loader. EXPECTED_TIERS pins what load_scenarios
     # reports; without this, inverting select_tier's own predicate -- so
     # --tier smoke runs the core scenarios and vice versa -- satisfies every
     # assertion above, because the two sets merely swap.
-    for tier in ("smoke", "core", "live"):
+    for tier in ("smoke", "core", "full", "live"):
         expected = {name for name, declared in EXPECTED_TIERS.items() if declared == tier}
         assert {scenario.id for scenario in select_tier(scenarios, tier)} == expected
         assert all(scenario.tier == tier for scenario in select_tier(scenarios, tier))
@@ -597,7 +603,7 @@ def test_select_tier_preserves_declared_run_order() -> None:
 def test_select_tier_rejects_an_unknown_tier() -> None:
     scenarios = load_scenarios(SCENARIO_ROOT)
     with pytest.raises(ScenarioError):
-        select_tier(scenarios, "full")
+        select_tier(scenarios, "unknown")
 
 
 def test_a_tier_that_matches_no_scenario_is_an_error_not_an_empty_clean_run() -> None:
