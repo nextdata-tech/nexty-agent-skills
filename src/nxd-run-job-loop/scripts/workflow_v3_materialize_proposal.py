@@ -14,9 +14,13 @@ proposal_raw = proposal_path.read_bytes()
 proposal = json.loads(proposal_raw.decode("utf-8"))
 approved_proposal = authoring.lock_decisions_for_approval(proposal)
 approved_proposal_path = proposal_path.with_name("approved-proposal.json")
-approved_proposal_raw = json.dumps(
-    approved_proposal, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-).encode("utf-8")
+approved_proposal_raw = (
+    proposal_raw
+    if approved_proposal == proposal
+    else json.dumps(
+        approved_proposal, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+)
 approved_proposal_path.write_bytes(approved_proposal_raw)
 approved = authoring.approve(
     parsed, approved_proposal, base_hash=authoring.semantic_hash(parsed)
