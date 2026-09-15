@@ -86,6 +86,31 @@ the path named by the mismatch. The legacy
 consumers, but it is only a location hint: even when it is present, regenerate
 the complete proposal.
 
+### Recovering a rejected proposal
+
+Treat recovery as a whole-proposal replacement, never as a repair to the path
+named by the primary issue. Follow this order exactly:
+
+1. Inspect the opaque `prepare_recovery_id` immediately.
+2. Require the expected recovery schema, the semantic hash of the unchanged
+   final blueprint, and a complete `source_spans` map. If any is absent, stale,
+   unavailable, or oversized, discard recovery and obtain a fresh parse.
+3. Re-read the entire final blueprint. The recovery record contains coordinates
+   only; it deliberately contains neither source prose nor typed values.
+4. Rebuild the entire typed proposal. Inventory every populated parser `.text`
+   source path, including every populated Decision subsection.
+5. Give every inventory item exactly one direct provenance entry with its exact
+   source span. An explicit source-to-target anchor may resolve a differing
+   typed path, but never replaces that provenance entry. Copy all four trusted
+   coordinates verbatim for each non-`platform_fixed` entry and rebuild
+   `echo.coverage` from the complete provenance key set.
+6. Replace the complete proposal, round-trip and strictly validate it, then
+   retry only when validation has zero issues and with a fresh `request_id`.
+
+`source_block_uncovered` after an attempted recovery means this complete
+regeneration invariant was violated. Do not patch a second named path, infer a
+span from prose, or retry a partial proposal.
+
 The validator result protocol is v2. It preserves the v1 `ok`, hash, and
 primary issue `code`/`path`/`message` semantics and keeps the legacy single-span
 field; v2 permits the supervisor to retain a complete map behind the opaque

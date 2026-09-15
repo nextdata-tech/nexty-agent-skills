@@ -178,6 +178,14 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "round-trip the complete JSON",
         "re-run strict proposal validation",
         "new globally unique `request_id` because the payload changed",
+        "## Recovering a rejected proposal",
+        "Treat recovery as a whole-proposal replacement",
+        "every populated parser `.text` source path",
+        "every populated Decision subsection",
+        "never replaces that provenance entry",
+        "rebuild `echo.coverage` from the complete provenance key set",
+        "with a fresh `request_id`",
+        "Do not patch a second named path",
     ):
         assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
     assert "typed_proposal_path" not in prepare
@@ -194,6 +202,8 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "replace the complete proposal file",
         "Do not claim generic filesystem atomicity",
         "Never guess, split, trim, widen, or alter typed values",
+        "source_block_uncovered",
+        "complete-regeneration invariant",
     ):
         assert marker in job, f"live span-repair fallback lost: {marker}"
     assert "replace only that path's coordinates" not in job
