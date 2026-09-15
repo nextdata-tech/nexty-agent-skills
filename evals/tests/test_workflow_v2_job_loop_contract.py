@@ -160,11 +160,17 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Copy all four integers",
         "may include separator blank lines",
         "Do not trim or widen that range",
-        "validation_issue.expected_source_span",
-        "replace only that path's coordinates",
-        "If the MCP host renders only error text",
-        "parse the safe `validation_issue=...` JSON suffix",
-        "copy exactly its four numeric coordinates",
+        "prepare_recovery_id",
+        "inspect_prepare_recovery",
+        "complete `source_spans` map",
+        "regenerate the entire typed proposal",
+        "legacy `validation_issue.expected_source_span`",
+        "source_map_code",
+        "v3.provenance.source_map_unavailable",
+        "v3.provenance.source_map_oversized",
+        "reparse the final blueprint",
+        "replace the complete proposal file",
+        "Do not claim generic filesystem atomicity",
         "Never guess, split, trim, widen, or alter typed values",
         "may remain `status: proposed` during prepare",
         "trusted materializer projects proposed Decisions to `locked` in the approved closure snapshot",
@@ -175,15 +181,22 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
     ):
         assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
     assert "typed_proposal_path" not in prepare
+    assert "replace only that path's coordinates" not in prepare
 
     job = JOB_SKILL.read_text(encoding="utf-8")
     for marker in (
-        "structured `validation_issue.expected_source_span`",
-        "parse the safe `validation_issue=...` JSON suffix",
-        "copy exactly its four numeric coordinates",
+        "bounded `prepare_recovery_id`",
+        "`inspect_prepare_recovery`",
+        "regenerate the entire proposal",
+        "v1-compatible location hint",
+        "source_map_code",
+        "reparse the final blueprint",
+        "replace the complete proposal file",
+        "Do not claim generic filesystem atomicity",
         "Never guess, split, trim, widen, or alter typed values",
     ):
         assert marker in job, f"live span-repair fallback lost: {marker}"
+    assert "replace only that path's coordinates" not in job
 
     capture = text[text.index("## Relay consent and capture") : text.index("## Run and report the review")]
     assert capture.index("approval authorizes") < capture.index('"type": "capture"')

@@ -73,13 +73,38 @@ maps the parser source path to a typed proposal path; omit it when the paths
 already match. Do not calculate spans from memory; rerun the parser after every
 blueprint edit and validate the exact proposal before calling `prepare_workflow`.
 
-If `prepare_workflow` returns `v3.provenance.span_mismatch` with a structured
-`validation_issue.expected_source_span`, replace only that path's coordinates
-with the returned four integers and retry the exact proposal. If the MCP host
-renders only error text, parse the safe `validation_issue=...` JSON suffix and
-copy exactly its four numeric coordinates. Never guess, split, trim, widen, or
-alter typed values; the hint is coordinates, not permission to change the typed
-value.
+If `prepare_workflow` returns `v3.provenance.span_mismatch` with a bounded
+`prepare_recovery_id`, call `inspect_prepare_recovery` with that opaque id.
+Require its versioned result to carry the source semantic hash for the same
+final blueprint and a complete `source_spans` map, then use that structural map
+to regenerate the entire typed proposal. The inspection response contains only
+canonical v3 parser paths and four integer coordinates; it contains no source
+text or typed values. Rebuild every provenance/span entry, round-trip the
+complete proposal, and strictly validate it before retrying. Do not patch only
+the path named by the mismatch. The legacy
+`validation_issue.expected_source_span` field remains available for v1
+consumers, but it is only a location hint: even when it is present, regenerate
+the complete proposal.
+
+The validator result protocol is v2. It preserves the v1 `ok`, hash, and
+primary issue `code`/`path`/`message` semantics and keeps the legacy single-span
+field; v2 permits the supervisor to retain a complete map behind the opaque
+recovery id. A v1 caller may ignore that addition or request the validator's
+v1 compatibility output. If the map cannot be safely retained, the issue has
+no recovery id and carries a stable
+`source_map_code` of `v3.provenance.source_map_unavailable` or
+`v3.provenance.source_map_oversized`; stop and obtain a fresh parser result.
+Never guess, split, trim, widen, or alter typed values. If the MCP host renders
+only error text, read only the bounded `prepare_recovery_id` or
+`source_map_code` suffix; never attempt to recover a map from error prose.
+
+Any blueprint edit invalidates the parsed map and every proposal coordinate.
+Before `prepare_workflow` succeeds, reparse the final blueprint, regenerate
+the complete proposal and its spans, replace the complete proposal file using
+the available file operation, strictly validate it, and send a new
+globally-unique `request_id`. Do not claim generic filesystem atomicity for a
+file-tool replacement. Reuse a request id only for a byte-for-byte identical
+request.
 
 If the typed path differs from the parser path, resolve it through the proposal's
 `anchors` map (`source_path` → `target_path`) and use the trusted parser's
@@ -347,14 +372,19 @@ state.
 
 ## Reset after behavior changes
 
-If the blueprint changes, call `reset_workflow` with the supervisor-returned
-graph-root requirement (the activated contract currently returns consent) and
-the new host-visible `replacement_blueprint_path`. Do not invent the root id;
-read it from the current requirements/actions. If only the generated closure
-changes behavior, reset the returned capture requirement and set
-`replacement_blueprint_path` to null. Then follow the returned actions from the
-new generation and epoch. Re-capture, re-review, and re-run validation as
-indicated; stale evidence cannot satisfy admission.
+If the blueprint or typed proposal changes after `prepare_workflow` succeeds,
+do not retry the old operation or patch its binding. Call `reset_workflow` with
+the supervisor-returned graph-root requirement (the activated contract
+currently returns consent) and the new host-visible
+`replacement_blueprint_path`. Then regenerate the complete proposal and obtain
+fresh prepare and consent state. If the edit happens after consent, the same
+reset/replacement/fresh-consent rule applies; old consent never transfers to an
+edited blueprint or proposal. Do not invent the root id; read it from the
+current requirements/actions. If only the generated closure changes behavior,
+reset the returned capture requirement and set `replacement_blueprint_path` to
+null. Then follow the returned actions from the new generation and epoch.
+Re-capture, re-review, and re-run validation as indicated; stale evidence
+cannot satisfy admission.
 
 ```json
 {

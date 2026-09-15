@@ -669,6 +669,125 @@ def test_workflow_v3_validator_fails_closed_when_anchored_target_is_unmapped():
     assert workflow_v3_validator.expected_source_span(parsed, proposal, issue) is None
 
 
+def _span_mismatch_result(text: str = sample()):
+    parsed = v3.parse(text)
+    proposal = proposal_for(text)
+    path = "v3:intent.text"
+    proposal["source_spans"][path]["offset_end"] += 1
+    return parsed, proposal, workflow_v3_validator.validation_result(parsed, proposal)
+
+
+def test_workflow_v3_validator_emits_the_complete_same_parse_structural_map():
+    parsed, _, result = _span_mismatch_result()
+
+    assert result["schema"] == workflow_v3_validator.VALIDATION_SCHEMA_V2
+    issue = result["issue"]
+    assert issue["code"] == "v3.provenance.span_mismatch"
+    assert "source_map" not in issue
+    assert set(issue) >= {"code", "path", "message", "expected_source_span", "source_spans"}
+    assert issue["source_spans"] == parsed.source_map.to_dict()
+    assert issue["expected_source_span"] == issue["source_spans"]["v3:intent.text"]
+    assert all(set(span) == set(workflow_v3_validator._SPAN_FIELDS) for span in issue["source_spans"].values())
+    serialized = json.dumps(issue, sort_keys=True)
+    assert "Provide an auditable monthly revenue relation" not in serialized
+    assert "Group accepted orders by customer" not in serialized
+
+
+def test_workflow_v3_validator_v2_preserves_v1_issue_semantics():
+    parsed = v3.parse(sample())
+    proposal = proposal_for(sample())
+    proposal["source_spans"]["v3:intent.text"]["offset_end"] += 1
+
+    v1_result = workflow_v3_validator.validation_result(parsed, proposal, protocol="v1")
+    v2_result = workflow_v3_validator.validation_result(parsed, proposal, protocol="v2")
+
+    assert v1_result["schema"] == workflow_v3_validator.VALIDATION_SCHEMA_V1
+    assert v2_result["schema"] == workflow_v3_validator.VALIDATION_SCHEMA_V2
+    for key in ("code", "path", "message", "expected_source_span"):
+        assert v1_result["issue"][key] == v2_result["issue"][key]
+    assert "source_spans" not in v1_result["issue"]
+
+
+def test_workflow_v3_validator_omits_map_for_invalid_path_and_reports_stable_code():
+    parsed, proposal, _ = _span_mismatch_result()
+    parsed.source_map.spans["v3:secret-value.text"] = v3.SourceSpan(1, 1, 0, 1)
+
+    source_map, code = workflow_v3_validator.structural_source_map(parsed)
+    result = workflow_v3_validator.validation_result(parsed, proposal)
+
+    assert source_map is None
+    assert code == workflow_v3_validator.SOURCE_MAP_UNAVAILABLE_CODE
+    assert result["issue"]["source_map_code"] == code
+    assert "source_spans" not in result["issue"]
+
+
+def test_workflow_v3_validator_accepts_every_parser_emitted_block_path_form():
+    text = sample().replace(
+        "What was monthly revenue for each customer?",
+        "### 2025 monthly question\n\nWhat was monthly revenue for each customer?",
+    ).replace(
+        "## Open Questions\n",
+        "## Open Questions\n\n### Delivery question\n\nWhich delivery profile should be used?\n",
+    )
+
+    parsed = v3.parse(text)
+    source_map, code = workflow_v3_validator.structural_source_map(parsed)
+
+    assert code is None
+    assert source_map["v3:questions[2025_monthly_question].text"]
+    assert source_map["v3:open_questions[delivery_question].text"]
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate", "expected_code"),
+    [
+        (
+            "invalid span",
+            lambda parsed: parsed.source_map.spans.__setitem__(
+                "v3:intent.text", v3.SourceSpan(0, 1, 0, 1)
+            ),
+            workflow_v3_validator.SOURCE_MAP_UNAVAILABLE_CODE,
+        ),
+        (
+            "path limit",
+            lambda parsed: parsed.source_map.spans.__setitem__(
+                "v3:terms[" + "x" * workflow_v3_validator.SOURCE_MAP_MAX_PATH_BYTES + "].text",
+                v3.SourceSpan(1, 1, 0, 1),
+            ),
+            workflow_v3_validator.SOURCE_MAP_OVERSIZED_CODE,
+        ),
+        (
+            "entry limit",
+            lambda parsed: parsed.source_map.spans.update(
+                {
+                    f"v3:terms[item_{index}].text": v3.SourceSpan(1, 1, 0, 1)
+                    for index in range(workflow_v3_validator.SOURCE_MAP_MAX_ENTRIES + 1)
+                }
+            ),
+            workflow_v3_validator.SOURCE_MAP_OVERSIZED_CODE,
+        ),
+        (
+            "serialized limit",
+            lambda parsed: parsed.source_map.spans.update(
+                {
+                    f"v3:terms[item_{index}_{'x' * 90}].text": v3.SourceSpan(1, 1, 0, 1)
+                    for index in range(workflow_v3_validator.SOURCE_MAP_MAX_ENTRIES)
+                }
+            ),
+            workflow_v3_validator.SOURCE_MAP_OVERSIZED_CODE,
+        ),
+    ],
+)
+def test_workflow_v3_validator_source_map_bounds_fail_closed(label, mutate, expected_code):
+    parsed = v3.parse(sample())
+    mutate(parsed)
+
+    source_map, code = workflow_v3_validator.structural_source_map(parsed)
+
+    assert source_map is None, label
+    assert code == expected_code, label
+
+
 def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: Path):
     text = sample()
     proposal = proposal_for(text)
