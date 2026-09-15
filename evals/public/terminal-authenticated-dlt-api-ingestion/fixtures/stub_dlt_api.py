@@ -37,6 +37,7 @@ ORDERS = [
     {"order_id": i, "status": "paid" if i % 3 else "pending", "amount": i * 10}
     for i in range(1, 24)
 ]
+PAGE_SIZE = 10
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -72,14 +73,29 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "unknown endpoint"})
             return
         query = parse_qs(parsed.query)
+        requested_page_size = int(query.get("per_page", [str(PAGE_SIZE)])[0])
+        if requested_page_size != PAGE_SIZE:
+            record.update({"status": 400, "error": "page_size_must_be_bounded"})
+            _record(record)
+            self._json(400, {"error": "per_page must be 10"})
+            return
         rows = ORDERS
-        if query.get("status"):
-            rows = [row for row in rows if row["status"] == query["status"][0]]
+        status_filter = query.get("status", [""])[0]
+        if status_filter:
+            rows = [row for row in rows if row["status"] == status_filter]
         page = max(1, int(query.get("page", ["1"])[0]))
-        per_page = max(1, int(query.get("per_page", ["10"])[0]))
+        per_page = PAGE_SIZE
         start = (page - 1) * per_page
         pages = (len(rows) + per_page - 1) // per_page
-        record.update({"status": 200, "page": page, "rows": len(rows[start:start + per_page]), "total": len(rows)})
+        record.update({
+            "status": 200,
+            "status_filter": status_filter or None,
+            "page": page,
+            "per_page": per_page,
+            "pages": pages,
+            "rows": len(rows[start:start + per_page]),
+            "total": len(rows),
+        })
         _record(record)
         self._json(200, {"page": page, "per_page": per_page, "total": len(rows), "pages": pages, "data": rows[start:start + per_page]})
 
