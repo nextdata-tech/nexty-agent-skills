@@ -26,8 +26,17 @@ LOCAL_INFERENCE = (
 )
 REVIEW_SKILL = REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md"
 WORKFLOW_V2 = JOB_LOOP / "reference" / "workflow-v2.md"
+PRE_CAPTURE_AUDIT = (
+    REPO_ROOT
+    / "src"
+    / "nxd-generate-data-product"
+    / "reference"
+    / "pre-capture-audit.md"
+)
 SCHEDULING = JOB_LOOP / "reference" / "scheduling.md"
 BUILD_RECORD = JOB_LOOP / "reference" / "build-record.md"
+SOURCE_MATERIALIZATION = JOB_LOOP / "reference" / "source-materialization.md"
+FAILURE_HANDLING = JOB_LOOP / "reference" / "failure-handling.md"
 
 
 def _reachable_installed_docs() -> set[Path]:
@@ -61,6 +70,19 @@ def test_main_skills_stay_within_loader_limit_and_point_to_v2_reference():
         assert len(text.splitlines()) <= 500
     assert "reference/workflow-v2.md" in JOB_SKILL.read_text(encoding="utf-8")
     assert "reference/workflow-v2.md" in GENERATOR_SKILL.read_text(encoding="utf-8")
+
+
+def test_source_discovery_inspects_declared_inputs_before_asking_for_a_path():
+    job = JOB_SKILL.read_text(encoding="utf-8")
+    materialization = SOURCE_MATERIALIZATION.read_text(encoding="utf-8")
+    for text in (job, materialization):
+        assert "supplied attachments" in text
+        assert "declared workspace artifacts" in text
+        assert "source profiles" in text
+        assert "reference files" in text
+        assert "Before asking" in text
+    assert "NXD_EVAL_FIXTURE_DIR" not in job
+    assert "NXD_EVAL_FIXTURE_DIR" not in materialization
 
 
 def test_v2_construction_order_is_explicit():
@@ -114,6 +136,10 @@ def test_prepare_uses_exact_kind_and_supervisor_owned_approval_lifecycle():
         "the prepare request must carry the complete typed proposal object",
         "approval remains only through the returned `session_decision` consent action",
         "`session_decision` consent action",
+        "every Decision is included in the exact echo-back",
+        "may remain `status: proposed` until the user approves",
+        "trusted materializer projects those Decisions to `locked` only after the subject-bound `session_decision`",
+        "`locked` is an approval-derived snapshot state, not authorization by itself",
     ):
         assert marker in step
     assert step.index("call `prepare_workflow`") < step.index("returned `session_decision` consent action")
@@ -136,9 +162,28 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Do not trim or widen that range",
         "validation_issue.expected_source_span",
         "replace only that path's coordinates",
+        "If the MCP host renders only error text",
+        "parse the safe `validation_issue=...` JSON suffix",
+        "copy exactly its four numeric coordinates",
+        "Never guess, split, trim, widen, or alter typed values",
+        "may remain `status: proposed` during prepare",
+        "trusted materializer projects proposed Decisions to `locked` in the approved closure snapshot",
+        "`locked` is an approval-derived snapshot state",
+        "round-trip the complete JSON",
+        "re-run strict proposal validation",
+        "new globally unique `request_id` because the payload changed",
     ):
         assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
     assert "typed_proposal_path" not in prepare
+
+    job = JOB_SKILL.read_text(encoding="utf-8")
+    for marker in (
+        "structured `validation_issue.expected_source_span`",
+        "parse the safe `validation_issue=...` JSON suffix",
+        "copy exactly its four numeric coordinates",
+        "Never guess, split, trim, widen, or alter typed values",
+    ):
+        assert marker in job, f"live span-repair fallback lost: {marker}"
 
     capture = text[text.index("## Relay consent and capture") : text.index("## Run and report the review")]
     assert capture.index("approval authorizes") < capture.index('"type": "capture"')
@@ -199,6 +244,22 @@ def test_workflow_v2_contract_inventory_is_executable_and_exact():
     assert "Capture/preflight reject missing, extra, placeholder, or unwired contracts" in invariants
 
 
+def test_contract_inventory_mismatch_has_one_semantics_preserving_repair():
+    text = " ".join(FAILURE_HANDLING.read_text(encoding="utf-8").split())
+    for marker in (
+        "closure.contract_inventory_mismatch",
+        "one bounded mechanical repair",
+        "approved proposal's semantics are unchanged",
+        "Preserve the approval",
+        "anchors",
+        "changes semantics, Terms, contracts, delivery, or any typed proposal content",
+        "fresh user approval",
+        "ambiguous operator reply is not approval",
+        "no unbounded repair loop",
+    ):
+        assert marker in text, f"bounded inventory repair rule lost: {marker}"
+
+
 def test_generator_invariants_separate_authored_and_capture_owned_files():
     """Workflow-v2 must not ask the agent to create supervisor-owned records."""
     text = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
@@ -242,6 +303,44 @@ def test_generator_distinguishes_optional_tables_and_physical_pii_exposure():
         "project every sensitive column out before any dlt resource is yielded",
     ):
         assert marker in text
+
+
+def test_pre_capture_audit_pins_output_privacy_and_decision_projection():
+    """Keep the final closure audit explicit and reachable from both flows."""
+    audit = " ".join(PRE_CAPTURE_AUDIT.read_text(encoding="utf-8").split())
+    generator = GENERATOR_SKILL.read_text(encoding="utf-8")
+    workflow = WORKFLOW_V2.read_text(encoding="utf-8")
+
+    assert "reference/pre-capture-audit.md" in generator
+    assert "../../nxd-generate-data-product/reference/pre-capture-audit.md" in workflow
+    for marker in (
+        "blueprint `Model`",
+        "explicit blueprint `Output`",
+        "ordinary DSL `.promise(model)`",
+        "required physical materialization",
+        "non-privacy",
+        "share the DuckDB output",
+        "before yielding",
+        "closure README",
+        "typed-v3",
+        "`locked` | `confirmed`",
+        "`proposed` | `proposed`",
+        "ledger `blocked`",
+        "`provenance = deferred`",
+        "`user_confirmed`",
+        "`agent_authored`",
+        "`source_derived`",
+        "`deferred`",
+        "`approved`, `settled`",
+        "`operator_accepted`, or `user_approved`",
+        "external `review-record.json`",
+        "session-only decisions",
+        "blueprint amendment and fresh user reapproval",
+        "one ledger row per approved typed Decision",
+    ):
+        assert marker in audit, f"pre-capture audit marker lost: {marker}"
+    assert "Batch same-round mechanical" in workflow
+    assert "typed `locked` becomes ledger `confirmed`" in generator
 
 
 def test_reviewer_checks_semantic_and_direct_store_disclosure_early():
