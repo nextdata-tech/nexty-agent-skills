@@ -119,7 +119,9 @@ fell back.
 
 ## Scenarios
 
-Scenarios are selected by the `tier` each one declares.
+Scenarios are selected by the `tier` each one declares. `smoke`, `core`, and
+`full` packages grade replayable supplied evidence; `live` packages grade a
+live agent session and cannot be replayed.
 
 **Smoke** runs on every skill, runtime, or generator change, takes minutes, and
 spends nearly nothing on models. It runs in `run_order`:
@@ -168,6 +170,13 @@ never pulled into a smoke run:
   transition, and UTC date-boundary event, where source-local and UTC daily
   views preserve totals while one of 14 rows shifts.
 
+**Full** covers deterministic cross-source decisions that are too specific for
+the routine core suite:
+
+- **marketing-attribution** — B3's safe campaign-name matching, including
+  case/whitespace normalization, one unique 50-character truncation, and a
+  matched-conversions-only CPA policy.
+
 **Live** is the only tier whose runs cannot be replayed:
 
 - **capability-shortfall** — a mock REST source that genuinely cannot answer some
@@ -202,6 +211,7 @@ scenario.
 | [inventory-position](scenarios/inventory-position/README.md) | core | 9 | profile-backed inventory and warehouse lookup with quality warnings |
 | [application-reconciliation](scenarios/application-reconciliation/README.md) | core | 10 | 391-to-353 count dispute with status/tombstone lineage |
 | [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
+| [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign-name normalization, unique truncation, and unmatched-CPA policy |
 
 ## Running
 

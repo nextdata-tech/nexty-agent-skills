@@ -117,8 +117,10 @@ REPLAY_SESSION_PATH_FIELDS = frozenset(
 COMPARABILITY_EXCLUDED_FIELDS = REPLAY_SESSION_PATH_FIELDS | frozenset({"validation_mode"})
 
 # Tiers are named for what they are: the smoke tier runs on every change, the
-# core tier weekly, the full tier per release.  The smoke and core tiers are
-# implemented here, and each waives the pins for surfaces it never exercises.
+# core tier weekly, the full tier per release.  Each tier waives only pins for
+# surfaces a scenario does not exercise.  A full-tier scenario that uses a
+# judge or mapper fixture still supplies those pins; the waiver merely permits
+# an LLM-free full-tier package such as B3 to record them as not-applicable.
 # Keep T0 as an alias for persisted manifests produced by the original smoke
 # tier; both spellings use the same waiver policy.
 _SMOKE_TIER_WAIVERS = frozenset(
@@ -144,10 +146,12 @@ _CORE_TIER_WAIVERS = _SMOKE_TIER_WAIVERS
 # existed in ``scenario.py`` before anything downstream of it recognized the
 # spelling.
 _LIVE_TIER_WAIVERS = _SMOKE_TIER_WAIVERS
+_FULL_TIER_WAIVERS = _SMOKE_TIER_WAIVERS
 TIER_WAIVERS: dict[str, frozenset[str]] = {
     "smoke": _SMOKE_TIER_WAIVERS,
     "T0": _SMOKE_TIER_WAIVERS,
     "core": _CORE_TIER_WAIVERS,
+    "full": _FULL_TIER_WAIVERS,
     "live": _LIVE_TIER_WAIVERS,
 }
 
