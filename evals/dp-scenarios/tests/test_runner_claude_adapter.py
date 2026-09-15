@@ -24,7 +24,11 @@ from dp_scenarios.runner.claude_adapter import (
     parse_claude_events,
 )
 from dp_scenarios.operator.transport import TouchedFile, ToolCall, TurnResult
-from dp_scenarios.failure_reasons import CHILD_NO_TERMINAL_RESULT, PROVIDER_SESSION_LIMIT
+from dp_scenarios.failure_reasons import (
+    CHILD_EXITED_EARLY,
+    CHILD_NO_TERMINAL_RESULT,
+    PROVIDER_SESSION_LIMIT,
+)
 from dp_scenarios.runner.session import turn_result_to_dict
 from dp_scenarios.runner.local import FileSupervisorRecordReader, LocalRunnerError
 
@@ -1088,6 +1092,462 @@ def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> 
         append_system_prompt="test",
         mcp_config=tmp_path / "mcp.json",
     )
+
+
+def _write_review_deadline_fake(path: Path, *, mode: str) -> None:
+    """Create a child that changes only the runner-owned guard fixture."""
+
+    path.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+MODE = __MODE__
+
+def set_guard_state(state):
+    path = Path(os.environ["NXD_EVAL_REVIEW_GUARD_STATE"])
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value.update({"state": state, "review_tool_use_id": "review-accepted"})
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+def set_completed_state():
+    path = Path(os.environ["NXD_EVAL_REVIEW_GUARD_STATE"])
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value.update({"state": "normal", "completed_review_tool_use_id": "review-accepted"})
+    value.pop("review_tool_use_id", None)
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+if MODE == "late_provider":
+    def write_provider_limit_and_exit(_signum, _frame):
+        sys.stderr.write("Claude usage limit reached. Your limit will reset later.\\n")
+        sys.stderr.flush()
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, write_provider_limit_and_exit)
+
+for line in sys.stdin:
+    json.loads(line)
+    set_guard_state("review_dispatch_pending")
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "reviewer activity"}
+    ]}}), flush=True)
+    if MODE == "active":
+        for index in range(20):
+            print(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": f"inspection-{index}"}
+            ]}}), flush=True)
+            time.sleep(0.03)
+        time.sleep(600)
+    elif MODE == "complete":
+        time.sleep(0.05)
+        set_guard_state("relay_pending")
+        print(json.dumps({"type": "result", "result": "review complete", "is_error": False}), flush=True)
+    elif MODE == "report_in_flight":
+        time.sleep(0.05)
+        set_guard_state("report_in_flight")
+        print(json.dumps({"type": "result", "result": "review reported", "is_error": False}), flush=True)
+    elif MODE == "normal_after_completion":
+        time.sleep(0.05)
+        set_completed_state()
+        print(json.dumps({"type": "result", "result": "review finalized", "is_error": False}), flush=True)
+    else:
+        time.sleep(600)
+        """.replace("__MODE__", json.dumps(mode)).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _run_review_deadline_fake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    mode: str,
+    stderr: str | None = None,
+    timeout_s: float = 2.0,
+) -> tuple[ClaudeCodeAdapter, TurnResult]:
+    fake_claude = tmp_path / f"review-{mode}-fake-claude.py"
+    _write_review_deadline_fake(fake_claude, mode=mode)
+    if stderr is not None:
+        fake_claude.write_text(
+            fake_claude.read_text(encoding="utf-8").replace(
+                '    set_guard_state("review_dispatch_pending")',
+                f'    sys.stderr.write({stderr!r} + "\\n")\n'
+                '    sys.stderr.flush()\n'
+                '    set_guard_state("review_dispatch_pending")',
+            ),
+            encoding="utf-8",
+        )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=timeout_s)
+    result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    return adapter, result
+
+
+def test_ordinary_quiet_stream_waits_past_a_polling_slice_and_returns_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_claude = tmp_path / "quiet-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    json.loads(line)
+    time.sleep(0.35)
+    print(json.dumps({"type": "result", "result": "quiet complete", "is_error": False}), flush=True)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+
+    started = time.monotonic()
+    try:
+        result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    finally:
+        adapter.close()
+
+    assert time.monotonic() - started >= 0.3
+    assert result.turn_timed_out is False
+    assert result.agent_message == "quiet complete"
+
+
+def test_accepted_review_dispatch_uses_a_silent_child_deadline_and_reaps_the_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    started = time.monotonic()
+    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="silent")
+
+    assert 0.15 <= time.monotonic() - started < 1.5
+    assert result.turn_timed_out is True
+    assert result.environment_wedged is False
+    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    assert "reviewer activity" in result.transcript_delta
+    assert adapter._process is None
+    adapter.close()
+
+
+def test_outer_deadline_beats_a_still_pending_reviewer_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 1_000)
+    started = time.monotonic()
+    adapter, result = _run_review_deadline_fake(
+        tmp_path,
+        monkeypatch,
+        mode="silent",
+        timeout_s=0.3,
+    )
+
+    assert time.monotonic() - started >= 0.25
+    assert result.turn_timed_out is True
+    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    assert "Claude did not complete the turn within 0.3s" in (result.environment_detail or "")
+    assert "retained-capture reviewer" not in (result.environment_detail or "")
+    adapter.close()
+
+
+def test_review_inspection_activity_does_not_extend_the_accepted_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    started = time.monotonic()
+    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="active")
+
+    assert 0.15 <= time.monotonic() - started < 1.5
+    assert result.turn_timed_out is True
+    assert result.environment_wedged is False
+    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    assert "inspection-0" in result.transcript_delta
+    assert adapter._process is None
+    adapter.close()
+
+
+def test_review_completion_disarms_the_deadline_and_returns_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="complete")
+    try:
+        assert result.turn_timed_out is False
+        assert result.environment_wedged is False
+        assert result.terminal_result_count == 1
+        assert result.agent_message == "review complete"
+    finally:
+        adapter.close()
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    (
+        ("report_in_flight", "review reported"),
+        ("normal_after_completion", "review finalized"),
+    ),
+)
+def test_valid_post_dispatch_guard_states_disarm_before_a_terminal_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    message: str,
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode=mode)
+    try:
+        assert result.turn_timed_out is False
+        assert result.agent_message == message
+        assert adapter._review_deadline_at is None
+    finally:
+        adapter.close()
+
+
+def test_provider_reason_wins_when_the_accepted_review_deadline_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    adapter, result = _run_review_deadline_fake(
+        tmp_path,
+        monkeypatch,
+        mode="silent",
+        stderr="Claude usage limit reached. Your limit will reset later.",
+    )
+    try:
+        assert result.turn_timed_out is True
+        assert result.environment_wedged is False
+        assert result.failure_reason == PROVIDER_SESSION_LIMIT
+    finally:
+        adapter.close()
+
+
+def test_late_provider_stderr_during_reap_beats_generic_review_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    adapter, result = _run_review_deadline_fake(
+        tmp_path,
+        monkeypatch,
+        mode="late_provider",
+    )
+    try:
+        assert result.turn_timed_out is True
+        assert result.failure_reason == PROVIDER_SESSION_LIMIT
+    finally:
+        adapter.close()
+
+
+def test_eof_before_either_deadline_is_child_exited_early(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_claude = tmp_path / "eof-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    json.loads(line)
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "partial"}]}}), flush=True)
+    break
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+
+    try:
+        result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    finally:
+        adapter.close()
+
+    assert result.turn_timed_out is False
+    assert result.failure_reason == CHILD_EXITED_EARLY
+    assert "partial" in result.transcript_delta
+
+
+def test_zero_event_eof_is_typed_early_exit_and_reaps_the_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_claude = tmp_path / "zero-event-eof-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import sys
+
+sys.stdin.readline()
+raise SystemExit(3)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+
+    result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+
+    assert result.turn_timed_out is False
+    assert result.failure_reason == CHILD_EXITED_EARLY
+    assert adapter._process is None
+    adapter.close()
+
+
+def test_unreadable_guard_snapshot_cannot_reset_an_armed_reviewer_deadline(
+    tmp_path: Path
+) -> None:
+    fake_claude = tmp_path / "unused-fake-claude.py"
+    fake_claude.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
+    state = tmp_path / "review-state.json"
+    adapter._review_guard_state = state
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "review_dispatch_pending",
+                "review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    started = 100.0
+    initial = adapter._refresh_review_deadline(started)
+    armed_at = adapter._review_deadline_at
+    assert initial is not None and armed_at is not None
+    state.write_text('{"version":', encoding="utf-8")
+
+    preserved = adapter._refresh_review_deadline(started + 0.1)
+    assert preserved is not None
+    assert adapter._review_deadline_at == armed_at
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "report_in_flight",
+                "review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert adapter._refresh_review_deadline(started + 0.2) is None
+
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "review_dispatch_pending",
+                "review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert adapter._refresh_review_deadline(started + 0.3) is not None
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "normal",
+                "completed_review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert adapter._refresh_review_deadline(started + 0.4) is None
+
+
+def test_cleanup_kills_a_term_ignoring_descendant_after_its_leader_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_claude = tmp_path / "term-ignoring-child-fake-claude.py"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        """
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+def exit_leader(_signum, _frame):
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, exit_leader)
+for line in sys.stdin:
+    json.loads(line)
+    child = subprocess.Popen([
+        sys.executable,
+        "-c",
+        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)",
+    ])
+    Path("child.pid").write_text(str(child.pid), encoding="utf-8")
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "child launched"}]}}), flush=True)
+    time.sleep(600)
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.chdir(agent_dir)
+    # Allow interpreter startup plus child creation before exercising group
+    # teardown; the assertion concerns post-SIGTERM cleanup, not startup.
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+
+    result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
+    child_pid = int((agent_dir / "child.pid").read_text(encoding="utf-8"))
+
+    assert result.turn_timed_out is True
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("term-ignoring descendant survived adapter group cleanup")
+    adapter.close()
+
+
+def test_review_timeout_keeps_partial_events_without_forging_review_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
+    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="silent")
+    try:
+        assert result.turn_timed_out is True
+        assert result.reported is False
+        assert result.tool_results == ()
+        assert not (tmp_path / "artifacts" / "review-record.json").exists()
+        assert not (tmp_path / "artifacts" / "agent-attestations.json").exists()
+    finally:
+        adapter.close()
 
 
 def test_a_child_that_stalls_past_the_deadline_names_the_missing_terminal_result(

@@ -1290,36 +1290,32 @@ _REVIEW_METADATA_STATUSES = frozenset(
     {"async_launched", "queued", "running", "completed", "success", "succeeded"}
 )
 _REVIEW_CONTENT_KEYS = frozenset({"content", "text", "result", "output"})
+_SANITIZED_REQUEST_LABEL = "Sanitized original request:"
+_REVIEW_SKILL_INSTRUCTION = "Load and follow nxd-review-closure."
 
 
 def _prompt_has_explicit_request(prompt: str) -> bool:
-    """Require request content outside the canonical dispatch marker."""
+    """Require exactly one nonblank canonical request line."""
 
-    for line in prompt.splitlines():
-        if line.startswith(_REVIEW_DISPATCH_PREFIX):
-            continue
-        prefix, separator, value = line.partition(":")
-        if (
-            separator
-            and "sanitized original request" in prefix.casefold()
-            and value.strip().strip("\\\"'").strip()
-        ):
-            return True
-    return False
+    if prompt.count(_SANITIZED_REQUEST_LABEL) != 1:
+        return False
+    request_lines = [
+        line for line in prompt.splitlines() if line.startswith(_SANITIZED_REQUEST_LABEL)
+    ]
+    return len(request_lines) == 1 and bool(
+        request_lines[0][len(_SANITIZED_REQUEST_LABEL) :].strip()
+    )
 
 
 def _prompt_field_values(prompt: str, field: str) -> tuple[str, ...]:
     """Return exact values for one labeled prompt field."""
 
-    values: list[str] = []
-    for line in prompt.splitlines():
-        candidate = line.strip()
-        if candidate.startswith("-"):
-            candidate = candidate[1:].lstrip()
-        prefix, separator, value = candidate.partition(":")
-        if separator and prefix.strip().casefold() == field.casefold():
-            values.append(value.strip())
-    return tuple(values)
+    prefix = f"{field}:"
+    return tuple(
+        line[len(prefix) :].strip()
+        for line in prompt.splitlines()
+        if line.startswith(prefix)
+    )
 
 
 def _prompt_binds_review_input(
@@ -1327,7 +1323,11 @@ def _prompt_binds_review_input(
 ) -> bool:
     """Require the exact non-empty paths issued by the supervisor."""
 
-    if not _prompt_has_explicit_request(prompt) or not review_input:
+    if (
+        not _prompt_has_explicit_request(prompt)
+        or prompt.splitlines().count(_REVIEW_SKILL_INSTRUCTION) != 1
+        or not review_input
+    ):
         return False
     return all(
         value and _prompt_field_values(prompt, field) == (value,)
