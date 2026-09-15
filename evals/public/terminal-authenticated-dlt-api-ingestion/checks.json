@@ -11,10 +11,10 @@
     "trace_source": "runner_mcp"
   },
   "checks": [
-    {"id": "public-mcp-trace", "check": "The runner-authored trace shows the public MCP lifecycle and does not rely on direct supervisor CLI calls."},
-    {"id": "dlt-profile-architecture", "check": "The landed closure uses the DLT REST connector, flat api-source profile attributes, and profile-derived endpoint/auth/header values; a hand-written HTTP loop or endpoint companion is rejected."},
-    {"id": "positive-pagination", "check": "The positive closure preserves all 23 synthetic rows from the three-page envelope and supports the governed filtered query."},
-    {"id": "negative-matrix", "check": "401, 403, 404, malformed profile, omitted profile, retired companion, and hard-coded endpoint cases each record a distinct structured failure phase/code."},
-    {"id": "redaction-and-cleanup", "check": "The synthetic credential is absent from the runner trace, diagnostics, generated source, and export evidence, and the workflow is stopped through the public tools."}
+    {"id": "public-mcp-trace", "check": "The runner-authored JSON-RPC trace proves the public workflow-v2 lifecycle with correlated responses."},
+    {"id": "dlt-companion-architecture", "check": "The landed closure uses the DLT REST connector, reads the materialized api-source-endpoints companion and profile auth/header, and has no hand-written HTTP or transform literals."},
+    {"id": "positive-pagination-and-query", "check": "Separate unfiltered observations prove 10/10/3 and 23 rows, while a governed paid filter has its own bounded observations and response."},
+    {"id": "negative-matrix", "check": "401, 403, 404, malformed companion, omitted companion, and hard-coded endpoint cases each have trace-linked structured phase/code failures."},
+    {"id": "materialization-publication-redaction", "check": "Definition digest, published row_count=23, inspect/list/resume/describe/query/export evidence are present and the synthetic credential is absent from every artifact except the sensitive profile."}
   ]
 }
