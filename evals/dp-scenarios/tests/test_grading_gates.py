@@ -916,6 +916,8 @@ def _published_build(
         EventPosition(turn, call_index),
         "workflow",
         "/workspace",
+        "sha256-v1:definition",
+        (("retained_capture_root", "/captured/root"), ("retained_blueprint_path", "/captured/blueprint.md")),
     )
 
 
@@ -990,7 +992,10 @@ def _dispatch_observations(
                         "arguments": {
                             "subagent_type": subagent_type,
                             "prompt": (
-                                "Review the sanitized original request and return claims only.\n"
+                                "Load and follow nxd-review-closure.\n"
+                                "retained_capture_root: /captured/root\n"
+                                "retained_blueprint_path: /captured/blueprint.md\n"
+                                "Sanitized original request: \"fixture request\"\n"
                                 'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":'
                                 '"sanitized_original_request","return":"claims_only","review_round_index":0}'
                             ),
@@ -1066,32 +1071,32 @@ def test_construction_does_not_credit_a_background_launch_as_a_dispatch() -> Non
     review having happened.
     """
 
-    observations = {
-        "turns": [
-            {
-                "tool_calls": [
-                    {
-                        "name": "mcp__nxd-desktop__check_data_product",
-                        "arguments": {},
-                        "result": {"is_error": False},
-                    },
-                    {
-                        "name": "Agent",
-                        "arguments": {
-                            "subagent_type": "general-purpose",
-                            "prompt": (
-                                "Review closure ./closure against the original request; "
-                                "return claims only."
-                            ),
-                        },
-                        "result": {
-                            "is_error": False,
-                            "content": "Async agent launched successfully. agentId: abc",
-                        },
-                    },
-                ]
-            }
-        ]
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"][0]["result"]["content"] = (
+        "Async agent launched successfully. agentId: abc"
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_does_not_credit_completion_metadata_as_reviewer_claims() -> None:
+    """A completed child needs returned claims, not only status metadata."""
+
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"][0]["result"]["content"] = {
+        "status": "completed",
+        "message": "Agent completed successfully",
+        "agent_id": "review-agent",
     }
 
     result = gate_construction(
@@ -1130,8 +1135,109 @@ def test_construction_does_not_credit_an_unrelated_or_unreturned_helper() -> Non
             require_observed=True,
         )
 
-        assert result.passed is False
-        assert "construction_adversarial_review_not_observed" in result.codes
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_rejects_review_labels_without_supervisor_paths() -> None:
+    """Labels alone must not stand in for the capture response's paths."""
+
+    observations = _dispatch_observations()
+    helper = observations["turns"][0]["tool_calls"][0]
+    helper["arguments"]["prompt"] = (
+        "Load and follow nxd-review-closure. Inspect the retained capture and "
+        "retained blueprint against the sanitized original request.\n"
+        "Sanitized original request: \"fixture request\"\n"
+        + canonical_review_dispatch_marker("closure", 0)
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_rejects_review_dispatch_without_retained_blueprint() -> None:
+    """The marker and skill name do not prove that all retained inputs were supplied."""
+
+    observations = _dispatch_observations()
+    helper = observations["turns"][0]["tool_calls"][0]
+    helper["arguments"]["prompt"] = (
+        "Load and follow nxd-review-closure. Inspect the retained capture against "
+        "the sanitized original request and return claims only.\n"
+        + canonical_review_dispatch_marker("closure", 0)
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"status": "completed"},
+        {
+            "status": "completed",
+            "content": [],
+            "message": "Agent completed successfully",
+            "agent_id": "review-agent",
+        },
+        {"agent_id": "abc"},
+        {"status": "queued", "agent_id": "abc"},
+        {"status": "running", "agent_id": "abc"},
+        {},
+        [],
+        [""],
+        "",
+    ],
+)
+def test_construction_rejects_metadata_only_review_results(content: object) -> None:
+    """Only content-bearing child results count as an inline review return."""
+
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"][0]["result"]["content"] = content
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_does_not_count_an_obsolete_custom_reviewer_type() -> None:
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(subagent_type="nxd-review-closure"),
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
 
 
 def test_construction_rejects_a_status_only_review_round() -> None:
@@ -1395,7 +1501,10 @@ def _review_call(index: int, *, closure: str = "closure") -> dict[str, object]:
         "name": "Agent",
         "arguments": {
             "subagent_type": "general-purpose",
-            "prompt": "Return claims only.\n"
+            "prompt": "Load and follow nxd-review-closure.\n"
+            "retained_capture_root: /captured/root\n"
+            "retained_blueprint_path: /captured/blueprint.md\n"
+            "Sanitized original request: \"fixture request\"\n"
             + canonical_review_dispatch_marker(closure, index),
         },
         "result": {"is_error": False, "content": "No claims."},
@@ -1570,6 +1679,33 @@ def _workflow_review_observations() -> dict[str, object]:
 
 def test_construction_accepts_supervisor_bound_workflow_review_sequence() -> None:
     closure = "nxd-jobs/january-review/closure"
+    observations = _workflow_review_observations()
+    observations["turns"][0]["tool_calls"].insert(0, _review_call(0, closure=closure))
+    observations["turns"][1]["tool_calls"].insert(0, _review_call(1, closure=closure))
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(
+            _review_attestation("corrected", closure=closure, review_round_index=0),
+            _review_attestation("clear", closure=closure, review_round_index=1),
+        ),
+        review_rounds={
+            closure: [
+                _workflow_review_round(0, findings=True),
+                _workflow_review_round(1, findings=False),
+            ]
+        },
+        published_closure=_published_build(closure, turn=2, call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed, result.codes
+
+
+def test_construction_rejects_a_report_only_workflow_review_sequence() -> None:
+    """Supervisor report transitions cannot replace the independent child."""
+
+    closure = "nxd-jobs/january-review/closure"
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=_workflow_review_observations(),
@@ -1587,7 +1723,8 @@ def test_construction_accepts_supervisor_bound_workflow_review_sequence() -> Non
         require_observed=True,
     )
 
-    assert result.passed, result.codes
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
 
 
 def test_construction_accepts_a_clear_first_generation_workflow_review() -> None:
@@ -1597,6 +1734,7 @@ def test_construction_accepts_a_clear_first_generation_workflow_review() -> None
             {
                 "turn": 1,
                 "tool_calls": [
+                    _review_call(0, closure=closure),
                     _workflow_review_report_call(
                         1, "sha256:review-1", "workflow/review_satisfied"
                     ),
@@ -1614,7 +1752,7 @@ def test_construction_accepts_a_clear_first_generation_workflow_review() -> None
             _review_attestation("clear", closure=closure, review_round_index=0),
         ),
         review_rounds={closure: [_workflow_review_round(0, findings=False)]},
-        published_closure=_published_build(closure, turn=1, call_index=2),
+            published_closure=_published_build(closure, turn=1, call_index=3),
         require_observed=True,
     )
 
@@ -1707,7 +1845,7 @@ def test_construction_accepts_trusted_v2_validation_before_admission() -> None:
     assert result.codes == ()
 
 
-def test_construction_rejects_legacy_check_as_validation_evidence() -> None:
+def test_construction_accepts_a_successful_supervisor_check_as_self_check_evidence() -> None:
     observations = {
         "turns": [
             {
@@ -1722,7 +1860,23 @@ def test_construction_rejects_legacy_check_as_validation_evidence() -> None:
                         },
                         "result": {
                             "is_error": False,
-                            "content": {"outcome": "pass", "workflow": "workflow"},
+                            "content": {
+                                "outcome": "pass",
+                                "workflow": "workflow",
+                                "provenance": {
+                                    "definition_id": "sha256-v1:definition",
+                                    "closure_path": "/workspace/closure",
+                                },
+                                "stages": [
+                                    {"stage": stage, "status": "pass", "checks": []}
+                                    for stage in (
+                                        "structure",
+                                        "runtime",
+                                        "contract",
+                                        "semantic",
+                                    )
+                                ],
+                            },
                         },
                     },
                     _workflow_start_run_call(),
@@ -1730,6 +1884,86 @@ def test_construction_rejects_legacy_check_as_validation_evidence() -> None:
             }
         ]
     }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "wrong_definition_id",
+        "wrong_provenance_closure",
+        "wrong_closure",
+        "wrong_workflow",
+        "missing_stage",
+    ],
+)
+def test_construction_rejects_an_unbound_or_incomplete_supervisor_check(
+    mutation: str,
+) -> None:
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    _review_call(0),
+                    {
+                        "name": "mcp__nxd-desktop__check_data_product",
+                        "arguments": {
+                            "definition": "/workspace/closure",
+                            "workflow": "workflow",
+                        },
+                        "result": {
+                            "is_error": False,
+                            "content": {
+                                "outcome": "pass",
+                                "workflow": "workflow",
+                                "provenance": {
+                                    "definition_id": "sha256-v1:definition",
+                                    "closure_path": "/workspace/closure",
+                                },
+                                "stages": [
+                                    {"stage": stage, "status": "pass", "checks": []}
+                                    for stage in (
+                                        "structure",
+                                        "runtime",
+                                        "contract",
+                                        "semantic",
+                                    )
+                                ],
+                            },
+                        },
+                    },
+                    _workflow_start_run_call(),
+                ],
+            }
+        ]
+    }
+    check = observations["turns"][0]["tool_calls"][1]
+    if mutation == "wrong_definition_id":
+        check["result"]["content"]["provenance"]["definition_id"] = (
+            "sha256-v1:other-definition"
+        )
+    elif mutation == "wrong_provenance_closure":
+        check["result"]["content"]["provenance"]["closure_path"] = (
+            "/workspace/other-closure"
+        )
+    elif mutation == "wrong_closure":
+        check["arguments"]["definition"] = "/workspace/other-closure"
+    elif mutation == "wrong_workflow":
+        check["arguments"]["workflow"] = "other-workflow"
+    else:
+        check["result"]["content"]["stages"].pop()
+
     result = gate_construction(
         _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
         observations=observations,

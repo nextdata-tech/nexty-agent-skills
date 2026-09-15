@@ -41,6 +41,10 @@ REVIEW_MARKER_KEYS = frozenset(
 REVIEW_RECORD = "review-record.json"
 ATTESTATIONS = "agent-attestations.json"
 REVIEW_ALLOWED_SUBAGENT_TYPES = frozenset({"general-purpose"})
+REVIEW_METADATA_STATUSES = frozenset(
+    {"async_launched", "queued", "running", "completed", "success", "succeeded"}
+)
+REVIEW_CONTENT_KEYS = frozenset({"content", "text", "result", "output"})
 REVIEW_CHILD_TOOLS = frozenset({"read", "glob", "grep", "skill"})
 DESKTOP_ADVANCE = "mcp__nxd-desktop__advance_workflow"
 REVIEW_SKILL_NAMES = frozenset(
@@ -191,6 +195,10 @@ def _string(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _exact_nonempty_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _int(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
@@ -292,11 +300,16 @@ def _claim_text(value: object) -> list[str]:
         # any child result exists. Only content-bearing fields count as the
         # reviewer's returned claims.
         status = value.get("status")
-        if isinstance(status, str) and status.casefold() in {
-            "async_launched",
-            "queued",
-            "running",
-        }:
+        has_content = any(
+            any(item.strip() for item in _claim_text(value[key]))
+            for key in REVIEW_CONTENT_KEYS
+            if key in value
+        )
+        if (
+            isinstance(status, str)
+            and status.casefold() in REVIEW_METADATA_STATUSES
+            and not has_content
+        ) or ("agent_id" in value and not has_content):
             return []
         text: list[str] = []
         for key in ("content", "text", "message", "result", "output"):
@@ -343,6 +356,44 @@ def _capture_requirement(event: dict[str, object]) -> dict[str, object] | None:
                 "owner_agent_id": _event_id(event, "agent_id", "agentId"),
                 "owner_session_id": _event_id(event, "session_id", "sessionId"),
             }
+            requirements = item.get("requirements")
+            if isinstance(requirements, dict):
+                review = requirements.get(REVIEW_REQUIREMENT)
+            elif isinstance(requirements, list):
+                review = next(
+                    (
+                        requirement
+                        for requirement in requirements
+                        if isinstance(requirement, dict)
+                        and requirement.get("id") == REVIEW_REQUIREMENT
+                    ),
+                    None,
+                )
+            else:
+                review = None
+            review_input = review.get("review_input") if isinstance(review, dict) else None
+            review_status = review.get("status") if isinstance(review, dict) else None
+            retained_capture_root = (
+                review_input.get("retained_capture_root")
+                if isinstance(review_input, dict)
+                else None
+            )
+            retained_blueprint_path = (
+                review_input.get("retained_blueprint_path")
+                if isinstance(review_input, dict)
+                else None
+            )
+            retained_capture_root = _exact_nonempty_string(retained_capture_root)
+            retained_blueprint_path = _exact_nonempty_string(retained_blueprint_path)
+            if (
+                str(review_status or "").casefold() != "pending"
+                or retained_capture_root is None
+                or retained_blueprint_path is None
+            ):
+                record["review_input_error"] = "missing_or_malformed"
+            else:
+                record["retained_capture_root"] = retained_capture_root
+                record["retained_blueprint_path"] = retained_blueprint_path
             return record
     return None
 
@@ -478,6 +529,41 @@ def _is_review_skill(value: object) -> bool:
     return skill in REVIEW_SKILL_NAMES
 
 
+def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) -> bool:
+    if not isinstance(prompt, str):
+        return False
+    retained_capture_root = state.get("retained_capture_root")
+    retained_blueprint_path = state.get("retained_blueprint_path")
+    if not isinstance(retained_capture_root, str) or not retained_capture_root.strip():
+        return False
+    if not isinstance(retained_blueprint_path, str) or not retained_blueprint_path.strip():
+        return False
+    fields: dict[str, list[str]] = {}
+    for line in prompt.splitlines():
+        candidate = line.strip()
+        if candidate.startswith("-"):
+            candidate = candidate[1:].lstrip()
+        prefix, separator, value = candidate.partition(":")
+        if separator and prefix.strip() in {
+            "retained_capture_root",
+            "retained_blueprint_path",
+        }:
+            fields.setdefault(prefix.strip(), []).append(value.strip())
+    if fields.get("retained_capture_root") != [retained_capture_root]:
+        return False
+    if fields.get("retained_blueprint_path") != [retained_blueprint_path]:
+        return False
+    for line in prompt.splitlines():
+        prefix, separator, value = line.partition(":")
+        if (
+            separator
+            and "sanitized original request" in prefix.casefold()
+            and value.strip().strip("\"'").strip()
+        ):
+            return True
+    return False
+
+
 def _child_pre(event: dict[str, object]) -> dict[str, object]:
     """Keep the retained-input reviewer read-only and single-level."""
 
@@ -506,6 +592,8 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
             )
         if state.get("review_tool_use_id"):
             return _deny("The captured review already has a dispatcher; use its returned claims and relay the report.")
+        if state.get("review_input_error"):
+            return _deny("Reviewer dispatch rejected: supervisor review_input is missing or malformed.")
         tool_input = _event_tool_input(event)
         subagent_type = _string(tool_input.get("subagent_type"))
         if subagent_type not in REVIEW_ALLOWED_SUBAGENT_TYPES:
@@ -515,17 +603,19 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
             return _deny(
                 "Reviewer dispatch rejected: use one canonical relative closure marker (for example closure), sanitized_original_request, and claims_only."
             )
+        if tool_input.get("run_in_background") is True:
+            return _deny("The retained-capture reviewer must run inline in this turn.")
+        if not _review_prompt_has_required_input(tool_input.get("prompt"), state):
+            return _deny(
+                "Reviewer dispatch rejected: include the exact supervisor-retained paths and a non-empty 'Sanitized original request:' line."
+            )
         state["review_tool_use_id"] = _event_id(event, "tool_use_id", "toolUseId")
         state["review_round_index"] = marker[1]
         # The adapter disables background tasks for the whole Claude process.
         # Do not mutate the Agent input here: recent Claude Code versions omit
         # ``run_in_background`` from the in-process schema entirely when that
         # mode is disabled, and an injected field can turn an otherwise valid
-        # synchronous child into an empty tool result.  An explicitly supplied
-        # background request is rejected by the admission check below.
-        if tool_input.get("run_in_background") is True:
-            state.pop("review_tool_use_id", None)
-            return _deny("The retained-capture reviewer must run inline in this turn.")
+        # synchronous child into an empty tool result.
         return _allow()
     if state["state"] == RELAY_PENDING:
         if tool in {"write", "edit"}:
@@ -599,6 +689,7 @@ def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, obj
             if isinstance(action, dict) and action.get("type") == "capture":
                 capture = _capture_requirement(event)
                 if capture is not None:
+                    state.pop("review_input_error", None)
                     state.update(capture)
                     state["state"] = REVIEW_DISPATCH_PENDING
                 return _allow()
