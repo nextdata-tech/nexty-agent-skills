@@ -238,15 +238,26 @@ review child, and relays every workflow action. Do not delegate Steps 2–3,
 must
 now make exactly one built-in `Agent` or `Task` dispatch for this capture
 generation. A `general-purpose` subagent is acceptable; the reviewer is a
-conversation child, not a supervisor/MCP operation. Its prompt must tell the
-child to load and follow `nxd-review-closure`, give it the retained blueprint
-path, retained capture root, and original request under the existing
-sanitized-request contract, and contain exactly this canonical marker line
-(replace only the example closure path and round index):
+conversation child, not a supervisor/MCP operation. Its prompt must use the
+following canonical block, replacing only the angle-bracketed values with the
+exact matching `review_input` values and the sanitized request. Keep each
+retained-path line exactly once, keep exactly one nonblank `Sanitized original
+request:` line, and include the canonical marker line exactly once. The prompt
+must tell the child to load and follow `nxd-review-closure`, and must give it
+the retained blueprint path, retained capture root, and original request under
+the existing sanitized-request contract:
 
 ```text
+retained_capture_root: <exact retained_capture_root from review_input>
+retained_blueprint_path: <exact retained_blueprint_path from review_input>
+Load and follow nxd-review-closure.
+Sanitized original request: <complete request with credentials replaced>
 NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
 ```
+
+Invoke the child inline with `run_in_background: false` when the installed
+`Agent`/`Task` schema exposes that field; otherwise omit the field, and never
+set it to `true`. The child loads `nxd-review-closure` and returns claims only.
 
 The main thread must not invoke `Skill(nxd-review-closure)` or conduct
 the review with its own `Read`/`Glob`/`Grep` calls. The main thread may load this

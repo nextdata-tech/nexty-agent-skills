@@ -271,7 +271,8 @@ def test_multi_question_dispatch_never_transfers_runtime_credentials():
 
 def test_adversarial_review_is_builtin_claims_only_dispatch():
     skill = _strip_markdown(GENERATE_DP.read_text())
-    reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
+    reference_raw = ADVERSARIAL_REVIEW.read_text()
+    reference = _strip_markdown(reference_raw)
     # Step 6b is the entry contract; the reference supplies the full handoff.
     assert "dispatches exactly one built-in read-only reviewer" in skill
     assert "supervisor-provided retained capture" in skill
@@ -279,17 +280,18 @@ def test_adversarial_review_is_builtin_claims_only_dispatch():
     assert "reference/adversarial-review.md" in skill
     assert "one built-in read-only subagent" in reference
     assert "the closure path" in reference and "original request, verbatim" in reference
+    assert "retained_capture_root: <exact retained_capture_root from review_input>" in reference_raw
+    assert "retained_blueprint_path: <exact retained_blueprint_path from review_input>" in reference_raw
+    assert "Sanitized original request: <complete request with credentials replaced>" in reference_raw
     assert "return claims only" in reference
     assert all(word in reference for word in ("never edits", "builds", "serves", "runs the transform", "user conversation"))
 
 
-def test_adversarial_deadline_records_partial_claims_without_a_finding_cap():
+def test_adversarial_reference_does_not_invent_runner_timeout_records():
     reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
     collapsed = re.sub(r"\s+", " ", reference)
-    assert "120000 ms elapsed-time deadline" in reference
-    assert "status: timedout" in reference and "budgetms: 120000" in reference
-    assert "every partial claim received by then" in collapsed
-    assert "no finding-count cap" in collapsed
-    assert "client cannot cancel or collect" in collapsed and "stop the workflow as needsuser" in collapsed
+    assert "do not invent a timeout record" in collapsed
+    assert "workflow pending" in collapsed
+    assert "120000 ms elapsed-time deadline" not in reference
+    assert "budgetms: 120000" not in reference
     assert "no complexity-based skip" in collapsed
-    assert "complete, timedout, and needsuser" in collapsed
