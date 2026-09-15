@@ -64,6 +64,10 @@ class PublishedBuild:
     position: EventPosition
     workflow: str | None
     agent_root: str
+    definition_id: str
+    #: The exact verified paths exposed by the supervisor's capture response.
+    #: This is populated by the tier join, never by the agent's attestation.
+    review_input: tuple[tuple[str, str], ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1282,8 +1286,101 @@ def _review_dispatch_marker(prompt: object) -> tuple[str, int] | None:
     return (closure_path, review_round_index) if line == canonical else None
 
 
+_REVIEW_METADATA_STATUSES = frozenset(
+    {"async_launched", "queued", "running", "completed", "success", "succeeded"}
+)
+_REVIEW_CONTENT_KEYS = frozenset({"content", "text", "result", "output"})
+
+
+def _prompt_has_explicit_request(prompt: str) -> bool:
+    """Require request content outside the canonical dispatch marker."""
+
+    for line in prompt.splitlines():
+        if line.startswith(_REVIEW_DISPATCH_PREFIX):
+            continue
+        prefix, separator, value = line.partition(":")
+        if (
+            separator
+            and "sanitized original request" in prefix.casefold()
+            and value.strip().strip("\\\"'").strip()
+        ):
+            return True
+    return False
+
+
+def _prompt_field_values(prompt: str, field: str) -> tuple[str, ...]:
+    """Return exact values for one labeled prompt field."""
+
+    values: list[str] = []
+    for line in prompt.splitlines():
+        candidate = line.strip()
+        if candidate.startswith("-"):
+            candidate = candidate[1:].lstrip()
+        prefix, separator, value = candidate.partition(":")
+        if separator and prefix.strip().casefold() == field.casefold():
+            values.append(value.strip())
+    return tuple(values)
+
+
+def _prompt_binds_review_input(
+    prompt: str, review_input: tuple[tuple[str, str], ...] | None
+) -> bool:
+    """Require the exact non-empty paths issued by the supervisor."""
+
+    if not _prompt_has_explicit_request(prompt) or not review_input:
+        return False
+    return all(
+        value and _prompt_field_values(prompt, field) == (value,)
+        for field, value in review_input
+    )
+
+
+def _review_claim_text(value: object) -> tuple[str, ...]:
+    """Extract returned claims while ignoring launch/status metadata.
+
+    This mirrors the claim extraction in ``runner/review_guard.py`` without
+    importing the runner layer into grading.  Agent results are untrusted
+    observations: only content-bearing fields can prove that the child
+    returned claims, while ``status``, ``agent_id``, and blank containers
+    cannot.
+    """
+
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Mapping):
+        status = value.get("status")
+        has_content = any(
+            any(item.strip() for item in _review_claim_text(value[key]))
+            for key in _REVIEW_CONTENT_KEYS
+            if key in value
+        )
+        if (
+            isinstance(status, str)
+            and status.casefold() in _REVIEW_METADATA_STATUSES
+            and not has_content
+        ) or (
+            "agent_id" in value
+            and not has_content
+        ):
+            return ()
+        text: list[str] = []
+        for key in ("content", "text", "message", "result", "output"):
+            if key in value:
+                text.extend(_review_claim_text(value[key]))
+        return tuple(text)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        text: list[str] = []
+        for item in value:
+            text.extend(_review_claim_text(item))
+        return tuple(text)
+    return ()
+
+
 def _completed_review_delegation(
-    call: Mapping[str, object], position: EventPosition
+    call: Mapping[str, object],
+    position: EventPosition,
+    *,
+    review_input: tuple[tuple[str, str], ...] | None = None,
 ) -> ReviewDispatch | None:
     """Return the marked closure when a reviewer completed inline.
 
@@ -1296,21 +1393,36 @@ def _completed_review_delegation(
     result = call.get("result")
     if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
         return None
+    # The shipped workflow requires one built-in general-purpose conversation
+    # child.  The reviewer identity belongs in the prompt, not in a custom
+    # ``subagent_type``: the plugin does not register an nxd-review-closure
+    # agent, and accepting that invented name made the gate impossible for the
+    # actual CLI flow.
+    if arguments.get("subagent_type") != "general-purpose":
+        return None
+    prompt = arguments.get("prompt")
+    if not isinstance(prompt, str):
+        return None
+    folded_prompt = prompt.casefold()
+    if (
+        "nxd-review-closure" not in folded_prompt
+        or not _prompt_binds_review_input(prompt, review_input)
+    ):
+        return None
+    # The review guard rejects this input before the child starts. Keep the
+    # predicate fail-closed as well for replayed observations and for a CLI
+    # that returns a misleading non-empty launch acknowledgement.
+    if arguments.get("run_in_background") is True:
+        return None
     marker = _review_dispatch_marker(arguments.get("prompt"))
     if marker is None or result.get("is_error") is not False:
         return None
     content = result.get("content")
-    if isinstance(content, str):
-        rendered = content.strip()
-    elif isinstance(content, (Mapping, Sequence)) and not isinstance(
-        content, (bytes, bytearray)
+    claims = _review_claim_text(content)
+    if not any(
+        item.strip() and "async agent launched" not in item.casefold()
+        for item in claims
     ):
-        rendered = json.dumps(content, default=str).strip()
-        if rendered in {"{}", "[]", '""'}:
-            return None
-    else:
-        return None
-    if not rendered or "async agent launched" in rendered.casefold():
         return None
     closure_path, review_round_index = marker
     return ReviewDispatch(position, closure_path, review_round_index)
@@ -1353,6 +1465,8 @@ def _review_dispatches(
     closure_path: str | None = None,
     workflow: str | None = None,
     desktop_server_name: str = "nxd-desktop",
+    review_input: tuple[tuple[str, str], ...] | None = None,
+    require_dispatch: bool = False,
 ) -> tuple[ReviewDispatch, ...]:
     """Return completed reviewer dispatches in exact event order.
 
@@ -1374,7 +1488,11 @@ def _review_dispatches(
         if not isinstance(name, str):
             continue
         if name.casefold() in {"task", "agent"}:
-            dispatch = _completed_review_delegation(call, position)
+            dispatch = _completed_review_delegation(
+                call,
+                position,
+                review_input=review_input,
+            )
             if dispatch is not None:
                 marker_found.append(dispatch)
             continue
@@ -1545,6 +1663,12 @@ def _review_dispatches(
 
     if marker_found:
         return tuple(marker_found)
+    if require_dispatch:
+        # A supervisor report proves the report transition, not that the
+        # mandated independent reviewer actually ran.  Strict live grading
+        # requires the observed Agent/Task result as well; otherwise a
+        # report-only transcript can manufacture a clean construction gate.
+        return ()
     if len(accepted_sequences) == 1:
         normalized_path = _normalized_closure_root(closure_path)
         if normalized_path is None:
@@ -1605,10 +1729,11 @@ def _successful_check_positions(
 ) -> tuple[EventPosition, ...]:
     desktop_prefix = desktop_tool_prefix(desktop_server_name)
     expected_advance = desktop_prefix + "advance_workflow"
+    expected_check = desktop_prefix + "check_data_product"
     positions: list[EventPosition] = []
     for position, call in _positioned_calls(observations):
         name = call.get("name")
-        if not isinstance(name, str) or name.casefold() != expected_advance:
+        if not isinstance(name, str):
             continue
         arguments = call.get("arguments")
         result = call.get("result")
@@ -1616,6 +1741,54 @@ def _successful_check_positions(
             continue
         content = result.get("content")
         if result.get("is_error") is not False or not isinstance(content, Mapping):
+            continue
+
+        # ``check_data_product`` is the supervisor's supported read-only
+        # self-check path.  Keep it as a compatibility evidence source for
+        # runs and scenarios that use that path, but require the complete
+        # structured report and bind it to the same closure and workflow as
+        # the published build.  A bare success string or an unrelated
+        # preflight must not certify the build.
+        if name.casefold() == expected_check:
+            if (
+                str(content.get("outcome", "")).strip().casefold() != "pass"
+                or _normalized_definition_for_build(
+                    arguments.get("definition"), build
+                )
+                != build.closure_path
+                or _normalized_workflow(arguments.get("workflow"))
+                != build.workflow
+                or _normalized_workflow(content.get("workflow")) != build.workflow
+            ):
+                continue
+            provenance = content.get("provenance")
+            stages = content.get("stages")
+            if (
+                not isinstance(provenance, Mapping)
+                or not isinstance(stages, Sequence)
+                or isinstance(stages, (str, bytes, bytearray))
+                or provenance.get("definition_id") != build.definition_id
+                or _normalized_definition_for_build(
+                    provenance.get("closure_path"), build
+                )
+                != build.closure_path
+                or [
+                    stage.get("stage")
+                    for stage in stages
+                    if isinstance(stage, Mapping)
+                ]
+                != ["structure", "runtime", "contract", "semantic"]
+                or any(
+                    not isinstance(stage, Mapping)
+                    or stage.get("status") != "pass"
+                    for stage in stages
+                )
+            ):
+                continue
+            positions.append(position)
+            continue
+
+        if name.casefold() != expected_advance:
             continue
         action = arguments.get("action")
         if not isinstance(action, Mapping) or action.get("type") != "start_requirement":
@@ -2177,6 +2350,8 @@ def gate_construction(
         closure_path=build.closure_path if build is not None else None,
         workflow=build.workflow if build is not None else None,
         desktop_server_name=desktop_server_name,
+        review_input=build.review_input if build is not None else None,
+        require_dispatch=True,
     )
     review_attestations = tuple(
         value

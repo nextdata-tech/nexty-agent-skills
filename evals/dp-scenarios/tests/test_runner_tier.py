@@ -574,7 +574,10 @@ def _completed_review_call() -> ToolCall:
         arguments={
             "subagent_type": "general-purpose",
             "prompt": (
-                "Review the sanitized original request and return claims only.\n"
+                "Load and follow nxd-review-closure.\n"
+                "retained_capture_root: /captured/root\n"
+                "retained_blueprint_path: /captured/blueprint.md\n"
+                "Sanitized original request: \"fixture request\"\n"
                 'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":'
                 '"sanitized_original_request","return":"claims_only","review_round_index":0}'
             ),
@@ -593,7 +596,10 @@ def _completed_prepare_call(workflow: str) -> ToolCall:
             "blueprint_path": "dp-blueprint.md",
             "typed_proposal": typed_proposal,
         },
-        result={"is_error": False, "content": {"workflow": workflow}},
+        result={
+            "is_error": False,
+            "content": {"workflow": workflow},
+        },
     )
 
 
@@ -764,7 +770,22 @@ def _completed_capture_call(workflow: str) -> ToolCall:
                 "parameters": {"requirement_id": "capture", "authoring_root": "closure"},
             },
         },
-        result={"is_error": False, "content": {"workflow": workflow}},
+        result={
+            "is_error": False,
+            "content": {
+                "workflow": workflow,
+                "requirements": [
+                    {
+                        "id": "review",
+                        "status": "pending",
+                        "review_input": {
+                            "retained_capture_root": "/captured/root",
+                            "retained_blueprint_path": "/captured/blueprint.md",
+                        },
+                    }
+                ],
+            },
+        },
     )
 
 
@@ -785,6 +806,7 @@ def _completed_build_call(supervisor: Mapping[str, object], workflow: str) -> To
                 "admission": {
                     "run_id": supervisor["run_id"],
                     "artifact_id": supervisor["artifact_id"],
+                    "definition_id": "sha256-v1:definition",
                 },
             },
         },
@@ -1198,16 +1220,35 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
                                 },
                             },
                         },
-                        "result": {"is_error": False, "content": {"workflow": "workflow"}},
+                        "result": {
+                            "is_error": False,
+                            "content": {
+                                "workflow": "workflow",
+                                "requirements": [
+                                    {
+                                        "id": "review",
+                                        "status": "pending",
+                                        "review_input": {
+                                            "retained_capture_root": "/captured/root",
+                                            "retained_blueprint_path": "/captured/blueprint.md",
+                                        },
+                                    }
+                                ],
+                            },
+                        },
                     },
-                    {
-                        "name": "Agent",
-                    "arguments": {
-                        "prompt": "Return claims only.\n"
-                        + canonical_review_dispatch_marker(closure, 0),
-                    },
-                    "result": {"is_error": False, "content": "No claims."},
-                },
+                        {
+                            "name": "Agent",
+                            "arguments": {
+                                "subagent_type": "general-purpose",
+                                "prompt": "Load and follow nxd-review-closure.\n"
+                                "retained_capture_root: /captured/root\n"
+                                "retained_blueprint_path: /captured/blueprint.md\n"
+                                "Sanitized original request: \"fixture request\"\n"
+                                + canonical_review_dispatch_marker(closure, 0),
+                            },
+                            "result": {"is_error": False, "content": "No claims."},
+                        },
                     _tool_call_observation(_completed_check_call("workflow")),
                     _tool_call_observation(
                         _completed_build_call(
@@ -1224,6 +1265,10 @@ def test_documented_agent_attestations_parse_and_pair_with_the_published_closure
         agent_root=agent,
     )
     assert published is not None
+    assert published.review_input == (
+        ("retained_capture_root", "/captured/root"),
+        ("retained_blueprint_path", "/captured/blueprint.md"),
+    )
     result = gate_construction(
         [{"record_type": "run_manifest"}, {"action_kind": "self_check", "claim": {"outcome": "pass"}}],
         observations=observations,
@@ -2947,6 +2992,7 @@ def _observed_build(
     *,
     run_id: str = "run-published",
     artifact_id: str = "artifact-published",
+    definition_id: str = "sha256-v1:definition",
     is_error: bool = False,
     workflow: str = "workflow",
     tool_name: str = "mcp__nxd-desktop__advance_workflow",
@@ -2964,7 +3010,11 @@ def _observed_build(
             "is_error": is_error,
             "content": {
                 "workflow": workflow,
-                "admission": {"run_id": run_id, "artifact_id": artifact_id},
+                "admission": {
+                    "run_id": run_id,
+                    "artifact_id": artifact_id,
+                    "definition_id": definition_id,
+                },
                 "bearer_token": "must-not-become-evidence",
             },
         },
@@ -2995,6 +3045,7 @@ def test_published_closure_uses_matching_real_build_result_and_normalizes_defini
         EventPosition(1, 3),
         "workflow",
         str(agent.resolve()),
+        "sha256-v1:definition",
     )
 
 
@@ -3032,6 +3083,7 @@ def test_published_closure_uses_the_latest_v2_capture_for_start_run(tmp_path: Pa
                             "admission": {
                                 "run_id": "run-published",
                                 "artifact_id": "artifact-published",
+                                "definition_id": "sha256-v1:definition",
                             }
                         },
                     ),
@@ -3047,6 +3099,7 @@ def test_published_closure_uses_the_latest_v2_capture_for_start_run(tmp_path: Pa
         EventPosition(2, 1),
         workflow,
         str(agent.resolve()),
+        "sha256-v1:definition",
     )
 
 

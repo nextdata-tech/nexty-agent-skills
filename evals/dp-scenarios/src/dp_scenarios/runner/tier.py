@@ -867,6 +867,45 @@ def _normalized_definition_path(definition: object, *, agent_root: Path) -> str 
     return normalized
 
 
+_REVIEW_INPUT_PATH_KEYS = ("retained_capture_root", "retained_blueprint_path")
+
+
+def _review_input_from_capture(
+    call: Mapping[str, object],
+) -> tuple[tuple[str, str], ...] | None:
+    """Extract verified reviewer paths from a successful supervisor capture."""
+
+    result = call.get("result")
+    if not isinstance(result, Mapping) or result.get("is_error") is not False:
+        return None
+    content = result.get("content")
+    if not isinstance(content, Mapping):
+        return None
+    requirements = content.get("requirements")
+    if not isinstance(requirements, Sequence) or isinstance(
+        requirements, (str, bytes, bytearray)
+    ):
+        return None
+    for requirement in requirements:
+        if (
+            not isinstance(requirement, Mapping)
+            or requirement.get("id") != "review"
+            or str(requirement.get("status", "")).casefold() != "pending"
+        ):
+            continue
+        review_input = requirement.get("review_input")
+        if not isinstance(review_input, Mapping):
+            return None
+        values: list[tuple[str, str]] = []
+        for key in _REVIEW_INPUT_PATH_KEYS:
+            value = review_input.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append((key, value))
+        return tuple(values)
+    return None
+
+
 def _published_closure(
     observations: object,
     supervisor_facts: SupervisorFacts | None,
@@ -892,7 +931,9 @@ def _published_closure(
     if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
         return None
     matches: list[PublishedBuild] = []
-    captured_closures: dict[str, str] = {}
+    captured_closures: dict[
+        str, tuple[str, tuple[tuple[str, str], ...] | None]
+    ] = {}
     for turn in turns:
         if not isinstance(turn, Mapping):
             continue
@@ -935,7 +976,10 @@ def _published_closure(
                     parameters.get("authoring_root"), agent_root=agent_root
                 )
                 if normalized is not None and content.get("workflow") == normalized_workflow:
-                    captured_closures[normalized_workflow] = normalized
+                    captured_closures[normalized_workflow] = (
+                        normalized,
+                        _review_input_from_capture(call),
+                    )
                 continue
             if action_type != "start_run" or content.get("workflow") != normalized_workflow:
                 continue
@@ -944,14 +988,20 @@ def _published_closure(
                 continue
             if admission.get("run_id") != run_id or admission.get("artifact_id") != artifact_id:
                 continue
-            normalized = captured_closures.get(normalized_workflow)
-            if normalized is not None:
+            definition_id = admission.get("definition_id")
+            if not isinstance(definition_id, str) or not definition_id.strip():
+                continue
+            captured = captured_closures.get(normalized_workflow)
+            if captured is not None:
+                normalized, review_input = captured
                 matches.append(
                     PublishedBuild(
                         normalized,
                         EventPosition(turn_number, call_index),
                         normalized_workflow,
                         str(agent_root.resolve()),
+                        definition_id,
+                        review_input,
                     )
                 )
     return matches[0] if len(matches) == 1 else None
