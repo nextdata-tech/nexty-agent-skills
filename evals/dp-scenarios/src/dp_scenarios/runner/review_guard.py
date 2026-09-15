@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - Windows is not a supported live host.
 
 STATE_ENV = "NXD_EVAL_REVIEW_GUARD_STATE"
 STATE_VERSION = 1
+REVIEW_DEADLINE_MS = 120_000
 NORMAL = "normal"
 REVIEW_DISPATCH_PENDING = "review_dispatch_pending"
 RELAY_PENDING = "relay_pending"
@@ -40,6 +41,8 @@ REVIEW_MARKER_KEYS = frozenset(
 )
 REVIEW_RECORD = "review-record.json"
 ATTESTATIONS = "agent-attestations.json"
+SANITIZED_REQUEST_LABEL = "Sanitized original request:"
+REVIEW_SKILL_INSTRUCTION = "Load and follow nxd-review-closure."
 REVIEW_ALLOWED_SUBAGENT_TYPES = frozenset({"general-purpose"})
 REVIEW_METADATA_STATUSES = frozenset(
     {"async_launched", "queued", "running", "completed", "success", "succeeded"}
@@ -538,30 +541,28 @@ def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) 
         return False
     if not isinstance(retained_blueprint_path, str) or not retained_blueprint_path.strip():
         return False
-    fields: dict[str, list[str]] = {}
-    for line in prompt.splitlines():
-        candidate = line.strip()
-        if candidate.startswith("-"):
-            candidate = candidate[1:].lstrip()
-        prefix, separator, value = candidate.partition(":")
-        if separator and prefix.strip() in {
-            "retained_capture_root",
-            "retained_blueprint_path",
-        }:
-            fields.setdefault(prefix.strip(), []).append(value.strip())
-    if fields.get("retained_capture_root") != [retained_capture_root]:
+    lines = prompt.splitlines()
+    # These are protocol lines, not prose labels.  Requiring each exact line
+    # once prevents a child from receiving a sibling path or a second,
+    # ambiguous binding disguised as a bullet or a differently-cased field.
+    if lines.count(f"retained_capture_root: {retained_capture_root}") != 1:
         return False
-    if fields.get("retained_blueprint_path") != [retained_blueprint_path]:
+    if lines.count(f"retained_blueprint_path: {retained_blueprint_path}") != 1:
         return False
-    for line in prompt.splitlines():
-        prefix, separator, value = line.partition(":")
-        if (
-            separator
-            and "sanitized original request" in prefix.casefold()
-            and value.strip().strip("\"'").strip()
-        ):
-            return True
-    return False
+    # The real built-in reviewer is selected by this explicit instruction,
+    # not by inventing a custom subagent type. Keep it canonical so replayed
+    # observations and live hook enforcement agree about what was dispatched.
+    if lines.count(REVIEW_SKILL_INSTRUCTION) != 1:
+        return False
+    # The request is caller-authored and must never be reconstructed by the
+    # hook.  Require exactly one exact label and only check that its value is
+    # nonblank; sanitization itself remains the dispatcher's responsibility.
+    if prompt.count(SANITIZED_REQUEST_LABEL) != 1:
+        return False
+    request_lines = [line for line in lines if line.startswith(SANITIZED_REQUEST_LABEL)]
+    return len(request_lines) == 1 and bool(
+        request_lines[0][len(SANITIZED_REQUEST_LABEL) :].strip()
+    )
 
 
 def _child_pre(event: dict[str, object]) -> dict[str, object]:
@@ -678,6 +679,10 @@ def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, obj
         ):
             if _report_matches(_event_tool_input(event), state, event):
                 state["state"] = NORMAL
+                # Preserve the completed dispatcher identity just long
+                # enough for the runner to observe a valid terminal state.
+                # A fresh capture clears it before accepting another review.
+                state["completed_review_tool_use_id"] = state.get("review_tool_use_id")
                 for key in ("review_tool_use_id", "report_tool_use_id", "review_round_index"):
                     state.pop(key, None)
             else:
@@ -690,6 +695,7 @@ def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, obj
                 capture = _capture_requirement(event)
                 if capture is not None:
                     state.pop("review_input_error", None)
+                    state.pop("completed_review_tool_use_id", None)
                     state.update(capture)
                     state["state"] = REVIEW_DISPATCH_PENDING
                 return _allow()
@@ -741,9 +747,12 @@ __all__ = [
     "ATTESTATIONS",
     "DESKTOP_ADVANCE",
     "NORMAL",
+    "REVIEW_DEADLINE_MS",
     "REPORT_IN_FLIGHT",
     "RELAY_PENDING",
     "REVIEW_DISPATCH_PENDING",
+    "REVIEW_SKILL_INSTRUCTION",
+    "SANITIZED_REQUEST_LABEL",
     "handle_event",
     "settings_payload",
     "write_initial_state",

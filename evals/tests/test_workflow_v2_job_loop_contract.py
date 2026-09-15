@@ -160,11 +160,17 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Copy all four integers",
         "may include separator blank lines",
         "Do not trim or widen that range",
-        "validation_issue.expected_source_span",
-        "replace only that path's coordinates",
-        "If the MCP host renders only error text",
-        "parse the safe `validation_issue=...` JSON suffix",
-        "copy exactly its four numeric coordinates",
+        "prepare_recovery_id",
+        "inspect_prepare_recovery",
+        "complete `source_spans` map",
+        "regenerate the entire typed proposal",
+        "legacy `validation_issue.expected_source_span`",
+        "source_map_code",
+        "v3.provenance.source_map_unavailable",
+        "v3.provenance.source_map_oversized",
+        "reparse the final blueprint",
+        "replace the complete proposal file",
+        "Do not claim generic filesystem atomicity",
         "Never guess, split, trim, widen, or alter typed values",
         "may remain `status: proposed` during prepare",
         "trusted materializer projects proposed Decisions to `locked` in the approved closure snapshot",
@@ -172,18 +178,35 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "round-trip the complete JSON",
         "re-run strict proposal validation",
         "new globally unique `request_id` because the payload changed",
+        "## Recovering a rejected proposal",
+        "Treat recovery as a whole-proposal replacement",
+        "every populated parser `.text` source path",
+        "every populated Decision subsection",
+        "never replaces that provenance entry",
+        "rebuild `echo.coverage` from the complete provenance key set",
+        "with a fresh `request_id`",
+        "Do not patch a second named path",
     ):
         assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
     assert "typed_proposal_path" not in prepare
+    assert "replace only that path's coordinates" not in prepare
 
     job = JOB_SKILL.read_text(encoding="utf-8")
     for marker in (
-        "structured `validation_issue.expected_source_span`",
-        "parse the safe `validation_issue=...` JSON suffix",
-        "copy exactly its four numeric coordinates",
+        "bounded `prepare_recovery_id`",
+        "`inspect_prepare_recovery`",
+        "regenerate the entire proposal",
+        "v1-compatible location hint",
+        "source_map_code",
+        "reparse the final blueprint",
+        "replace the complete proposal file",
+        "Do not claim generic filesystem atomicity",
         "Never guess, split, trim, widen, or alter typed values",
+        "source_block_uncovered",
+        "complete-regeneration invariant",
     ):
         assert marker in job, f"live span-repair fallback lost: {marker}"
+    assert "replace only that path's coordinates" not in job
 
     capture = text[text.index("## Relay consent and capture") : text.index("## Run and report the review")]
     assert capture.index("approval authorizes") < capture.index('"type": "capture"')
@@ -467,9 +490,14 @@ def test_review_dispatch_is_one_conversation_child_with_the_canonical_marker():
         "`general-purpose` subagent is acceptable",
         "conversation child, not a supervisor/MCP operation",
         "load and follow `nxd-review-closure`",
+        "retained_capture_root: <exact retained_capture_root from review_input>",
+        "retained_blueprint_path: <exact retained_blueprint_path from review_input>",
+        "Sanitized original request: <complete request with credentials replaced>",
+        "Load and follow nxd-review-closure.",
         "main thread must not invoke `Skill(nxd-review-closure)`",
         "canonical marker line",
         'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}',
+        "`run_in_background: false`",
         "timeout or partial child result does not justify dispatching a second reviewer",
         "Reporting is the main thread's relay step",
     ):

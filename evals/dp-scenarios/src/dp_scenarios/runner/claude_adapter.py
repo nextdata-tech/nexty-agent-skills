@@ -30,7 +30,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
-from dp_scenarios.runner.review_guard import settings_payload, write_initial_state
+from dp_scenarios.runner.review_guard import (
+    REVIEW_DEADLINE_MS,
+    REVIEW_DISPATCH_PENDING,
+    RELAY_PENDING,
+    REPORT_IN_FLIGHT,
+    STATE_VERSION,
+    settings_payload,
+    write_initial_state,
+)
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
@@ -202,12 +210,18 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "Never fall back to check_data_product or build_data_product.",
     "When capture returns a review action, dispatch exactly one general-purpose "
     "Agent or Task conversation child with the supervisor-provided review_input "
-    "and this exact canonical NXD_REVIEW_DISPATCH marker syntax:\n"
+    "and this exact prompt template (replace only the angle-bracketed values):\n"
+    "retained_capture_root: <exact retained_capture_root from review_input>\n"
+    "retained_blueprint_path: <exact retained_blueprint_path from review_input>\n"
+    "Load and follow nxd-review-closure.\n"
+    "Sanitized original request: <the complete request with credentials replaced>\n"
     "NXD_REVIEW_DISPATCH {\"closure_path\":\"closure\",\"request_contract\":\"sanitized_original_request\",\"return\":\"claims_only\",\"review_round_index\":0}\n"
     "Replace only closure_path and review_round_index: use the relative "
     "closure path and the next zero-based index; keep request_contract and "
     "return unchanged, never use the absolute retained-capture path, and then "
-    "wait for its claims; the reviewer must run inline (run_in_background=false). "
+    "wait for its claims; invoke the child inline with run_in_background=false "
+    "when that field is supported (otherwise omit it; never set it true). The "
+    "reviewer must run inline (run_in_background=false) and return claims only. "
     "The main marker line must use exactly the NXD_REVIEW_DISPATCH keys and "
     "constant values; the example's 0 is only the first-round index, and actual "
     "dispatches use the next zero-based index. "
@@ -315,6 +329,20 @@ class ClaudeAdapterError(RuntimeError):
 
 class ClaudeTurnTimeout(ClaudeAdapterError):
     """Raised when Claude does not finish one turn before its deadline."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        events: Sequence[Mapping[str, object]] = (),
+        reviewer_deadline: bool = False,
+    ) -> None:
+        # Failure attribution is deliberately delayed until after the process
+        # group is reaped: provider stderr can arrive as the child handles the
+        # terminating signal. ``reviewer_deadline`` records only which clock
+        # expired, never a speculative failure reason.
+        super().__init__(message, events=events)
+        self.reviewer_deadline = reviewer_deadline
 
 
 def _load_desktop_stdio(repo_root: Path) -> tuple[type[Any], Any, Any]:
@@ -1108,6 +1136,10 @@ class ClaudeCodeAdapter:
         self._review_guard_state: Path | None = None
         self._review_guard_settings: Path | None = None
         self._process: subprocess.Popen[bytes] | None = None
+        # ``start_new_session=True`` makes this a group owned exclusively by
+        # the adapter; retain the identity so cleanup never targets a caller
+        # or unrelated process group.
+        self._process_group_id: int | None = None
         self._stderr: deque[str] = deque(maxlen=200)
         self._stderr_thread: threading.Thread | None = None
         # Claude Code validates --session-id as a UUID.  The scenario/epoch
@@ -1133,6 +1165,11 @@ class ClaudeCodeAdapter:
         # describe this run's builds.
         self._state_dir: Path | None = supervisor_data_dir
         self._build_context: dict[str, object] = {}
+        # Arm this clock only after the runner-owned hook has accepted a
+        # reviewer dispatch.  Keep it across turns so an owning-thread result
+        # cannot restart the review clock on the next operator message.
+        self._review_deadline_id: str | None = None
+        self._review_deadline_at: float | None = None
         self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
 
     @property
@@ -1306,6 +1343,7 @@ class ClaudeCodeAdapter:
             bufsize=0,
             start_new_session=True,
         )
+        self._process_group_id = self._process.pid
         self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
         self._stderr_thread.start()
         self._before = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
@@ -1321,17 +1359,119 @@ class ClaudeCodeAdapter:
         process = self._process
         if process is None:
             return
-        if process.poll() is None:
-            with contextlib.suppress(OSError):
-                os.killpg(process.pid, signal.SIGTERM)
-            try:
+        group_id = self._process_group_id
+        if not isinstance(group_id, int) or group_id <= 0:
+            # This fallback is only for older hand-built adapter fixtures.
+            # Every live process sets the id immediately after ``Popen``.
+            group_id = process.pid
+        # The leader can exit before a child closes the group. Signal the
+        # dedicated session group regardless, then reap the leader. ESRCH is
+        # normal when both already exited.
+        # Darwin can report EPERM for a just-reaped, empty process group even
+        # though the direct child is ours. The group has no signalable member
+        # in that case; continue to wait/reap instead of masking the original
+        # EOF or timeout.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(group_id, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(group_id, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                with contextlib.suppress(OSError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=5)
+        # A leader that handles SIGTERM can exit while a descendant ignores
+        # it. Probe the known private group after a short grace, then send a
+        # group-wide SIGKILL if it remains. Never derive a group from a PID
+        # after reaping; only the session id captured at spawn is signalable.
+        grace_deadline = time.monotonic() + 0.5
+        while self._process_group_alive(group_id) and time.monotonic() < grace_deadline:
+            time.sleep(0.02)
+        if self._process_group_alive(group_id):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(group_id, signal.SIGKILL)
+            kill_deadline = time.monotonic() + 1
+            while self._process_group_alive(group_id) and time.monotonic() < kill_deadline:
+                time.sleep(0.02)
+        # A provider-limit message can be written while SIGTERM is handled.
+        # Do not classify the interruption until this reader has consumed the
+        # closed stderr pipe.
+        thread = self._stderr_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1)
+        self._stderr_thread = None
         self._process = None
+        self._process_group_id = None
+
+    @staticmethod
+    def _process_group_alive(group_id: int) -> bool:
+        """Whether the adapter-owned process group still has a member."""
+
+        try:
+            os.killpg(group_id, 0)
+        except (ProcessLookupError, PermissionError):
+            # Permission errors are treated as non-signalable rather than a
+            # cue to target a potentially recycled id.
+            return False
+        return True
+
+    def _review_guard_snapshot(self) -> tuple[str, str | None] | None:
+        """Return a valid guard state, or ``None`` for a transient bad read."""
+
+        guard_state = self._review_guard_state
+        if guard_state is None:
+            return None
+        try:
+            value = json.loads(guard_state.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            # Hooks rewrite this runner-owned file in place. A partial read
+            # must not erase an already-armed monotonic deadline.
+            return None
+        if not isinstance(value, Mapping) or value.get("version") != STATE_VERSION:
+            return None
+        state = value.get("state")
+        if not isinstance(state, str):
+            return None
+        tool_use_id = value.get("review_tool_use_id")
+        if state == "normal" and not tool_use_id:
+            tool_use_id = value.get("completed_review_tool_use_id")
+        return state, tool_use_id.strip() if isinstance(tool_use_id, str) and tool_use_id.strip() else None
+
+    def _refresh_review_deadline(self, now: float) -> float | None:
+        """Return remaining reviewer time, arming only for an accepted id."""
+
+        snapshot = self._review_guard_snapshot()
+        if snapshot is None:
+            # A partially written, unreadable state is not proof that the
+            # accepted reviewer returned. Preserve any armed deadline.
+            return (
+                self._review_deadline_at - now
+                if self._review_deadline_at is not None
+                else None
+            )
+        state, tool_use_id = snapshot
+        if state == REVIEW_DISPATCH_PENDING:
+            if tool_use_id and (
+                tool_use_id != self._review_deadline_id
+                or self._review_deadline_at is None
+            ):
+                self._review_deadline_id = tool_use_id
+                self._review_deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
+        elif (
+            self._review_deadline_id is not None
+            and tool_use_id == self._review_deadline_id
+            and state in {RELAY_PENDING, REPORT_IN_FLIGHT, "normal"}
+        ):
+            # The hook records this matching, accepted dispatch before the
+            # owner may relay it. No unrelated state or blank/partial state
+            # may cancel the child clock.
+            self._review_deadline_id = None
+            self._review_deadline_at = None
+        return (
+            self._review_deadline_at - now
+            if self._review_deadline_at is not None
+            else None
+        )
 
     def _read_until_result(self) -> list[Mapping[str, object]]:
         process = self._process
@@ -1353,8 +1493,26 @@ class ClaudeCodeAdapter:
                 events.append(value)
                 if value.get("type") == "result":
                     saw_result = True
-            remaining = deadline - time.monotonic()
-            if saw_result:
+            now = time.monotonic()
+            review_remaining = self._refresh_review_deadline(now)
+            remaining = deadline - now
+            review_expired = review_remaining is not None and review_remaining <= 0
+            outer_expired = remaining <= 0
+            if review_expired or outer_expired:
+                # When both have elapsed, name the deadline that was due
+                # first. In particular, do not attribute an ordinary outer
+                # timeout to a still-pending reviewer.
+                reviewer_deadline = review_expired and (
+                    not outer_expired
+                    or self._review_deadline_at is not None
+                    and self._review_deadline_at < deadline
+                )
+                raise ClaudeTurnTimeout(
+                    "Claude did not complete before its deadline",
+                    events=events,
+                    reviewer_deadline=reviewer_deadline,
+                )
+            if saw_result and review_remaining is None:
                 # A result ends one provider turn, but capture any immediately
                 # adjacent stream events before returning so duplicate terminal
                 # results cannot masquerade as exactly one. No next-turn event
@@ -1369,38 +1527,58 @@ class ClaudeCodeAdapter:
                     return events
                 self._stdout_buffer += chunk
                 continue
-            timed_out = remaining <= 0
-            if not timed_out:
-                ready, _, _ = select.select([process.stdout.fileno()], [], [], remaining)
-                timed_out = not ready
-            if timed_out:
-                message, reason = self._timeout_diagnostic(process)
-                raise ClaudeTurnTimeout(message, events=events, reason=reason)
+            wait_for = min(remaining, 0.25)
+            if review_remaining is not None:
+                wait_for = min(wait_for, max(0.0, review_remaining))
+            ready, _, _ = select.select([process.stdout.fileno()], [], [], wait_for)
+            if not ready:
+                # This is a polling slice, never a timeout. Loop so the real
+                # outer and reviewer monotonic deadlines decide attribution.
+                continue
             chunk = os.read(process.stdout.fileno(), 65536)
             if not chunk:
-                detail = " | ".join(self._stderr)
                 raise ClaudeAdapterError(
-                    f"Claude exited before a result event: {detail[-1000:]}",
+                    "Claude exited before a result event",
                     events=events,
-                    reason=classify_failure_reason(detail) or CHILD_EXITED_EARLY,
+                    reason=CHILD_EXITED_EARLY,
                 )
             self._stdout_buffer += chunk
 
-    def _timeout_diagnostic(self, process: subprocess.Popen[bytes]) -> tuple[str, str]:
+    def _timeout_diagnostic(
+        self, process: subprocess.Popen[bytes], *, reviewer: bool = False
+    ) -> tuple[str, str]:
         """Return the message for a turn that produced no terminal result.
 
-        A deadline hit and an idle-select hit are the same condition -- the
-        child owed a ``result`` event and did not produce one -- so they must
-        report the same structured reason, not two prose variants of it.
+        Call this only after the stream process group has been reaped and its
+        stderr reader has drained. A short select slice is not a deadline.
         """
 
         detail = " | ".join(self._stderr)
         suffix = f"; exit_code={process.poll()}"
         if detail:
             suffix += f"; stderr={detail[-1000:]}"
+        if reviewer:
+            message = (
+                "The retained-capture reviewer did not complete within "
+                f"{REVIEW_DEADLINE_MS / 1000.0:.1f}s{suffix}"
+            )
+        else:
+            message = f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
         return (
-            f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}",
+            message,
             classify_failure_reason(detail) or CHILD_NO_TERMINAL_RESULT,
+        )
+
+    def _early_exit_diagnostic(self, process: subprocess.Popen[bytes]) -> tuple[str, str]:
+        """Classify EOF after reaping without confusing it with a deadline."""
+
+        detail = " | ".join(self._stderr)
+        suffix = f"; exit_code={process.poll()}"
+        if detail:
+            suffix += f"; stderr={detail[-1000:]}"
+        return (
+            f"Claude exited before a result event{suffix}",
+            classify_failure_reason(detail) or CHILD_EXITED_EARLY,
         )
 
     def _finish_turn(
@@ -1546,17 +1724,35 @@ class ClaudeCodeAdapter:
         try:
             events = self._read_until_result()
         except ClaudeAdapterError as exc:
-            if not exc.events and exc.reason is None:
+            if (
+                not isinstance(exc, ClaudeTurnTimeout)
+                and not exc.events
+                and exc.reason is None
+            ):
                 # No events and no classification is a defect in this adapter,
                 # not an outcome of the run.  Anything the run *did* produce --
                 # partial events, or a reason read off the child's stderr --
                 # is worth more to the report than a traceback.
                 raise
+            # Reap the entire Claude process group before converting the
+            # partial stream into a result. This also drains stderr before
+            # classifying the interruption, so a late provider ceiling wins.
+            process = self._process
+            self._stop_process()
+            if process is not None:
+                if isinstance(exc, ClaudeTurnTimeout):
+                    detail, reason = self._timeout_diagnostic(
+                        process, reviewer=exc.reviewer_deadline
+                    )
+                else:
+                    detail, reason = self._early_exit_diagnostic(process)
+            else:
+                detail, reason = str(exc), exc.reason
             result = self._finish_turn(
                 exc.events,
-                environment_detail=str(exc),
+                environment_detail=detail,
                 turn_timed_out=isinstance(exc, ClaudeTurnTimeout),
-                failure_reason=exc.reason,
+                failure_reason=reason,
             )
             # The child cannot satisfy another turn after a timeout or an
             # early exit. Close it here while the adapter remains alive so the
