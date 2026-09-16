@@ -74,6 +74,16 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
+def _wait_pid(path: Path) -> int:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        pid = _read_pid(path)
+        if pid is not None:
+            return pid
+        time.sleep(0.01)
+    raise AssertionError(f"file {path} did not contain a valid PID")
+
+
 FAKE_SERVER = r'''
 import json, sys
 for raw in sys.stdin:
@@ -299,16 +309,8 @@ def test_live_session_cleanup_reaps_turn_child_after_protocol_error(tmp_path: Pa
     grandchild_pid: int | None = None
     try:
         live.start_fresh_session()
-        deadline = time.monotonic() + 5
-        while not pid_file.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert pid_file.exists()
-        deadline = time.monotonic() + 5
-        while not grandchild_pid_file.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert grandchild_pid_file.exists()
-        child_pid = int(pid_file.read_text(encoding="utf-8"))
-        grandchild_pid = int(grandchild_pid_file.read_text(encoding="utf-8"))
+        child_pid = _wait_pid(pid_file)
+        grandchild_pid = _wait_pid(grandchild_pid_file)
         result = live.send_message("mid-session failure")
         # A per-turn deadline is a timeout, not a wedged environment: the
         # artifacts the agent already authored stay gradeable.

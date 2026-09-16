@@ -1,13 +1,15 @@
 # nxd-query-data-product — semantic querying design notes
 
-Background for the skill's semantic-layer path (Step 6f + `reference/semantic-intent-validation.md`).
+Background for the skill's semantic-layer path (Step 6f + the shared
+`nxd-semantic-query-intent` foundation).
 **Not loaded by the query flow** — `SKILL.md` and the `reference/` docs are what the
 agent reads at query time. This README is for a human (or a future contributor)
 who wants to understand *why* the semantic path is shaped the way it is, *how* the
 MCP tools it talks to are generated, and *what* is intentionally left for later.
 
 If you only want to run a query, read `SKILL.md`. If you only want the intent-gate
-mechanics, read `reference/semantic-intent-validation.md`.
+mechanics, read the shared
+[`semantic-intent-validation.md`](../nxd-semantic-query-intent/reference/semantic-intent-validation.md).
 
 ---
 
@@ -49,7 +51,8 @@ object on the wire (`{measures, dimensions, filters}`), not buried inside genera
 SQL. So we can validate it as its own artifact: echo it back, critique it, clarify
 it. Free-form text-to-SQL can't do this because there is no selection to inspect.
 
-Step 6f is that validation, run **client-side** before `run_semantic_query`:
+Step 6f is that validation, run **client-side** before `run_semantic_query` by
+using the shared foundation:
 
 0. **Coverage** — every model in the agreed scope has been read via
    `describe_model` (the full `list_models` set; or, for a large catalog in an
@@ -68,8 +71,8 @@ Step 6f is that validation, run **client-side** before `run_semantic_query`:
 All four read only what `list_models` + `describe_model` already return — zero
 server change. Echo is deterministic; critic and clarify are non-deterministic /
 interactive, so they stay client-side, which keeps the `run_semantic_query` path
-deterministic (the determinism dividend). Full design:
-[`reference/semantic-intent-validation.md`](reference/semantic-intent-validation.md).
+deterministic (the determinism dividend). Full gate design:
+[`nxd-semantic-query-intent/reference/semantic-intent-validation.md`](../nxd-semantic-query-intent/reference/semantic-intent-validation.md).
 
 ---
 

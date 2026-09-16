@@ -107,6 +107,238 @@ def test_api_refresh_script_is_installable_in_the_generator_skill(tmp_path: Path
     ).read_bytes()
 
 
+@pytest.mark.parametrize("adapter", ("nxd-run-job-loop", "nxd-query-data-product"))
+def test_selective_query_adapter_install_includes_shared_intent_foundation(
+    tmp_path: Path, adapter: str
+):
+    """Explicit query-adapter installs include and remove their linked foundation."""
+    result = _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        adapter,
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    assert result.returncode == 0, result.stderr
+    skills_root = tmp_path / ".claude" / "skills"
+    assert (skills_root / adapter).is_dir()
+    assert (skills_root / "nxd-semantic-query-intent").is_dir()
+    marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
+    assert marker["skills"] == [adapter, "nxd-semantic-query-intent"]
+
+    result = _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        adapter,
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (skills_root / adapter).exists()
+    assert not (skills_root / "nxd-semantic-query-intent").exists()
+    assert not (skills_root / ".nexty-plugin-install.json").exists()
+
+
+def test_explicit_query_adapters_retain_shared_dependency_until_last_consumer(
+    tmp_path: Path,
+):
+    """Removing one explicit adapter does not break the other adapter."""
+    result = _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-run-job-loop nxd-query-data-product",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    assert result.returncode == 0, result.stderr
+    skills_root = tmp_path / ".claude" / "skills"
+    marker_path = skills_root / ".nexty-plugin-install.json"
+    marker = json.loads(marker_path.read_text())
+    assert marker["requested_skills"] == [
+        "nxd-run-job-loop",
+        "nxd-query-data-product",
+    ]
+
+    before = _snapshot_tree(skills_root)
+    marker_before = marker_path.read_bytes()
+    result = _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--dry-run",
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode == 0, result.stderr
+    assert _snapshot_tree(skills_root) == before
+    assert marker_path.read_bytes() == marker_before
+    assert "rm -rf" in result.stderr
+    assert "nxd-semantic-query-intent" not in result.stderr
+
+    result = _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (skills_root / "nxd-run-job-loop").exists()
+    assert (skills_root / "nxd-query-data-product").is_dir()
+    assert (skills_root / "nxd-semantic-query-intent").is_dir()
+    marker = json.loads(marker_path.read_text())
+    assert marker["skills"] == [
+        "nxd-semantic-query-intent",
+        "nxd-query-data-product",
+    ]
+    assert marker["requested_skills"] == ["nxd-query-data-product"]
+
+    result = _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        "nxd-query-data-product",
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker_path.exists()
+    assert not (skills_root / "nxd-semantic-query-intent").exists()
+
+
+def test_markerless_explicit_uninstall_preserves_dependency_tree(tmp_path: Path):
+    """Unmanaged installs remove only the explicitly named skill."""
+    skills_root = tmp_path / ".claude" / "skills"
+    for skill in ("nxd-run-job-loop", "nxd-semantic-query-intent"):
+        skill_dir = skills_root / skill
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "keep.txt").write_text("keep", encoding="utf-8")
+
+    result = _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--no-validate",
+        "--no-submodule",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (skills_root / "nxd-run-job-loop").exists()
+    assert (skills_root / "nxd-semantic-query-intent" / "keep.txt").read_text() == "keep"
+
+
+def test_mixed_managed_uninstall_removes_unmanaged_requested_root(tmp_path: Path):
+    """A managed marker must not make an explicit unmanaged request a no-op."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    skills_root = tmp_path / ".claude" / "skills"
+    unmanaged = skills_root / "nxd-analyze-mesh"
+    unmanaged.mkdir()
+    (unmanaged / "keep.txt").write_text("keep", encoding="utf-8")
+
+    result = _run_installer(
+        tmp_path,
+        "uninstall",
+        "--code",
+        "--skills",
+        "nxd-analyze-mesh",
+        "--no-validate",
+        "--no-submodule",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not unmanaged.exists()
+    assert (skills_root / "nxd-run-job-loop").is_dir()
+    assert (skills_root / "nxd-semantic-query-intent").is_dir()
+
+
+def test_explicit_uninstall_dry_run_reads_read_only_destination(tmp_path: Path):
+    """Dry-run planning does not require write access to installed skills."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-run-job-loop nxd-query-data-product",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    skills_root = tmp_path / ".claude" / "skills"
+    before = _snapshot_tree(skills_root)
+    skills_root.chmod(0o555)
+    try:
+        result = _run_installer(
+            tmp_path,
+            "uninstall",
+            "--code",
+            "--skills",
+            "nxd-run-job-loop",
+            "--dry-run",
+            "--no-validate",
+            "--no-submodule",
+        )
+    finally:
+        skills_root.chmod(0o755)
+    assert result.returncode == 0, result.stderr
+    assert _snapshot_tree(skills_root) == before
+
+
+def test_explicit_root_survives_named_projection_switch(tmp_path: Path):
+    """A root selected explicitly remains installed outside its current pack."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "desktop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-run-job-loop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--plugin",
+        "datamesh",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    skills_root = tmp_path / ".claude" / "skills"
+    assert (skills_root / "nxd-run-job-loop").is_dir()
+    marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
+    assert "nxd-run-job-loop" in marker["extra_skills"]
+    assert marker["requested_skills"] == ["nxd-run-job-loop"]
+
+
 def test_a_cross_skill_call_names_the_owning_skill():
     """No skill may resolve these helpers from its workflow or closure cwd."""
     offenders = []
@@ -389,6 +621,7 @@ def test_switching_named_code_projections_replaces_only_managed_skills(tmp_path:
         "nxd-render-static-artifact",
         "nxd-review-closure",
         "nxd-run-job-loop",
+        "nxd-semantic-query-intent",
         "user-authored-skill",
     }
     marker = json.loads((skills_root / ".nexty-plugin-install.json").read_text())
@@ -454,6 +687,7 @@ def test_explicit_code_skill_operations_preserve_and_update_managed_subset(tmp_p
         "nxd-generate-data-product",
         "nxd-render-static-artifact",
         "nxd-review-closure",
+        "nxd-semantic-query-intent",
         "nxd-analyze-mesh",
     ]
 
@@ -476,6 +710,7 @@ def test_explicit_code_skill_operations_preserve_and_update_managed_subset(tmp_p
         "nxd-render-static-artifact",
         "nxd-review-closure",
         "nxd-run-job-loop",
+        "nxd-semantic-query-intent",
     }
     assert marker["extra_skills"] == ["nxd-analyze-mesh"]
 
@@ -698,6 +933,27 @@ def test_named_plugin_archive_has_complete_installable_skill_trees(
         assert skill_names
         for skill in skill_names:
             assert f"skills/{skill}/SKILL.md" in zf.namelist()
+            for adapter in ("nxd-run-job-loop", "nxd-query-data-product"):
+                if adapter not in skill_names:
+                    continue
+                source_docs = {
+                    path.relative_to(SRC / adapter).as_posix()
+                    for path in (SRC / adapter).rglob("*.md")
+                    if "nextdata-public-examples" not in path.parts
+                }
+                adapter_docs = [
+                    name.removeprefix(f"skills/{adapter}/")
+                    for name in zf.namelist()
+                    if name.startswith(f"skills/{adapter}/") and name.endswith(".md")
+                ]
+                assert adapter_docs
+                assert set(adapter_docs) == source_docs
+                for name in adapter_docs:
+                    packaged_name = f"skills/{adapter}/{name}"
+                    text = zf.read(packaged_name).decode("utf-8")
+                    if "nxd-semantic-query-intent" in text:
+                        assert "../nxd-semantic-query-intent/" in text
+                        assert "](reference/semantic-intent-validation.md)" not in text
 
 
 def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
@@ -718,6 +974,31 @@ def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
     _assert_helpers_run(skill_dir)
+
+
+@pytest.mark.parametrize("adapter", ("nxd-run-job-loop", "nxd-query-data-product"))
+def test_standalone_query_adapter_zip_carries_shared_intent_reference(
+    adapter: str,
+):
+    """One-skill query uploads carry the shared gate without a sibling tree."""
+    subprocess.run(["bash", "build-skills.sh"], cwd=REPO, check=True, capture_output=True, text=True)
+    archive = REPO / "build" / f"{adapter}.zip"
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+        skill_text = zf.read("SKILL.md").decode("utf-8")
+        assert "reference/semantic-intent-validation.md" in names
+        assert "reference/semantic-intent-validation.md" in skill_text
+        assert zf.read("reference/semantic-intent-validation.md") == (
+            SRC / "nxd-semantic-query-intent" / "reference" / "semantic-intent-validation.md"
+        ).read_bytes()
+        for name in names:
+            if not name.endswith(".md"):
+                continue
+            text = zf.read(name).decode("utf-8")
+            assert not re.search(
+                r"\]\((?:\.\./)+nxd-semantic-query-intent/",
+                text,
+            ), f"{name} retains a sibling-skill link in the standalone archive"
 
 
 def _assert_api_refresh_script_in_archive(archive: Path, member: str) -> None:
