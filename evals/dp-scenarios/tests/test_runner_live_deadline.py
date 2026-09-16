@@ -15,13 +15,15 @@ import os
 import sys
 import time
 
+import pytest
+
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
     SHARED_RUNTIME_CONTENTION,
 )
-from dp_scenarios.runner.session import LiveSession
+from dp_scenarios.runner.session import LiveSession, SessionError, turn_result_to_dict
 
 
 TURN_TIMEOUT = 0.75
@@ -50,6 +52,35 @@ def _announcing_child(message: str) -> list[str]:
         "sys.stdin.readline()\n"
         f"sys.stderr.write({message!r})\n"
         "sys.stderr.flush()\n"
+        "time.sleep(600)\n",
+    ]
+
+
+def _partial_line_child() -> list[str]:
+    """A child that starts a JSON response but withholds its newline."""
+
+    return [
+        sys.executable,
+        "-c",
+        "import sys, time\n"
+        "sys.stdin.readline()\n"
+        "sys.stdout.write('{\\\"result\\\":')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(600)\n",
+    ]
+
+
+def _partial_line_then_eof_child() -> list[str]:
+    """A child that emits one malformed partial line and then closes stdout."""
+
+    return [
+        sys.executable,
+        "-c",
+        "import os, sys, time\n"
+        "sys.stdin.readline()\n"
+        "sys.stdout.write('{\\\"result\\\":')\n"
+        "sys.stdout.flush()\n"
+        "os.close(sys.stdout.fileno())\n"
         "time.sleep(600)\n",
     ]
 
@@ -96,6 +127,41 @@ def test_a_provider_ceiling_on_stderr_is_named_instead_of_a_bare_timeout() -> No
     assert result.turn_timed_out is True
     assert result.failure_reason == PROVIDER_SESSION_LIMIT
     assert "usage limit reached" in (result.environment_detail or "")
+    assert not _alive(pid)
+
+
+def test_a_partial_json_line_cannot_block_past_the_turn_deadline() -> None:
+    started = time.monotonic()
+    result, pid = _run_once(_partial_line_child())
+    elapsed = time.monotonic() - started
+
+    assert elapsed < BOUND, "a partial JSON line made the parent read unbounded"
+    assert result.turn_timed_out is True
+    assert result.environment_wedged is False
+    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    encoded = turn_result_to_dict(result)
+    assert encoded["turn_timed_out"] is True
+    assert encoded["failure_reason"] == CHILD_NO_TERMINAL_RESULT
+    assert not _alive(pid)
+
+
+def test_partial_json_at_eof_is_consumed_before_a_retry() -> None:
+    session = LiveSession(_partial_line_then_eof_child(), timeout=TURN_TIMEOUT)
+    session.start_fresh_session()
+    assert session._process is not None
+    pid = session._process.pid
+
+    try:
+        with pytest.raises(SessionError, match="non-JSON turn result"):
+            session.send_message("build it")
+
+        result = session.send_message("try again")
+        assert result.environment_wedged is True
+        assert result.failure_reason == CHILD_EXITED_EARLY
+        assert session._stdout_buffer == bytearray()
+    finally:
+        session.close()
+
     assert not _alive(pid)
 
 
