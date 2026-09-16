@@ -127,12 +127,12 @@ runs:
         if [ -n "$EXPECT_SOURCE_SHA" ]; then
           release_tag="nxd-py-artifact-$EXPECT_SOURCE_SHA"
           expected_asset="nxd-py-linux-x86_64-$EXPECT_SOURCE_SHA.tar.gz"
+          release_endpoint="repos/nextdata-tech/nxd/releases/tags/$release_tag"
           release=''
           # A missing release is the only case that may use the legacy
           # Actions-artifact lookup below. Once a source-addressed release
           # exists, malformed or incomplete publication must fail closed.
-          if release="$(gh api \
-            "repos/nextdata-tech/nxd/releases/tags/$release_tag" 2>/dev/null)"; then
+          if release="$(gh api "$release_endpoint" 2>/dev/null)"; then
             if [ "$(jq -r '.tag_name // empty' <<< "$release")" != "$release_tag" ]; then
               echo "The NXD release tag does not match the pinned source" >&2
               exit 1
@@ -175,6 +175,22 @@ runs:
             echo "run_id=" >> "$GITHUB_OUTPUT"
             echo "Resolved immutable release $release_tag"
             resolved_transport=release
+          else
+            # gh exits non-zero for every HTTP error. Retry in header-only
+            # mode so only a confirmed 404 means that this source has no
+            # release yet; auth, rate-limit, server, and network failures must
+            # not silently downgrade a pinned lookup to the legacy path.
+            release_headers=''
+            release_http_status=''
+            if release_headers="$(gh api --include --silent "$release_endpoint" 2>/dev/null)"; then
+              release_http_status=unknown
+            else
+              release_http_status="$(awk '$1 ~ /^HTTP\// { print $2; exit }' <<< "$release_headers")"
+            fi
+            if [ "$release_http_status" != "404" ]; then
+              echo "Unable to resolve the pinned NXD release $release_tag (HTTP status: ${release_http_status:-unknown})" >&2
+              exit 1
+            fi
           fi
         fi
 
@@ -353,9 +369,46 @@ runs:
             echo "The NXD release manifest references an unreadable workflow run" >&2
             exit 1
           fi
-          if ! jq -e '(.status == "completed") and (.conclusion == "success")' \
+          if ! jq -e --arg expected_source_sha "$EXPECT_SOURCE_SHA" \
+            '(.status == "completed")
+             and (.conclusion == "success")
+             and (.head_branch == "main")
+             and (.head_sha == $expected_source_sha)
+             and (.workflow_id != null)' \
             <<< "$workflow_run" >/dev/null; then
-            echo "The NXD release manifest references a non-successful workflow run" >&2
+            echo "The NXD release manifest references a workflow run that is not a successful main run for the pinned source" >&2
+            exit 1
+          fi
+          workflow_id="$(jq -r '.workflow_id // empty' <<< "$workflow_run")"
+          if [ -z "$workflow_id" ] || ! [[ "$workflow_id" =~ ^[0-9]+$ ]]; then
+            echo "The NXD release manifest references an invalid producer workflow id" >&2
+            exit 1
+          fi
+          workflow_path=''
+          if ! workflow_path="$(gh api \
+            "repos/nextdata-tech/nxd/actions/workflows/$workflow_id" \
+            --jq '.path // empty' 2>/dev/null)"; then
+            echo "The NXD release manifest references an unreadable producer workflow" >&2
+            exit 1
+          fi
+          case "$workflow_path" in
+            .github/workflows/nxd.ci.yml|.github/workflows/nxd.python-artifact-refresh.yml) ;;
+            *)
+              echo "The NXD release manifest references an unapproved producer workflow: $workflow_path" >&2
+              exit 1
+              ;;
+          esac
+          if ! workflow_jobs="$(gh api \
+            "repos/nextdata-tech/nxd/actions/runs/$workflow_run_id/jobs?per_page=100" 2>/dev/null)"; then
+            echo "The NXD release manifest references unreadable producer jobs" >&2
+            exit 1
+          fi
+          publication_jobs="$(jq '[.jobs[]
+            | select((.name // "") | endswith(" / artifact-bundle"))
+            | select(.status == "completed" and .conclusion == "success")]
+            | length' <<< "$workflow_jobs")"
+          if [ "$publication_jobs" != "1" ]; then
+            echo "The NXD release producer has $publication_jobs successful artifact-bundle jobs; expected exactly one" >&2
             exit 1
           fi
         fi
