@@ -70,13 +70,23 @@ plugin → Upload plugin** and choose `~/.nxd-desktop/nexty-desktop-vx.y.z.zip`.
 Quit Claude and open it again after adding the plugin, then start a new chat.
 Ask for what you want in your own words, or run `/nxd-run-job-loop`.
 
-Once the job loop starts, you should see a screen that looks like this:
+The job loop opens by collecting a few things. Depending on how your client
+presents it, these arrive either as a set of fields to fill in or as questions
+in the conversation:
 
-![start_screen.png](start_screen.png)
+- **What the data product is about.** A sentence is enough.
+- **Where the data lives**: local files, a database, or a REST API.
+- **How to reach it**: a file to upload, a path on your own machine, a
+  connection, or an API address.
+- **What questions it should answer.** One per line. These drive everything
+  downstream, so the more specific the better.
+- **Any rules or scoring it should follow**: thresholds, exclusions, a rubric,
+  how a term is defined. Paste what you already have rather than retyping it.
 
-Not all questions are required. Give as much guidance as you can. The more you give, the faster it will be to get a correct answer.
+Not all of them are required. Give as much as you can, since the more you give,
+the faster you get to a valid answer.
 
-For example, if you want to analyze weather data, you might say the data product is about `Weather analysis` and the question to answer is:
+For example, for weather data you might say the data product is about `Weather analysis`, and give one question to answer:
 
 > I want to analyze the last 30 days of weather in zip code 94941 to see which days of the week are the sunniest. Use the Open Meteo Weather API.
 
