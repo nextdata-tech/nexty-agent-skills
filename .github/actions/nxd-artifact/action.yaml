@@ -1,8 +1,10 @@
 name: 'Consume a published NXD Python artifact'
 description: >-
   Resolve, download, verify and optionally install a wheel bundle that NXD has
-  already published. Consumer-side only: this never triggers, dispatches, or
-  waits on an NXD build. If no eligible artifact matches, it fails.
+  already published. Pinned consumers prefer the immutable source-addressed
+  release; unpinned consumers use the bounded newest-main Actions-artifact
+  lookup. Consumer-side only: this never triggers, dispatches, or waits on an
+  NXD build. If no eligible artifact matches, it fails.
 
 inputs:
   token:
@@ -17,13 +19,14 @@ inputs:
     default: 'NXD_DISPATCH_PAT is unavailable; this job cannot resolve the NXD artifact.'
   artifact_prefix:
     description: >-
-      Artifact-name prefix to select on. The published name is
+      Legacy Actions-artifact name prefix to select on. The published name is
       nxd-py-linux-x86_64-<field-mapper-tree>-<semantic-tree>-<source-sha>-<run-id>,
       so a prefix can pin as much or as little of that as the caller needs. If
-      expect_source_sha is absent, the newest unexpired main-branch match wins;
-      otherwise the source revision input restricts the search to that commit's
-      main runs after its artifact-bundle publication job succeeds. Pass the
-      bare "nxd-py-linux-x86_64-" to take whatever main published most recently.
+      expect_source_sha is set, the action first resolves the immutable
+      source-addressed release and uses this prefix only for the explicit
+      legacy fallback. If expect_source_sha is absent, the newest unexpired
+      main-branch Actions artifact matching this prefix wins. Pass the bare
+      "nxd-py-linux-x86_64-" to take whatever main published most recently.
     required: true
   selector_label:
     description: 'How to name the selector in the not-found message. Defaults to artifact_prefix.'
@@ -43,11 +46,12 @@ inputs:
     default: ''
   expect_source_sha:
     description: >-
-      When set, resolution is restricted to NXD main runs for this exact
-      revision, outside the recent-run window, and the manifest source_sha must
-      equal it. If this revision has no unexpired matching artifact, the action
-      fails not-found rather than resolving a different source and reporting a
-      mismatch.
+      When set, resolution first uses the immutable release
+      nxd-py-artifact-<sha> and its exact source-addressed asset. The release
+      tag, release state, asset set, manifest source_sha and manifest workflow
+      run must all bind to this revision. If the release is absent, the action
+      uses the exact-source legacy Actions-artifact path; it never resolves a
+      different source and reports a mismatch.
     required: false
     default: ''
   require_mcp_provenance:
@@ -74,8 +78,8 @@ outputs:
     description: 'The resolved artifact name.'
     value: ${{ steps.resolve.outputs.artifact_name }}
   run_id:
-    description: 'The NXD workflow run that published it.'
-    value: ${{ steps.resolve.outputs.run_id }}
+    description: 'The NXD workflow run recorded by the verified artifact manifest.'
+    value: ${{ steps.verify.outputs.run_id }}
   manifest_path:
     description: 'Absolute path to the verified manifest.json.'
     value: ${{ steps.verify.outputs.manifest_path }}
@@ -119,6 +123,62 @@ runs:
       run: |
         set -euo pipefail
         artifact_prefix="$ARTIFACT_PREFIX"
+        resolved_transport=''
+        if [ -n "$EXPECT_SOURCE_SHA" ]; then
+          release_tag="nxd-py-artifact-$EXPECT_SOURCE_SHA"
+          expected_asset="nxd-py-linux-x86_64-$EXPECT_SOURCE_SHA.tar.gz"
+          release=''
+          # A missing release is the only case that may use the legacy
+          # Actions-artifact lookup below. Once a source-addressed release
+          # exists, malformed or incomplete publication must fail closed.
+          if release="$(gh api \
+            "repos/nextdata-tech/nxd/releases/tags/$release_tag" 2>/dev/null)"; then
+            if [ "$(jq -r '.tag_name // empty' <<< "$release")" != "$release_tag" ]; then
+              echo "The NXD release tag does not match the pinned source" >&2
+              exit 1
+            fi
+            release_draft="$(jq -r 'if .draft == false then "false" elif .draft == true then "true" else "invalid" end' <<< "$release")"
+            release_prerelease="$(jq -r 'if .prerelease == false then "false" elif .prerelease == true then "true" else "invalid" end' <<< "$release")"
+            asset_count="$(jq --arg expected_asset "$expected_asset" \
+              '[.assets[] | select(.name == $expected_asset)] | length' <<< "$release")"
+            asset_total="$(jq '.assets | length' <<< "$release")"
+            asset_state="$(jq --arg expected_asset "$expected_asset" \
+              -r '[.assets[] | select(.name == $expected_asset) | .state][0] // empty' <<< "$release")"
+            if [ "$release_draft" != "false" ] || [ "$release_prerelease" != "false" ] \
+              || [ "$asset_count" != "1" ] || [ "$asset_total" != "1" ] \
+              || [ "$asset_state" != "uploaded" ]; then
+              echo "The pinned NXD release is not a published single-asset release" >&2
+              exit 1
+            fi
+            if ! tag_ref="$(gh api \
+              "repos/nextdata-tech/nxd/git/ref/tags/$release_tag" 2>/dev/null)"; then
+              echo "The pinned NXD release tag cannot be resolved" >&2
+              exit 1
+            fi
+            tag_type="$(jq -r '.object.type // empty' <<< "$tag_ref")"
+            tag_sha="$(jq -r '.object.sha // empty' <<< "$tag_ref")"
+            if [ "$tag_type" = "tag" ]; then
+              if ! tag_sha="$(gh api "repos/nextdata-tech/nxd/git/tags/$tag_sha" \
+                --jq '.object.sha // empty' 2>/dev/null)"; then
+                echo "The pinned NXD release annotation cannot be resolved" >&2
+                exit 1
+              fi
+            fi
+            if { [ "$tag_type" != "commit" ] && [ "$tag_type" != "tag" ]; } \
+              || [ "$tag_sha" != "$EXPECT_SOURCE_SHA" ]; then
+              echo "The pinned NXD release tag does not point to the requested source" >&2
+              exit 1
+            fi
+            echo "transport=release" >> "$GITHUB_OUTPUT"
+            echo "artifact_name=$expected_asset" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            echo "Resolved immutable release $release_tag"
+            resolved_transport=release
+          fi
+        fi
+
+        if [ -z "$resolved_transport" ]; then
         # The token needs contents:read and actions:read on nextdata-tech/nxd
         # for this cross-repository lookup.
         # The producer appends source and run identity after this prefix. When
@@ -142,20 +202,27 @@ runs:
         while IFS= read -r run_id; do
           if [ -n "$EXPECT_SOURCE_SHA" ]; then
             # The artifact-bundle job is the publication gate for this
-            # consumer. It completes before unrelated release jobs, so a
-            # pinned consumer must not wait for the entire NXD workflow run.
+            # consumer. GitHub exposes its display name here, which includes
+            # the workflow title before the stable job-id suffix. Match that
+            # suffix so a workflow-title rename cannot hide a valid artifact.
+            # It completes before unrelated release jobs, so a pinned consumer
+            # must not wait for the entire NXD workflow run.
             if ! run_jobs="$(gh api \
               "repos/nextdata-tech/nxd/actions/runs/$run_id/jobs?per_page=100")"; then
               echo "NXD_DISPATCH_PAT cannot read NXD workflow jobs; grant actions:read" >&2
               exit 1
             fi
-            publication_jobs="$(jq -r '[.jobs[]
-              | select(.name == "python-build / artifact-bundle")
-              | select(.status == "completed" and .conclusion == "success")]
-              | length' <<< "$run_jobs")"
-            if [ "$publication_jobs" -eq 0 ]; then
-              continue
-            fi
+              publication_jobs="$(jq -r '[.jobs[]
+                | select((.name // "") | endswith(" / artifact-bundle"))
+                | select(.status == "completed" and .conclusion == "success")]
+                | length' <<< "$run_jobs")"
+              if [ "$publication_jobs" -gt 1 ]; then
+                echo "The NXD run has multiple successful artifact-bundle publication jobs" >&2
+                exit 1
+              fi
+              if [ "$publication_jobs" -eq 0 ]; then
+                continue
+              fi
           fi
           if ! run_artifacts="$(gh api \
             "repos/nextdata-tech/nxd/actions/runs/$run_id/artifacts?per_page=100")"; then
@@ -188,11 +255,51 @@ runs:
           echo "The resolved NXD artifact has no valid workflow run or name" >&2
           exit 1
         fi
-        echo "artifact_name=$resolved_name" >> "$GITHUB_OUTPUT"
-        echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-        echo "Resolved $resolved_name from NXD workflow run $run_id"
+          echo "transport=actions" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$resolved_name" >> "$GITHUB_OUTPUT"
+          echo "release_tag=" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Resolved legacy Actions artifact $resolved_name from NXD workflow run $run_id"
+        fi
 
-    - name: Download NXD Python artifact
+    - name: Download NXD Python artifact from immutable release
+      if: steps.resolve.outputs.transport == 'release'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
+        RELEASE_ASSET_NAME: ${{ steps.resolve.outputs.artifact_name }}
+        ARTIFACT_DIR: ${{ inputs.artifact_dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$ARTIFACT_DIR"
+        gh release download "$RELEASE_TAG" \
+          --repo nextdata-tech/nxd \
+          --pattern "$RELEASE_ASSET_NAME" \
+          --dir "$ARTIFACT_DIR"
+        archive="$ARTIFACT_DIR/$RELEASE_ASSET_NAME"
+        test -f "$archive"
+        members="$(tar -tzf "$archive")"
+        while IFS= read -r member; do
+          case "$member" in
+            manifest.json|wheels/|wheels/*.whl) ;;
+            *)
+              echo "The NXD release contains an unexpected archive member: $member" >&2
+              exit 1
+              ;;
+          esac
+          case "$member" in
+            /*|../*|*/../*|*/..)
+              echo "The NXD release contains an unsafe archive member: $member" >&2
+              exit 1
+              ;;
+          esac
+        done <<< "$members"
+        tar -xzf "$archive" --no-same-owner -C "$ARTIFACT_DIR"
+        rm -f "$archive"
+
+    - name: Download NXD Python artifact from Actions artifact
+      if: steps.resolve.outputs.transport == 'actions'
       uses: actions/download-artifact@v7
       with:
         github-token: ${{ inputs.token }}
@@ -207,6 +314,8 @@ runs:
       env:
         ARTIFACT_DIR: ${{ inputs.artifact_dir }}
         ARTIFACT_RUN_ID: ${{ steps.resolve.outputs.run_id }}
+        ARTIFACT_TRANSPORT: ${{ steps.resolve.outputs.transport }}
+        GH_TOKEN: ${{ inputs.token }}
         EXPECT_FIELD_MAPPER_TREE_SHA: ${{ inputs.expect_field_mapper_tree_sha }}
         EXPECT_SEMANTIC_TREE_SHA: ${{ inputs.expect_semantic_tree_sha }}
         EXPECT_RPC_TREE_SHA: ${{ inputs.expect_rpc_tree_sha }}
@@ -218,10 +327,13 @@ runs:
         test -f "$manifest"
         jq -e \
           --arg artifact_run_id "$ARTIFACT_RUN_ID" \
+          --arg artifact_transport "$ARTIFACT_TRANSPORT" \
           '(.schema == "nxd-py-artifact-v1")
            and (.repository == "nextdata-tech/nxd")
            and (.source_sha // "" | test("^[0-9a-f]{40}$"))
-           and (.workflow_run_id == $artifact_run_id)
+           and (.workflow_run_id != null)
+           and (($artifact_transport == "release")
+                or ((.workflow_run_id | tostring) == $artifact_run_id))
            and (.platform == "linux-x86_64")
            and (.python == "3.11")
            and (.package_version != null)
@@ -229,6 +341,25 @@ runs:
            and (.packages["nxd-data_product"] != null)
            and (.packages["nxd-drivers"] != null)
            and (.wheels | length > 0)' "$manifest" >/dev/null
+
+        workflow_run_id="$(jq -r 'if .workflow_run_id == null then empty else (.workflow_run_id | tostring) end' "$manifest")"
+        if [ -z "$workflow_run_id" ] || ! [[ "$workflow_run_id" =~ ^[0-9]+$ ]]; then
+          echo "The NXD artifact manifest has no valid workflow run id" >&2
+          exit 1
+        fi
+        if [ "$ARTIFACT_TRANSPORT" = "release" ]; then
+          if ! workflow_run="$(gh api \
+            "repos/nextdata-tech/nxd/actions/runs/$workflow_run_id" 2>/dev/null)"; then
+            echo "The NXD release manifest references an unreadable workflow run" >&2
+            exit 1
+          fi
+          if ! jq -e '(.status == "completed") and (.conclusion == "success")' \
+            <<< "$workflow_run" >/dev/null; then
+            echo "The NXD release manifest references a non-successful workflow run" >&2
+            exit 1
+          fi
+        fi
+        echo "run_id=$workflow_run_id" >> "$GITHUB_OUTPUT"
 
         if [ -n "$EXPECT_FIELD_MAPPER_TREE_SHA" ]; then
           actual="$(jq -r '.field_mapper_tree_sha // ""' "$manifest")"
