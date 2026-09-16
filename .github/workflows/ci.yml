@@ -21,7 +21,7 @@ env:
   # artifact; a revision that predates the provenance fails the job closed
   # rather than being accepted, which is deliberate — see
   # .github/actions/nxd-artifact and evals/mcp/README.md.
-  NXD_PINNED_SHA: 5080aae4b8355aa2c78c649bf3a522960725b653
+  NXD_PINNED_SHA: 8e08caa8f40f8657c10d2c5a012ed4c636691b5a
 
 jobs:
   static-checks:
