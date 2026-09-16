@@ -1496,6 +1496,57 @@ def test_construction_rejects_a_valid_marker_duplicated_across_dispatches() -> N
     assert "construction_adversarial_review_not_observed" in result.codes
 
 
+@pytest.mark.parametrize(
+    "request_line",
+    (
+        "Sanitized original request (operator-provided): fixture request",
+        "sanitized original request: fixture request",
+        "Sanitized original request:   ",
+        "Sanitized original request: first\nSanitized original request: second",
+        "- Sanitized original request: fixture request",
+    ),
+)
+def test_construction_requires_one_exact_nonblank_request_label(request_line: str) -> None:
+    observations = _dispatch_observations()
+    prompt = observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"]
+    assert isinstance(prompt, str)
+    observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"] = (
+        prompt[: prompt.index("Sanitized original request:")] + request_line
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_requires_the_canonical_reviewer_skill_instruction() -> None:
+    observations = _dispatch_observations()
+    prompt = observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"]
+    assert isinstance(prompt, str)
+    observations["turns"][0]["tool_calls"][0]["arguments"]["prompt"] = prompt.replace(
+        "Load and follow nxd-review-closure.",
+        "Use nxd-review-closure.",
+    )
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
 def _review_call(index: int, *, closure: str = "closure") -> dict[str, object]:
     return {
         "name": "Agent",

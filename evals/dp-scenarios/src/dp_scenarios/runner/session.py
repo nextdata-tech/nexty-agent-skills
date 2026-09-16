@@ -20,6 +20,7 @@ from pathlib import Path
 import select
 import signal
 import subprocess
+import time
 from typing import Any, Protocol
 
 from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
@@ -557,8 +558,9 @@ class LiveSession:
         # protocol keeps replay and handler-backed sessions independent of the
         # substrate while making the lifecycle contract explicit.
         self.desktop_session = desktop_session
-        self._process: subprocess.Popen[str] | None = None
+        self._process: subprocess.Popen[bytes] | None = None
         self._session_counter = 0
+        self._stdout_buffer = bytearray()
 
     def start_fresh_session(self) -> str:
         self._session_counter += 1
@@ -577,12 +579,10 @@ class LiveSession:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
+                bufsize=0,
                 start_new_session=True,
             )
+            self._stdout_buffer.clear()
             if self.desktop_session is not None:
                 self.desktop_session.attach_process(self._process)
         return f"live-session-{self._session_counter}"
@@ -606,10 +606,10 @@ class LiveSession:
             self.start_fresh_session()
         assert self._process is not None and self._process.stdin is not None and self._process.stdout is not None
         request = {"type": "turn", "message": operator_message_to_dict(message)}
-        self._process.stdin.write(json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n")
+        self._process.stdin.write((json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
         self._process.stdin.flush()
-        ready, _, _ = select.select([self._process.stdout], [], [], self.timeout)
-        if not ready:
+        line = self._read_stdout_line()
+        if line is None:
             detail = f"live session exceeded the {self.timeout:.3f}s turn timeout"
             # Return a structured wedge so RecordingSession and TierRunner can
             # persist the partial replay, ledger, and final report. Raising
@@ -631,7 +631,6 @@ class LiveSession:
                 failure_reason=reason,
                 session_id=f"live-session-{self._session_counter}",
             )
-        line = self._process.stdout.readline()
         if not line:
             stderr = self._drain_stderr_nonblocking()
             detail = "live session ended without a structured turn result"
@@ -645,7 +644,7 @@ class LiveSession:
                 session_id=f"live-session-{self._session_counter}",
             )
         try:
-            raw = json.loads(line)
+            raw = json.loads(line.decode("utf-8", errors="replace"))
         except json.JSONDecodeError as exc:
             raise SessionError("live session returned a non-JSON turn result") from exc
         if not isinstance(raw, Mapping):
@@ -656,6 +655,50 @@ class LiveSession:
         return turn_result_from_dict(nested)
 
     send = send_message
+
+    def _read_stdout_line(self) -> bytes | None:
+        """Read one JSONL response without allowing a partial line to wedge us.
+
+        ``select`` only says that at least one byte is available.  Calling
+        ``readline`` on a blocking text stream after that check can still wait
+        forever for the newline.  Keep our own byte buffer, use a nonblocking
+        descriptor, and bound every poll by the turn deadline.  ``None``
+        means the deadline expired; ``b""`` means EOF with no buffered data.
+        An EOF after a partial line returns and consumes that partial line,
+        matching ``readline``'s single-consumption behavior.
+        """
+
+        process = self._process
+        if process is None or process.stdout is None:
+            return b""
+        descriptor = process.stdout.fileno()
+        with contextlib.suppress(OSError):
+            os.set_blocking(descriptor, False)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            newline = self._stdout_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self._stdout_buffer[: newline + 1])
+                del self._stdout_buffer[: newline + 1]
+                return line
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ready, _, _ = select.select([descriptor], [], [], remaining)
+            if not ready:
+                return None
+            try:
+                chunk = os.read(descriptor, 65536)
+            except BlockingIOError:
+                continue
+            except OSError:
+                chunk = b""
+            if not chunk:
+                line = bytes(self._stdout_buffer)
+                self._stdout_buffer.clear()
+                return line
+            self._stdout_buffer.extend(chunk)
 
     def _drain_stderr_nonblocking(self) -> str:
         """Return whatever the child has already written to stderr.

@@ -10,6 +10,7 @@ import pytest
 from dp_scenarios.runner.review_guard import (
     NORMAL,
     RELAY_PENDING,
+    REVIEW_BUDGET_LINE,
     REVIEW_DISPATCH_PENDING,
     handle_event,
     settings_payload,
@@ -82,7 +83,9 @@ def _review_prompt(
         f"{_marker()}\n"
         f"retained_capture_root: {retained_capture_root}\n"
         f"retained_blueprint_path: {retained_blueprint_path}\n"
-        f"Sanitized original request (operator-provided): {sanitized_request}"
+        "Load and follow nxd-review-closure.\n"
+        f"{REVIEW_BUDGET_LINE}\n"
+        f"Sanitized original request: {sanitized_request}"
     )
 
 
@@ -256,6 +259,7 @@ def test_capture_to_report_is_owner_scoped_and_clears_only_on_matching_response(
     }
     assert handle_event(report_post, state_path=state_path) == {}
     assert _state(state_path)["state"] == NORMAL
+    assert _state(state_path)["completed_review_tool_use_id"] == "review-tool"
 
 
 def test_async_agent_launch_does_not_satisfy_the_review_dispatch(tmp_path: Path) -> None:
@@ -291,6 +295,29 @@ def test_async_agent_launch_does_not_satisfy_the_review_dispatch(tmp_path: Path)
 
     assert result == {}
     assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
+def test_normal_agent_is_not_constrained_before_a_review_is_pending(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "ordinary-agent",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": "Do the ordinary workflow helper step.",
+            },
+        },
+        state_path=state_path,
+    )
+
+    assert decision == {}
+    assert _state(state_path)["state"] == NORMAL
 
 
 def test_empty_content_in_completion_metadata_does_not_satisfy_the_review_dispatch(
@@ -529,6 +556,92 @@ def test_owner_dispatch_requires_exact_retained_paths_and_sanitized_request_line
         state_path=state_path,
     )
     assert allowed == {}
+
+
+@pytest.mark.parametrize(
+    "malformed_line",
+    [
+        "Sanitized original request (operator-provided): request",
+        "sanitized original request: request",
+        "Sanitized original request:   ",
+        "Sanitized original request: first\nSanitized original request: second",
+        "- Sanitized original request: request",
+    ],
+)
+def test_owner_dispatch_rejects_noncanonical_or_ambiguous_request_labels(
+    tmp_path: Path, malformed_line: str
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    prompt = _review_prompt()
+    prompt = prompt[: prompt.index("Sanitized original request:")] + malformed_line
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "malformed-review",
+            "tool_input": {"subagent_type": "general-purpose", "prompt": prompt},
+        },
+        state_path=state_path,
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
+def test_owner_dispatch_requires_the_canonical_reviewer_skill_instruction(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt().replace(
+                    "Load and follow nxd-review-closure.",
+                    "Use nxd-review-closure.",
+                ),
+            },
+        },
+        state_path=state_path,
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
+def test_owner_dispatch_requires_the_declared_review_budget(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt().replace(f"{REVIEW_BUDGET_LINE}\n", ""),
+            },
+        },
+        state_path=state_path,
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
 
 
 def test_settings_install_all_three_hook_phases() -> None:
