@@ -277,8 +277,20 @@ retained_capture_root: <exact retained_capture_root from review_input>
 retained_blueprint_path: <exact retained_blueprint_path from review_input>
 Load and follow nxd-review-closure.
 Sanitized original request: <complete request with credentials replaced>
+review_time_budget_seconds: 120
 NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
 ```
+
+The `120` value above is the current workflow-v2 runner policy; a caller with
+another enforced budget must substitute that value in the same field.
+Treat `review_time_budget_seconds` as a hard absolute budget from accepted
+dispatch, not a suggestion. Front-load disclosure paths and output promises,
+then model roles and physical writes, then semantic and direct-store
+reachability. Reserve time to return claims. If the Agent runtime forwards
+intermediate child text, allow one concise progress checkpoint to the owning
+thread around halfway through the budget; it is informational and does not
+extend or reset the deadline. Stop reading before expiry and return complete
+or partial evidenced claims; never wait for another message.
 
 Invoke the child inline with `run_in_background: false` when the installed
 `Agent`/`Task` schema exposes that field; otherwise omit the field, and never

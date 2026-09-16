@@ -42,6 +42,9 @@ REVIEW_MARKER_KEYS = frozenset(
 REVIEW_RECORD = "review-record.json"
 ATTESTATIONS = "agent-attestations.json"
 SANITIZED_REQUEST_LABEL = "Sanitized original request:"
+# Runner-owned protocol line: the accepted child must see the same absolute
+# wall-clock bound that the transport enforces.
+REVIEW_BUDGET_LINE = f"review_time_budget_seconds: {REVIEW_DEADLINE_MS / 1000:.0f}"
 REVIEW_SKILL_INSTRUCTION = "Load and follow nxd-review-closure."
 REVIEW_ALLOWED_SUBAGENT_TYPES = frozenset({"general-purpose"})
 REVIEW_METADATA_STATUSES = frozenset(
@@ -554,6 +557,8 @@ def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) 
     # observations and live hook enforcement agree about what was dispatched.
     if lines.count(REVIEW_SKILL_INSTRUCTION) != 1:
         return False
+    if lines.count(REVIEW_BUDGET_LINE) != 1:
+        return False
     # The request is caller-authored and must never be reconstructed by the
     # hook.  Require exactly one exact label and only check that its value is
     # nonblank; sanitization itself remains the dispatcher's responsibility.
@@ -748,6 +753,7 @@ __all__ = [
     "DESKTOP_ADVANCE",
     "NORMAL",
     "REVIEW_DEADLINE_MS",
+    "REVIEW_BUDGET_LINE",
     "REPORT_IN_FLIGHT",
     "RELAY_PENDING",
     "REVIEW_DISPATCH_PENDING",

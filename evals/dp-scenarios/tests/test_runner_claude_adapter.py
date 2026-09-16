@@ -1478,6 +1478,57 @@ def test_unreadable_guard_snapshot_cannot_reset_an_armed_reviewer_deadline(
     assert adapter._refresh_review_deadline(started + 0.4) is None
 
 
+def test_new_pending_reviewer_id_cannot_restart_absolute_deadline(tmp_path: Path) -> None:
+    fake_claude = tmp_path / "unused-fake-claude.py"
+    fake_claude.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
+    state = tmp_path / "review-state.json"
+    adapter._review_guard_state = state
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "review_dispatch_pending",
+                "review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    started = 100.0
+    assert adapter._refresh_review_deadline(started) is not None
+    armed_at = adapter._review_deadline_at
+    assert armed_at is not None
+
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "review_dispatch_pending",
+                "review_tool_use_id": "different-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert adapter._refresh_review_deadline(started + 0.1) is not None
+    assert adapter._review_deadline_at == armed_at
+    assert adapter._review_deadline_id == "accepted-review"
+
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "report_in_flight",
+                "review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert adapter._refresh_review_deadline(started + 0.2) is None
+    adapter.close()
+
+
 def test_cleanup_kills_a_term_ignoring_descendant_after_its_leader_exits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

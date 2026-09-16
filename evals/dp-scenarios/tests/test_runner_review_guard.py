@@ -10,6 +10,7 @@ import pytest
 from dp_scenarios.runner.review_guard import (
     NORMAL,
     RELAY_PENDING,
+    REVIEW_BUDGET_LINE,
     REVIEW_DISPATCH_PENDING,
     handle_event,
     settings_payload,
@@ -83,6 +84,7 @@ def _review_prompt(
         f"retained_capture_root: {retained_capture_root}\n"
         f"retained_blueprint_path: {retained_blueprint_path}\n"
         "Load and follow nxd-review-closure.\n"
+        f"{REVIEW_BUDGET_LINE}\n"
         f"Sanitized original request: {sanitized_request}"
     )
 
@@ -609,6 +611,30 @@ def test_owner_dispatch_requires_the_canonical_reviewer_skill_instruction(tmp_pa
                     "Load and follow nxd-review-closure.",
                     "Use nxd-review-closure.",
                 ),
+            },
+        },
+        state_path=state_path,
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
+def test_owner_dispatch_requires_the_declared_review_budget(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt().replace(f"{REVIEW_BUDGET_LINE}\n", ""),
             },
         },
         state_path=state_path,

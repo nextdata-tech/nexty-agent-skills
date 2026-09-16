@@ -493,11 +493,15 @@ def test_review_dispatch_is_one_conversation_child_with_the_canonical_marker():
         "retained_capture_root: <exact retained_capture_root from review_input>",
         "retained_blueprint_path: <exact retained_blueprint_path from review_input>",
         "Sanitized original request: <complete request with credentials replaced>",
+        "review_time_budget_seconds: 120",
         "Load and follow nxd-review-closure.",
         "main thread must not invoke `Skill(nxd-review-closure)`",
         "canonical marker line",
         'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}',
         "`run_in_background: false`",
+        "hard absolute budget",
+        "progress checkpoint",
+        "does not extend or reset the deadline",
         "timeout or partial child result does not justify dispatching a second reviewer",
         "Reporting is the main thread's relay step",
     ):
@@ -518,6 +522,8 @@ def test_review_role_and_job_loop_ban_inline_or_supervisor_launched_review():
         assert "conversation" in lowered
     assert "Skill(nxd-review-closure)" in checkpoint
     assert "report_requirement" in reviewer
+    assert "hard, absolute, non-extendable wall-clock deadline" in reviewer
+    assert "progress checkpoint" in reviewer
 
 
 def test_advance_wire_shapes_are_pinned_exactly():

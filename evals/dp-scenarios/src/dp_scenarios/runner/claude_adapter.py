@@ -215,6 +215,7 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "retained_blueprint_path: <exact retained_blueprint_path from review_input>\n"
     "Load and follow nxd-review-closure.\n"
     "Sanitized original request: <the complete request with credentials replaced>\n"
+    f"review_time_budget_seconds: {REVIEW_DEADLINE_MS / 1000:.0f}\n"
     "NXD_REVIEW_DISPATCH {\"closure_path\":\"closure\",\"request_contract\":\"sanitized_original_request\",\"return\":\"claims_only\",\"review_round_index\":0}\n"
     "Replace only closure_path and review_round_index: use the relative "
     "closure path and the next zero-based index; keep request_contract and "
@@ -222,6 +223,13 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "wait for its claims; invoke the child inline with run_in_background=false "
     "when that field is supported (otherwise omit it; never set it true). The "
     "reviewer must run inline (run_in_background=false) and return claims only. "
+    f"The reviewer has a hard absolute {REVIEW_DEADLINE_MS / 1000:.0f}-second "
+    "budget from accepted dispatch: front-load disclosure paths and highest-"
+    "severity checks, reserve time to return complete or partial evidenced "
+    "claims, and never wait for another message. If the Agent runtime forwards "
+    "intermediate child text, emit at most one concise progress checkpoint to "
+    "the owning thread around halfway through the budget; progress is "
+    "informational and does not extend or reset the deadline. "
     "The main marker line must use exactly the NXD_REVIEW_DISPATCH keys and "
     "constant values; the example's 0 is only the first-round index, and actual "
     "dispatches use the next zero-based index. "
@@ -1451,10 +1459,10 @@ class ClaudeCodeAdapter:
             )
         state, tool_use_id = snapshot
         if state == REVIEW_DISPATCH_PENDING:
-            if tool_use_id and (
-                tool_use_id != self._review_deadline_id
-                or self._review_deadline_at is None
-            ):
+            # The first accepted dispatch starts one absolute clock. A
+            # rewritten pending id is not a fresh review and must not grant
+            # the child another full deadline.
+            if tool_use_id and self._review_deadline_at is None:
                 self._review_deadline_id = tool_use_id
                 self._review_deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         elif (
