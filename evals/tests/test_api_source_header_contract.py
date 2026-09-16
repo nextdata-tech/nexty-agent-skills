@@ -44,6 +44,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_SOURCE = (REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" /
               "api-source.md")
+GENERATOR_SKILL = REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md"
 REFRESH_SCRIPT = (REPO_ROOT / "src" / "nxd-generate-data-product" / "scripts" /
                   "api_source_refresh_session.py")
 FIXTURES = (REPO_ROOT / "evals" / "public" / "authenticated-api-source-build" /
@@ -62,6 +63,17 @@ UV = shutil.which("uv") or "uv"
 
 def _doc() -> str:
     return API_SOURCE.read_text(encoding="utf-8")
+
+
+def test_generator_skill_surfaces_auth_type_dispatch():
+    # The reference has the full recipe, but the top-level generation contract
+    # must surface the invariant where a construction agent first looks. This
+    # is the exact omission behind the release cell's deterministic failure.
+    t = GENERATOR_SKILL.read_text(encoding="utf-8")
+    assert 'auth_type = secrets.get("auth_type")' in t
+    assert 'client_config["auth"]' in t
+    assert "raise for unsupported non-`None` values" in t
+    assert "never hard-code only the scheme today's profile uses" in t
 
 
 def test_recipe_documents_the_header_prefix():
