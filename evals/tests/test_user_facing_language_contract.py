@@ -27,6 +27,26 @@ def test_user_facing_reference_keeps_internal_details_out_of_default_chat():
         assert marker in text
 
 
+def test_open_a_file_case_hands_over_a_clickable_command():
+    text = _flat(LANGUAGE_REFERENCE)
+    assert "### Asking the user to open a file" in text, (
+        "the reference must carry a case for asking the user to open a file"
+    )
+    assert "Never leave the user to find or open the file themselves." in text, (
+        "the rule must forbid handing over a bare path"
+    )
+    # The command has to be runnable as written. `open` alone on a .yaml can
+    # land in Xcode or in nothing at all, so the editor is pinned.
+    for marker in (
+        "macOS: `open -e <absolute path>`",
+        "Linux: `xdg-open <absolute path>`",
+    ):
+        assert marker in text, f"the rule must give a runnable command: {marker}"
+    assert "The command carries a path, never a secret" in text, (
+        "the rule must state why the command is safe to put in a transcript"
+    )
+
+
 def test_job_loop_names_durable_user_files_but_not_staging_paths():
     text = _flat(JOB_SKILL)
     for marker in (
