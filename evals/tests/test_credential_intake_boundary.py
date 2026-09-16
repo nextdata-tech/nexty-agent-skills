@@ -84,6 +84,25 @@ def test_credential_routes_are_ordered_cheapest_exposure_first():
     assert "last resort" in text, "the chat paste must be marked a last resort"
 
 
+def test_user_filled_route_hands_over_a_runnable_command():
+    text = _normalize(MATERIALIZATION.read_text())
+    # Route 1 is the preferred route precisely because the value never enters a
+    # transcript — but it only works if the user can actually reach the file.
+    # Naming a path assumes they know where it is, which editor opens a .yaml,
+    # and that they are comfortable in a terminal. A non-technical user handed a
+    # path alone stalls here, and the likely recovery is route 3: they paste the
+    # key into chat instead, which is the exposure this ordering exists to avoid.
+    assert "runnable command that opens the file rather than only its path" in text, (
+        "route 1 must hand the user a runnable command, not just the profile path"
+    )
+    assert "a non-technical user handed a path alone is stuck" in text, (
+        "route 1 must say why a bare path is not enough"
+    )
+    assert "user-facing-language.md" in text, (
+        "route 1 must point at the shared rule for asking a user to open a file"
+    )
+
+
 def test_env_var_route_forbids_shell_interpolation():
     text = _normalize(MATERIALIZATION.read_text())
     # "Use an env var" is not by itself a fix: a shell-expanded $TOKEN on a

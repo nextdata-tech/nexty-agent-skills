@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.50.3
+  version: 0.51.0
 ---
 
 # NXD Expectations and Promises
