@@ -679,9 +679,11 @@ cell's `PASS` is exactly what converts a coin toss into a gating cell.
 
 Two cells are currently marked:
 
-- `generate-semantic-layer-dp-from-schema` — `PASS` when recorded, `FAIL` (3/10
-  checks) on an identical re-run. Its checks demand visible evidence for ten
-  separate artifacts that a nondeterministic agent does not reliably produce.
++ `generate-semantic-layer-dp-from-schema` — `PASS` when recorded, `FAIL` on
++  both attempts, including the retry, in release run `35104054413`. It is
++  temporarily quarantined while the semantic-layer behavior is debugged; the
++  release still reports the failed cell as FLAKY rather than calling it a
++  pass.
 - `nxd-setup-headless-auth` — `FAIL` then `PASS` across two CI runs of the same
   commit. Recorded `FAIL`, so it does not gate today; the marker exists to stop
   a later `PASS` from being locked in.
