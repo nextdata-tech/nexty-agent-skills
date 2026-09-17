@@ -780,40 +780,99 @@ def _is_review_skill(value: object) -> bool:
 
 
 def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) -> bool:
+    """Return whether the owner supplied one complete review handoff."""
+
+    return not _review_prompt_issues(prompt, state)
+
+
+def _review_prompt_issues(prompt: object, state: dict[str, object]) -> tuple[str, ...]:
+    """Return safe, actionable issues for a malformed review handoff.
+
+    Keep the issue calculation shared by the boolean validator and its
+    diagnostic. A duplicated line must be described as removable, not as a
+    missing line to add, or the owning conversation can retry forever.
+    """
+
     if not isinstance(prompt, str):
-        return False
+        return ("the review prompt must be text",)
     retained_capture_root = state.get("retained_capture_root")
     retained_blueprint_path = state.get("retained_blueprint_path")
-    if not isinstance(retained_capture_root, str) or not retained_capture_root.strip():
-        return False
-    if not isinstance(retained_blueprint_path, str) or not retained_blueprint_path.strip():
-        return False
+    if not isinstance(retained_capture_root, str) or not retained_capture_root.strip() or not isinstance(
+        retained_blueprint_path, str
+    ) or not retained_blueprint_path.strip():
+        return ("supervisor-retained paths are unavailable; do not retry with a fallback path",)
     lines = prompt.splitlines()
-    # These are protocol lines, not prose labels.  Requiring each exact line
-    # once prevents a child from receiving a sibling path or a second,
-    # ambiguous binding disguised as a bullet or a differently-cased field.
-    if lines.count(f"retained_capture_root: {retained_capture_root}") != 1:
-        return False
-    if lines.count(f"retained_blueprint_path: {retained_blueprint_path}") != 1:
-        return False
-    # The real built-in reviewer is selected by this explicit instruction,
-    # not by inventing a custom subagent type. Keep it canonical so replayed
-    # observations and live hook enforcement agree about what was dispatched.
-    if lines.count(REVIEW_SKILL_INSTRUCTION) != 1:
-        return False
-    if lines.count(REVIEW_BUDGET_LINE) != 1:
-        return False
-    if lines.count(REVIEW_INSPECTION_CUTOFF_LINE) != 1:
-        return False
-    # The request is caller-authored and must never be reconstructed by the
-    # hook.  Require exactly one exact label and only check that its value is
-    # nonblank; sanitization itself remains the dispatcher's responsibility.
-    if prompt.count(SANITIZED_REQUEST_LABEL) != 1:
-        return False
+    issues: list[str] = []
+
+    for label, expected in (
+        ("retained_capture_root", retained_capture_root),
+        ("retained_blueprint_path", retained_blueprint_path),
+    ):
+        matches = [line for line in lines if line.startswith(f"{label}: ")]
+        if matches == [f"{label}: {expected}"]:
+            continue
+        if not matches:
+            issues.append(f"missing exact {label} line; add it verbatim")
+        elif len(matches) > 1:
+            issues.append(f"{label} must occur exactly once; remove duplicate lines")
+        else:
+            issues.append(f"{label} is not the exact supervisor value; replace that line")
+
+    for exact_line in (
+        REVIEW_SKILL_INSTRUCTION,
+        REVIEW_BUDGET_LINE,
+        REVIEW_INSPECTION_CUTOFF_LINE,
+    ):
+        count = lines.count(exact_line)
+        if count == 1:
+            continue
+        if count == 0:
+            issues.append(f"missing exact {exact_line} line; add it verbatim")
+        else:
+            issues.append(f"{exact_line} must occur exactly once; remove duplicate lines")
+
+    request_label_count = prompt.count(SANITIZED_REQUEST_LABEL)
     request_lines = [line for line in lines if line.startswith(SANITIZED_REQUEST_LABEL)]
-    return len(request_lines) == 1 and bool(
-        request_lines[0][len(SANITIZED_REQUEST_LABEL) :].strip()
-    )
+    if request_label_count != 1:
+        if request_label_count == 0:
+            issues.append(
+                "missing exact 'Sanitized original request:' label at the start of its own line"
+            )
+        else:
+            issues.append(
+                "'Sanitized original request:' must occur exactly once; remove other mentions"
+            )
+    elif len(request_lines) != 1:
+        issues.append(
+            "'Sanitized original request:' must start its own line; move the label"
+        )
+    elif not request_lines[0][len(SANITIZED_REQUEST_LABEL) :].strip():
+        issues.append(
+            "'Sanitized original request:' line must contain a non-empty sanitized request"
+        )
+    return tuple(issues)
+
+
+def _review_prompt_validation_message(
+    prompt: object, state: dict[str, object]
+) -> str:
+    """Explain which canonical review-dispatch inputs are still missing.
+
+    Claude retries a denied tool call using the hook's permission message.  A
+    single generic error is actively misleading here: the owning conversation
+    can have supplied the supervisor paths and marker while still omitting one
+    of the fixed protocol lines.  Name only protocol labels, never the
+    caller's request or retained path values, so the diagnostic remains safe
+    to surface in the agent session.
+    """
+
+    issues = _review_prompt_issues(prompt, state)
+    if not issues:
+        return (
+            "Reviewer dispatch rejected: the canonical review prompt is invalid; "
+            "do not retry without the exact protocol lines."
+        )
+    return "Reviewer dispatch rejected: " + "; ".join(issues) + "."
 
 
 def _child_pre(
@@ -927,7 +986,7 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
             return _deny("The retained-capture reviewer must run inline in this turn.")
         if not _review_prompt_has_required_input(tool_input.get("prompt"), state):
             return _deny(
-                "Reviewer dispatch rejected: include the exact supervisor-retained paths and a non-empty 'Sanitized original request:' line."
+                _review_prompt_validation_message(tool_input.get("prompt"), state)
             )
         state["review_tool_use_id"] = _event_id(event, "tool_use_id", "toolUseId")
         state["review_round_index"] = marker[1]

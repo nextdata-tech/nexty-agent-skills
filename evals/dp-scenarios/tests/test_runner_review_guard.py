@@ -1120,6 +1120,127 @@ def test_owner_dispatch_requires_the_declared_review_budget(tmp_path: Path) -> N
     assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
 
 
+def test_owner_dispatch_explains_each_missing_protocol_line(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    prompt = _review_prompt()
+    prompt = prompt.replace("Load and follow nxd-review-closure.\n", "")
+    prompt = prompt.replace(f"{REVIEW_BUDGET_LINE}\n", "")
+    prompt = prompt.replace(f"{REVIEW_INSPECTION_CUTOFF_LINE}\n", "")
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": prompt,
+            },
+        },
+        state_path=state_path,
+    )
+
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Load and follow nxd-review-closure." in reason
+    assert REVIEW_BUDGET_LINE in reason
+    assert REVIEW_INSPECTION_CUTOFF_LINE in reason
+    assert RETAINED_CAPTURE_ROOT not in reason
+    assert RETAINED_BLUEPRINT_PATH not in reason
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
+@pytest.mark.parametrize(
+    ("change", "expected_fragment"),
+    [
+        (
+            lambda prompt: prompt.replace(
+                "Sanitized original request:",
+                "Sanitized original request: keep this label out of prose.\nSanitized original request:",
+                1,
+            ),
+            "'Sanitized original request:' must occur exactly once",
+        ),
+        (
+            lambda prompt: prompt.replace(
+                f"{REVIEW_BUDGET_LINE}\n",
+                f"{REVIEW_BUDGET_LINE}\n{REVIEW_BUDGET_LINE}\n",
+            ),
+            f"{REVIEW_BUDGET_LINE} must occur exactly once",
+        ),
+        (
+            lambda prompt: prompt.replace(
+                "Sanitized original request: Review the captured sales closure.",
+                "Sanitized original request:   ",
+            ),
+            "'Sanitized original request:' line must contain a non-empty sanitized request",
+        ),
+    ],
+)
+def test_owner_dispatch_diagnostics_match_validator_for_retryable_shapes(
+    tmp_path: Path, change: object, expected_fragment: str
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    prompt = change(_review_prompt())
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": prompt,
+            },
+        },
+        state_path=state_path,
+    )
+
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert expected_fragment in reason
+    assert "canonical review prompt is invalid" not in reason
+    assert "Review the captured sales closure." not in reason
+    assert not reason.startswith("Reviewer dispatch rejected: add ")
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
+def test_owner_dispatch_does_not_invite_retry_when_supervisor_paths_are_absent(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    state = _state(state_path)
+    state["state"] = REVIEW_DISPATCH_PENDING
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "supervisor-retained paths are unavailable" in reason
+    assert "add these exact review-prompt lines" not in reason
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+
 def test_settings_install_all_three_hook_phases() -> None:
     settings = settings_payload(python="/usr/bin/python3", script="/tmp/review_guard.py")
     assert set(settings["hooks"]) == {"PreToolUse", "PostToolUse", "Stop"}
