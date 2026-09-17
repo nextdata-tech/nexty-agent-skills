@@ -1175,6 +1175,78 @@ def test_workflow_activation_drops_ambient_only_caller_credential_mapping(
     assert ambient_value not in activation_environment.values()
 
 
+def test_workflow_activation_drops_ambient_only_caller_credential_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.runner import desktop as desktop_module
+
+    class FakeTransport:
+        def __init__(self) -> None:
+            self.root = tmp_path / "session"
+            self.config_path = self.root / "config.json"
+            self.trace_path = self.root / "trace.jsonl"
+            self.server_result_path = self.root / "server-result.json"
+            self.supervisor_binary_path = "supervisor"
+            self.session_config_sha256 = "sha256:fake"
+            self.root.mkdir()
+
+        def start(self) -> "FakeTransport":
+            return self
+
+        def cleanup(self) -> None:
+            pass
+
+    def fake_create(*args: object, **kwargs: object) -> FakeTransport:
+        del args, kwargs
+        return FakeTransport()
+
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fake_create),
+    )
+    ambient_value = "ambient-only-supervisor-secret"
+    explicit_value = "explicit-supervisor-secret"
+    monkeypatch.setenv("AMBIENT_ONLY_TOKEN", ambient_value)
+    activation_bundle = tmp_path / "activation.json"
+    activation_bundle.write_text('{}\n', encoding="utf-8")
+    activation_environments: list[dict[str, str]] = []
+
+    def run_activation(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del argv
+        activation_environments.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess("supervisor", 0, '{"activated":true}\n', "")
+
+    monkeypatch.setattr(environment_module.subprocess, "run", run_activation)
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        live_command=("agent",),
+        supervisor_command=("supervisor",),
+        supervisor_environment={
+            "EXPLICIT_SUPERVISOR_TOKEN": explicit_value,
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": (
+                "explicit=EXPLICIT_SUPERVISOR_TOKEN,ambient=AMBIENT_ONLY_TOKEN"
+            ),
+        },
+        workflow_activation_bundle=activation_bundle,
+    ):
+        assert len(activation_environments) == 1
+
+    activation_environment = activation_environments[0]
+    assert activation_environment["EXPLICIT_SUPERVISOR_TOKEN"] == explicit_value
+    assert (
+        activation_environment["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
+        == "explicit=EXPLICIT_SUPERVISOR_TOKEN"
+    )
+    assert "AMBIENT_ONLY_TOKEN" not in activation_environment
+    assert ambient_value not in activation_environment.values()
+
+
 @pytest.mark.parametrize(
     ("mapping", "error"),
     [
