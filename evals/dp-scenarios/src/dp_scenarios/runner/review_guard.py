@@ -874,7 +874,6 @@ def _review_prompt_validation_message(
         )
     return "Reviewer dispatch rejected: " + "; ".join(issues) + "."
 
-
 def _child_pre(
     event: dict[str, object], state: dict[str, object]
 ) -> dict[str, object]:
