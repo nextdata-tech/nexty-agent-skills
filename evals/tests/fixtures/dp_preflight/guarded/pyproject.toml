@@ -1,0 +1,6 @@
+[project]
+name = "demo-product"
+version = "1.0.0-dev"
+
+[tool.setuptools]
+py-modules = ["spec", "models", "nxd_spec", "nxd_models", "transform"]

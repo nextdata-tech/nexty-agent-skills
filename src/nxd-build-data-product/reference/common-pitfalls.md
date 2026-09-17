@@ -8,6 +8,7 @@
 - Data quality issues
 - Infra / service issues
 - Deprecated patterns
+- Glossary links
 - Naming, types, imports
 
 Known failure modes when writing nextdata data products. Check these before declaring a DP ready.
@@ -117,6 +118,17 @@ def transform(store_sales_adls: AzureDataLakeStorage, iceberg_on_s3: S3Output) -
 **`.token` vs `.private_access_token` on DatabricksWrite**
 `.token` is OAuth M2M. `.private_access_token` is PAT auth. Using the wrong one causes auth failures with misleading messages.
 
+**Blank CSV fields become the literal string `nan` on the way out**
+A default `pd.read_csv` infers dtypes and turns empty fields into `NaN`. Writing that frame back out serialises them as the text `nan`, so an optional column (`promotion_id`, `discount_code`, any nullable foreign key) silently gains a fake value in every row that was empty. Passthrough and lift-and-shift products are where this bites, because nothing downstream expects the data to have changed.
+```python
+# Wrong: blanks come back as "nan"
+frame = pd.read_csv(path)
+
+# Correct for a passthrough: blanks stay blank, no dtype guessing
+frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+```
+Reading everything as a string also stops pandas reformatting values it thinks are numbers: a zero-padded store code keeps its padding, and a long numeric ID does not acquire an exponent. Convert explicitly where the transform needs arithmetic. Check this against a real extract, not a hand-written sample: samples rarely carry the empty fields that trigger it.
+
 ---
 
 ## Data quality issues
@@ -154,6 +166,14 @@ Always add the extra at the same time you add the promise — never rely on vali
 
 ## Infra / service issues
 
+**`nxd validate` does not check driver strings at all**
+It resolves *service names* against the infra profile and stops there. A wrong driver version, and a driver name that does not exist, both validate clean:
+```python
+.service(service_name="adls", driver="nxd:kubernetes/contract:9.9.9")   # exit 0
+.service(service_name="adls", driver="nxd:totally-made-up:1.0.0")       # exit 0
+```
+Rename the *service* to something bogus and validate fails immediately, which is what makes the silence about drivers easy to misread as approval. Check every `driver=` against the profile by eye. A wrong one surfaces at launch or when a contract executes, far from the edit that caused it.
+
 **Invented service names**
 Service names in `.source()` URLs must match actual names from the infra profile — read them from the chosen profile YAML, or list profiles from the active mesh with `nxd ls infra-profiles --config=<session_config>` and list a chosen profile's services with `nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile-name>/services`. Made-up names cause `service not found` errors at validate or deploy time.
 
@@ -175,6 +195,28 @@ When running against a local cluster with locally-built images, add `"image_pull
 Don't use `.schema()`, `.resource_name()`, `.target_file()`, `.target_table()` directly on a `source_aligned_input()`. Use `.config(storage_config.target_table(...))` instead.
 
 ---
+
+## Glossary links
+
+**A wrong glossary term ID fails silently, so verify every one**
+`.link(field, Predicate.GlossaryTerm, "<host>/data-product/<env>/<glossary>#/terms/<id>")` is resolved by ID. A `<id>` that does not exist is stored verbatim and resolves to nothing: the attribute carries no glossary meaning while appearing to, and nothing reports it. `nxd validate` does not check it, launch succeeds, and the deployed product reads back the dead reference as if it were fine. Term IDs copied from an input document, a sibling product, or an attribute name are all guesses until checked against the glossary itself.
+
+Fetch the real terms and compare before writing links. Through the mesh MCP gateway:
+
+```bash
+python3 scripts/gateway_tools.py glossary --name <glossary-dp-fullname> --token-file "$TOKEN_FILE"
+```
+
+The payload's `terms` object is keyed by exactly the IDs the links must use. A worked example from the ecommerce showcase: `region_id` linked to `#/terms/region` for as long as the product existed, and the glossary's 63 terms contain no `region` — the intended term is `sales_region`.
+
+**The host in a glossary URL is discarded**
+The platform parses `/data-product/<env>/<name>#/terms/<id>` into the glossary's full name, composed as `<name>-<env>`, plus the term ID. The host is not read, so two products pointing at different app hosts produce identical stored relationships:
+
+```
+region_id -> glossary=ecommerce-glossary-demo  termId=region
+```
+
+Use the active mesh's app host for consistency with the rest of the spec, but do not spend a decision on it, and do not diagnose a broken link by looking at the host. Check `<env>`, `<name>` and the term ID.
 
 ## Naming, types, imports
 

@@ -123,6 +123,8 @@ If spec-from-document is chosen, follow **Spec-from-Document** below in place of
 #### Spec-from-Document
 For each document path the user supplies (file path or `http(s)://` URL), read it and extract the requirements that would otherwise come from Interview. Where the document is missing an answer, fall back to asking the user just that question.
 
+**Re-read the document at the start of every generation**, including a rebuild of a product you generated earlier in this same session. Input documents get edited between runs, often *because* of what the last run produced, and a copy held in context from an earlier read is the stalest thing in the room. Rebuilding from it silently reproduces the decision the edit was written to overturn, and the resulting product looks like defiance rather than the cache miss it is.
+
 **Mesh-assets report — the primary supported format.** A `mesh-assets-<profile>.md` lists candidates grouped by domain, each numbered (`#### 41. \`<name>\``). Each candidate carries:
 
 - *Suggested data product name* — use as the data product name unless the user overrides.
@@ -214,10 +216,14 @@ inputs); for depending on another team's DP,
 frame it concretely using the locked input format and output storage (e.g.
 "given Parquet on ADLS in and Snowflake out, what models should this expose?").
 Collect each output model the same way. Then:
-* **Glossary matching (always do this):** fetch available glossary terms and
+* **Glossary matching (always do this):** fetch the glossary's real terms and
   propose matches against output field names/descriptions; record confirmed
   ones via `.link("field", Predicate.GlossaryTerm, "<glossary-full-name>#/terms/<id>")`.
-  If none match, say so explicitly and move on.
+  If none match, say so explicitly and move on. **Verify every term ID against
+  the fetched list, including IDs an input document supplied.** A wrong ID is a
+  dead link, not an error: nothing reports it. Never record term IDs as
+  unverifiable, the glossary is queryable
+  ([reference/common-pitfalls.md](reference/common-pitfalls.md)).
 * **Upstream links (source-code or DP-input products only):** where an output
   field traces to an input field, record
   `.link("output_field", Predicate.SameAs, "<input-model>#/schema/<input-field>")`.
@@ -367,6 +373,7 @@ and the command to re-run after fixing it.
 * Use Nextdata Contexts via explicit imports (e.g. `from nxd.data_product.context import AzureDataLakeStorage`) to pass configuration, credentials, and models for each input or output driver. Prefer explicit imports over wildcard imports within the transformation file(s).
 * Keep heavy runtime dependencies (Spark, torch, sentence-transformers, langchain embedding/vector integrations, browser clients) out of top-level imports. `nxd validate` imports `spec.py`, which imports `transform.py`; heavy top-level imports can make validation fail before the transform runs. Import heavy libraries inside `transform()` or helper functions.
 * Parameter names in the `transform(...)` signature must match the input and output-port names declared in `spec.py`. For example, `.input("comp_public", source_aligned_input()...)` binds to `def transform(comp_public: API, ...)`, and `.port("adls", storage(...))` binds to `adls: AzureDataLakeStorage`. Hyphens in spec names are normalised to underscores in the Python signature (e.g. `"s3-source"` → `s3_source`).
+* **The same name-binding rule governs `contracts/` verify functions**, and it is the one most often guessed wrong. A contract wired with `.service(service_name="adls", driver=...)` binds to `def verify(adls: AzureDataLakeStorage, ...)`; a generic name (`input`, `ctx`, `storage`) matches no declared service or port and fails when the contract runs. `nxd validate` never executes contracts, so it validates clean. See [reference/promises-contracts.md](reference/promises-contracts.md).
 
 #### `nxd` Library
 The `nxd` library should already be installed in the virtual environment by the prerequisites step. Always refer to the locally installed version for implementation details rather than relying on prior knowledge.
@@ -383,10 +390,26 @@ The platform's init container installs the data product as a Python package via 
 * **Ship a `.nxdignore`** that excludes everything local-only from the deployment bundle: `.env*`, `local_transform.py` (and any other local runner / smoke-test script), `.venv/`, `__pycache__/`, build artifacts, IDE / VCS noise. Local-execution files have credentials wired in or use development-only dependencies the platform shouldn't see.
 
 #### Generated-Code Preflight
-Before handing files to the user, run the checklist in
+Before handing files to the user, run the shipped checker and then the checklist.
+
+```bash
+python3 scripts/preflight_check.py <data_product_directory>
+```
+
+`scripts/preflight_check.py` is standard-library only and never imports the
+product, so it runs before dependencies are installed. It decides the
+`flat-layout`, `verify-bind`, `verify-weak`, `version-drift`, `contract-driver`
+and `surface` checks; what each one catches is tabled in
 [reference/generated-code-preflight.md](reference/generated-code-preflight.md).
-Fix what you can, and record every unresolved launch or validation risk in both
-`README.md` and `REQUIREMENTS_CHECKLIST.md`.
+
+A clean run is necessary, not sufficient. Two faults it cannot judge, and
+`nxd validate` cannot either: whether a `driver=` names the service's real
+driver, and whether a glossary term ID exists. Check both by hand
+([reference/common-pitfalls.md](reference/common-pitfalls.md)). Then work that
+reference's checklist, which covers what no static check can see. Fix what you
+can, and record every
+unresolved launch or validation risk in both `README.md` and
+`REQUIREMENTS_CHECKLIST.md`.
 
 ---
 
