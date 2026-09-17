@@ -427,6 +427,7 @@ def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_pat
             "NXD_DESKTOP_PYTHON": "/tmp/eval-python",
             "EVAL_MARKER": "allowed",
             "ANTHROPIC_API_KEY": "must-not-pass",
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": "api-source=NXD_EVAL_SOURCE_TOKEN",
             "NXD_EVAL_SOURCE_TOKEN": "trusted-source-token",
         },
     ).start()
@@ -446,6 +447,10 @@ def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_pat
         assert child_env["EVAL_MARKER"] == "allowed"
         assert "ANTHROPIC_API_KEY" not in child_env
         assert child_env["NXD_EVAL_SOURCE_TOKEN"] == "trusted-source-token"
+        assert (
+            child_env["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
+            == "api-source=NXD_EVAL_SOURCE_TOKEN"
+        )
         if proxy.stdin is not None:
             proxy.stdin.close()
         proxy.wait(timeout=10)
@@ -458,6 +463,100 @@ def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_pat
             proxy.kill()
             proxy.wait()
         session.cleanup()
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        "api-source=literal-secret",
+        "warehouse=sk_live_abc123",
+        "api-source=OTHER_SOURCE_TOKEN",
+        "warehouse=WAREHOUSE_TOKEN,other=ABSENT_TOKEN",
+    ],
+)
+def test_proxy_drops_invalid_or_unavailable_trusted_credential_mapping(
+    tmp_path, mapping
+):
+    child = _script(
+        tmp_path / "env-server.py",
+        "import json, os, sys\n"
+        "print(json.dumps({'env': dict(os.environ)}), flush=True)\n"
+        "for _line in sys.stdin: pass\n",
+    )
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        server_env={
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": mapping,
+            "WAREHOUSE_TOKEN": "test-only-placeholder",
+            "OTHER_SOURCE_TOKEN": "test-only-placeholder",
+        },
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdout is not None
+        child_env = json.loads(proxy.stdout.readline())["env"]
+        if mapping.startswith("warehouse=WAREHOUSE_TOKEN"):
+            assert (
+                child_env["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
+                == "warehouse=WAREHOUSE_TOKEN"
+            )
+            assert child_env["WAREHOUSE_TOKEN"] == "test-only-placeholder"
+        else:
+            assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in child_env
+            assert "WAREHOUSE_TOKEN" not in child_env
+        assert "OTHER_SOURCE_TOKEN" not in child_env
+        if proxy.stdin is not None:
+            proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_proxy_rejects_trusted_credential_mapping_limits():
+    available = {f"TOKEN_{index}" for index in range(17)}
+    exact_entries = ",".join(
+        f"service{index}=TOKEN_{index}" for index in range(16)
+    )
+    assert len(ds._safe_trusted_credential_mappings(exact_entries, available)) == 16
+    too_many = ",".join(
+        f"service{index}=TOKEN_{index}" for index in range(17)
+    )
+    assert ds._safe_trusted_credential_mappings(too_many, available) == []
+    assert (
+        ds._safe_trusted_credential_mappings(
+            "service=TOKEN_0,service=TOKEN_1", available
+        )
+        == []
+    )
+    assert (
+        ds._safe_trusted_credential_mappings(
+            "service=TOKEN_0,malformed-entry", available
+        )
+        == []
+    )
+    assert (
+        ds._safe_trusted_credential_mappings(
+            "evil=NXD_EVAL_SOURCE_TOKEN", {"NXD_EVAL_SOURCE_TOKEN"}
+        )
+        == []
+    )
+
+    exact_length = f"{'s' * 4088}=TOKEN_0"
+    assert len(exact_length) == 4096
+    assert ds._safe_trusted_credential_mappings(exact_length, available)
+    too_long = f"{'s' * 4089}=TOKEN_0"
+    assert len(too_long) == 4097
+    assert ds._safe_trusted_credential_mappings(too_long, available) == []
 
 
 def test_claude_stdio_agent_environment_drops_provider_credentials(monkeypatch):

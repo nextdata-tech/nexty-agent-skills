@@ -1,4 +1,6 @@
-from nxd.spec import semantic_model, string, timestamp
+from nxd.core.yaml_schemas import DurationUnit
+from nxd.spec import semantic_model, string
+from nxd.spec.data_types import timestamp
 
 customer_profile = semantic_model("customer_profile").schema(
     {
@@ -7,7 +9,7 @@ customer_profile = semantic_model("customer_profile").schema(
         "full_name": string(),
         "phone_number": string(),
         "postal_code": string(),
-        "signup_ts": timestamp(),
+        "signup_ts": timestamp(unit=DurationUnit.Milliseconds),
     }
 ).tags(
     {

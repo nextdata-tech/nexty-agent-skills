@@ -149,6 +149,14 @@ def test_ordinal_suffix_caveat_is_documented():
     )
 
 
+def test_timestamp_columns_use_the_parameterized_nxd_type():
+    contract = _contract()
+    assert "| `value_timestamp` | `timestamp()` |" not in contract
+    assert "| `override_value_timestamp` | `timestamp()` |" not in contract
+    assert "timestamp(unit=DurationUnit.Microseconds)" in contract
+    assert "import `DurationUnit` from `nxd.core.yaml_schemas`" in contract
+
+
 def test_provider_default_is_documented_as_grant_resolved():
     contract = _contract()
     assert "bound to the grant" in contract, (

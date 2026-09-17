@@ -47,7 +47,61 @@ _ASSIGN_SECRET = re.compile(
     r"passwd|access[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
     r"pg\w*password)\s*(?:[:=]|\bis\b)\s*)[^\s,;]+"
 )
-_TRUSTED_EXPLICIT_SECRET_KEYS = frozenset({"NXD_EVAL_SOURCE_TOKEN"})
+# The allowlist carries only environment-variable *names*, not credential
+# values.  It is needed by the supervisor to validate the explicit source
+# credential above, so it must survive the proxy's credential-key filter.
+_TRUSTED_CREDENTIAL_MAPPING_ENV = "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"
+_TRUSTED_EXPLICIT_SECRET_KEYS = frozenset(
+    {
+        "NXD_EVAL_SOURCE_TOKEN",
+        _TRUSTED_CREDENTIAL_MAPPING_ENV,
+    }
+)
+_TRUSTED_CREDENTIAL_MAPPING_ENTRY = re.compile(
+    r"(?P<service>[A-Za-z0-9._-]+)=(?P<variable>[A-Za-z_][A-Za-z0-9_]*)\Z"
+)
+_SOURCE_SERVICE_NAME = "api-source"
+_SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
+_MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
+_MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
+
+
+def _safe_trusted_credential_mappings(
+    value: str, available_keys: set[str]
+) -> list[str]:
+    """Return only bounded service-to-environment-name mappings."""
+
+    if len(value) > _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH:
+        return []
+    entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+    if len(entries) > _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES:
+        return []
+    valid: list[str] = []
+    services: set[str] = set()
+    for entry in entries:
+        match = _TRUSTED_CREDENTIAL_MAPPING_ENTRY.fullmatch(entry)
+        if match is None:
+            return []
+        service = match["service"]
+        if service in services:
+            return []
+        services.add(service)
+        variable = match["variable"]
+        if (
+            variable == _SOURCE_CREDENTIAL_ENV
+            and service != _SOURCE_SERVICE_NAME
+        ) or (
+            service == _SOURCE_SERVICE_NAME
+            and variable != _SOURCE_CREDENTIAL_ENV
+        ):
+            return []
+        if variable not in available_keys:
+            continue
+        valid.append(f"{service}={variable}")
+
+    return valid
+
+
 PROXY_MODULE = Path(__file__).resolve()
 PROXY_CHILD_TERM_GRACE_S = 2.0
 PROXY_CHILD_KILL_REAP_GRACE_S = 0.5
@@ -494,9 +548,29 @@ def run_stdio_proxy(spec_path: Path) -> int:
             if os.environ.get(key)
         }
         env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
+        mapping_key = _TRUSTED_CREDENTIAL_MAPPING_ENV
+        raw_mapping = env.get(mapping_key)
+        trusted_mapping_variables: set[str] = set()
+        if raw_mapping is not None:
+            trusted_mapping_variables = {
+                entry.split("=", 1)[1]
+                for entry in _safe_trusted_credential_mappings(
+                    raw_mapping, set(env)
+                )
+            }
         for key in tuple(env):
-            if _SECRET_KEY.search(key) and key not in _TRUSTED_EXPLICIT_SECRET_KEYS:
+            if (
+                _SECRET_KEY.search(key)
+                and key not in _TRUSTED_EXPLICIT_SECRET_KEYS
+                and key not in trusted_mapping_variables
+            ):
                 env.pop(key, None)
+        if mapping_key in env:
+            entries = _safe_trusted_credential_mappings(env[mapping_key], set(env))
+            if not entries:
+                env.pop(mapping_key, None)
+            else:
+                env[mapping_key] = ",".join(entries)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return 2
     child: subprocess.Popen[bytes] | None = None

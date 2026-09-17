@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-17 | harden workflow-v2 review handoff and contract evidence | NO_EVAL | — | [`2026-09-17-workflow-v2-review-handoff-hardening`](entries/2026-09-17-workflow-v2-review-handoff-hardening.md) |
 | 2026-09-16 | bound partial JSON responses in the live runner | NO_EVAL | — | [`2026-09-16-runner-partial-json-deadline`](entries/2026-09-16-runner-partial-json-deadline.md) |
 | 2026-09-16 | surface and budget the retained-capture reviewer deadline | NO_EVAL | — | [`2026-09-16-reviewer-deadline-guidance`](entries/2026-09-16-reviewer-deadline-guidance.md) |
 | 2026-09-16 | hand the user a command that opens the file, not a path to go find | NO_EVAL | — | [`2026-09-16-open-the-file-for-the-user`](entries/2026-09-16-open-the-file-for-the-user.md) |

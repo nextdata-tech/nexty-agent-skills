@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_API = (REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" /
             "nxd-spec-api.md")
 SKILL = REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md"
+SEMANTIC_SKILL = REPO_ROOT / "src" / "nxd-build-semantic-data-product" / "SKILL.md"
 
 
 def _doc() -> str:
@@ -67,6 +68,29 @@ def test_the_offline_blind_spot_is_stated():
     assert "check_data_product" in t, (
         "name what does report them, or the reader has nowhere to go"
     )
+
+
+def test_timestamp_requires_an_explicit_duration_unit():
+    t = _doc()
+    assert "timestamp(unit=DurationUnit.Milliseconds)" in t, (
+        "datetime fields need a concrete, copyable timestamp declaration"
+    )
+    assert "timestamp / datetime" in t, (
+        "the inferred-type mapping must cover API/source datetime values"
+    )
+    assert "`timestamp()` raises `TypeError` during supervisor spec compilation" in t
+    assert "`timestamp()`" not in t.replace(
+        "`timestamp()` raises `TypeError` during supervisor spec compilation", ""
+    ), "the normative API reference must not carry a bare timestamp call"
+
+
+def test_semantic_inference_maps_timestamp_to_the_parameterized_type():
+    t = SEMANTIC_SKILL.read_text(encoding="utf-8")
+    assert "import `DurationUnit` from" in t
+    assert "`nxd.core.yaml_schemas`" in t
+    assert "`TIMESTAMP` / `TIMESTAMPTZ`" in t
+    assert "timestamp(unit=DurationUnit.Milliseconds)" in t
+    assert "| `TIMESTAMP` / `TIMESTAMPTZ` | `timestamp()` |" not in t
 
 
 def test_semantic_views_use_the_output_model_chain_and_count_is_documented():

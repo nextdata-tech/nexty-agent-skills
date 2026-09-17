@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_tr
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
+from dp_scenarios.runner.review_guard import RETAINED_REVIEW_ROOT_NAMES
 
 
 class EnvironmentError(RuntimeError):
@@ -42,6 +44,96 @@ DEFAULT_WORKFLOW_ACTIVATION_BUNDLE = Path(__file__).with_name(
     "workflow-execution-activation.json"
 )
 WORKFLOW_ACTIVATION_DIGEST_ENV = "NXD_EVAL_WORKFLOW_ACTIVATION_SHA256"
+SOURCE_SERVICE_NAME = "api-source"
+SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
+TRUSTED_CREDENTIAL_ENVS_ENV = "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"
+API_SOURCE_CREDENTIAL_MAPPING = f"{SOURCE_SERVICE_NAME}={SOURCE_CREDENTIAL_ENV}"
+_MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
+_MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
+_CREDENTIAL_MAPPING_ENTRY = re.compile(
+    r"(?P<service>[A-Za-z0-9._-]+)=(?P<variable>[A-Za-z_][A-Za-z0-9_]*)\Z"
+)
+
+
+def _validated_credential_mappings(existing: str | None) -> list[str]:
+    """Validate and normalize caller mappings without exposing their values."""
+
+    if existing is None:
+        return []
+    if not isinstance(existing, str):
+        raise EnvironmentError(
+            "caller supervisor credential mapping must be a string"
+        )
+    if len(existing) > _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH:
+        raise EnvironmentError(
+            "caller supervisor credential mapping exceeds 4096 characters"
+        )
+    entries = [entry.strip() for entry in existing.split(",") if entry.strip()]
+    if len(entries) > _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES:
+        raise EnvironmentError(
+            "caller supervisor credential mapping exceeds 16 entries"
+        )
+    normalized: list[str] = []
+    services: set[str] = set()
+    for entry in entries:
+        match = _CREDENTIAL_MAPPING_ENTRY.fullmatch(entry)
+        if match is None:
+            raise EnvironmentError(
+                "caller supervisor credential mapping contains a malformed entry"
+            )
+        service = match["service"]
+        variable = match["variable"]
+        if service in services:
+            raise EnvironmentError(
+                "caller supervisor credential mapping contains a duplicate service"
+            )
+        services.add(service)
+        if variable == SOURCE_CREDENTIAL_ENV and service != SOURCE_SERVICE_NAME:
+            raise EnvironmentError(
+                "caller supervisor credential mapping must not rebind the "
+                f"generated {SOURCE_CREDENTIAL_ENV} to {service}"
+            )
+        if service == SOURCE_SERVICE_NAME and variable != SOURCE_CREDENTIAL_ENV:
+            raise EnvironmentError(
+                "caller supervisor credential mapping for "
+                f"{SOURCE_SERVICE_NAME} conflicts with the generated source profile"
+            )
+        normalized.append(f"{service}={variable}")
+    return normalized
+
+
+def _add_source_credential_mapping(existing: str | None) -> str:
+    """Add the generated source mapping without replacing caller entries."""
+
+    entries = _validated_credential_mappings(existing)
+    if API_SOURCE_CREDENTIAL_MAPPING not in entries:
+        if len(entries) >= _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES:
+            raise EnvironmentError(
+                "caller supervisor credential mapping leaves no room for the "
+                "generated source mapping"
+            )
+        entries.append(API_SOURCE_CREDENTIAL_MAPPING)
+    result = ",".join(entries)
+    if len(result) > _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH:
+        raise EnvironmentError(
+            "caller supervisor credential mapping exceeds 4096 characters "
+            "after adding the generated source mapping"
+        )
+    return result
+
+
+def _available_credential_mappings(
+    value: str, environment: Mapping[str, str]
+) -> str | None:
+    """Keep caller mappings whose named variables are available to a child."""
+
+    entries: list[str] = []
+    for entry in value.split(","):
+        entry = entry.strip()
+        match = _CREDENTIAL_MAPPING_ENTRY.fullmatch(entry)
+        if match is not None and match["variable"] in environment:
+            entries.append(f"{match['service']}={match['variable']}")
+    return ",".join(entries) if entries else None
 
 
 _AGENT_MANIFEST_FIELDS = frozenset(
@@ -167,6 +259,41 @@ def _supervisor_data_dir(supervisor_args: Sequence[str]) -> Path | None:
     return None
 
 
+def _prepare_runner_owned_review_roots(
+    supervisor_data_dir: Path | None,
+    *,
+    run_root: Path,
+) -> None:
+    """Prepare retained-input roots for a runner-owned supervisor.
+
+    The stdio proxy starts the real supervisor lazily, after the Claude
+    adapter has built its command.  A disposable per-trial data directory
+    therefore has no ``captures`` or ``blueprints`` directories yet when the
+    adapter validates its narrow read grant.  Create only those two roots
+    when the data directory is inside this trial's private root; never create
+    anything in an externally supplied supervisor directory.
+    """
+
+    if supervisor_data_dir is None:
+        return
+    resolved_data_dir = supervisor_data_dir.expanduser().resolve()
+    resolved_run_root = run_root.expanduser().resolve()
+    try:
+        resolved_data_dir.relative_to(resolved_run_root)
+    except ValueError:
+        return
+    if resolved_data_dir != resolved_run_root:
+        resolved_data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # ``mkdir(mode=...)`` does not tighten an existing directory.  These roots
+    # hold supervisor-owned retained inputs, so keep the privacy boundary even
+    # when a pre-existing state directory was created with a wider mode.
+    resolved_data_dir.chmod(0o700)
+    for name in RETAINED_REVIEW_ROOT_NAMES:
+        retained_root = resolved_data_dir / name
+        retained_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        retained_root.chmod(0o700)
+
+
 def _supervisor_command(command: str | Path | Sequence[str]) -> tuple[str, ...]:
     """Return a direct supervisor argv without involving a shell."""
 
@@ -215,13 +342,27 @@ def _activate_workflow_control(
         str(resolved_bundle),
     )
     try:
+        activation_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key in _SESSION_ENVIRONMENT_ALLOWLIST
+        }
+        activation_environment.update(environment)
+        # Activation does not execute a product transform.  Never let the
+        # generated source credential reach it, including via the ambient
+        # parent environment.  A caller-supplied trusted mapping is retained
+        # when explicitly supplied; the generated mapping is omitted by the
+        # live preparation path below.
+        activation_environment.pop(SOURCE_CREDENTIAL_ENV, None)
+        if TRUSTED_CREDENTIAL_ENVS_ENV not in environment:
+            activation_environment.pop(TRUSTED_CREDENTIAL_ENVS_ENV, None)
         completed = subprocess.run(
             argv,
             check=False,
             capture_output=True,
             text=True,
             timeout=30,
-            env={**os.environ, **environment},
+            env=activation_environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise EnvironmentError(f"workflow-v2 activation could not run: {exc}") from exc
@@ -551,7 +692,7 @@ def render_source_profile(
         "  name: scenario-local",
         "spec:",
         "  services:",
-        "    - name: api-source",
+        f"    - name: {SOURCE_SERVICE_NAME}",
         "      driver: nxd:generic-secrets:1.0.0",
         "      attributes:",
         "        - key: base_url",
@@ -568,7 +709,7 @@ def render_source_profile(
                 f"          value: {json.dumps(str(getattr(auth, 'scheme', 'Bearer')))}",
                 "          public: true",
                 "        - key: credential_env",
-                '          value: "NXD_EVAL_SOURCE_TOKEN"',
+                f'          value: "{SOURCE_CREDENTIAL_ENV}"',
                 "          public: true",
                 "        - key: auth_refresh_path",
                 f"          value: {json.dumps(str(getattr(auth, 'refresh_path', '')))}",
@@ -737,15 +878,29 @@ class RunEnvironment:
                         "mcp",
                         "serve",
                     )
-                # Whatever --data-dir the supervisor was actually given is the
-                # directory whose release records describe this run's builds.
-                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
                 # Host-home access is an explicit allowance for the agent
                 # process (typically to read a configured Claude profile),
                 # not an implicit allowance for the supervisor or its
                 # descendants.  Keep this invariant even when a caller
                 # supplies additional supervisor variables.
                 supervisor_environment = dict(self.supervisor_environment or {})
+                caller_trusted_credential_mapping = supervisor_environment.get(
+                    TRUSTED_CREDENTIAL_ENVS_ENV
+                )
+                if caller_trusted_credential_mapping is not None:
+                    normalized_mapping = _validated_credential_mappings(
+                        caller_trusted_credential_mapping
+                    )
+                    caller_trusted_credential_mapping = ",".join(normalized_mapping)
+                    if caller_trusted_credential_mapping:
+                        supervisor_environment[TRUSTED_CREDENTIAL_ENVS_ENV] = (
+                            caller_trusted_credential_mapping
+                        )
+                    else:
+                        caller_trusted_credential_mapping = None
+                        supervisor_environment.pop(
+                            TRUSTED_CREDENTIAL_ENVS_ENV, None
+                        )
                 supervisor_environment.update(
                     {"HOME": str(self.home), "USERPROFILE": str(self.home)}
                 )
@@ -754,7 +909,12 @@ class RunEnvironment:
                     if auth is not None:
                         # The source token belongs to the trusted supervisor
                         # and its transform children, never to the agent shell.
-                        supervisor_environment["NXD_EVAL_SOURCE_TOKEN"] = auth.token
+                        supervisor_environment[SOURCE_CREDENTIAL_ENV] = auth.token
+                        supervisor_environment[TRUSTED_CREDENTIAL_ENVS_ENV] = (
+                            _add_source_credential_mapping(
+                                supervisor_environment.get(TRUSTED_CREDENTIAL_ENVS_ENV)
+                            )
+                        )
                 if self.knobs.broker_fault is not None:
                     supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
                         self.attempt,
@@ -764,9 +924,34 @@ class RunEnvironment:
                         self.knobs.broker_fault.environment_for_attempt(self.attempt)  # type: ignore[union-attr]
                     )
 
+                # Whatever --data-dir the supervisor was actually given is the
+                # directory whose release records describe this run's builds.
+                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
+                # The proxy starts the real supervisor lazily, but the Claude
+                # adapter validates the retained-input roots before its
+                # process starts.  This directory is inside the disposable
+                # trial root, so preparing the two narrow roots is runner-owned
+                # setup rather than mutation of external supervisor state.
+                _prepare_runner_owned_review_roots(supervisor_data_dir, run_root=base)
+
                 if self.workflow_activation_bundle is not None:
                     activation_environment = dict(supervisor_environment)
-                    activation_environment.pop("NXD_EVAL_SOURCE_TOKEN", None)
+                    activation_environment.pop(SOURCE_CREDENTIAL_ENV, None)
+                    activation_environment.pop(TRUSTED_CREDENTIAL_ENVS_ENV, None)
+                    if caller_trusted_credential_mapping is not None:
+                        available_environment = {
+                            key: value
+                            for key, value in os.environ.items()
+                            if key in _SESSION_ENVIRONMENT_ALLOWLIST
+                        }
+                        available_environment.update(activation_environment)
+                        available_environment.pop(SOURCE_CREDENTIAL_ENV, None)
+                        retained_mapping = _available_credential_mappings(
+                            caller_trusted_credential_mapping,
+                            available_environment,
+                        )
+                        if retained_mapping is not None:
+                            activation_environment[TRUSTED_CREDENTIAL_ENVS_ENV] = retained_mapping
                     activation_digest = _activate_workflow_control(
                         self.supervisor_command,
                         data_dir=supervisor_data_dir,

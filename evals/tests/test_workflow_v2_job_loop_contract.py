@@ -7,8 +7,11 @@ reordered policy/review step fails before a live scenario is run.
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import re
 from pathlib import Path
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +40,46 @@ SCHEDULING = JOB_LOOP / "reference" / "scheduling.md"
 BUILD_RECORD = JOB_LOOP / "reference" / "build-record.md"
 SOURCE_MATERIALIZATION = JOB_LOOP / "reference" / "source-materialization.md"
 FAILURE_HANDLING = JOB_LOOP / "reference" / "failure-handling.md"
+
+
+def _closed_v3_shapes() -> dict[str, object]:
+    """Read the in-repository canonical v3 schema; fail closed if it moves."""
+
+    path = JOB_LOOP / "scripts" / "dp_spec_authoring.py"
+    assert path.is_file(), f"canonical v3 authoring module is missing: {path}"
+    spec = importlib.util.spec_from_file_location("_workflow_v2_dp_spec_authoring", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    payload_schema = module.PROPOSAL_SCHEMA["properties"]["proposal"]
+    source_schema = payload_schema["properties"]["inputs"]["items"]["properties"][
+        "expectations"
+    ]["items"]
+    contract_schema = payload_schema["properties"]["contracts"]["items"]
+    decision_schema = payload_schema["properties"]["decisions"]["items"]
+
+    def item_required_keys(name: str) -> frozenset[str]:
+        item_schema = payload_schema["properties"][name]["items"]
+        return frozenset(item_schema["required"])
+
+    return {
+        "payload_keys": frozenset(payload_schema["required"]),
+        "input_keys": item_required_keys("inputs"),
+        "model_keys": item_required_keys("models"),
+        "transform_keys": item_required_keys("transform"),
+        "output_keys": item_required_keys("outputs"),
+        "open_question_keys": item_required_keys("open_questions"),
+        "source_keys": frozenset(source_schema["required"]),
+        "contract_keys": frozenset(contract_schema["required"]),
+        "decision_keys": frozenset(decision_schema["required"]),
+        "decision_statuses": frozenset(module.DECISION_STATUS_VALUES),
+        "delivery": dict(module.FIXED_DELIVERY),
+    }
 
 
 def _reachable_installed_docs() -> set[Path]:
@@ -160,6 +203,18 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Copy all four integers",
         "may include separator blank lines",
         "Do not trim or widen that range",
+        "Treat source paths as opaque strings",
+        "Copy the exact parser key returned by the source map",
+        "including the `v3:` prefix",
+        "do not independently slugify, snake-case, or otherwise normalize it",
+        "The parser may normalize Markdown subsection ids to underscores while typed proposal ids are hyphenated",
+        "`v3:decisions[current_definition].text`",
+        "`v3:decisions[current-definition].text`",
+        "For that anchored entry, `provenance`, `source_spans`, and `echo.coverage` must use the target path",
+        "as required by the validator",
+        "the source path remains in `anchors`",
+        "Without an anchor, use the exact parser path directly",
+        "A missing `v3:` prefix or independently normalized id is a provenance/path failure",
         "prepare_recovery_id",
         "inspect_prepare_recovery",
         "complete `source_spans` map",
@@ -188,6 +243,11 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Do not patch a second named path",
     ):
         assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
+    assert "v3:decisions[current_definition].text` →\n`v3:decisions[current-definition].text" in WORKFLOW_V2.read_text(
+        encoding="utf-8"
+    )
+    assert "the parser's stable hyphenated ids" not in prepare
+    assert "`v3:decisions[current-status-definition].text`, never" not in prepare
     assert "typed_proposal_path" not in prepare
     assert "replace only that path's coordinates" not in prepare
 
@@ -265,6 +325,75 @@ def test_workflow_v2_contract_inventory_is_executable_and_exact():
     invariants = generator[generator.index("## Invariants") :]
     assert "never optional decoration" in invariants
     assert "Capture/preflight reject missing, extra, placeholder, or unwired contracts" in invariants
+
+
+def test_workflow_v2_skill_keeps_the_closed_v3_shape_reminder() -> None:
+    """The main skill must retain the pointer and the non-optional reminder."""
+    text = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+
+    assert "reference/workflow-v2.md" in text
+    assert "typed `proposal` payload is a closed v3 object" in text
+    assert "exactly 12 keys" in text
+    assert "frontmatter-only `name` and `workflow` do not belong" in text
+
+
+def test_workflow_v2_reference_matches_the_canonical_closed_v3_shapes() -> None:
+    """The copyable reference example must be a complete, exact payload."""
+    reference = WORKFLOW_V2.read_text(encoding="utf-8")
+    section = reference[reference.index("The `proposal` payload is a closed v3 object") :]
+    match = re.search(r"```json\n(.*?)\n```", section, flags=re.DOTALL)
+    assert match is not None, "reference must include a JSON closed-v3 payload example"
+    payload = json.loads(match.group(1))
+    shapes = _closed_v3_shapes()
+
+    assert set(payload) == shapes["payload_keys"]
+    assert len(shapes["payload_keys"]) == 12
+    for key in shapes["payload_keys"]:
+        assert f'`{key}`' in section, f"reference does not name canonical payload key: {key}"
+    assert all(set(item) == shapes["input_keys"] for item in payload["inputs"])
+    assert all(set(item) == shapes["model_keys"] for item in payload["models"])
+    assert all(set(item) == shapes["transform_keys"] for item in payload["transform"])
+    assert all(set(item) == shapes["output_keys"] for item in payload["outputs"])
+    assert all(set(item) == shapes["decision_keys"] for item in payload["decisions"])
+    assert all(
+        item["status"] in shapes["decision_statuses"] for item in payload["decisions"]
+    )
+    assert all(
+        set(item) == shapes["open_question_keys"]
+        for item in payload["open_questions"]
+    )
+    assert payload["delivery"] == shapes["delivery"]
+
+    source_entries: dict[str, dict[str, object]] = {}
+    source_ids: list[str] = []
+    for item in payload["inputs"]:
+        for source in item["expectations"]:
+            assert set(source) == shapes["source_keys"]
+            source_ids.append(source["id"])
+            source_entries[source["id"]] = {
+                **source,
+                "attachment": f"input:{item['id']}",
+                "phase": "pre_transform",
+            }
+    for item in payload["outputs"]:
+        for source in item["promises"]:
+            assert set(source) == shapes["source_keys"]
+            source_ids.append(source["id"])
+            source_entries[source["id"]] = {
+                **source,
+                "attachment": f"output:{item['id']}",
+                "phase": "post_transform",
+            }
+
+    assert source_entries
+    assert len(source_ids) == len(set(source_ids))
+    contract_ids = [item["id"] for item in payload["contracts"]]
+    assert len(contract_ids) == len(set(contract_ids))
+    assert set(contract_ids) == set(source_entries)
+    for contract in payload["contracts"]:
+        assert set(contract) == shapes["contract_keys"]
+        expected = source_entries[contract["id"]]
+        assert contract == expected
 
 
 def test_contract_inventory_mismatch_has_one_semantics_preserving_repair():
@@ -493,7 +622,8 @@ def test_review_dispatch_is_one_conversation_child_with_the_canonical_marker():
         "retained_capture_root: <exact retained_capture_root from review_input>",
         "retained_blueprint_path: <exact retained_blueprint_path from review_input>",
         "Sanitized original request: <complete request with credentials replaced>",
-        "review_time_budget_seconds: 120",
+        "review_time_budget_seconds: 300",
+        "review_inspection_cutoff_seconds: 240",
         "Load and follow nxd-review-closure.",
         "main thread must not invoke `Skill(nxd-review-closure)`",
         "canonical marker line",

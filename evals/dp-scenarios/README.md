@@ -324,6 +324,22 @@ not denied, so treat "not granted" as "not auto-approved", not "unreachable".
 Deny rules also apply to a `Task` subagent, so a denied shell stays denied one
 level down.
 
+The live runner's optional `supervisor_environment` may carry
+`NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS` as a comma-separated list of
+`service=ENVIRONMENT_VARIABLE` names. The mapping contains names only, is limited
+to 16 entries and 4096 characters, and duplicate services, malformed entries, or
+rebinding the runner-generated `NXD_EVAL_SOURCE_TOKEN` are rejected before the
+supervisor starts. An authenticated source uses one of those entries for the
+runner-generated mapping, leaving at most 15 caller entries. Each named variable
+must also be present in that explicit `supervisor_environment` for the MCP serve
+child; ambient shell variables are not inherited by that child. Workflow
+activation is a separate supervisor invocation and may use explicitly retained
+caller variables. `api-source` is reserved for the runner-generated source and
+cannot be mapped to another variable. An authenticated mock API source adds its own
+`api-source=NXD_EVAL_SOURCE_TOKEN` mapping for the trusted supervisor child; the
+credential value is never placed in the agent environment or workflow activation
+environment.
+
 #### Driving the operator with a model
 
 ```bash

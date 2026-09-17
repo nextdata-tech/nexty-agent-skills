@@ -31,10 +31,14 @@ from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner.review_guard import (
+    REVIEW_BUDGET_LINE,
     REVIEW_DEADLINE_MS,
     REVIEW_DISPATCH_PENDING,
+    REVIEW_INSPECTION_CUTOFF_LINE,
     RELAY_PENDING,
     REPORT_IN_FLIGHT,
+    REVIEW_RESERVE_INSTRUCTION,
+    RETAINED_REVIEW_ROOT_NAMES,
     STATE_VERSION,
     settings_payload,
     write_initial_state,
@@ -72,7 +76,10 @@ Replace only closure_path and review_round_index: use a relative closure path
 and the next zero-based index; keep the other constants unchanged. Follow the
 installed Nexty skills and answer the operator directly after each turn. The
 runner owns machine evidence; do not create or edit artifacts/ files or
-ledger-extra.json.
+ledger-extra.json. Supervisor review_input paths are bound to the current
+capture generation; use only the exact current pair and report an incomplete
+handoff if either path is unavailable. Never substitute an older capture,
+scratch path, or mutable authoring root.
 
 For generated-data-product workflow-v2 construction, after the prose blueprint
 passes deterministic validation, write the complete caller-authored typed
@@ -215,7 +222,8 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "retained_blueprint_path: <exact retained_blueprint_path from review_input>\n"
     "Load and follow nxd-review-closure.\n"
     "Sanitized original request: <the complete request with credentials replaced>\n"
-    f"review_time_budget_seconds: {REVIEW_DEADLINE_MS / 1000:.0f}\n"
+    f"{REVIEW_BUDGET_LINE}\n"
+    f"{REVIEW_INSPECTION_CUTOFF_LINE}\n"
     "NXD_REVIEW_DISPATCH {\"closure_path\":\"closure\",\"request_contract\":\"sanitized_original_request\",\"return\":\"claims_only\",\"review_round_index\":0}\n"
     "Replace only closure_path and review_round_index: use the relative "
     "closure path and the next zero-based index; keep request_contract and "
@@ -230,9 +238,14 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "intermediate child text, emit at most one concise progress checkpoint to "
     "the owning thread around halfway through the budget; progress is "
     "informational and does not extend or reset the deadline. "
+    f"{REVIEW_RESERVE_INSTRUCTION} "
     "The main marker line must use exactly the NXD_REVIEW_DISPATCH keys and "
     "constant values; the example's 0 is only the first-round index, and actual "
     "dispatches use the next zero-based index. "
+    "Use only the exact retained paths from that matching review_input. If either "
+    "fresh retained path is unavailable to the current session, stop and report "
+    "an incomplete handoff; never substitute an older capture, scratch path, "
+    "mutable authoring root, or path from another requirement. "
     "The main thread must not invoke "
     "Skill(nxd-review-closure) or inspect the retained capture itself; after the "
     "child returns, treat that result as the complete review, do not call Skill, "
@@ -1186,6 +1199,18 @@ class ClaudeCodeAdapter:
 
         return self._last_mcp_call
 
+    def _review_roots(self) -> tuple[Path, ...]:
+        """Return only the supervisor roots containing retained review input."""
+
+        state_dir = self._state_dir
+        if state_dir is None:
+            return ()
+        state_dir = state_dir.expanduser().resolve()
+        # These are the nxd workflow-v2 supervisor's retained-input roots.
+        # Keep the layout explicit and narrow: the adapter must not expose the
+        # rest of the supervisor data directory to the owning conversation.
+        return tuple(state_dir / name for name in RETAINED_REVIEW_ROOT_NAMES)
+
     def build_claude_command(
         self,
         *,
@@ -1245,6 +1270,13 @@ class ClaudeCodeAdapter:
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        # The supervisor retains the fresh capture and approved blueprint
+        # outside the agent workspace. Grant only those content roots to
+        # Claude, not the whole supervisor data directory, which may contain
+        # unrelated state. The nxd workflow-v2 supervisor owns these roots;
+        # generation-specific paths are then supplied by the capture result.
+        for review_root in self._review_roots():
+            command.extend(("--add-dir", str(review_root)))
         effective_settings = settings_path or self._review_guard_settings
         if effective_settings is not None:
             command.extend(("--settings", str(effective_settings), "--include-hook-events"))
@@ -1271,6 +1303,16 @@ class ClaudeCodeAdapter:
 
         if self._process is not None:
             return
+        if self.mcp_config is not None and self._state_dir is None:
+            raise ClaudeAdapterError(
+                "--mcp-config runs require --supervisor-data-dir so live build "
+                "evidence and retained review inputs have a runner-owned source"
+            )
+        if self.mcp_config is not None and self._state_dir is not None:
+            if not self._state_dir.exists() or not self._state_dir.is_dir():
+                raise ClaudeAdapterError(
+                    "--supervisor-data-dir must be an existing supervisor data directory"
+                )
         required_paths = [(self.claude, "claude"), (self.plugin_dir, "plugin directory")]
         if self.mcp_config is None:
             required_paths.extend(((self.desktop_supervisor, "desktop supervisor"), (self.desktop_python, "desktop Python")))
@@ -1282,7 +1324,37 @@ class ClaudeCodeAdapter:
         guard_dir = Path(self._review_guard_temp.name)
         self._review_guard_state = guard_dir / "state.json"
         self._review_guard_settings = guard_dir / "settings.json"
-        write_initial_state(self._review_guard_state, workspace_root=Path.cwd())
+        if self.mcp_config is None:
+            self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
+            state_dir = Path(self._temp.name) / "desktop-state"
+            self._state_dir = state_dir
+            stdio_state_dir = state_dir
+        else:
+            stdio_state_dir = None
+        review_roots = self._review_roots()
+        if self.mcp_config is None:
+            # The adapter owns this temporary supervisor state directory, so
+            # it may create the narrowly exposed roots before Claude starts.
+            for review_root in review_roots:
+                review_root.mkdir(parents=True, exist_ok=True)
+        elif any(not root.is_dir() for root in review_roots):
+            # An externally managed supervisor must establish its workflow-v2
+            # retained-input roots itself. Do not create directories inside a
+            # user-supplied data directory and mistake them for supervisor
+            # evidence or hide a layout mismatch.
+            raise ClaudeAdapterError(
+                "--supervisor-data-dir is missing the nxd workflow-v2 retained-input "
+                f"roots: expected {' and '.join(f'{name}/' for name in RETAINED_REVIEW_ROOT_NAMES)}"
+            )
+        write_initial_state(
+            self._review_guard_state,
+            workspace_root=Path.cwd(),
+            # An adapter-backed live run must fail closed when the supervisor
+            # data directory was not wired through. Keep an empty list as an
+            # explicit live sentinel; ``None`` remains reserved for replay
+            # hook fixtures that have no filesystem supervisor.
+            review_roots=review_roots,
+        )
         self._review_guard_settings.write_text(
             json.dumps(
                 settings_payload(
@@ -1296,11 +1368,8 @@ class ClaudeCodeAdapter:
             encoding="utf-8",
         )
         if self.mcp_config is None:
-            self._temp = tempfile.TemporaryDirectory(prefix="dp-scenario-claude-")
-            state_dir = Path(self._temp.name) / "desktop-state"
-            self._state_dir = state_dir
             stdio = self._desktop_stdio_type(
-                [str(self.desktop_supervisor), "--data-dir", str(state_dir), "mcp", "serve"],
+                [str(self.desktop_supervisor), "--data-dir", str(stdio_state_dir), "mcp", "serve"],
                 server_env={"NXD_DESKTOP_PYTHON": str(self.desktop_python)},
             )
             self._stdio = stdio.start()
@@ -1459,10 +1528,18 @@ class ClaudeCodeAdapter:
             )
         state, tool_use_id = snapshot
         if state == REVIEW_DISPATCH_PENDING:
+            # A new capture is pending before its replacement reviewer is
+            # accepted. Disarm the prior completed round here; the next
+            # accepted dispatch below will arm a fresh absolute clock. An
+            # accepted dispatch always carries its id, so this cannot cancel
+            # an active child deadline.
+            if not tool_use_id:
+                self._review_deadline_id = None
+                self._review_deadline_at = None
             # The first accepted dispatch starts one absolute clock. A
             # rewritten pending id is not a fresh review and must not grant
             # the child another full deadline.
-            if tool_use_id and self._review_deadline_at is None:
+            elif self._review_deadline_at is None:
                 self._review_deadline_id = tool_use_id
                 self._review_deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         elif (
@@ -1677,7 +1754,15 @@ class ClaudeCodeAdapter:
             return
         safe = {
             key: state[key]
-            for key in ("version", "state", "workflow", "revision", "generation", "review_round_index")
+            for key in (
+                "version",
+                "state",
+                "workflow",
+                "revision",
+                "generation",
+                "review_round_index",
+                "review_input_error",
+            )
             if key in state and isinstance(state[key], (str, int)) and not isinstance(state[key], bool)
         }
         with contextlib.suppress(OSError):
