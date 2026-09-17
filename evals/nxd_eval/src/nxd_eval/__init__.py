@@ -21,6 +21,7 @@ from .dependencies import DependencyCheckError
 from .gold import gold
 from .metrics import reliability_score, wilson_accuracy
 from .report import BucketCard, BucketDelta, Report
+from .session_isolation import SessionIsolationError
 from .task import MCPConnectionError, run_suite
 from .stats import (
     ConfidenceInterval,
@@ -61,6 +62,7 @@ __all__ = [
     "reliability_score",
     # run + report + certify (the read side)
     "MCPConnectionError",
+    "SessionIsolationError",
     "run_suite",
     "Report",
     "BucketCard",

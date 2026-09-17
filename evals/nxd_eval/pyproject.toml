@@ -1,6 +1,6 @@
 [project]
 name = "nxd-eval"
-version = "0.1.0"
+version = "0.2.0"
 description = "Inspect-based evaluation framework for the Nexty skill pack — deterministic-EX + judged scoring with a Wilson/McNemar/FDR statistics contract."
 requires-python = ">=3.11"
 dependencies = [

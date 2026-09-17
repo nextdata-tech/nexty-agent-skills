@@ -82,6 +82,22 @@ pipelines are currently able to fail independently.
 uv sync --project evals/nxd_eval
 ```
 
+### Stateful MCP servers
+
+If an MCP server retains message history across a connection, opt into a fresh
+connection for every case while retaining one collated `.eval` artifact:
+
+```python
+from nxd_eval import run_suite
+
+log_path = run_suite(suite, server_factory=server_factory, isolate_sessions=True)
+```
+
+The isolated runner completes the remaining cases if one case fails and writes
+the partial log atomically after each completed case. It then raises
+`SessionIsolationError` (whose `log_path` points at that artifact), preventing a
+partial run from being accidentally reported or certified as a successful suite.
+
 ### 2. Prove the substrate (no model, no API key needed)
 
 ```bash
