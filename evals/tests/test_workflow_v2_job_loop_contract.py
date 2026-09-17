@@ -203,16 +203,18 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Copy all four integers",
         "may include separator blank lines",
         "Do not trim or widen that range",
-        "Treat keys in `provenance`, `source_spans`, and `echo.coverage` as opaque parser paths",
-        "including the `v3:` prefix and the parser's stable hyphenated ids",
-        "`v3:decisions[current-status-definition].text`",
-        "never `decisions[current-status-definition]`",
-        "`v3:decisions[current_status_definition].text`",
-        "never slugify, snake-case, or otherwise normalize them",
-        "Keep the source parser path and typed proposal path distinct",
-        "exact parser path in the `source_path` side of the `anchors`",
-        "Do not silently substitute that target path for the parser key or its span",
-        "A missing prefix or normalized id is a provenance/path failure",
+        "Treat source paths as opaque strings",
+        "Copy the exact parser key returned by the source map",
+        "including the `v3:` prefix",
+        "do not independently slugify, snake-case, or otherwise normalize it",
+        "The parser may normalize Markdown subsection ids to underscores while typed proposal ids are hyphenated",
+        "`v3:decisions[current_definition].text`",
+        "`v3:decisions[current-definition].text`",
+        "For that anchored entry, `provenance`, `source_spans`, and `echo.coverage` must use the target path",
+        "as required by the validator",
+        "the source path remains in `anchors`",
+        "Without an anchor, use the exact parser path directly",
+        "A missing `v3:` prefix or independently normalized id is a provenance/path failure",
         "prepare_recovery_id",
         "inspect_prepare_recovery",
         "complete `source_spans` map",
@@ -241,6 +243,11 @@ def test_prepare_wire_shape_binds_the_real_typed_proposal_before_consent():
         "Do not patch a second named path",
     ):
         assert marker in prepare, f"typed proposal prepare contract lost: {marker}"
+    assert "v3:decisions[current_definition].text` →\n`v3:decisions[current-definition].text" in WORKFLOW_V2.read_text(
+        encoding="utf-8"
+    )
+    assert "the parser's stable hyphenated ids" not in prepare
+    assert "`v3:decisions[current-status-definition].text`, never" not in prepare
     assert "typed_proposal_path" not in prepare
     assert "replace only that path's coordinates" not in prepare
 
