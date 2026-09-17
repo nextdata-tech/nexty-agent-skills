@@ -982,16 +982,6 @@ class RunEnvironment:
                 # than mutation of external supervisor state.
                 _prepare_runner_owned_review_roots(supervisor_data_dir, run_root=base)
 
-                # Whatever --data-dir the supervisor was actually given is the
-                # directory whose release records describe this run's builds.
-                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
-                # The proxy starts the real supervisor lazily, but the Claude
-                # adapter validates the retained-input roots before its
-                # process starts.  This directory is inside the disposable
-                # trial root, so preparing the two narrow roots is runner-owned
-                # setup rather than mutation of external supervisor state.
-                _prepare_runner_owned_review_roots(supervisor_data_dir, run_root=base)
-
                 if self.workflow_activation_bundle is not None:
                     activation_environment = dict(supervisor_environment)
                     activation_environment.pop(SOURCE_CREDENTIAL_ENV, None)

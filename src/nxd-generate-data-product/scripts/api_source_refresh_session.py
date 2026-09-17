@@ -286,6 +286,10 @@ class RefreshingSession(requests.Session):
                 rewind()
                 continue
             if hook_error is not None:
+                # A response-hook exception means dlt will not receive the
+                # response object. Close it before propagating the terminal
+                # hook error so an exhausted retry cannot leak its connection.
+                response.close()
                 raise hook_error
             return response
 

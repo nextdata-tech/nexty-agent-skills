@@ -359,6 +359,51 @@ def test_response_hook_429_uses_the_bounded_retry_policy(
     assert calls[1]["closed"] is False
 
 
+def test_response_hook_second_401_fails_after_one_refresh(
+    recipe_namespace, monkeypatch
+):
+    calls = _install_transport(
+        recipe_namespace,
+        monkeypatch,
+        [
+            _HookErrorPlan(401, {"error": "expired"}),
+            (200, {"access_token": "rotated-test-token"}, {}),
+            _HookErrorPlan(401, {"error": "still expired"}),
+        ],
+    )
+    session = _new_session(recipe_namespace)
+
+    with pytest.raises(RuntimeError, match="one refresh"):
+        session.send(_prepared_request(recipe_namespace))
+
+    assert len(calls) == 3
+    assert all(call["closed"] is True for call in calls)
+
+
+def test_response_hook_second_429_is_raised_and_closed(
+    recipe_namespace, monkeypatch
+):
+    requests_module = _requests_module(recipe_namespace)
+    calls = _install_transport(
+        recipe_namespace,
+        monkeypatch,
+        [
+            _HookErrorPlan(429, {"error": "rate limited"}, {"Retry-After": "0"}),
+            _HookErrorPlan(429, {"error": "still limited"}, {"Retry-After": "0"}),
+        ],
+    )
+    delays = []
+    monkeypatch.setattr(recipe_namespace["time"], "sleep", delays.append)
+    session = _new_session(recipe_namespace)
+
+    with pytest.raises(requests_module.exceptions.HTTPError, match="response hook failed"):
+        session.send(_prepared_request(recipe_namespace))
+
+    assert delays == [0.0]
+    assert len(calls) == 2
+    assert all(call["closed"] is True for call in calls)
+
+
 def test_custom_headers_reach_an_ordinary_request(recipe_namespace, monkeypatch):
     calls = _install_transport(
         recipe_namespace,
