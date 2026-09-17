@@ -1068,6 +1068,13 @@ def test_authenticated_source_credentials_are_supervisor_only(
         live_command=("agent",),
         supervisor_command=("supervisor",),
         supervisor_environment=caller_environment,
+        live_environment={
+            "NXD_EVAL_SOURCE_TOKEN": "live-source-only-in-test",
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": (
+                "api-source=NXD_EVAL_SOURCE_TOKEN"
+            ),
+            "SOURCE_TOKEN_ALIAS": f"Bearer {token}",
+        },
         workflow_activation_bundle=activation_bundle,
     ) as environment:
         server_environment = captured["server_environment"]
@@ -1093,6 +1100,7 @@ def test_authenticated_source_credentials_are_supervisor_only(
         assert "NXD_EVAL_SOURCE_TOKEN" not in agent_transport_environment
         assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in agent_transport_environment
         assert token not in agent_transport_environment.values()
+        assert all(token not in value for value in agent_transport_environment.values())
 
 
 def test_workflow_activation_drops_ambient_only_caller_credential_mapping(
@@ -1510,8 +1518,6 @@ def test_workflow_activation_strips_source_credentials_from_ambient_environment(
     assert captured["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"] == "caller=CALLER_TOKEN"
     assert "ambient-secret" not in captured.values()
     assert "explicit-secret" not in captured.values()
-
-
 def test_workflow_activation_only_receives_allowlisted_and_explicit_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1538,6 +1544,41 @@ def test_workflow_activation_only_receives_allowlisted_and_explicit_environment(
     assert captured["WAREHOUSE_TOKEN"] == "explicit-warehouse-token"
     assert "OPENAI_API_KEY" not in captured
     assert "CUSTOM_SUPERVISOR_TOKEN" not in captured
+
+
+def test_workflow_activation_diagnostics_redact_source_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "activation.json"
+    bundle.write_text('{}\n', encoding="utf-8")
+    monkeypatch.setenv("NXD_EVAL_SOURCE_TOKEN", "ambient-secret")
+    monkeypatch.setenv(
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
+        "api-source=NXD_EVAL_SOURCE_TOKEN",
+    )
+
+    def run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del argv, kwargs
+        return subprocess.CompletedProcess(
+            "supervisor",
+            7,
+            "source=ambient-secret\n",
+            "source=ambient-secret",
+        )
+
+    monkeypatch.setattr(environment_module.subprocess, "run", run)
+    with pytest.raises(RunEnvironmentError) as excinfo:
+        environment_module._activate_workflow_control(
+            "supervisor",
+            data_dir=tmp_path / "desktop-state",
+            bundle=bundle,
+            environment={"NXD_EVAL_SOURCE_TOKEN": "explicit-secret"},
+        )
+
+    detail = str(excinfo.value)
+    assert "ambient-secret" not in detail
+    assert "explicit-secret" not in detail
+    assert "<redacted>" in detail
 
 
 def test_workflow_activation_fails_closed_without_confirmation(

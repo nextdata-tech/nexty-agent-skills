@@ -1122,6 +1122,10 @@ def test_openai_key_is_stripped_from_the_spawned_agent_environment(
     """
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-live-operator-key")
+    monkeypatch.setenv("NXD_EVAL_SOURCE_TOKEN", "source-only-in-test")
+    monkeypatch.setenv(
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS", "api-source=NXD_EVAL_SOURCE_TOKEN"
+    )
     monkeypatch.setenv("DP_ADAPTER_ENV_CANARY", "present")
 
     environment = _spawned_claude_environment(tmp_path, monkeypatch)
@@ -1132,7 +1136,10 @@ def test_openai_key_is_stripped_from_the_spawned_agent_environment(
     variable_names = set(environment)
 
     assert "OPENAI_API_KEY" not in variable_names
+    assert "NXD_EVAL_SOURCE_TOKEN" not in variable_names
+    assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in variable_names
     assert all("sk-live-operator-key" not in value for value in environment.values())
+    assert all("source-only-in-test" not in value for value in environment.values())
     # The strip is targeted, not a blanket environment reset.
     assert environment["DP_ADAPTER_ENV_CANARY"] == "present"
     assert environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"

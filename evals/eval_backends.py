@@ -63,6 +63,12 @@ _CREDENTIAL_ENV_KEY = re.compile(
     r"(?:key|token|secret|credential|password)|(?:key|token|secret|credential|password).*"
     r"(?:anthropic|openai|claude|api|access|secret|bearer|private)"
 )
+_RESERVED_CREDENTIAL_ENV_KEYS = frozenset(
+    {
+        "NXD_EVAL_SOURCE_TOKEN",
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
+    }
+)
 
 
 def source_access_audit(
@@ -554,7 +560,10 @@ class ClaudeBackend:
             env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
         if credential_isolation:
             for key in tuple(env):
-                if _CREDENTIAL_ENV_KEY.search(key):
+                if (
+                    key in _RESERVED_CREDENTIAL_ENV_KEYS
+                    or _CREDENTIAL_ENV_KEY.search(key)
+                ):
                     env.pop(key, None)
         return env
 
@@ -845,7 +854,11 @@ class ClaudeBackend:
             skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
             mcp_config=mcp_config, strict_mcp_config=strict_mcp_config,
         )
-        env = self._agent_env(env_overrides, path_prepend)
+        env = self._agent_env(
+            env_overrides,
+            path_prepend,
+            credential_isolation=stdio_session is not None,
+        )
 
         deadline = time.monotonic() + timeout_s
         try:

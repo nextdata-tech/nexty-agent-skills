@@ -51,6 +51,10 @@ from dp_scenarios.failure_reasons import (
 )
 
 
+SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
+TRUSTED_CREDENTIAL_ENVS_ENV = "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"
+
+
 DEFAULT_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
 
 This block is harness mechanics only: where things are, which channels exist,
@@ -1394,6 +1398,11 @@ class ClaudeCodeAdapter:
         # unrecoverable: an agent under test that can read the key can call the
         # same provider the operator does.
         environment.pop("OPENAI_API_KEY", None)
+        # These names are reserved for the runner-owned supervisor path. The
+        # direct adapter entrypoint must not make them visible to Claude just
+        # because its parent process happened to carry the source credential.
+        environment.pop(SOURCE_CREDENTIAL_ENV, None)
+        environment.pop(TRUSTED_CREDENTIAL_ENVS_ENV, None)
         # Subagents must complete inside the turn that launched them.  The CLI
         # runs them in the background by default, returning only "Async agent
         # launched successfully" and delivering the reply as a task-notification
