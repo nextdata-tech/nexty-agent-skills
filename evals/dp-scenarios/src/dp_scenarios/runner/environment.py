@@ -53,6 +53,11 @@ _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
 _CREDENTIAL_MAPPING_ENTRY = re.compile(
     r"(?P<service>[A-Za-z0-9._-]+)=(?P<variable>[A-Za-z_][A-Za-z0-9_]*)\Z"
 )
+_SENSITIVE_ENV_KEY = re.compile(
+    r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
+    r"authorization|cookie|credential|bearer|private[_-]?key|grant)",
+    re.IGNORECASE,
+)
 
 
 def _validated_credential_mappings(existing: str | None) -> list[str]:
@@ -134,6 +139,43 @@ def _available_credential_mappings(
         if match is not None and match["variable"] in environment:
             entries.append(f"{match['service']}={match['variable']}")
     return ",".join(entries) if entries else None
+
+
+def _credential_environment_values(
+    *environments: Mapping[str, object],
+) -> set[str]:
+    """Collect values that must not cross an activation diagnostic boundary."""
+
+    mapped_variables: set[str] = set()
+    for environment in environments:
+        mapping = environment.get(TRUSTED_CREDENTIAL_ENVS_ENV)
+        if not isinstance(mapping, str):
+            continue
+        for entry in mapping.split(","):
+            match = _CREDENTIAL_MAPPING_ENTRY.fullmatch(entry.strip())
+            if match is not None:
+                mapped_variables.add(match["variable"])
+
+    values: set[str] = set()
+    for environment in environments:
+        for key, value in environment.items():
+            if not isinstance(key, str) or not isinstance(value, str) or not value:
+                continue
+            if (
+                key == SOURCE_CREDENTIAL_ENV
+                or key in mapped_variables
+                or _SENSITIVE_ENV_KEY.search(key)
+            ):
+                values.add(value)
+    return values
+
+
+def _redact_credential_values(value: str, sensitive_values: set[str]) -> str:
+    """Remove known credential values from a subprocess diagnostic."""
+
+    for secret in sorted(sensitive_values, key=len, reverse=True):
+        value = value.replace(secret, "<redacted>")
+    return value
 
 
 _AGENT_MANIFEST_FIELDS = frozenset(
@@ -341,6 +383,7 @@ def _activate_workflow_control(
         "--bundle",
         str(resolved_bundle),
     )
+    sensitive_values = _credential_environment_values(os.environ, environment)
     try:
         activation_environment = {
             key: value
@@ -365,9 +408,13 @@ def _activate_workflow_control(
             env=activation_environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise EnvironmentError(f"workflow-v2 activation could not run: {exc}") from exc
+        detail = _redact_credential_values(str(exc), sensitive_values)
+        raise EnvironmentError(
+            f"workflow-v2 activation could not run: {detail}"
+        ) from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[-2048:]
+        detail = _redact_credential_values(detail, sensitive_values)
         raise EnvironmentError(
             "workflow-v2 activation failed"
             + (f": {detail}" if detail else "")
@@ -904,17 +951,6 @@ class RunEnvironment:
                 supervisor_environment.update(
                     {"HOME": str(self.home), "USERPROFILE": str(self.home)}
                 )
-                if self._mock_source is not None:
-                    auth = self._mock_source.server.config.auth
-                    if auth is not None:
-                        # The source token belongs to the trusted supervisor
-                        # and its transform children, never to the agent shell.
-                        supervisor_environment[SOURCE_CREDENTIAL_ENV] = auth.token
-                        supervisor_environment[TRUSTED_CREDENTIAL_ENVS_ENV] = (
-                            _add_source_credential_mapping(
-                                supervisor_environment.get(TRUSTED_CREDENTIAL_ENVS_ENV)
-                            )
-                        )
                 if self.knobs.broker_fault is not None:
                     supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
                         self.attempt,
@@ -923,15 +959,29 @@ class RunEnvironment:
                     supervisor_environment.update(
                         self.knobs.broker_fault.environment_for_attempt(self.attempt)  # type: ignore[union-attr]
                     )
+                generated_source_token: str | None = None
+                if self._mock_source is not None:
+                    auth = self._mock_source.server.config.auth
+                    if auth is not None:
+                        # The source token belongs to the trusted supervisor
+                        # and its transform children, never to the agent shell.
+                        generated_source_token = auth.token
+                        supervisor_environment[SOURCE_CREDENTIAL_ENV] = auth.token
+                        supervisor_environment[TRUSTED_CREDENTIAL_ENVS_ENV] = (
+                            _add_source_credential_mapping(
+                                supervisor_environment.get(TRUSTED_CREDENTIAL_ENVS_ENV)
+                            )
+                        )
 
                 # Whatever --data-dir the supervisor was actually given is the
                 # directory whose release records describe this run's builds.
                 supervisor_data_dir = _supervisor_data_dir(supervisor_args)
-                # The proxy starts the real supervisor lazily, but the Claude
-                # adapter validates the retained-input roots before its
-                # process starts.  This directory is inside the disposable
-                # trial root, so preparing the two narrow roots is runner-owned
-                # setup rather than mutation of external supervisor state.
+                # The runner starts the real supervisor lazily behind the
+                # credential-free proxy bridge, but the Claude adapter
+                # validates the retained-input roots before its process starts.
+                # This directory is inside the disposable trial root, so
+                # preparing the two narrow roots is runner-owned setup rather
+                # than mutation of external supervisor state.
                 _prepare_runner_owned_review_roots(supervisor_data_dir, run_root=base)
 
                 if self.workflow_activation_bundle is not None:
@@ -966,21 +1016,29 @@ class RunEnvironment:
                         activation_digest
                     )
 
+                agent_transport_environment = {
+                    **self.agent_environment,
+                    **dict(self.live_environment or {}),
+                    # This value is resolved and validated from the exact
+                    # staged plugin by the local runner. Apply it last so
+                    # an incidental live-environment override cannot send
+                    # the agent back to a host-cached helper.
+                    **(
+                        {"NXD_JOB_HELPER_DIR": str(self.staged_job_helper_dir)}
+                        if self.staged_job_helper_dir is not None
+                        else {}
+                    ),
+                }
+                agent_transport_environment.pop(SOURCE_CREDENTIAL_ENV, None)
+                agent_transport_environment.pop(TRUSTED_CREDENTIAL_ENVS_ENV, None)
+                if generated_source_token is not None:
+                    for key, value in tuple(agent_transport_environment.items()):
+                        if generated_source_token in str(value):
+                            agent_transport_environment.pop(key, None)
+
                 transport = DesktopStdioTransport.create(
                     _desktop_command_builder(self.live_command, supervisor_data_dir),
-                    environment={
-                        **self.agent_environment,
-                        **dict(self.live_environment or {}),
-                        # This value is resolved and validated from the exact
-                        # staged plugin by the local runner. Apply it last so
-                        # an incidental live-environment override cannot send
-                        # the agent back to a host-cached helper.
-                        **(
-                            {"NXD_JOB_HELPER_DIR": str(self.staged_job_helper_dir)}
-                            if self.staged_job_helper_dir is not None
-                            else {}
-                        ),
-                    },
+                    environment=agent_transport_environment,
                     cwd=self.live_cwd or (base / "agent"),
                     server_command=self.supervisor_command,
                     server_args=supervisor_args,

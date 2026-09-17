@@ -3,9 +3,10 @@
 
 The scenario runner must not inherit Claude Desktop's global MCP registry. A
 DesktopStdioSession writes a private, strict MCP config and points it at this
-module's small proxy. The proxy starts exactly one server child, forwards
-newline-delimited JSON-RPC, and records a redacted trace. It is intentionally
-stdlib-only so setup is usable before the Desktop Python environment is ready.
+module's small proxy. The runner starts exactly one server child behind a
+credential-free local bridge; the proxy forwards newline-delimited JSON-RPC and
+records a redacted trace. It is intentionally stdlib-only so setup is usable
+before the Desktop Python environment is ready.
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ import json
 import math
 import os
 import re
+import secrets
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -102,9 +105,45 @@ def _safe_trusted_credential_mappings(
     return valid
 
 
+def _safe_server_environment(server_env: Mapping[str, str]) -> dict[str, str]:
+    """Build the supervisor environment without retaining untrusted secrets."""
+
+    env = {
+        key: os.environ[key]
+        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
+        if os.environ.get(key)
+    }
+    env.update({str(key): str(value) for key, value in server_env.items()})
+    mapping_key = _TRUSTED_CREDENTIAL_MAPPING_ENV
+    raw_mapping = env.get(mapping_key)
+    entries = (
+        _safe_trusted_credential_mappings(raw_mapping, set(env))
+        if raw_mapping is not None
+        else []
+    )
+    trusted_mapping_variables = {
+        entry.split("=", 1)[1] for entry in entries
+    }
+    for key in tuple(env):
+        if (
+            _SECRET_KEY.search(key)
+            and key not in _TRUSTED_EXPLICIT_SECRET_KEYS
+            and key not in trusted_mapping_variables
+        ):
+            env.pop(key, None)
+    if entries:
+        env[mapping_key] = ",".join(entries)
+    else:
+        env.pop(mapping_key, None)
+    # The source token is meaningful only with the runner-generated mapping.
+    # This also closes the direct-session path when a caller supplies the
+    # reserved variable without its matching service declaration.
+    if _SOURCE_CREDENTIAL_ENV not in trusted_mapping_variables:
+        env.pop(_SOURCE_CREDENTIAL_ENV, None)
+    return env
+
+
 PROXY_MODULE = Path(__file__).resolve()
-PROXY_CHILD_TERM_GRACE_S = 2.0
-PROXY_CHILD_KILL_REAP_GRACE_S = 0.5
 _TRACE_LOCK = threading.Lock()
 
 
@@ -261,9 +300,9 @@ def _request_workflow(request: Mapping[str, Any]) -> str | None:
 class DesktopStdioSession:
     """Own one isolated Desktop MCP config, proxy, trace, and cleanup scope.
 
-    The server is started by the private proxy command referenced by Claude's
-    config. This keeps all server descendants in the eval process lineage while
-    allowing the runner to retain a JSON-RPC trace.
+    The server is started by the runner after the private proxy connects over a
+    local socket. This keeps the credential-bearing child outside the evaluated
+    agent's process lineage while allowing the runner to retain a JSON-RPC trace.
     """
 
     SERVER_NAME = "nxd-desktop"
@@ -291,7 +330,7 @@ class DesktopStdioSession:
         if not command or not command[0]:
             raise ValueError("server_command must not be empty")
         self.server_command = tuple(command)
-        self.server_env = {str(k): str(v) for k, v in (server_env or {}).items()}
+        self.server_env = _safe_server_environment(server_env or {})
         self.server_name = server_name
         self.allowed_tools = (
             tuple(allowed_tools)
@@ -305,6 +344,12 @@ class DesktopStdioSession:
         self._temp: tempfile.TemporaryDirectory[str] | None = None
         self._root: Path | None = None
         self._attached: list[subprocess.Popen[Any]] = []
+        self._bridge_listener: socket.socket | None = None
+        self._bridge_connection: socket.socket | None = None
+        self._bridge_thread: threading.Thread | None = None
+        self._bridge_stop = threading.Event()
+        self._bridge_path: Path | None = None
+        self._server_process: subprocess.Popen[bytes] | None = None
         self._started = False
         self._closed = False
         self.setup_result = StdioOutcome("not_started")
@@ -330,6 +375,14 @@ class DesktopStdioSession:
         return self.root / "server-result.json"
 
     @property
+    def bridge_path(self) -> Path:
+        return self._bridge_path or (self.root / "mcp-bridge.sock")
+
+    @property
+    def server_process_result_path(self) -> Path:
+        return self.root / "server-process-result.json"
+
+    @property
     def strict_mcp_config(self) -> bool:
         return True
 
@@ -351,9 +404,28 @@ class DesktopStdioSession:
                 self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
             with contextlib.suppress(OSError):
                 self.root.chmod(0o700)
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            for _attempt in range(8):
+                candidate = Path("/tmp") / (
+                    f"nxd-eval-mcp-{secrets.token_hex(8)}.sock"
+                )
+                try:
+                    listener.bind(str(candidate))
+                except OSError:
+                    if _attempt == 7:
+                        listener.close()
+                        raise
+                else:
+                    self._bridge_path = candidate
+                    break
+            with contextlib.suppress(OSError):
+                self.bridge_path.chmod(0o600)
+            listener.listen(1)
+            listener.settimeout(0.2)
+            self._bridge_listener = listener
             spec = {
-                "command": list(self.server_command),
-                "env": self.server_env,
+                "bridge_path": str(self.bridge_path),
+                "server_process_result_path": str(self.server_process_result_path),
                 "trace_path": str(self.trace_path),
                 "result_path": str(self.server_result_path),
                 "shutdown_timeout_s": self.shutdown_timeout_s,
@@ -380,6 +452,13 @@ class DesktopStdioSession:
             )
             _write_private_text(self.trace_path, "")
             _write_private_text(self.server_result_path, "{}")
+            _write_private_text(self.server_process_result_path, "{}")
+            self._bridge_thread = threading.Thread(
+                target=self._serve_bridge,
+                name="dp-scenarios-desktop-bridge",
+                daemon=True,
+            )
+            self._bridge_thread.start()
             self.setup_result = StdioOutcome("passed")
             self._started = True
             return self
@@ -399,6 +478,119 @@ class DesktopStdioSession:
         self.agent_result = StdioOutcome(
             status, redact_text(error) if error else None
         )
+
+    def _serve_bridge(self) -> None:
+        """Start the supervisor only after the credential-free proxy connects."""
+
+        listener = self._bridge_listener
+        if listener is None:
+            return
+        connection: socket.socket | None = None
+        child: subprocess.Popen[bytes] | None = None
+        try:
+            while not self._bridge_stop.is_set():
+                try:
+                    connection, _ = listener.accept()
+                    break
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+            if connection is None or self._bridge_stop.is_set():
+                return
+            self._bridge_connection = connection
+            child = subprocess.Popen(
+                list(self.server_command),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self.server_env,
+                start_new_session=True,
+            )
+            self._server_process = child
+            assert child.stdin is not None
+            assert child.stdout is not None
+            assert child.stderr is not None
+
+            def forward_to_server() -> None:
+                try:
+                    while True:
+                        chunk = connection.recv(65536)
+                        if not chunk:
+                            break
+                        child.stdin.write(chunk)
+                        child.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    with contextlib.suppress(OSError):
+                        child.stdin.close()
+
+            def forward_from_server() -> None:
+                try:
+                    for line in child.stdout:
+                        connection.sendall(line)
+                except (BrokenPipeError, OSError):
+                    pass
+
+            def drain_stderr() -> None:
+                for _line in child.stderr:
+                    pass
+
+            to_server = threading.Thread(target=forward_to_server, daemon=True)
+            from_server = threading.Thread(target=forward_from_server, daemon=True)
+            stderr_reader = threading.Thread(target=drain_stderr, daemon=True)
+            to_server.start()
+            from_server.start()
+            stderr_reader.start()
+            to_server.join()
+            from_server.join(timeout=self.shutdown_timeout_s)
+            if child.poll() is None:
+                try:
+                    child.wait(timeout=self.shutdown_timeout_s)
+                except subprocess.TimeoutExpired:
+                    self._kill_process(child)
+            else:
+                child.wait()
+            code = child.returncode
+            _write_private_text(
+                self.server_process_result_path,
+                json.dumps(
+                    {
+                        "status": "passed" if code == 0 else "failed",
+                        "exit_code": code,
+                        "pid": child.pid,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            # Publish the server outcome before releasing the bridge reader;
+            # the proxy uses that file to report a complete result.
+            with contextlib.suppress(OSError):
+                connection.shutdown(socket.SHUT_WR)
+        except (OSError, ValueError) as exc:
+            _write_private_text(
+                self.server_process_result_path,
+                json.dumps({"status": "failed", "error": redact_text(str(exc))}, sort_keys=True),
+            )
+            if child is not None:
+                self._kill_process(child)
+        finally:
+            if connection is not None:
+                with contextlib.suppress(OSError):
+                    connection.close()
+            self._bridge_connection = None
+            if child is not None:
+                self._server_process = None
+
+    @staticmethod
+    def _close_socket(value: socket.socket | None) -> None:
+        if value is None:
+            return
+        with contextlib.suppress(OSError):
+            value.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(OSError):
+            value.close()
 
     def _read_server_result(self) -> StdioOutcome:
         if not self._started or self._root is None:
@@ -452,6 +644,17 @@ class DesktopStdioSession:
         for proc in self._attached:
             self._kill_process(proc)
         self._attached.clear()
+        self._bridge_stop.set()
+        self._close_socket(self._bridge_connection)
+        self._close_socket(self._bridge_listener)
+        if self._bridge_thread is not None:
+            self._bridge_thread.join(timeout=5)
+            self._bridge_thread = None
+        self._bridge_connection = None
+        self._bridge_listener = None
+        if self._server_process is not None:
+            self._kill_process(self._server_process)
+            self._server_process = None
         if self._root is not None:
             try:
                 result = json.loads(
@@ -472,13 +675,15 @@ class DesktopStdioSession:
                     and child_pid > 0
                     and child_pid != os.getpid()
                 ):
-                    # The proxy normally forwards SIGTERM to its dedicated
-                    # child group. Keep the recorded PID as a fallback for a
-                    # proxy that was killed before its signal handler ran.
+                    # The runner normally tears down the bridge and its
+                    # supervisor child directly. Keep the recorded PID as a
+                    # fallback for a proxy that was killed before it could
+                    # publish the final result.
                     with contextlib.suppress(OSError):
                         os.kill(child_pid, signal.SIGTERM)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 pass
+        bridge_path = self._bridge_path
         if self._temp is not None:
             self._temp.cleanup()
             self._temp = None
@@ -486,11 +691,16 @@ class DesktopStdioSession:
             for name in (
                 "mcp-config.json",
                 "server-spec.json",
+                "server-process-result.json",
                 "mcp-trace.jsonl",
                 "server-result.json",
             ):
                 with contextlib.suppress(OSError):
                     (self.root / name).unlink()
+        if bridge_path is not None:
+            with contextlib.suppress(OSError):
+                bridge_path.unlink()
+        self._bridge_path = None
         self._closed = True
 
     def __enter__(self) -> "DesktopStdioSession":
@@ -534,62 +744,29 @@ def run_stdio_proxy(spec_path: Path) -> int:
     """Run the forwarding proxy used by Claude's private MCP config."""
     try:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
-        command = [str(x) for x in spec["command"]]
+        bridge_path = Path(spec["bridge_path"])
+        server_process_result_path = Path(spec["server_process_result_path"])
         trace_path = Path(spec["trace_path"])
         result_path = Path(spec["result_path"])
         timeout_faults = _timeout_faults(spec.get("request_timeout_faults"))
-        # Do not inherit the runner's or user's credential-bearing environment
-        # into the supervisor child. The private spec is the supported
-        # injection point for explicitly trusted runtime credentials; keep
-        # only process plumbing from the ambient environment.
-        env = {
-            key: os.environ[key]
-            for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
-            if os.environ.get(key)
-        }
-        env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
-        mapping_key = _TRUSTED_CREDENTIAL_MAPPING_ENV
-        raw_mapping = env.get(mapping_key)
-        trusted_mapping_variables: set[str] = set()
-        if raw_mapping is not None:
-            trusted_mapping_variables = {
-                entry.split("=", 1)[1]
-                for entry in _safe_trusted_credential_mappings(
-                    raw_mapping, set(env)
-                )
-            }
-        for key in tuple(env):
-            if (
-                _SECRET_KEY.search(key)
-                and key not in _TRUSTED_EXPLICIT_SECRET_KEYS
-                and key not in trusted_mapping_variables
-            ):
-                env.pop(key, None)
-        if mapping_key in env:
-            entries = _safe_trusted_credential_mappings(env[mapping_key], set(env))
-            if not entries:
-                env.pop(mapping_key, None)
-            else:
-                env[mapping_key] = ",".join(entries)
+        # The proxy is part of the evaluated agent's process lineage. It gets
+        # only a private socket endpoint; the parent runner owns the other end
+        # and starts the supervisor child with its in-memory environment.
+        os.environ.pop(_SOURCE_CREDENTIAL_ENV, None)
+        os.environ.pop(_TRUSTED_CREDENTIAL_MAPPING_ENV, None)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return 2
-    child: subprocess.Popen[bytes] | None = None
+    bridge: socket.socket | None = None
+    bridge_reader: Any | None = None
+    bridge_writer: Any | None = None
     child_error: list[str] = []
     try:
-        # Claude may launch this command without creating a process group for
-        # its MCP children. Give the proxy its own group so the runner can
-        # terminate it by the PID recorded in server-result.json.
+        bridge = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        bridge.connect(str(bridge_path))
+        bridge_reader = bridge.makefile("rb", buffering=0)
+        bridge_writer = bridge.makefile("wb", buffering=0)
         with contextlib.suppress(OSError):
             os.setsid()
-        child = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            start_new_session=True,
-        )
-        child_pid = child.pid
 
         state_lock = threading.Lock()
         pending: dict[str, _PendingRequest] = {}
@@ -713,27 +890,6 @@ def run_stdio_proxy(spec_path: Path) -> int:
             )
             write_client(line)
 
-        def reap_child(timeout_s: float) -> bool:
-            """Reap the direct child without taking Popen's wait lock."""
-            deadline = time.monotonic() + timeout_s
-            while time.monotonic() < deadline:
-                try:
-                    waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
-                except ChildProcessError:
-                    if child.returncode is None:
-                        child.returncode = -signal.SIGTERM
-                    return True
-                except OSError:
-                    return False
-                if waited_pid == child_pid:
-                    child.returncode = os.waitstatus_to_exitcode(status)
-                    return True
-                # This loop runs only during signal shutdown; keep the grace
-                # short and avoid Popen.wait(), whose Python lock may be held
-                # by the interrupted main thread.
-                time.sleep(0.01)
-            return False
-
         def terminate_child(signum: int, _frame: Any) -> None:
             nonlocal shutting_down
             if shutting_down:
@@ -743,29 +899,24 @@ def run_stdio_proxy(spec_path: Path) -> int:
             cancel_timers()
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             signal.signal(signal.SIGINT, signal.SIG_IGN)
-            # The proxy and server intentionally have separate sessions. The
-            # proxy owns the server group and forwards shutdown before exiting.
-            if child.poll() is None:
+            # Closing the bridge tells the parent runner to stop the trusted
+            # supervisor child. The proxy never owns or receives that child.
+            if bridge is not None:
                 with contextlib.suppress(OSError):
-                    os.killpg(child_pid, signum)
-                if not reap_child(PROXY_CHILD_TERM_GRACE_S):
-                    with contextlib.suppress(OSError):
-                        os.killpg(child_pid, signal.SIGKILL)
-                    if not reap_child(PROXY_CHILD_KILL_REAP_GRACE_S):
-                        # The proxy must still exit if the OS refuses a final
-                        # wait; the process group has already received SIGKILL.
-                        child.returncode = -signal.SIGKILL
+                    bridge.shutdown(socket.SHUT_RDWR)
+                with contextlib.suppress(OSError):
+                    bridge.close()
             raise SystemExit(128 + signum)
 
         signal.signal(signal.SIGTERM, terminate_child)
         signal.signal(signal.SIGINT, terminate_child)
         _write_proxy_result(
-            result_path, status="started", proxy_pid=os.getpid(), child_pid=child_pid
+            result_path, status="started", proxy_pid=os.getpid(), child_pid=None
         )
 
         def forward_responses() -> None:
-            assert child is not None and child.stdout is not None
-            for line in child.stdout:
+            assert bridge_reader is not None
+            for line in bridge_reader:
                 state: _PendingRequest | None = None
                 message: Any = None
                 try:
@@ -794,19 +945,9 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 if not write_client(line):
                     return
 
-        def drain_stderr() -> None:
-            assert child is not None and child.stderr is not None
-            for _line in child.stderr:
-                # Never leave the child's stderr pipe unread: a noisy server
-                # must not wedge the JSON-RPC channel. Server diagnostics are
-                # intentionally not copied into the public trace.
-                pass
-
         reader = threading.Thread(target=forward_responses, daemon=True)
-        stderr_reader = threading.Thread(target=drain_stderr, daemon=True)
         reader.start()
-        stderr_reader.start()
-        assert child.stdin is not None
+        assert bridge_writer is not None
         for line in sys.stdin.buffer:
             _trace_line(trace_path, "request", line)
             request: Any = None
@@ -852,10 +993,10 @@ def run_stdio_proxy(spec_path: Path) -> int:
                             pending[request_key] = state
                         schedule_timeout(state)
             try:
-                child.stdin.write(line)
-                child.stdin.flush()
+                bridge_writer.write(line)
+                bridge_writer.flush()
             except (BrokenPipeError, OSError):
-                child_error.append("server closed stdin")
+                child_error.append("server bridge closed")
                 break
         # EOF is the client's shutdown boundary: stop emitting synthetic
         # deadlines while the child drains or exits, but still let the reader
@@ -863,21 +1004,23 @@ def run_stdio_proxy(spec_path: Path) -> int:
         closing.set()
         cancel_timers()
         with contextlib.suppress(OSError):
-            child.stdin.close()
-        try:
-            code = child.wait(timeout=float(spec.get("shutdown_timeout_s", 5)))
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(OSError):
-                os.killpg(child.pid, signal.SIGTERM)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                child.wait(timeout=5)
-            code = child.returncode
+            bridge_writer.close()
+        with contextlib.suppress(OSError):
+            bridge.shutdown(socket.SHUT_WR)
         reader.join(timeout=5)
-        stderr_reader.join(timeout=5)
+        try:
+            server_result = json.loads(
+                server_process_result_path.read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            server_result = {}
+        code = server_result.get("exit_code") if isinstance(server_result, Mapping) else None
         if child_error:
             status, error = "failed", child_error[0]
         elif code == 0:
             status, error = "passed", None
+        elif code is None:
+            status, error = "failed", "server bridge ended without a server result"
         else:
             status, error = "failed", f"server exited {code}"
         _write_proxy_result(
@@ -886,7 +1029,11 @@ def run_stdio_proxy(spec_path: Path) -> int:
             error=error,
             exit_code=code,
             proxy_pid=os.getpid(),
-            child_pid=child_pid,
+            child_pid=(
+                server_result.get("pid")
+                if isinstance(server_result, Mapping)
+                else None
+            ),
         )
         return 0 if status == "passed" else 1
     except (OSError, ValueError) as exc:
@@ -895,11 +1042,17 @@ def run_stdio_proxy(spec_path: Path) -> int:
             status="failed",
             error=str(exc),
             proxy_pid=os.getpid(),
-            child_pid=child.pid if child is not None else None,
+            child_pid=None,
         )
-        if child is not None:
-            DesktopStdioSession._kill_process(child)
         return 1
+    finally:
+        for stream in (bridge_reader, bridge_writer):
+            if stream is not None:
+                with contextlib.suppress(OSError):
+                    stream.close()
+        if bridge is not None:
+            with contextlib.suppress(OSError):
+                bridge.close()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

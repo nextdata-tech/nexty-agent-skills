@@ -401,6 +401,58 @@ def test_multi_turn_drives_every_turn(fake_cli, tmp_path):
     assert metrics["session_id"]
 
 
+def test_multi_turn_stdio_path_requests_credential_isolation(
+    fake_cli, tmp_path, monkeypatch
+):
+    seen = {}
+    real_agent_env = eb.ClaudeBackend._agent_env
+
+    def capture_agent_env(
+        env_overrides, path_prepend, *, credential_isolation=False
+    ):
+        seen["credential_isolation"] = credential_isolation
+        return real_agent_env(
+            env_overrides,
+            path_prepend,
+            credential_isolation=credential_isolation,
+        )
+
+    monkeypatch.setattr(
+        eb.ClaudeBackend,
+        "_agent_env",
+        staticmethod(capture_agent_env),
+    )
+
+    class StdioSession:
+        config_path = tmp_path / "mcp.json"
+        server_name = "nxd-desktop"
+
+        def ensure_started(self):
+            return self
+
+        def attach_process(self, _process):
+            pass
+
+        def record_agent(self, **_kwargs):
+            pass
+
+        def result_metrics(self):
+            return {}
+
+    monkeypatch.setenv("NXD_EVAL_SOURCE_TOKEN", "source-only-in-test")
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path,
+        "first prompt",
+        "m",
+        60,
+        followup_turns=[eb.FollowupTurn(text="second message")],
+        stdio_session=StdioSession(),
+    )
+
+    assert ok, metrics
+    assert seen["credential_isolation"] is True
+
+
 def test_conditional_turn_is_skipped_without_the_sentinel(fake_cli, tmp_path):
     ok, trace, metrics = eb.ClaudeBackend().run_agent(
         tmp_path, "first", "m", 60,

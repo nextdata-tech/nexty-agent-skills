@@ -100,6 +100,10 @@ def test_session_writes_private_strict_config_and_mcp_allowlist(tmp_path):
         assert session.allowed_tools_csv == "mcp__nxd-desktop__*"
         assert session.setup_result.status == "passed"
         assert "secret" not in session.config_path.read_text()
+        spec_text = (session.root / "server-spec.json").read_text()
+        assert "secret" not in spec_text
+        assert "NXD_EVAL_SOURCE_TOKEN" not in spec_text
+        assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in spec_text
         assert stat.S_IMODE(session.root.stat().st_mode) == 0o700
         for private_file in (
             session.config_path,
@@ -451,6 +455,10 @@ def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_pat
             child_env["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
             == "api-source=NXD_EVAL_SOURCE_TOKEN"
         )
+        spec_text = (session.root / "server-spec.json").read_text()
+        assert "trusted-source-token" not in spec_text
+        assert "NXD_EVAL_SOURCE_TOKEN" not in spec_text
+        assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in spec_text
         if proxy.stdin is not None:
             proxy.stdin.close()
         proxy.wait(timeout=10)
@@ -570,6 +578,22 @@ def test_claude_stdio_agent_environment_drops_provider_credentials(monkeypatch):
     assert env["NXD_SYNTHETIC_EVALUATION_PROFILE"] == "/tmp/profile.json"
     assert "ANTHROPIC_API_KEY" not in env
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
+def test_multi_turn_claude_agent_environment_drops_reserved_source_credentials(
+    monkeypatch,
+):
+    monkeypatch.setenv("NXD_EVAL_SOURCE_TOKEN", "source-only-in-test")
+    monkeypatch.setenv(
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS", "api-source=NXD_EVAL_SOURCE_TOKEN"
+    )
+    env = eb.ClaudeBackend._agent_env(
+        None,
+        None,
+        credential_isolation=True,
+    )
+    assert "NXD_EVAL_SOURCE_TOKEN" not in env
+    assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in env
 
 
 def test_claude_backend_passes_private_mcp_flags_and_isolated_tools(tmp_path):
