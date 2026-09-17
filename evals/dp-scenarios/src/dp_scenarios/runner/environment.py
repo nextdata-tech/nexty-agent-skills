@@ -342,7 +342,12 @@ def _activate_workflow_control(
         str(resolved_bundle),
     )
     try:
-        activation_environment = {**os.environ, **environment}
+        activation_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key in _SESSION_ENVIRONMENT_ALLOWLIST
+        }
+        activation_environment.update(environment)
         # Activation does not execute a product transform.  Never let the
         # generated source credential reach it, including via the ambient
         # parent environment.  A caller-supplied trusted mapping is retained
@@ -935,9 +940,11 @@ class RunEnvironment:
                     activation_environment.pop(TRUSTED_CREDENTIAL_ENVS_ENV, None)
                     if caller_trusted_credential_mapping is not None:
                         available_environment = {
-                            **os.environ,
-                            **activation_environment,
+                            key: value
+                            for key, value in os.environ.items()
+                            if key in _SESSION_ENVIRONMENT_ALLOWLIST
                         }
+                        available_environment.update(activation_environment)
                         available_environment.pop(SOURCE_CREDENTIAL_ENV, None)
                         retained_mapping = _available_credential_mappings(
                             caller_trusted_credential_mapping,
