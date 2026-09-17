@@ -120,6 +120,20 @@ maps the parser source path to a typed proposal path; omit it when the paths
 already match. Do not calculate spans from memory; rerun the parser after every
 blueprint edit and validate the exact proposal before calling `prepare_workflow`.
 
+Treat keys in `provenance`, `source_spans`, and `echo.coverage` as opaque parser
+paths. Copy them exactly from the parser/source-map result, including the
+`v3:` prefix and the parser's stable hyphenated ids: use
+`v3:decisions[current-status-definition].text`, never
+`decisions[current-status-definition]` or
+`v3:decisions[current_status_definition].text`. These keys are not typed ids;
+never slugify, snake-case, or otherwise normalize them. Keep the source parser
+path and typed proposal path distinct: when the typed target differs, put the
+exact parser path in the `source_path` side of the `anchors`
+(`source_path` → `target_path`) mapping and the typed path on the target side.
+Do not silently substitute that target path for the parser key or its span. A
+missing prefix or normalized id is a provenance/path failure, not a reason to
+relax validation.
+
 If `prepare_workflow` returns `v3.provenance.span_mismatch` with a bounded
 `prepare_recovery_id`, call `inspect_prepare_recovery` with that opaque id.
 Require its versioned result to carry the source semantic hash for the same
