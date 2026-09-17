@@ -139,8 +139,6 @@ def _available_credential_mappings(
         if match is not None and match["variable"] in environment:
             entries.append(f"{match['service']}={match['variable']}")
     return ",".join(entries) if entries else None
-
-
 def _credential_environment_values(
     *environments: Mapping[str, object],
 ) -> set[str]:
