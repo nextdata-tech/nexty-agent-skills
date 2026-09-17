@@ -1581,6 +1581,34 @@ def test_workflow_activation_diagnostics_redact_source_credentials(
     assert "<redacted>" in detail
 
 
+def test_workflow_activation_only_receives_allowlisted_and_explicit_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "activation.json"
+    bundle.write_text('{}\n', encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-key")
+    monkeypatch.setenv("CUSTOM_SUPERVISOR_TOKEN", "ambient-custom-token")
+    monkeypatch.setenv("WAREHOUSE_TOKEN", "ambient-warehouse-token")
+    captured: dict[str, str] = {}
+
+    def run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del argv
+        captured.update(kwargs["env"])  # type: ignore[arg-type]
+        return subprocess.CompletedProcess("supervisor", 0, '{"activated":true}\n', "")
+
+    monkeypatch.setattr(environment_module.subprocess, "run", run)
+    environment_module._activate_workflow_control(
+        "supervisor",
+        data_dir=tmp_path / "desktop-state",
+        bundle=bundle,
+        environment={"WAREHOUSE_TOKEN": "explicit-warehouse-token"},
+    )
+
+    assert captured["WAREHOUSE_TOKEN"] == "explicit-warehouse-token"
+    assert "OPENAI_API_KEY" not in captured
+    assert "CUSTOM_SUPERVISOR_TOKEN" not in captured
+
+
 def test_workflow_activation_fails_closed_without_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
