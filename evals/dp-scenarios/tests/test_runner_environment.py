@@ -989,6 +989,390 @@ def test_prepare_invokes_runner_owned_review_root_helper_for_live_state(
         assert (expected_data_dir / "blueprints").is_dir()
 
 
+def test_authenticated_source_credentials_are_supervisor_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner import desktop as desktop_module
+
+    token = "dummy-token-only-in-memory"
+    captured: dict[str, object] = {}
+
+    class FakeTransport:
+        def __init__(self) -> None:
+            self.root = tmp_path / "session"
+            self.config_path = self.root / "config.json"
+            self.trace_path = self.root / "trace.jsonl"
+            self.server_result_path = self.root / "server-result.json"
+            self.supervisor_binary_path = "supervisor"
+            self.session_config_sha256 = "sha256:fake"
+            self.root.mkdir()
+
+        def start(self) -> "FakeTransport":
+            return self
+
+        def cleanup(self) -> None:
+            pass
+
+    def fake_create(*args: object, **kwargs: object) -> FakeTransport:
+        del args
+        captured.update(kwargs)
+        return FakeTransport()
+
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fake_create),
+    )
+
+    route_config = load_config(
+        {
+            "version": 1,
+            "auth": {"token": token, "initial_requests": 1},
+            "routes": [
+                {
+                    "path": "/rows",
+                    "method": "GET",
+                    "auth_required": True,
+                    "response": {"json": []},
+                }
+            ],
+        }
+    )
+    caller_environment = {
+        "NXD_DESKTOP_PYTHON": "/tmp/desktop-python",
+        "WAREHOUSE_TOKEN": "caller-secret-only-in-test",
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": (
+            "warehouse=WAREHOUSE_TOKEN,api-source=NXD_EVAL_SOURCE_TOKEN"
+        ),
+    }
+    monkeypatch.setenv("NXD_EVAL_SOURCE_TOKEN", "ambient-source-only-in-test")
+    activation_bundle = tmp_path / "activation.json"
+    activation_bundle.write_text('{}\n', encoding="utf-8")
+    activation_environments: list[dict[str, str]] = []
+
+    def run_activation(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        del argv
+        activation_environments.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess("supervisor", 0, '{"activated":true}\n', "")
+
+    monkeypatch.setattr(environment_module.subprocess, "run", run_activation)
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        route_config=route_config,
+        live_command=("agent",),
+        supervisor_command=("supervisor",),
+        supervisor_environment=caller_environment,
+        workflow_activation_bundle=activation_bundle,
+    ) as environment:
+        server_environment = captured["server_environment"]
+        agent_transport_environment = captured["environment"]
+        assert isinstance(server_environment, dict)
+        assert isinstance(agent_transport_environment, dict)
+        assert server_environment["NXD_EVAL_SOURCE_TOKEN"] == token
+        assert (
+            server_environment["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
+            == caller_environment["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
+        )
+        assert server_environment["NXD_DESKTOP_PYTHON"] == caller_environment["NXD_DESKTOP_PYTHON"]
+        assert len(activation_environments) == 1
+        assert "NXD_EVAL_SOURCE_TOKEN" not in activation_environments[0]
+        assert (
+            activation_environments[0]["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"]
+            == "warehouse=WAREHOUSE_TOKEN"
+        )
+
+        assert "NXD_EVAL_SOURCE_TOKEN" not in environment.agent_environment
+        assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in environment.agent_environment
+        assert token not in environment.agent_environment.values()
+        assert "NXD_EVAL_SOURCE_TOKEN" not in agent_transport_environment
+        assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in agent_transport_environment
+        assert token not in agent_transport_environment.values()
+
+
+@pytest.mark.parametrize(
+    ("mapping", "error"),
+    [
+        ("api-source=OTHER_SOURCE_TOKEN", "conflicts with the generated source profile"),
+        ("warehouse=WAREHOUSE-TOKEN", "malformed entry"),
+        ("warehouse=NXD_EVAL_SOURCE_TOKEN", "must not rebind"),
+        (
+            "api-source=NXD_EVAL_SOURCE_TOKEN,warehouse=NXD_EVAL_SOURCE_TOKEN",
+            "must not rebind",
+        ),
+        (
+            "api-source=NXD_EVAL_SOURCE_TOKEN,api-source=OTHER_SOURCE_TOKEN",
+            "duplicate service",
+        ),
+    ],
+)
+def test_invalid_source_credential_mapping_fails_before_supervisor_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mapping: str,
+    error: str,
+) -> None:
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner import desktop as desktop_module
+
+    route_config = load_config(
+        {
+            "version": 1,
+            "auth": {"token": "dummy-token-only-in-memory", "initial_requests": 1},
+            "routes": [
+                {
+                    "path": "/rows",
+                    "method": "GET",
+                    "auth_required": True,
+                    "response": {"json": []},
+                }
+            ],
+        }
+    )
+    transport_calls = 0
+
+    def fail_create(*args: object, **kwargs: object) -> object:
+        nonlocal transport_calls
+        transport_calls += 1
+        raise AssertionError("transport must not start for a conflicting mapping")
+
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fail_create),
+    )
+
+    with pytest.raises(RunEnvironmentError, match=error):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            root=tmp_path,
+            route_config=route_config,
+            live_command=("agent",),
+            supervisor_command=("supervisor",),
+            supervisor_environment={
+                "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": mapping
+            },
+        ):
+            pass
+
+    assert transport_calls == 0
+
+
+def test_source_mapping_limit_is_rejected_before_supervisor_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner import desktop as desktop_module
+
+    route_config = load_config(
+        {
+            "version": 1,
+            "auth": {"token": "dummy-token-only-in-memory", "initial_requests": 1},
+            "routes": [
+                {
+                    "path": "/rows",
+                    "method": "GET",
+                    "auth_required": True,
+                    "response": {"json": []},
+                }
+            ],
+        }
+    )
+    transport_calls = 0
+
+    def fail_create(*args: object, **kwargs: object) -> object:
+        nonlocal transport_calls
+        transport_calls += 1
+        raise AssertionError("transport must not start for an oversized mapping")
+
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fail_create),
+    )
+    mapping = ",".join(f"service{index}=TOKEN_{index}" for index in range(16))
+
+    with pytest.raises(RunEnvironmentError, match="leaves no room"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            root=tmp_path,
+            route_config=route_config,
+            live_command=("agent",),
+            supervisor_command=("supervisor",),
+            supervisor_environment={
+                "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": mapping
+            },
+        ):
+            pass
+
+    assert transport_calls == 0
+
+
+def test_source_mapping_is_appended_and_final_length_is_bounded() -> None:
+    assert (
+        environment_module._add_source_credential_mapping("warehouse=WAREHOUSE_TOKEN")
+        == "warehouse=WAREHOUSE_TOKEN,api-source=NXD_EVAL_SOURCE_TOKEN"
+    )
+    assert (
+        environment_module._add_source_credential_mapping(None)
+        == "api-source=NXD_EVAL_SOURCE_TOKEN"
+    )
+    oversized_service = "s" * 4070
+    with pytest.raises(RunEnvironmentError, match="after adding"):
+        environment_module._add_source_credential_mapping(
+            f"{oversized_service}=TOKEN"
+        )
+
+
+def test_proxy_and_runner_trusted_mapping_contracts_match() -> None:
+    import sys
+
+    evals_dir = Path(__file__).resolve().parents[2]
+    if str(evals_dir) not in sys.path:
+        sys.path.insert(0, str(evals_dir))
+    import desktop_stdio as desktop_stdio_module
+
+    assert (
+        desktop_stdio_module._TRUSTED_CREDENTIAL_MAPPING_ENTRY.pattern
+        == environment_module._CREDENTIAL_MAPPING_ENTRY.pattern
+    )
+    assert (
+        desktop_stdio_module._SOURCE_SERVICE_NAME
+        == environment_module.SOURCE_SERVICE_NAME
+    )
+    assert (
+        desktop_stdio_module._SOURCE_CREDENTIAL_ENV
+        == environment_module.SOURCE_CREDENTIAL_ENV
+    )
+    assert (
+        desktop_stdio_module._MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES
+        == environment_module._MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES
+    )
+    assert (
+        desktop_stdio_module._MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH
+        == environment_module._MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH
+    )
+
+
+def test_unauthenticated_source_does_not_get_generated_credential_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner import desktop as desktop_module
+
+    captured: dict[str, object] = {}
+
+    class FakeTransport:
+        def __init__(self) -> None:
+            self.root = tmp_path / "session"
+            self.config_path = self.root / "config.json"
+            self.trace_path = self.root / "trace.jsonl"
+            self.server_result_path = self.root / "server-result.json"
+            self.supervisor_binary_path = "supervisor"
+            self.session_config_sha256 = "sha256:fake"
+            self.root.mkdir()
+
+        def start(self) -> "FakeTransport":
+            return self
+
+        def cleanup(self) -> None:
+            pass
+
+    def fake_create(*args: object, **kwargs: object) -> FakeTransport:
+        del args
+        captured.update(kwargs)
+        return FakeTransport()
+
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fake_create),
+    )
+
+    route_config = load_config(
+        {
+            "version": 1,
+            "routes": [
+                {
+                    "path": "/rows",
+                    "method": "GET",
+                    "response": {"json": []},
+                }
+            ],
+        }
+    )
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        route_config=route_config,
+        live_command=("agent",),
+        supervisor_command=("supervisor",),
+    ) as environment:
+        server_environment = captured["server_environment"]
+        assert isinstance(server_environment, dict)
+        assert "NXD_EVAL_SOURCE_TOKEN" not in server_environment
+        assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in server_environment
+        assert "NXD_EVAL_SOURCE_TOKEN" not in environment.agent_environment
+        assert "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS" not in environment.agent_environment
+
+
+def test_invalid_source_credential_mapping_is_rejected_without_authenticated_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.runner import desktop as desktop_module
+
+    route_config = load_config(
+        {
+            "version": 1,
+            "routes": [
+                {
+                    "path": "/rows",
+                    "method": "GET",
+                    "response": {"json": []},
+                }
+            ],
+        }
+    )
+    transport_calls = 0
+
+    def fail_create(*args: object, **kwargs: object) -> object:
+        nonlocal transport_calls
+        transport_calls += 1
+        raise AssertionError("transport must not start for a malformed mapping")
+
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fail_create),
+    )
+
+    with pytest.raises(RunEnvironmentError, match="malformed entry"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            root=tmp_path,
+            route_config=route_config,
+            live_command=("agent",),
+            supervisor_command=("supervisor",),
+            supervisor_environment={
+                "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": "warehouse=NOT-A-TOKEN"
+            },
+        ):
+            pass
+
+    assert transport_calls == 0
+
+
 def test_workflow_activation_runs_before_mcp_with_the_exact_disposable_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1020,6 +1404,40 @@ def test_workflow_activation_runs_before_mcp_with_the_exact_disposable_state(
     )
     assert calls[0][1]["HOME"] == str(tmp_path / "home")
     assert digest == "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+
+def test_workflow_activation_strips_source_credentials_from_ambient_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "activation.json"
+    bundle.write_text('{}\n', encoding="utf-8")
+    captured: dict[str, str] = {}
+    monkeypatch.setenv("NXD_EVAL_SOURCE_TOKEN", "ambient-secret")
+    monkeypatch.setenv(
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
+        "ambient=AMBIENT_TOKEN",
+    )
+
+    def run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del argv
+        captured.update(kwargs["env"])  # type: ignore[arg-type]
+        return subprocess.CompletedProcess("supervisor", 0, '{"activated":true}\n', "")
+
+    monkeypatch.setattr(environment_module.subprocess, "run", run)
+    environment_module._activate_workflow_control(
+        "supervisor",
+        data_dir=tmp_path / "desktop-state",
+        bundle=bundle,
+        environment={
+            "NXD_EVAL_SOURCE_TOKEN": "explicit-secret",
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": "caller=CALLER_TOKEN",
+        },
+    )
+
+    assert "NXD_EVAL_SOURCE_TOKEN" not in captured
+    assert captured["NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"] == "caller=CALLER_TOKEN"
+    assert "ambient-secret" not in captured.values()
+    assert "explicit-secret" not in captured.values()
 
 
 def test_workflow_activation_fails_closed_without_confirmation(
