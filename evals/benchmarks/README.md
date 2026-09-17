@@ -10,6 +10,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | 2026-09-16 | bound partial JSON responses in the live runner | NO_EVAL | — | [`2026-09-16-runner-partial-json-deadline`](entries/2026-09-16-runner-partial-json-deadline.md) |
 | 2026-09-16 | surface and budget the retained-capture reviewer deadline | NO_EVAL | — | [`2026-09-16-reviewer-deadline-guidance`](entries/2026-09-16-reviewer-deadline-guidance.md) |
 | 2026-09-16 | hand the user a command that opens the file, not a path to go find | NO_EVAL | — | [`2026-09-16-open-the-file-for-the-user`](entries/2026-09-16-open-the-file-for-the-user.md) |
+| 2026-09-16 | Contract param binding, verify substance, flat-layout packaging and unrequested-surface guards in nxd-build-data-product, measured against a regeneration | NO_EVAL | — | [`2026-09-16-contract-binding-and-flat-layout-guards`](entries/2026-09-16-contract-binding-and-flat-layout-guards.md) |
 | 2026-09-14 | remove retired supervisor construction fallbacks from skills | NO_EVAL | — | [`2026-09-14-supervisor-admission-only-skills`](entries/2026-09-14-supervisor-admission-only-skills.md) |
 | 2026-09-12 | workflow-v2: bind proposal-file evidence to preparation | NO_EVAL | — | [`2026-09-12-workflow-v2-proposal-evidence`](entries/2026-09-12-workflow-v2-proposal-evidence.md) |
 | 2026-09-12 | nxd-run-job-loop: user-facing language boundary | NO_EVAL | — | [`2026-09-12-job-loop-user-facing-language`](entries/2026-09-12-job-loop-user-facing-language.md) |
