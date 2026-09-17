@@ -30,6 +30,14 @@ guidance now has a complete copyable closed-v3 payload example, an explicitly
 non-copyable abbreviated request envelope, and contract tests that compare the
 documented keys, decision statuses, delivery object, and compiled source shapes
 with the canonical authoring schema.
+typed timestamp contract corrections shipped with the same pack revision. The
+runner now creates only mode-0700 `captures/` and `blueprints/` roots for an
+in-scope supervisor data directory, including when that directory is the run
+root; lifecycle and direct-helper tests cover this boundary. The workflow-v2
+guidance now has a complete copyable closed-v3 payload example, an explicitly
+non-copyable abbreviated request envelope, and contract tests that compare the
+documented keys, decision statuses, delivery object, and compiled source shapes
+with the canonical authoring schema.
 
 ## Evidence
 
