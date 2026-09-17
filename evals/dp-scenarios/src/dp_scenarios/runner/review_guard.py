@@ -82,6 +82,10 @@ REVIEW_METADATA_STATUSES = frozenset(
 )
 REVIEW_CONTENT_KEYS = frozenset({"content", "text", "result", "output"})
 REVIEW_CHILD_TOOLS = frozenset({"read", "glob", "grep", "skill"})
+# The only supervisor-owned roots exposed to the retained-capture reviewer.
+# Keep this in the dependency-free guard module so environment setup and the
+# adapter's read grant cannot silently drift apart.
+RETAINED_REVIEW_ROOT_NAMES = ("captures", "blueprints")
 DESKTOP_ADVANCE = "mcp__nxd-desktop__advance_workflow"
 REVIEW_SKILL_NAMES = frozenset(
     {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}

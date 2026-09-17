@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import stat
 import subprocess
 
 import pytest
@@ -866,6 +867,126 @@ def test_the_live_adapter_is_told_where_the_supervisor_keeps_its_state() -> None
         ]
     )
     assert parsed.supervisor_data_dir == Path("/tmp/run/desktop-state")
+
+
+def test_runner_owned_supervisor_state_prepares_only_retained_review_roots(
+    tmp_path: Path,
+) -> None:
+    from dp_scenarios.runner.environment import _prepare_runner_owned_review_roots
+
+    state_dir = tmp_path / "trial" / "desktop-state"
+    _prepare_runner_owned_review_roots(state_dir, run_root=tmp_path / "trial")
+
+    assert (state_dir / "captures").is_dir()
+    assert (state_dir / "blueprints").is_dir()
+    assert sorted(path.name for path in state_dir.iterdir()) == ["blueprints", "captures"]
+    assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((state_dir / "captures").stat().st_mode) == 0o700
+    assert stat.S_IMODE((state_dir / "blueprints").stat().st_mode) == 0o700
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["trial"]
+
+
+def test_runner_owned_review_roots_allow_data_dir_equal_to_run_root(
+    tmp_path: Path,
+) -> None:
+    from dp_scenarios.runner.environment import _prepare_runner_owned_review_roots
+
+    tmp_path.chmod(0o755)
+    _prepare_runner_owned_review_roots(tmp_path, run_root=tmp_path)
+
+    assert (tmp_path / "captures").is_dir()
+    assert (tmp_path / "blueprints").is_dir()
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "captures").stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "blueprints").stat().st_mode) == 0o700
+
+
+def test_runner_owned_review_roots_tighten_preexisting_state_dir(
+    tmp_path: Path,
+) -> None:
+    from dp_scenarios.runner.environment import _prepare_runner_owned_review_roots
+
+    state_dir = tmp_path / "trial" / "desktop-state"
+    state_dir.mkdir(parents=True, mode=0o755)
+    state_dir.chmod(0o755)
+    (state_dir / "captures").mkdir(mode=0o755)
+    (state_dir / "blueprints").mkdir(mode=0o755)
+
+    _prepare_runner_owned_review_roots(state_dir, run_root=tmp_path / "trial")
+
+    assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((state_dir / "captures").stat().st_mode) == 0o700
+    assert stat.S_IMODE((state_dir / "blueprints").stat().st_mode) == 0o700
+
+
+def test_external_supervisor_state_is_not_created_by_the_runner(tmp_path: Path) -> None:
+    from dp_scenarios.runner.environment import _prepare_runner_owned_review_roots
+
+    state_dir = tmp_path / "external" / "desktop-state"
+    _prepare_runner_owned_review_roots(state_dir, run_root=tmp_path / "trial")
+
+    assert not state_dir.exists()
+
+
+def test_prepare_invokes_runner_owned_review_root_helper_for_live_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.runner import desktop as desktop_module
+
+    calls: list[tuple[str, Path | None, Path | None]] = []
+    real_helper = environment_module._prepare_runner_owned_review_roots
+
+    def recording_helper(data_dir: Path | None, *, run_root: Path) -> None:
+        calls.append(("roots", data_dir, run_root))
+        real_helper(data_dir, run_root=run_root)
+
+    class FakeTransport:
+        def __init__(self) -> None:
+            self.root = tmp_path / "session"
+            self.config_path = self.root / "config.json"
+            self.trace_path = self.root / "trace.jsonl"
+            self.server_result_path = self.root / "server-result.json"
+            self.supervisor_binary_path = "supervisor"
+            self.session_config_sha256 = "sha256:fake"
+            self.cleaned = False
+            self.root.mkdir()
+
+        def start(self) -> "FakeTransport":
+            return self
+
+        def cleanup(self) -> None:
+            self.cleaned = True
+
+    def fake_create(*args: object, **kwargs: object) -> FakeTransport:
+        calls.append(("transport", None, None))
+        del args, kwargs
+        return FakeTransport()
+
+    monkeypatch.setattr(
+        environment_module,
+        "_prepare_runner_owned_review_roots",
+        recording_helper,
+    )
+    monkeypatch.setattr(
+        desktop_module.DesktopStdioTransport,
+        "create",
+        staticmethod(fake_create),
+    )
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        live_command=("agent",),
+        supervisor_command=("supervisor",),
+    ) as environment:
+        expected_data_dir = environment.base_dir / "desktop-state"
+        assert calls == [
+            ("roots", expected_data_dir, environment.base_dir),
+            ("transport", None, None),
+        ]
+        assert (expected_data_dir / "captures").is_dir()
+        assert (expected_data_dir / "blueprints").is_dir()
 
 
 def test_workflow_activation_runs_before_mcp_with_the_exact_disposable_state(

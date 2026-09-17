@@ -29,6 +29,7 @@ from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_tr
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
+from dp_scenarios.runner.review_guard import RETAINED_REVIEW_ROOT_NAMES
 
 
 class EnvironmentError(RuntimeError):
@@ -165,6 +166,41 @@ def _supervisor_data_dir(supervisor_args: Sequence[str]) -> Path | None:
         if argument.startswith("--data-dir="):
             return Path(argument.split("=", 1)[1])
     return None
+
+
+def _prepare_runner_owned_review_roots(
+    supervisor_data_dir: Path | None,
+    *,
+    run_root: Path,
+) -> None:
+    """Prepare retained-input roots for a runner-owned supervisor.
+
+    The stdio proxy starts the real supervisor lazily, after the Claude
+    adapter has built its command.  A disposable per-trial data directory
+    therefore has no ``captures`` or ``blueprints`` directories yet when the
+    adapter validates its narrow read grant.  Create only those two roots
+    when the data directory is inside this trial's private root; never create
+    anything in an externally supplied supervisor directory.
+    """
+
+    if supervisor_data_dir is None:
+        return
+    resolved_data_dir = supervisor_data_dir.expanduser().resolve()
+    resolved_run_root = run_root.expanduser().resolve()
+    try:
+        resolved_data_dir.relative_to(resolved_run_root)
+    except ValueError:
+        return
+    if resolved_data_dir != resolved_run_root:
+        resolved_data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # ``mkdir(mode=...)`` does not tighten an existing directory.  These roots
+    # hold supervisor-owned retained inputs, so keep the privacy boundary even
+    # when a pre-existing state directory was created with a wider mode.
+    resolved_data_dir.chmod(0o700)
+    for name in RETAINED_REVIEW_ROOT_NAMES:
+        retained_root = resolved_data_dir / name
+        retained_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        retained_root.chmod(0o700)
 
 
 def _supervisor_command(command: str | Path | Sequence[str]) -> tuple[str, ...]:
@@ -737,9 +773,6 @@ class RunEnvironment:
                         "mcp",
                         "serve",
                     )
-                # Whatever --data-dir the supervisor was actually given is the
-                # directory whose release records describe this run's builds.
-                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
                 # Host-home access is an explicit allowance for the agent
                 # process (typically to read a configured Claude profile),
                 # not an implicit allowance for the supervisor or its
@@ -763,6 +796,16 @@ class RunEnvironment:
                     supervisor_environment.update(
                         self.knobs.broker_fault.environment_for_attempt(self.attempt)  # type: ignore[union-attr]
                     )
+
+                # Whatever --data-dir the supervisor was actually given is the
+                # directory whose release records describe this run's builds.
+                supervisor_data_dir = _supervisor_data_dir(supervisor_args)
+                # The proxy starts the real supervisor lazily, but the Claude
+                # adapter validates the retained-input roots before its
+                # process starts.  This directory is inside the disposable
+                # trial root, so preparing the two narrow roots is runner-owned
+                # setup rather than mutation of external supervisor state.
+                _prepare_runner_owned_review_roots(supervisor_data_dir, run_root=base)
 
                 if self.workflow_activation_bundle is not None:
                     activation_environment = dict(supervisor_environment)

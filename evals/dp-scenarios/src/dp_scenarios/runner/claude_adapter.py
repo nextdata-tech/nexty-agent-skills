@@ -38,6 +38,7 @@ from dp_scenarios.runner.review_guard import (
     RELAY_PENDING,
     REPORT_IN_FLIGHT,
     REVIEW_RESERVE_INSTRUCTION,
+    RETAINED_REVIEW_ROOT_NAMES,
     STATE_VERSION,
     settings_payload,
     write_initial_state,
@@ -1208,7 +1209,7 @@ class ClaudeCodeAdapter:
         # These are the nxd workflow-v2 supervisor's retained-input roots.
         # Keep the layout explicit and narrow: the adapter must not expose the
         # rest of the supervisor data directory to the owning conversation.
-        return (state_dir / "captures", state_dir / "blueprints")
+        return tuple(state_dir / name for name in RETAINED_REVIEW_ROOT_NAMES)
 
     def build_claude_command(
         self,
@@ -1343,7 +1344,7 @@ class ClaudeCodeAdapter:
             # evidence or hide a layout mismatch.
             raise ClaudeAdapterError(
                 "--supervisor-data-dir is missing the nxd workflow-v2 retained-input "
-                "roots: expected captures/ and blueprints/"
+                f"roots: expected {' and '.join(f'{name}/' for name in RETAINED_REVIEW_ROOT_NAMES)}"
             )
         write_initial_state(
             self._review_guard_state,

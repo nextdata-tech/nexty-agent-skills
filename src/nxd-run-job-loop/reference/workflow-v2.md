@@ -31,6 +31,10 @@ the blueprint before consent, then call `prepare_workflow` with the inline
 `typed_proposal` object, before the approval turn and before generating the
 closure:
 
+The following request-envelope sketch is intentionally abbreviated and is not
+a complete request. Do not copy it as the `typed_proposal`; copy the complete
+typed proposal object from `dp-blueprint.proposal.json` instead.
+
 ```json
 {
   "request_id": "prepare-<workflow>-<unique>",
@@ -62,6 +66,49 @@ inventory. For an API source, fail and ask for a supported phase when a custom
 input expectation cannot execute on the CSV-first runtime; never emit it as
 decorative unwired code. Wire output promises when their runtime is supported,
 and do not invent contracts from inferred schema facts.
+
+The `proposal` payload is a closed v3 object, not a free-form entity summary. It
+must contain exactly `intent`, `questions`, `scope`, `terms`, `inputs`,
+`models`, `transform`, `outputs`, `decisions`, `open_questions`, `delivery`,
+and `contracts`. Frontmatter-only `name` and `workflow` must not be added to
+this payload. Use these exact item shapes (with no legacy aliases or extra
+keys):
+
+```json
+{
+  "intent": "Provide a queryable order summary.",
+  "questions": [{"id": "order-count", "question": "How many accepted orders are there?"}],
+  "scope": "Use the declared orders input and exclude refunded rows.",
+  "terms": [{"id": "accepted-order", "name": "Accepted order", "definition": "An order that is not refunded.", "priority": "P3"}],
+  "inputs": [{"id": "orders", "expectations": [{"id": "orders-rows", "model": "orders", "guarantee": "Each accepted input row has an order identifier.", "rule": "Reject rows without an order identifier.", "fields": ["order_id"]}]}],
+  "models": [{"id": "orders", "fields": ["order_id"]}],
+  "transform": [{"id": "exclude-refunds", "operation": "filter"}],
+  "outputs": [{"id": "accepted-orders", "promises": [{"id": "accepted-orders-rows", "model": "orders", "guarantee": "Every output row is an accepted order.", "rule": "Exclude refunded rows.", "fields": ["order_id"]}]}],
+  "decisions": [{"id": "refund-rule", "target": "orders", "ruling": "Exclude refunded rows.", "status": "proposed"}],
+  "open_questions": [{"id": "late-orders", "question": "Should late-arriving orders be included?", "blocking": false}],
+  "delivery": {"kind": "semantic_query", "profile": "desktop-local", "port": "duckdb", "provenance": "platform_fixed"},
+  "contracts": [
+    {"id": "orders-rows", "attachment": "input:orders", "model": "orders", "phase": "pre_transform", "guarantee": "Each accepted input row has an order identifier.", "rule": "Reject rows without an order identifier.", "fields": ["order_id"]},
+    {"id": "accepted-orders-rows", "attachment": "output:accepted-orders", "model": "orders", "phase": "post_transform", "guarantee": "Every output row is an accepted order.", "rule": "Exclude refunded rows.", "fields": ["order_id"]}
+  ]
+}
+```
+
+When a term priority is omitted, materialize the platform default as `P3` with
+`platform_fixed` provenance and disclose that default; an explicitly written
+priority uses `explicit` provenance.
+
+Input expectation and output promise source entries each have exactly `id`,
+`model`, `guarantee`, `rule`, and `fields`. Compiled contracts each have exactly
+`id`, `attachment`, `model`, `phase`, `guarantee`, `rule`, and `fields`; copy the
+source entry's `id`, model, guarantee, rule, and fields unchanged. Input
+contracts use `attachment: "input:<input-id>"` and `phase: "pre_transform"`;
+output contracts use `attachment: "output:<output-id>"` and
+`phase: "post_transform"`. A phase is not an attachment, so never use
+`post_transform` as one. Decision items are exactly `id`, `target`, `ruling`,
+and `status`, where status is `proposed` or `locked`. Do not emit
+legacy `name`, `rationale`, or `text` keys for these items, or put an output id
+in place of the `output:<output-id>` attachment.
 
 Source spans are exact coordinates from the trusted parser, not approximate
 Markdown locations. Copy all four integers (`line_start`, `line_end`,

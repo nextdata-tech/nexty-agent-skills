@@ -13,7 +13,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.51.0
+  version: 0.51.1
 ---
 
 # nxd-run-job-loop skill
@@ -164,7 +164,7 @@ python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-blueprint.md --j
 python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <path>/dp-blueprint.md --json
 ```
 
-The deterministic parser only checks headings, free prose, source spans, and lifecycle metadata. Then have the AI write the complete caller-authored typed proposal JSON beside it as `dp-blueprint.proposal.json`, omitting `source_hash` and carrying `explicit`, `inferred`, or `platform_fixed` provenance, source spans, compiled contracts, the fixed delivery profile, and a complete natural-language echo-back. Validate and bind its proposal content against the parsed blueprint before prepare. The supervisor owns the canonical `source_hash`: it inserts or replaces that value from the retained Markdown before validation and binding. Do not guess or hand-compute it when shell access is unavailable. Deterministic proposal validation must turn underspecification into an Open Question; it must never accept confidence as correctness.
+The deterministic parser only checks headings, free prose, source spans, and lifecycle metadata. The typed `proposal` payload is a closed v3 object with exactly 12 keys; frontmatter-only `name` and `workflow` do not belong in it. Follow [reference/workflow-v2.md](reference/workflow-v2.md) for the exact nested shapes, statuses, fixed delivery object, and compiled contract rules. Then have the AI write the complete caller-authored typed proposal JSON beside it as `dp-blueprint.proposal.json`, omitting `source_hash` and carrying `explicit`, `inferred`, or `platform_fixed` provenance, source spans, compiled contracts, the fixed delivery profile, and a complete natural-language echo-back. Validate and bind its proposal content against the parsed blueprint before prepare. The supervisor owns the canonical `source_hash`: it inserts or replaces that value from the retained Markdown before validation and binding. Do not guess or hand-compute it when shell access is unavailable. Deterministic proposal validation must turn underspecification into an Open Question; it must never accept confidence as correctness.
 
 **Approval is approval of the echo-back.** A validator pass is not approval,
 and `status: approved` is the user's decision. Approval binds the Markdown and
