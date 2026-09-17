@@ -8,6 +8,7 @@ Copy-paste reference for wiring output promises and input expectations into an N
 - [requirements.txt extras](#requirementstxt-extras)
 - [Spec wiring — all three promises](#spec-wiring--all-three-promises)
 - [nxd_spec.py additions](#nxd_specpy-additions)
+- [Verify function signatures](#verify-function-signatures)
 - [Contract file templates](#contract-file-templates)
 - [Input expectations (pre-checks on source data)](#input-expectations-pre-checks-on-source-data)
 
@@ -164,6 +165,108 @@ check syntax.
 
 Add `.model(model)` in the spec to scope this check to one model; omit it to run against
 all canonical output models.
+
+---
+
+## Verify function signatures
+
+Two rules decide whether a contract runs at all and whether it is worth running.
+Neither is checked by `nxd validate`, which imports the bundle but never executes
+a contract. A contract that breaks either one validates clean and fails, or lies,
+at verification time.
+
+### Parameters bind by name, after the service
+
+Verify arguments bind by name, not position, the same rule that governs
+`transform(...)`. The service context parameter must be named after the service
+the contract is wired to:
+
+```python
+# spec.py
+custom("POS_CHANNEL_VALIDATION")
+    .script("contracts/pos_channel_validation.py")
+    .service(service_name="adls", driver="nxd:adls:2.0.0")
+
+# contracts/pos_channel_validation.py
+def verify(adls: AzureDataLakeStorage, models: dict[str, Model]) -> VerifyResult:
+    ...
+```
+
+`adls` is correct because the service is named `adls`. Generic names — `input`,
+`ctx_in`, `storage`, `source`, `context` — match no declared service or port and
+fail at runtime with an invalid-argument-name error. The type annotation does not
+rescue a wrong name; annotations document the context, names bind it.
+
+Hyphens in a service or port name normalise to underscores in the signature, just
+as they do for the transform (`"s3-source"` → `s3_source`).
+
+### `driver=` names the storage service, never the contract executor
+
+`.service(service_name=..., driver=...)` declares which infra-profile service the
+contract receives a context for, and `driver=` selects the context *class*. Pass
+the driver the profile declares for that service:
+
+```python
+.service(service_name="adls", driver="nxd:adls:2.0.0")        # -> AzureDataLakeStorage
+.service(service_name="adls", driver="nxd:kubernetes/contract:1.0.0")  # -> bare Context
+```
+
+`nxd:kubernetes/contract:1.0.0` is the **contract executor**, which the platform
+selects on its own; the package excludes it from service resolution precisely
+because "it is not an infra-profile service" (`nxd/spec/_spec.py`). Passing it
+here resolves to a bare `Context`, exactly as a fabricated driver does, so every
+`adls.model_paths`, `adls.container` and `adls.tenant_id` in the contract raises
+at verification time. Confirm the mapping against the installed package when in
+doubt:
+
+```python
+from nxd.spec._spec import storage_context_type_for_driver
+storage_context_type_for_driver("nxd:adls:2.0.0")   # (AzureDataLakeStorage, AzureDataLakeStorage)
+```
+
+This one hides well. A contract that returns `PASS` without touching the context
+never dereferences anything, so a wrong driver is invisible until the body starts
+doing real work. Bundled examples that carry both faults look like working
+precedent and are not.
+
+### A verify that cannot fail is a defect
+
+Every contract must read the data it is asserting over and be capable of returning
+`VerifyResultEnum.FAILED`. A body that returns `PASS` unconditionally passes
+review, passes validation, and passes at runtime while asserting nothing — worse
+than no contract at all, because the mesh now advertises a guarantee nobody
+checks.
+
+```python
+# WRONG — asserts nothing, can never fail
+@data_product.on_verify()
+def verify(adls: AzureDataLakeStorage) -> VerifyResult:
+    return VerifyResult(VerifyResultEnum.PASS, {"result": "Looks good"})
+```
+
+A correct body reads the published data, evaluates the stated rule, and reports
+the offending values and row counts on failure so the owner can act:
+
+```python
+observed = frame[CHANNEL_COLUMN].astype(str)
+unexpected = sorted(set(observed) - set(ACCEPTED_CHANNELS))
+if unexpected:
+    return VerifyResult(
+        VerifyResultEnum.FAILED,
+        {
+            "result": f"{int(observed.isin(unexpected).sum())} row(s) outside the accepted set.",
+            "unexpected_values": unexpected[:20],
+            "rows_checked": int(len(frame)),
+        },
+    )
+```
+
+`VerifyResultEnum` carries `PASS`, `WARNING` and `FAILED`. Reach for `WARNING`
+when the data is usable but degraded; do not use it to soften a real violation.
+
+**Some bundled public examples ship unconditional-`PASS` contracts.** They are
+seeding fixtures, not a pattern to copy. When an example's contract body cannot
+fail, write a real one rather than mirroring it.
 
 ---
 

@@ -2,6 +2,7 @@
 
 ## Contents
 - Purpose
+- What the checker decides
 - Required review
 - Offline spec-build check
 - Validation result clarity
@@ -18,7 +19,34 @@ This step exists because a scaffold can look complete while still containing
 demo service URLs, missing packaging entries, vague runtime status, or launch
 risks that only surface after the user spends time testing.
 
+## What the checker decides
+
+`scripts/preflight_check.py` is standard-library only and never imports the
+product, so it runs before dependencies are installed. Each check covers a fault
+`nxd validate` structurally cannot see, because validate resolves services but
+never executes a transform, never executes a contract, and never installs the
+package.
+
+| Check | Fault |
+|---|---|
+| `flat-layout` | several shipped top-level modules with neither `py-modules` nor a root `__init__.py`; `nxd launch` fails at `Installing dependencies` |
+| `verify-bind` | a contract whose first parameter is not named after a declared service, input or port; arguments bind by name |
+| `verify-weak` | a contract that never references `FAILED` or `WARNING`, so it can only return `PASS` and asserts nothing |
+| `version-drift` | `spec.py` and `pyproject.toml` disagree on the version |
+| `contract-driver` | a contract wired with the contract-executor driver, which hands it a bare `Context` |
+| `surface` | an access/approval modifier or executor config no README line justifies (warns, never blocks) |
+
+It cannot judge two things that `nxd validate` also cannot: whether a `driver=`
+names the service's real driver, and whether a glossary term ID exists. Both are
+by-hand items below.
+
 ## Required review
+
+Run `python3 scripts/preflight_check.py <data_product_directory>` first: it
+mechanically decides the flat-layout, verify-bind, verify-weak, version-drift and
+unrequested-surface items below, and reports file and line. `surface` findings are
+warnings: they ask for a written rationale, not for removal. The remaining items
+need judgement.
 
 Check at least:
 
@@ -27,9 +55,39 @@ Check at least:
   are real values or explicit unresolved decisions. Do not leave a demo host as
   the apparent default.
 - **Import/package integrity:** `spec.py` can import its shims, shims export
-  every DSL name used, `contracts/` is a package when imported as a package,
-  `pyproject.toml` ships every module/package needed by `spec.py`, and
+  every DSL name used, `contracts/` is a package when imported as a package, and
   `.nxdignore` excludes only local-only files.
+- **Flat-layout packaging guard (binary check):** count the top-level `.py`
+  modules that actually ship (those `.nxdignore` does not exclude). If more than
+  one ships (the usual `spec`, `models`, `nxd_spec`, `nxd_models`, `transform`
+  set), the bundle MUST carry exactly one of: a `[tool.setuptools]` block in
+  `pyproject.toml` whose `py-modules` lists every shipped module, or an empty
+  `__init__.py` at the product root making it a package. With neither, `nxd
+  launch` fails at `Installing dependencies` with `error: Multiple top-level
+  modules discovered in a flat-layout`. `nxd validate` passes regardless, so
+  validation is not evidence this is handled.
+- **Verify substance and binding:** every `contracts/` verify function names its
+  service-context parameter after the service it is wired to (`.service(
+  service_name="adls", ...)` → `def verify(adls: ...)`), and every body reads the
+  data and can return `VerifyResultEnum.FAILED`. A contract that returns `PASS`
+  unconditionally, or takes a generic parameter name such as `input` or `ctx`, is
+  a defect. Neither fault is reachable by `nxd validate`, which never executes a
+  contract. See [promises-contracts.md](promises-contracts.md).
+- **No unrequested surface:** every builder call in `spec.py` traces to something
+  the user asked for or to a documented platform requirement. Access-control and
+  approval modifiers (`.managed_access()`, `.skip_approval_flow()`,
+  `.enable_public_access()`), executor `.config(...)` blocks, resource limits and
+  provisioning settings change deployed behaviour and must not be invented to
+  look thorough. If one is genuinely needed, say why in the README; otherwise
+  leave the platform default.
+- **Version coherence:** the `version` in `spec.py` and the `version` in
+  `pyproject.toml` agree, or the README records why they differ.
+- **Driver strings, by eye:** every `driver="nxd:...:x.y.z"` in `spec.py` matches
+  what the infra profile declares for that service. Nothing checks this for you.
+  `nxd validate` accepts a wrong version *and* a fabricated driver name, exiting 0
+  either way, and the static checker cannot resolve a profile it may not have. A
+  wrong driver string surfaces at launch or at contract-execution time, long after
+  the evidence that would explain it.
 - **Lazy import integrity:** `transform.py` avoids top-level imports for heavy
   runtime-only dependencies such as Spark, torch, sentence-transformers,
   langchain embedding/vector integrations, browser clients, and vendor SDKs not
