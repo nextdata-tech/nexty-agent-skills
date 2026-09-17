@@ -18,6 +18,7 @@ from _repo_paths import REPO_ROOT
 
 import dp_scenarios.runner.claude_adapter as adapter_module
 from dp_scenarios.runner.claude_adapter import (
+    ClaudeAdapterError,
     ClaudeCodeAdapter,
     _update_from_state_dir,
     _update_machine_artifacts,
@@ -806,6 +807,7 @@ def _spawned_claude_argv(
     monkeypatch: pytest.MonkeyPatch,
     *,
     allow_bash: bool,
+    supervisor_data_dir: Path | None = None,
 ) -> list[str]:
     """Return the argv the adapter really hands to ``subprocess.Popen``."""
 
@@ -818,6 +820,11 @@ def _spawned_claude_argv(
     fixture_dir.mkdir(exist_ok=True)
     mcp_config = tmp_path / "mcp.json"
     mcp_config.write_text("{}", encoding="utf-8")
+    if supervisor_data_dir is None:
+        supervisor_data_dir = tmp_path / "desktop-state"
+    supervisor_data_dir.mkdir(exist_ok=True)
+    (supervisor_data_dir / "captures").mkdir(exist_ok=True)
+    (supervisor_data_dir / "blueprints").mkdir(exist_ok=True)
     workspace = tmp_path / "agent"
     workspace.mkdir(exist_ok=True)
     monkeypatch.chdir(workspace)
@@ -855,9 +862,29 @@ def _spawned_claude_argv(
         allow_bash=allow_bash,
         mcp_config=mcp_config,
         allowed_tools="mcp__nxd-desktop__build_data_product",
+        supervisor_data_dir=supervisor_data_dir,
     )
     adapter.start()
     return captured["argv"]
+
+
+def test_spawned_claude_can_read_only_supervisor_retained_content_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor_data_dir = tmp_path / "desktop-state"
+    argv = _spawned_claude_argv(
+        tmp_path,
+        monkeypatch,
+        allow_bash=False,
+        supervisor_data_dir=supervisor_data_dir,
+    )
+
+    add_dirs = [Path(value) for value in _flag_values(argv, "--add-dir")]
+    assert add_dirs[-2:] == [
+        supervisor_data_dir / "captures",
+        supervisor_data_dir / "blueprints",
+    ]
+    assert supervisor_data_dir not in add_dirs
 
 
 def _flag_values(argv: list[str], flag: str) -> list[str]:
@@ -963,6 +990,10 @@ def _spawned_claude_environment(
     fixture_dir.mkdir(exist_ok=True)
     mcp_config = tmp_path / "mcp.json"
     mcp_config.write_text("{}", encoding="utf-8")
+    supervisor_data_dir = tmp_path / "desktop-state"
+    supervisor_data_dir.mkdir(exist_ok=True)
+    (supervisor_data_dir / "captures").mkdir(exist_ok=True)
+    (supervisor_data_dir / "blueprints").mkdir(exist_ok=True)
     workspace = tmp_path / "agent"
     workspace.mkdir(exist_ok=True)
     monkeypatch.chdir(workspace)
@@ -1000,9 +1031,83 @@ def _spawned_claude_environment(
         allow_bash=False,
         mcp_config=mcp_config,
         allowed_tools="mcp__nxd-desktop__build_data_product",
+        supervisor_data_dir=supervisor_data_dir,
     )
     adapter.start()
     return captured["env"]
+
+
+def test_mcp_config_requires_supervisor_data_dir_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    claude.chmod(0o700)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir()
+    mcp_config = tmp_path / "mcp.json"
+    mcp_config.write_text("{}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    adapter = ClaudeCodeAdapter(
+        claude=claude,
+        model="test",
+        effort="low",
+        plugin_dir=plugin_dir,
+        repo_root=REPO_ROOT,
+        fixture_dir=fixture_dir,
+        artifact_dir=tmp_path / "artifacts",
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path(sys.executable),
+        claude_config_dir=None,
+        timeout_s=5,
+        max_budget_usd=None,
+        append_system_prompt="test",
+        mcp_config=mcp_config,
+    )
+
+    with pytest.raises(ClaudeAdapterError, match="supervisor-data-dir"):
+        adapter.start()
+
+
+def test_external_supervisor_data_dir_must_already_have_retained_input_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    claude.chmod(0o700)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir()
+    mcp_config = tmp_path / "mcp.json"
+    mcp_config.write_text("{}\n", encoding="utf-8")
+    supervisor_data_dir = tmp_path / "desktop-state"
+    supervisor_data_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    adapter = ClaudeCodeAdapter(
+        claude=claude,
+        model="test",
+        effort="low",
+        plugin_dir=plugin_dir,
+        repo_root=REPO_ROOT,
+        fixture_dir=fixture_dir,
+        artifact_dir=tmp_path / "artifacts",
+        desktop_supervisor=Path("/usr/bin/true"),
+        desktop_python=Path(sys.executable),
+        claude_config_dir=None,
+        timeout_s=5,
+        max_budget_usd=None,
+        append_system_prompt="test",
+        mcp_config=mcp_config,
+        supervisor_data_dir=supervisor_data_dir,
+    )
+
+    with pytest.raises(ClaudeAdapterError, match="captures.*blueprints"):
+        adapter.start()
 
 
 def test_openai_key_is_stripped_from_the_spawned_agent_environment(
@@ -1076,6 +1181,10 @@ def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> 
     plugin_dir.mkdir(exist_ok=True)
     fixture_dir = tmp_path / "fixture"
     fixture_dir.mkdir(exist_ok=True)
+    supervisor_data_dir = tmp_path / "desktop-state"
+    supervisor_data_dir.mkdir(exist_ok=True)
+    (supervisor_data_dir / "captures").mkdir(exist_ok=True)
+    (supervisor_data_dir / "blueprints").mkdir(exist_ok=True)
     return ClaudeCodeAdapter(
         claude=fake_claude,
         model="test",
@@ -1091,6 +1200,7 @@ def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> 
         max_budget_usd=None,
         append_system_prompt="test",
         mcp_config=tmp_path / "mcp.json",
+        supervisor_data_dir=supervisor_data_dir,
     )
 
 
@@ -1526,6 +1636,38 @@ def test_new_pending_reviewer_id_cannot_restart_absolute_deadline(tmp_path: Path
         encoding="utf-8",
     )
     assert adapter._refresh_review_deadline(started + 0.2) is None
+    adapter.close()
+
+
+def test_new_capture_without_a_reviewer_id_disarms_the_previous_deadline(
+    tmp_path: Path,
+) -> None:
+    fake_claude = tmp_path / "unused-fake-claude.py"
+    fake_claude.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
+    state = tmp_path / "review-state.json"
+    adapter._review_guard_state = state
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "state": "review_dispatch_pending",
+                "review_tool_use_id": "accepted-review",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    started = 100.0
+    assert adapter._refresh_review_deadline(started) is not None
+    state.write_text(
+        json.dumps({"version": 1, "state": "review_dispatch_pending"}),
+        encoding="utf-8",
+    )
+    assert adapter._refresh_review_deadline(started + 0.1) is None
+    assert adapter._review_deadline_id is None
+    assert adapter._review_deadline_at is None
     adapter.close()
 
 

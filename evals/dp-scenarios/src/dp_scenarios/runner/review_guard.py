@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
+import shlex
 import sys
+import time
 from typing import Any
 
 try:
@@ -27,7 +30,9 @@ except ImportError:  # pragma: no cover - Windows is not a supported live host.
 
 STATE_ENV = "NXD_EVAL_REVIEW_GUARD_STATE"
 STATE_VERSION = 1
-REVIEW_DEADLINE_MS = 120_000
+REVIEW_DEADLINE_MS = 300_000
+REVIEW_FINALIZATION_RESERVE_MS = 60_000
+REVIEW_INSPECTION_CUTOFF_MS = REVIEW_DEADLINE_MS - REVIEW_FINALIZATION_RESERVE_MS
 NORMAL = "normal"
 REVIEW_DISPATCH_PENDING = "review_dispatch_pending"
 RELAY_PENDING = "relay_pending"
@@ -41,10 +46,35 @@ REVIEW_MARKER_KEYS = frozenset(
 )
 REVIEW_RECORD = "review-record.json"
 ATTESTATIONS = "agent-attestations.json"
+_REVIEW_HANDOFF_STATE_KEYS = (
+    "review_tool_use_id",
+    "report_tool_use_id",
+    "review_round_index",
+    "review_started_at",
+    "retained_capture_root",
+    "retained_blueprint_path",
+    "review_input_error",
+)
 SANITIZED_REQUEST_LABEL = "Sanitized original request:"
 # Runner-owned protocol line: the accepted child must see the same absolute
 # wall-clock bound that the transport enforces.
 REVIEW_BUDGET_LINE = f"review_time_budget_seconds: {REVIEW_DEADLINE_MS / 1000:.0f}"
+REVIEW_INSPECTION_CUTOFF_LINE = (
+    f"review_inspection_cutoff_seconds: {REVIEW_INSPECTION_CUTOFF_MS / 1000:.0f}"
+)
+REVIEW_RESERVE_INSTRUCTION = (
+    f"After {REVIEW_INSPECTION_CUTOFF_MS / 1000:.0f} seconds, the runner-owned "
+    "guard denies further child Read, Glob, and Grep calls and the reviewer "
+    "must return complete or explicitly partial evidenced claims immediately. "
+    "The finalization reserve remains available for terminal return and does "
+    "not extend or reset the hard deadline."
+)
+REVIEW_RESERVE_DIAGNOSTIC = (
+    f"The retained-capture reviewer inspection window ended after "
+    f"{REVIEW_INSPECTION_CUTOFF_MS / 1000:.0f} seconds; return complete or "
+    "explicitly partial evidenced claims immediately. The finalization reserve "
+    "remains available for terminal return."
+)
 REVIEW_SKILL_INSTRUCTION = "Load and follow nxd-review-closure."
 REVIEW_ALLOWED_SUBAGENT_TYPES = frozenset({"general-purpose"})
 REVIEW_METADATA_STATUSES = frozenset(
@@ -62,7 +92,12 @@ class GuardError(RuntimeError):
     """Raised for malformed or unavailable guard state."""
 
 
-def write_initial_state(path: Path, *, workspace_root: Path | None = None) -> None:
+def write_initial_state(
+    path: Path,
+    *,
+    workspace_root: Path | None = None,
+    review_roots: Sequence[Path] | None = None,
+) -> None:
     """Create a fresh state file owned by the runner, never by the agent."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +109,8 @@ def write_initial_state(path: Path, *, workspace_root: Path | None = None) -> No
     }
     if workspace_root is not None:
         payload["workspace_root"] = str(workspace_root.resolve())
+    if review_roots is not None:
+        payload["review_roots"] = [str(root.resolve()) for root in review_roots]
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags | no_follow, 0o600)
@@ -404,6 +441,179 @@ def _capture_requirement(event: dict[str, object]) -> dict[str, object] | None:
     return None
 
 
+def _review_input_is_available(
+    capture: dict[str, object], state: dict[str, object]
+) -> bool:
+    """Require fresh supervisor-retained paths to exist under allowed roots."""
+
+    return _review_input_availability_error(capture, state) is None
+
+
+def _review_input_availability_error(
+    capture: dict[str, object], state: dict[str, object]
+) -> str | None:
+    """Classify retained-input availability without reading retained content."""
+
+    raw_roots = state.get("review_roots")
+    if raw_roots is None:
+        # Replay-only hook fixtures do not have a live supervisor root. The
+        # live adapter always supplies one before Claude starts.
+        return None
+    if not isinstance(raw_roots, list) or not raw_roots:
+        return "review_roots_unavailable"
+    roots: list[Path] = []
+    for value in raw_roots:
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            return "review_roots_unavailable"
+        try:
+            root = Path(value).resolve(strict=False)
+        except OSError:
+            return "review_roots_unavailable"
+        if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+            return "review_roots_unavailable"
+        roots.append(root)
+
+    def path_error(value: object, *, directory: bool) -> str | None:
+        if not isinstance(value, str) or not value or not Path(value).is_absolute():
+            return "paths_unavailable"
+        candidate = Path(value)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            return "paths_unavailable"
+        if not any(resolved == root or root in resolved.parents for root in roots):
+            return "review_input_outside_configured_roots"
+        if directory:
+            if not resolved.is_dir() or not os.access(
+                resolved, os.R_OK | os.X_OK
+            ):
+                return "paths_unavailable"
+        elif not resolved.is_file() or not os.access(resolved, os.R_OK):
+            return "paths_unavailable"
+        return None
+
+    for value, directory in (
+        (capture.get("retained_capture_root"), True),
+        (capture.get("retained_blueprint_path"), False),
+    ):
+        error = path_error(value, directory=directory)
+        if error is not None:
+            return error
+    # Freshness is bound by the supervisor's current RequirementView and the
+    # exact path pair it returned.  Do not infer identity from hashes encoded
+    # in filenames or directory names: the workflow-v2 contract deliberately
+    # treats those paths as opaque values, and deployments may use arbitrary
+    # retention layouts.
+    return None
+
+
+def _review_read_path_is_allowed(
+    event: dict[str, object], state: dict[str, object]
+) -> bool:
+    """Restrict child filesystem tools to this generation's exact inputs."""
+
+    if state.get("review_roots") is None:
+        # Preserve the dependency-free replay hook fixture contract. Live
+        # adapters always configure roots, including an empty sentinel when
+        # configuration is missing, so they never take this branch.
+        return True
+    if not _review_input_is_available(state, state):
+        return False
+    tool = _event_tool_name(event)
+    tool_input = _event_tool_input(event)
+    raw_path = (
+        tool_input.get("file_path", tool_input.get("path"))
+        if tool == "read"
+        else tool_input.get("path")
+    )
+    if tool == "glob" and not _glob_pattern_is_contained(tool_input.get("pattern")):
+        return False
+    if not isinstance(raw_path, str) or not raw_path or not Path(raw_path).is_absolute():
+        return False
+    try:
+        candidate = Path(raw_path).resolve(strict=False)
+        capture = Path(str(state["retained_capture_root"])).resolve(strict=True)
+        blueprint = Path(str(state["retained_blueprint_path"])).resolve(strict=True)
+    except (KeyError, OSError):
+        return False
+    return (
+        candidate == blueprint
+        or candidate == capture
+        or capture in candidate.parents
+    )
+
+
+def _glob_pattern_is_contained(value: object) -> bool:
+    """Reject Glob patterns that can traverse outside their explicit root."""
+
+    if not isinstance(value, str) or not value:
+        return False
+    normalized = value.replace("\\", "/")
+    return not normalized.startswith("/") and ".." not in normalized.split("/")
+
+
+def _owner_glob_targets_review_root(value: object, state: dict[str, object]) -> bool:
+    """Return whether an owner's absolute Glob pattern names a retained root."""
+
+    if not isinstance(value, str) or not value:
+        return False
+    pattern = value.replace("\\", "/")
+    raw_roots = state.get("review_roots")
+    if not isinstance(raw_roots, list):
+        return False
+    for raw_root in raw_roots:
+        if not isinstance(raw_root, str) or not Path(raw_root).is_absolute():
+            continue
+        try:
+            root = str(Path(raw_root).resolve(strict=False)).replace("\\", "/")
+        except OSError:
+            continue
+        if pattern == root or pattern.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _owner_bash_targets_review_root(value: object, state: dict[str, object]) -> bool:
+    """Return whether a shell command names a retained root path."""
+
+    if not isinstance(value, str) or not value:
+        return False
+    raw_roots = state.get("review_roots")
+    if not isinstance(raw_roots, list):
+        return False
+    command = value.replace("\\", "/")
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        return True
+    for raw_root in raw_roots:
+        if not isinstance(raw_root, str) or not Path(raw_root).is_absolute():
+            continue
+        try:
+            root = Path(raw_root).resolve(strict=False)
+        except OSError:
+            continue
+        root_text = str(root).replace("\\", "/")
+        if root_text in command:
+            return True
+        for token in tokens:
+            if isinstance(token, str) and _under_review_root(token, state):
+                return True
+    return False
+
+
+def _review_inspection_window_is_open(state: dict[str, object]) -> bool:
+    """Return whether child inspection is still allowed in this dispatch."""
+
+    started_at = state.get("review_started_at")
+    if not isinstance(started_at, (int, float)) or isinstance(started_at, bool):
+        # A live accepted dispatch always records this value. Missing it is a
+        # fail-closed condition: the guard cannot establish that inspection is
+        # still inside the pre-reserve window.
+        return False
+    return time.monotonic() - started_at < REVIEW_INSPECTION_CUTOFF_MS / 1000.0
+
+
 def _report_parameters(tool_input: dict[str, object]) -> tuple[dict[str, object], dict[str, object]] | None:
     action = tool_input.get("action")
     if not isinstance(action, dict) or action.get("type") != REPORT_ACTION:
@@ -503,6 +713,36 @@ def _safe_write_path(value: object, state: dict[str, object]) -> bool:
     return True
 
 
+def _under_review_root(value: object, state: dict[str, object]) -> bool:
+    """Return whether an owner write targets supervisor-retained content."""
+
+    if not isinstance(value, str) or not value:
+        return False
+    raw_roots = state.get("review_roots")
+    if not isinstance(raw_roots, list) or not raw_roots:
+        return False
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        workspace_root = state.get("workspace_root")
+        if not isinstance(workspace_root, str) or not Path(workspace_root).is_absolute():
+            return False
+        candidate = Path(workspace_root).resolve() / candidate
+    try:
+        resolved = candidate.resolve(strict=False)
+    except OSError:
+        return False
+    for raw_root in raw_roots:
+        if not isinstance(raw_root, str) or not Path(raw_root).is_absolute():
+            continue
+        try:
+            root = Path(raw_root).resolve(strict=False)
+        except OSError:
+            continue
+        if resolved == root or root in resolved.parents:
+            return True
+    return False
+
+
 def _allow(*, updated_input: dict[str, object] | None = None) -> dict[str, object]:
     if updated_input is None:
         return {}
@@ -559,6 +799,8 @@ def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) 
         return False
     if lines.count(REVIEW_BUDGET_LINE) != 1:
         return False
+    if lines.count(REVIEW_INSPECTION_CUTOFF_LINE) != 1:
+        return False
     # The request is caller-authored and must never be reconstructed by the
     # hook.  Require exactly one exact label and only check that its value is
     # nonblank; sanitization itself remains the dispatcher's responsibility.
@@ -570,12 +812,20 @@ def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) 
     )
 
 
-def _child_pre(event: dict[str, object]) -> dict[str, object]:
+def _child_pre(
+    event: dict[str, object], state: dict[str, object]
+) -> dict[str, object]:
     """Keep the retained-input reviewer read-only and single-level."""
 
     tool = _event_tool_name(event)
     if tool in {"read", "glob", "grep"}:
-        return _allow()
+        if not _review_inspection_window_is_open(state):
+            return _deny(REVIEW_RESERVE_DIAGNOSTIC)
+        if _review_read_path_is_allowed(event, state):
+            return _allow()
+        return _deny(
+            "The retained-capture reviewer may read only the current supervisor-retained capture and approved blueprint."
+        )
     if tool == "skill":
         tool_input = _event_tool_input(event)
         skill = _string(tool_input.get("skill", tool_input.get("name")))
@@ -590,7 +840,39 @@ def _child_pre(event: dict[str, object]) -> dict[str, object]:
 def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, object]:
     tool = _event_tool_name(event)
     if _is_child(event, state):
-        return _child_pre(event)
+        return _child_pre(event, state)
+    if tool in {"write", "edit"}:
+        path = _event_tool_input(event).get(
+            "file_path", _event_tool_input(event).get("path")
+        )
+        if _under_review_root(path, state):
+            return _deny(
+                "The owning conversation may not modify supervisor-retained captures or blueprints."
+            )
+    if tool == "notebookedit":
+        if _under_review_root(_event_tool_input(event).get("notebook_path"), state):
+            return _deny(
+                "The owning conversation may not modify supervisor-retained captures or blueprints."
+            )
+    if tool in {"read", "glob", "grep"}:
+        path = _event_tool_input(event).get(
+            "file_path", _event_tool_input(event).get("path")
+        )
+        if _under_review_root(path, state) or (
+            tool == "glob"
+            and _owner_glob_targets_review_root(
+                _event_tool_input(event).get("pattern"), state
+            )
+        ):
+            return _deny(
+                "The owning conversation may not inspect supervisor-retained captures or blueprints."
+            )
+    if tool == "bash" and _owner_bash_targets_review_root(
+        _event_tool_input(event).get("command"), state
+    ):
+        return _deny(
+            "The owning conversation may not use shell access to inspect or modify supervisor-retained captures or blueprints."
+        )
     if state["state"] == REVIEW_DISPATCH_PENDING:
         if tool not in {"agent", "task"}:
             return _deny(
@@ -599,7 +881,35 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
         if state.get("review_tool_use_id"):
             return _deny("The captured review already has a dispatcher; use its returned claims and relay the report.")
         if state.get("review_input_error"):
+            if state["review_input_error"] == "paths_unavailable":
+                return _deny(
+                    "Reviewer dispatch rejected: the fresh supervisor-retained capture or blueprint is unavailable; do not use a fallback path."
+                )
+            if state["review_input_error"] == "review_roots_unavailable":
+                return _deny(
+                    "Reviewer dispatch rejected: the configured supervisor retained-input roots are unavailable; check --supervisor-data-dir and the nxd workflow-v2 captures/blueprints layout."
+                )
+            if state["review_input_error"] == "review_input_outside_configured_roots":
+                return _deny(
+                    "Reviewer dispatch rejected: the supervisor returned retained paths outside the configured captures/blueprints roots; do not use a fallback path."
+                )
             return _deny("Reviewer dispatch rejected: supervisor review_input is missing or malformed.")
+        if not _review_input_is_available(state, state):
+            state["review_input_error"] = (
+                _review_input_availability_error(state, state)
+                or "paths_unavailable"
+            )
+            if state["review_input_error"] == "review_roots_unavailable":
+                return _deny(
+                    "Reviewer dispatch rejected: the configured supervisor retained-input roots are unavailable; check --supervisor-data-dir and the nxd workflow-v2 captures/blueprints layout."
+                )
+            if state["review_input_error"] == "review_input_outside_configured_roots":
+                return _deny(
+                    "Reviewer dispatch rejected: the supervisor returned retained paths outside the configured captures/blueprints roots; do not use a fallback path."
+                )
+            return _deny(
+                "Reviewer dispatch rejected: the fresh supervisor-retained capture or blueprint is unavailable; do not use a fallback path."
+            )
         tool_input = _event_tool_input(event)
         subagent_type = _string(tool_input.get("subagent_type"))
         if subagent_type not in REVIEW_ALLOWED_SUBAGENT_TYPES:
@@ -617,6 +927,9 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
             )
         state["review_tool_use_id"] = _event_id(event, "tool_use_id", "toolUseId")
         state["review_round_index"] = marker[1]
+        # Persist a monotonic timestamp so each short-lived hook process
+        # enforces the same absolute inspection window for the child.
+        state["review_started_at"] = time.monotonic()
         # The adapter disables background tasks for the whole Claude process.
         # Do not mutate the Agent input here: recent Claude Code versions omit
         # ``run_in_background`` from the in-process schema entirely when that
@@ -688,7 +1001,15 @@ def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, obj
                 # enough for the runner to observe a valid terminal state.
                 # A fresh capture clears it before accepting another review.
                 state["completed_review_tool_use_id"] = state.get("review_tool_use_id")
-                for key in ("review_tool_use_id", "report_tool_use_id", "review_round_index"):
+                for key in (
+                    "review_tool_use_id",
+                    "report_tool_use_id",
+                    "review_round_index",
+                    "review_started_at",
+                    "retained_capture_root",
+                    "retained_blueprint_path",
+                    "review_input_error",
+                ):
                     state.pop(key, None)
             else:
                 state["state"] = RELAY_PENDING
@@ -698,16 +1019,31 @@ def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, obj
             action = tool_input.get("action")
             if isinstance(action, dict) and action.get("type") == "capture":
                 capture = _capture_requirement(event)
+                # Every capture supersedes the previous generation, including
+                # a malformed or non-review capture. Clear all old paths and
+                # dispatch identifiers before applying the new snapshot so a
+                # failed handoff can never reuse stale retained inputs.
+                for key in _REVIEW_HANDOFF_STATE_KEYS:
+                    state.pop(key, None)
                 if capture is not None:
-                    state.pop("review_input_error", None)
+                    if "review_input_error" not in capture:
+                        availability_error = _review_input_availability_error(
+                            capture, state
+                        )
+                        if availability_error is not None:
+                            capture["review_input_error"] = availability_error
                     state.pop("completed_review_tool_use_id", None)
                     state.update(capture)
                     state["state"] = REVIEW_DISPATCH_PENDING
+                else:
+                    state["state"] = NORMAL
                 return _allow()
         return _allow()
 
     if event_name == "stop":
         if state.get("state") in {REVIEW_DISPATCH_PENDING, RELAY_PENDING, REPORT_IN_FLIGHT}:
+            if state.get("state") == REVIEW_DISPATCH_PENDING and state.get("review_input_error"):
+                return _allow()
             return _block_stop("The captured workflow review has not been relayed; finish the reviewer handoff before stopping.")
         return _allow()
 
@@ -754,6 +1090,10 @@ __all__ = [
     "NORMAL",
     "REVIEW_DEADLINE_MS",
     "REVIEW_BUDGET_LINE",
+    "REVIEW_INSPECTION_CUTOFF_MS",
+    "REVIEW_INSPECTION_CUTOFF_LINE",
+    "REVIEW_RESERVE_INSTRUCTION",
+    "REVIEW_RESERVE_DIAGNOSTIC",
     "REPORT_IN_FLIGHT",
     "RELAY_PENDING",
     "REVIEW_DISPATCH_PENDING",

@@ -7,11 +7,14 @@ from pathlib import Path
 
 import pytest
 
+import dp_scenarios.runner.review_guard as guard_module
 from dp_scenarios.runner.review_guard import (
     NORMAL,
     RELAY_PENDING,
     REVIEW_BUDGET_LINE,
     REVIEW_DISPATCH_PENDING,
+    REVIEW_INSPECTION_CUTOFF_MS,
+    REVIEW_INSPECTION_CUTOFF_LINE,
     handle_event,
     settings_payload,
     write_initial_state,
@@ -26,7 +29,11 @@ def _state(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _capture_event() -> dict[str, object]:
+def _capture_event(
+    *,
+    retained_capture_root: str = RETAINED_CAPTURE_ROOT,
+    retained_blueprint_path: str = RETAINED_BLUEPRINT_PATH,
+) -> dict[str, object]:
     return {
         "hook_event_name": "PostToolUse",
         "tool_name": "mcp__nxd-desktop__advance_workflow",
@@ -46,8 +53,8 @@ def _capture_event() -> dict[str, object]:
                         "id": "review",
                         "status": "pending",
                         "review_input": {
-                            "retained_capture_root": RETAINED_CAPTURE_ROOT,
-                            "retained_blueprint_path": RETAINED_BLUEPRINT_PATH,
+                            "retained_capture_root": retained_capture_root,
+                            "retained_blueprint_path": retained_blueprint_path,
                         },
                     }
                 ],
@@ -85,6 +92,7 @@ def _review_prompt(
         f"retained_blueprint_path: {retained_blueprint_path}\n"
         "Load and follow nxd-review-closure.\n"
         f"{REVIEW_BUDGET_LINE}\n"
+        f"{REVIEW_INSPECTION_CUTOFF_LINE}\n"
         f"Sanitized original request: {sanitized_request}"
     )
 
@@ -297,6 +305,66 @@ def test_async_agent_launch_does_not_satisfy_the_review_dispatch(tmp_path: Path)
     assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
 
 
+def test_reviewer_reads_are_cut_off_with_time_for_terminal_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    clock = 100.0
+    monkeypatch.setattr(guard_module.time, "monotonic", lambda: clock)
+    handle_event(_capture_event(), state_path=state_path)
+    handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "session_id": "owner-session",
+            "tool_input": {"subagent_type": "general-purpose", "prompt": _review_prompt()},
+        },
+        state_path=state_path,
+    )
+
+    before_cutoff = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "agent_id": "review-agent",
+            "session_id": "review-session",
+            "tool_input": {"file_path": "/captured/closure"},
+        },
+        state_path=state_path,
+    )
+    assert before_cutoff == {}
+
+    clock += REVIEW_INSPECTION_CUTOFF_MS / 1000.0 + 0.1
+    after_cutoff = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "agent_id": "review-agent",
+            "session_id": "review-session",
+            "tool_input": {"file_path": "/captured/closure"},
+        },
+        state_path=state_path,
+    )
+    assert after_cutoff["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "inspection window ended" in after_cutoff["hookSpecificOutput"]["permissionDecisionReason"]
+
+    # The reserve still allows the already-running child to return its claims.
+    assert handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Skill",
+            "agent_id": "review-agent",
+            "session_id": "review-session",
+            "tool_input": {"skill": "nxd-review-closure"},
+        },
+        state_path=state_path,
+    ) == {}
+
+
 def test_normal_agent_is_not_constrained_before_a_review_is_pending(tmp_path: Path) -> None:
     state_path = tmp_path / "guard-state.json"
     workspace = tmp_path / "agent"
@@ -484,6 +552,414 @@ def test_capture_persists_supervisor_retained_review_input(tmp_path: Path) -> No
     assert state["retained_blueprint_path"] == RETAINED_BLUEPRINT_PATH
 
 
+def test_live_capture_rejects_missing_or_stale_retained_paths(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    captures.mkdir(parents=True)
+    blueprints.mkdir(parents=True)
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+
+    fresh_capture = captures / "current" / "capture"
+    fresh_capture.mkdir(parents=True)
+    fresh_blueprint = blueprints / "current" / "approved-blueprint.md"
+    fresh_blueprint.parent.mkdir(parents=True)
+    fresh_blueprint.write_text("approved\n", encoding="utf-8")
+    handle_event(
+        _capture_event(
+            retained_capture_root=str(fresh_capture),
+            retained_blueprint_path=str(fresh_blueprint),
+        ),
+        state_path=state_path,
+    )
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+    assert "review_input_error" not in _state(state_path)
+
+    missing_state = tmp_path / "missing-state.json"
+    write_initial_state(
+        missing_state,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+    handle_event(
+        _capture_event(
+            retained_capture_root=str(captures / "missing" / "capture"),
+            retained_blueprint_path=str(fresh_blueprint),
+        ),
+        state_path=missing_state,
+    )
+    assert _state(missing_state)["review_input_error"] == "paths_unavailable"
+
+    outside_state = tmp_path / "outside-state.json"
+    outside_capture = tmp_path / "older-capture"
+    outside_capture.mkdir()
+    outside_blueprint = tmp_path / "older-blueprint.md"
+    outside_blueprint.write_text("older\n", encoding="utf-8")
+    write_initial_state(
+        outside_state,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+    handle_event(
+        _capture_event(
+            retained_capture_root=str(outside_capture),
+            retained_blueprint_path=str(outside_blueprint),
+        ),
+        state_path=outside_state,
+    )
+    assert _state(outside_state)["review_input_error"] == "review_input_outside_configured_roots"
+
+
+def test_missing_supervisor_retained_roots_get_a_distinct_diagnostic(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+
+    handle_event(_capture_event(), state_path=state_path)
+    assert _state(state_path)["review_input_error"] == "review_roots_unavailable"
+
+
+def test_live_reviewer_reads_only_the_current_capture_and_blueprint(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    fresh_capture = captures / "current" / "capture"
+    fresh_capture.mkdir(parents=True)
+    (fresh_capture / "models.py").write_text("# current\n", encoding="utf-8")
+    fresh_blueprint = blueprints / "current" / "approved-blueprint.md"
+    fresh_blueprint.parent.mkdir(parents=True)
+    fresh_blueprint.write_text("approved\n", encoding="utf-8")
+    older_capture = captures / "older" / "capture"
+    older_capture.mkdir(parents=True)
+    (older_capture / "models.py").write_text("# old\n", encoding="utf-8")
+    captures.mkdir(parents=True, exist_ok=True)
+    blueprints.mkdir(parents=True, exist_ok=True)
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+    handle_event(
+        _capture_event(
+            retained_capture_root=str(fresh_capture),
+            retained_blueprint_path=str(fresh_blueprint),
+        ),
+        state_path=state_path,
+    )
+
+    assert handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(
+                    retained_capture_root=str(fresh_capture),
+                    retained_blueprint_path=str(fresh_blueprint),
+                ),
+            },
+        },
+        state_path=state_path,
+    ) == {}
+
+    for tool_name in ("Glob", "Grep"):
+        defaulted = handle_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool_name,
+                "parent_tool_use_id": "review-tool",
+                "tool_input": {"pattern": "**/*"},
+            },
+            state_path=state_path,
+        )
+        assert defaulted["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "current supervisor-retained capture" in defaulted["hookSpecificOutput"]["permissionDecisionReason"]
+
+    escaped_glob = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Glob",
+            "parent_tool_use_id": "review-tool",
+            "tool_input": {"pattern": "../**/*", "path": str(fresh_capture)},
+        },
+        state_path=state_path,
+    )
+    assert escaped_glob["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    for tool_name, tool_input in (
+        ("Read", {"file_path": str(fresh_capture / "models.py")}),
+        ("Glob", {"pattern": "**/*", "path": str(fresh_capture)}),
+        ("Read", {"file_path": str(fresh_blueprint)}),
+    ):
+        assert handle_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool_name,
+                "parent_tool_use_id": "review-tool",
+                "tool_input": tool_input,
+            },
+            state_path=state_path,
+        ) == {}
+
+    denied = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "parent_tool_use_id": "review-tool",
+            "tool_input": {"file_path": str(older_capture / "models.py")},
+        },
+        state_path=state_path,
+    )
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_live_reviewer_rechecks_paths_immediately_before_dispatch(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    fresh_capture = captures / "current" / "capture"
+    fresh_capture.mkdir(parents=True)
+    fresh_blueprint = blueprints / "current" / "approved-blueprint.md"
+    fresh_blueprint.parent.mkdir(parents=True)
+    fresh_blueprint.write_text("approved\n", encoding="utf-8")
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+    handle_event(
+        _capture_event(
+            retained_capture_root=str(fresh_capture),
+            retained_blueprint_path=str(fresh_blueprint),
+        ),
+        state_path=state_path,
+    )
+    fresh_blueprint.unlink()
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(
+                    retained_capture_root=str(fresh_capture),
+                    retained_blueprint_path=str(fresh_blueprint),
+                ),
+            },
+        },
+        state_path=state_path,
+    )
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _state(state_path)["review_input_error"] == "paths_unavailable"
+
+
+def test_owner_cannot_modify_supervisor_retained_roots(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    captures.mkdir(parents=True)
+    blueprints.mkdir(parents=True)
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+
+    for tool_name, path in (
+        ("Write", captures / "current" / "models.py"),
+        ("Edit", blueprints / "current" / "approved-blueprint.md"),
+    ):
+        decision = handle_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool_name,
+                "tool_input": {"file_path": str(path)},
+            },
+            state_path=state_path,
+        )
+        assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "supervisor-retained" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+    notebook_decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "NotebookEdit",
+            "tool_input": {"notebook_path": str(captures / "current" / "notes.ipynb")},
+        },
+        state_path=state_path,
+    )
+    assert notebook_decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "supervisor-retained" in notebook_decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_owner_cannot_inspect_supervisor_retained_roots(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    captures.mkdir(parents=True)
+    blueprints.mkdir(parents=True)
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+
+    for tool_name, tool_input in (
+        ("Read", {"file_path": str(blueprints)}),
+        ("Glob", {"path": str(captures), "pattern": "**/*"}),
+        ("Grep", {"path": str(captures), "pattern": "needle"}),
+    ):
+        decision = handle_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+            },
+            state_path=state_path,
+        )
+        assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "may not inspect" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+    state = _state(state_path)
+    state["completed_review_tool_use_id"] = "review-tool"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    bash_decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": f"cat {captures}"},
+        },
+        state_path=state_path,
+    )
+    assert bash_decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "may not use shell access" in bash_decision["hookSpecificOutput"]["permissionDecisionReason"]
+    relative_bash_decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat ../supervisor/captures"},
+        },
+        state_path=state_path,
+    )
+    assert relative_bash_decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_incomplete_retained_input_handoff_can_stop_cleanly(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    write_initial_state(state_path)
+    state = _state(state_path)
+    state.update(
+        {
+            "state": REVIEW_DISPATCH_PENDING,
+            "review_input_error": "paths_unavailable",
+        }
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert handle_event({"hook_event_name": "Stop"}, state_path=state_path) == {}
+
+
+@pytest.mark.parametrize("tool_name", ["Write", "Edit"])
+def test_owner_write_without_review_roots_does_not_require_workspace_root(
+    tmp_path: Path, tool_name: str
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    write_initial_state(state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool_name,
+            "tool_input": {"file_path": "review-record.json"},
+        },
+        state_path=state_path,
+    )
+    assert decision == {}
+
+
+def test_live_capture_accepts_documented_requirement_view_shape(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    captures = tmp_path / "supervisor" / "captures"
+    blueprints = tmp_path / "supervisor" / "blueprints"
+    capture = captures / "retained" / "capture"
+    capture.mkdir(parents=True)
+    blueprint = blueprints / "retained" / "approved-blueprint.md"
+    blueprint.parent.mkdir(parents=True)
+    blueprint.write_text("approved\n", encoding="utf-8")
+    write_initial_state(
+        state_path,
+        workspace_root=workspace,
+        review_roots=(captures, blueprints),
+    )
+    event = _capture_event(
+        retained_capture_root=str(capture),
+        retained_blueprint_path=str(blueprint),
+    )
+    handle_event(event, state_path=state_path)
+    state = _state(state_path)
+    assert state["state"] == REVIEW_DISPATCH_PENDING
+    assert "review_input_error" not in state
+
+
+def test_new_capture_clears_a_previous_review_handoff(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+
+    handle_event(_capture_event(), state_path=state_path)
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+
+    replacement = _capture_event()
+    requirements = replacement["tool_result"]["content"]["requirements"]
+    assert isinstance(requirements, list)
+    assert isinstance(requirements[0], dict)
+    requirements[0]["review_input"] = {
+        "retained_capture_root": RETAINED_CAPTURE_ROOT,
+    }
+    handle_event(replacement, state_path=state_path)
+
+    state = _state(state_path)
+    assert state["state"] == REVIEW_DISPATCH_PENDING
+    assert state["review_input_error"] == "missing_or_malformed"
+    assert "retained_capture_root" not in state
+    assert "retained_blueprint_path" not in state
+    assert "review_tool_use_id" not in state
+
+    replacement["tool_result"]["content"]["next_actions"] = []
+    handle_event(replacement, state_path=state_path)
+    assert _state(state_path)["state"] == NORMAL
+
+
 @pytest.mark.parametrize("malformation", ["missing", "malformed"])
 def test_malformed_or_missing_review_input_fails_closed(tmp_path: Path, malformation: str) -> None:
     state_path = tmp_path / "guard-state.json"
@@ -515,7 +991,7 @@ def test_malformed_or_missing_review_input_fails_closed(tmp_path: Path, malforma
         state_path=state_path,
     )
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert handle_event({"hook_event_name": "Stop"}, state_path=state_path)["decision"] == "block"
+    assert handle_event({"hook_event_name": "Stop"}, state_path=state_path) == {}
 
 
 @pytest.mark.parametrize("tool_name", ["Agent", "Task"])

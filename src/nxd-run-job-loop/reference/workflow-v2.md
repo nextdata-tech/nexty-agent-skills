@@ -256,6 +256,54 @@ of the returned review action, then take `review_input` from the matching
 `RequirementView`. Never
 take a `review_input` from another requirement, infer one from its array
 position, or substitute the mutable authoring root. Use only that matching view.
+
+Treat the matching `review_input` as an opaque, generation-bound handoff. On a
+host without a runner-owned review guard, the owning thread must perform a
+**non-content path/accessibility check** for both exact retained paths using
+the session's allowed read-only host filesystem mechanism (a metadata/stat or
+equivalent path-access check, not a content read). On a shellless host, an
+allowed `Glob` or `Grep` call with an explicit absolute `path` is an acceptable
+equivalent; do not omit that `path` or use a content read as a substitute. On
+a host with a runner-owned guard, do not issue a separate owning-thread check:
+the guard performs and repeats it immediately before accepting the child
+dispatch. Check that the exact `retained_capture_root` is an existing directory
+and that the exact `retained_blueprint_path` is an existing regular readable
+file. Resolve both paths for containment and verify that each remains inside
+the session's allowed host-visible roots on the same host surface that the
+child can read; reject missing paths, stale paths, inaccessible paths, and
+symlink/realpath escapes. Establish freshness from the exact path pair on the
+current matching `RequirementView` and its current requirement/generation
+binding, never from a filename, timestamp, attachment id, or a path discovered
+elsewhere. Do not open either path or inspect its contents as part of this
+precondition.
+
+In the eval/live runner, the run-scoped review guard performs this metadata
+check when capture is received and repeats it immediately before accepting the
+child dispatch. The owning thread does not need to inspect retained content to
+establish availability. A host runtime without that guard must provide an
+equivalent metadata/stat check; if no non-content mechanism is available, stop
+with the incomplete blocker instead of using a content read or a fallback.
+
+For the nxd desktop workflow-v2 supervisor, the runner maps its `data-dir` to
+two retained-input roots: `<data-dir>/captures` for captured closure content
+and `<data-dir>/blueprints` for approved blueprint content. The adapter exposes
+only those roots to the reviewer. If the supervisor returns paths outside them,
+or the roots are unavailable, the handoff fails closed with a distinct
+configuration/availability diagnostic; never create or use a fallback root.
+
+If either check fails, stop before dispatch and report an explicit incomplete
+blocker, for example: `INCOMPLETE — retained capture handoff blocked:
+<retained_capture_root|retained_blueprint_path> is <missing|stale|outside the
+allowed host-visible roots|inaccessible> for requirement <id>, generation
+<generation>; no reviewer was dispatched.` Leave the review requirement
+pending and do not send a clear, findings, rejected, or indeterminate
+`report_requirement`. Never substitute an older capture, scratch or fallback
+path, the mutable authoring root, or a path belonging to another requirement.
+On a guarded host, this is terminal for the current session: the runner permits
+the owning thread to stop with the incomplete blocker, but does not permit a
+retry or a tool that could replace the captured handoff. A new session must
+obtain a fresh supervisor capture.
+
 The owning/main thread owns the complete workflow-v2 sequence: it performs
 semantic inference and closure generation, captures the closure, dispatches the
 review child, and relays every workflow action. Do not delegate Steps 2–3,
@@ -277,20 +325,32 @@ retained_capture_root: <exact retained_capture_root from review_input>
 retained_blueprint_path: <exact retained_blueprint_path from review_input>
 Load and follow nxd-review-closure.
 Sanitized original request: <complete request with credentials replaced>
-review_time_budget_seconds: 120
+review_time_budget_seconds: 300
+review_inspection_cutoff_seconds: 240
 NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
 ```
 
-The `120` value above is the current workflow-v2 runner policy; a caller with
-another enforced budget must substitute that value in the same field.
+The `300` and `240` values above are the current workflow-v2 runner policy; a
+caller with another enforced budget must substitute those values in the same
+fields. The inspection cutoff is advisory to callers that do not provide a
+runner-owned guard, but when present it preserves time for the terminal claims
+response.
+Keep both retained-path values byte-for-byte identical to the paths that passed
+the pre-dispatch check; do not rebase, shorten, normalize, or replace them for
+the child. The check proves handoff availability only; it is not review
+evidence and does not authorize the main thread to inspect the retained
+capture.
 Treat `review_time_budget_seconds` as a hard absolute budget from accepted
-dispatch, not a suggestion. Front-load disclosure paths and output promises,
-then model roles and physical writes, then semantic and direct-store
-reachability. Reserve time to return claims. If the Agent runtime forwards
-intermediate child text, allow one concise progress checkpoint to the owning
-thread around halfway through the budget; it is informational and does not
-extend or reset the deadline. Stop reading before expiry and return complete
-or partial evidenced claims; never wait for another message.
+dispatch, not a suggestion. A runner-owned guard may deny further Read, Glob,
+and Grep calls at `review_inspection_cutoff_seconds` so the finalization reserve
+remains available for the terminal claims response. Front-load disclosure paths
+and output promises, then model roles and physical writes, then semantic and
+direct-store reachability. If the Agent runtime forwards intermediate child
+text, allow one concise progress checkpoint to the owning thread around
+halfway through the budget; it is informational and does not extend or reset
+the deadline. The cutoff likewise does not extend or reset the hard deadline.
+Stop reading at the cutoff and return complete or explicitly
+partial evidenced claims; never wait for another message.
 
 Invoke the child inline with `run_in_background: false` when the installed
 `Agent`/`Task` schema exposes that field; otherwise omit the field, and never
@@ -303,6 +363,12 @@ silently turn those claims into a verdict. The child may read and return claims,
 but it must not edit, build, serve, transform, start a supervisor operation, or
 talk to the user. A timeout or partial child result does not justify dispatching
 a second reviewer for the same capture generation.
+
+After a review completes, the owning thread may use Bash for ordinary
+remediation work before a reset and fresh capture. The runner guard rejects
+owner Read/Glob/Grep/Write/Edit/NotebookEdit operations and shell commands that
+target the retained capture or blueprint roots; those supervisor-retained
+inputs remain immutable.
 
 Keep the rich review ledger in
 `…/nxd-jobs/<workflow>/review-record.json`, adjacent to the blueprint and

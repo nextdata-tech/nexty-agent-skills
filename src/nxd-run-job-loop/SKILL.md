@@ -233,17 +233,17 @@ definition path before capture. A new result-changing gap returns
 
 ### Step 3b — Capture, review, and adjudicate
 
-After generation authors the executable closure inputs, and after any optional
-agent-side evidence, follow only the supervisor's returned `capture` action with
-its host-visible authoring root. Never modify the captured tree afterward. Run
-**exactly one mandatory review per capture generation**:
-immediately dispatch one built-in `Agent` or `Task` conversation subagent (a `general-purpose` subagent is fine).
-Its prompt tells it to load and follow `nxd-review-closure`, supplies the supervisor-returned retained
-`review_input` paths and sanitized request, and uses the canonical dispatch marker defined in
-[reference/workflow-v2.md](reference/workflow-v2.md). The main thread must not invoke
-`Skill(nxd-review-closure)`, inspect the retained capture to form claims inline, or launch the reviewer through
-MCP/supervisor. The reviewer is a conversation subagent, never supervisor-launched. The main thread waits for the
-child claims, keeps the rich ledger and adjudication in `…/nxd-jobs/<workflow>/review-record.json` outside `closure/`, relays only the bounded projection through the returned `report_requirement` action, and when `NXD_EVAL_ATTESTATIONS_PATH` is present writes the required root-array construction sidecar there before `start_run` (exact path and schema: [reference/workflow-v2.md](reference/workflow-v2.md)).
+After generation authors the executable closure inputs and optional agent-side evidence, follow only the supervisor's returned `capture` action with its host-visible authoring root; never modify the captured tree afterward. Run **exactly one mandatory review per capture generation** by immediately dispatching one built-in `Agent` or `Task` conversation subagent, supplying the supervisor's matching `review_input` paths, sanitized request, and the canonical dispatch marker from [reference/workflow-v2.md](reference/workflow-v2.md).
+Keep semantic inference, capture, workflow MCP actions, review adjudication, and the rich `review-record.json` ledger in the main thread; the main thread must not invoke `Skill(nxd-review-closure)`, inspect the retained capture inline, or launch the reviewer through MCP/supervisor. Write the required `NXD_EVAL_ATTESTATIONS_PATH` sidecar before `start_run` as specified in the reference.
+
+Before dispatch, select only the current matching `RequirementView`. On a host without a runner-owned review guard, require a non-content read-only host path/accessibility check for both exact retained paths, including generation, allowed roots, types, and readability. On a host with the eval/live runner's review guard, do not issue a separate owning-thread check: the guard performs and repeats it immediately before dispatch. A host runtime without an equivalent metadata/stat mechanism must stop if it cannot establish availability. If either path is missing, stale, outside the allowed roots, or inaccessible, stop with an explicit incomplete blocker, leave the requirement pending, and never substitute another path. See [reference/workflow-v2.md](reference/workflow-v2.md).
+
+Follow the returned `report_requirement` action only after the reviewer returns; a clear report permits the returned validation and admission actions, while findings, rejection, indeterminate, or an incomplete handoff leave the requirement unsatisfied.
+
+After a review completes, ordinary Bash remediation remains available for
+non-retained paths until reset; the runner guard rejects owner operations and
+shell commands targeting retained captures or blueprints.
+
 There is no skip under the activated v2 contract and no duplicate review against a mutable closure. A rejected,
 indeterminate, or scope-refused report remains unsatisfied. A fix requires reset, local correction, optional evidence if available,
 recapture, and one fresh review for the new generation. See
