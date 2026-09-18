@@ -4,7 +4,7 @@ real-time consumer purchases at the register, supporting analysis of channel per
 promotions and in-store behaviour.
 
 It should be created within the "retail/store-operations" domain and use the "ecommerce-demo"
-infrastructure profile. The Nextdata instance is located at: https://app.demo.nextopia.dev/
+infrastructure profile. The Nextdata instance is located at: https://nxd.demo.nextopia.dev/
 
 Data product name should be store-sales.
 
