@@ -117,6 +117,45 @@ def test_b1_declares_review_findings_adjudication_without_coaching_the_fix() -> 
         assert matcher.reply_for(message).rule_id != "decision.answer.review_fix_authorization"
 
 
+def test_b1_script_resolves_the_internal_status_projection_choice() -> None:
+    """The operator explicitly selects the contract-preserving review fix."""
+
+    assert script_turn_text(SCENARIO.answer_sheet.turns[6]) == (
+        "The source uses status deleted for tombstoned records; exclude those rows "
+        "and proceed to the final pipeline output. Choose option 1: amend the "
+        "approved blueprint to state that status is an internal-only landed column "
+        "used solely to verify deleted-row exclusion, keep it roleless and absent "
+        "from the governed output, then re-approve the amended plan, recapture, "
+        "run a fresh independent review, validate, publish, query, and write the "
+        "required evidence. Do not add owner or email details."
+    )
+
+
+def test_b1_answers_amount_precision_as_an_explicit_data_contract() -> None:
+    """A review finding about numeric precision gets a concrete ruling."""
+
+    answer = SCENARIO.answer_sheet.decision_answers["amount_precision"]
+    assert answer.terms == ("amount", "precision")
+    assert answer.answer.startswith("Choose exact-decimal semantics for amount.")
+    result = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet).reply_for(
+        "The amount precision is unspecified; should the model preserve fractional values?"
+    )
+    assert result.rule_id == "decision.answer.amount_precision"
+    assert result.reply == answer.answer
+
+
+def test_b1_answers_an_admitted_workflow_revision_with_a_new_id() -> None:
+    """A published workflow cannot be revised in place through this path."""
+
+    answer = SCENARIO.answer_sheet.decision_answers["workflow_revision"]
+    assert answer.terms == ("new", "workflow")
+    result = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet).reply_for(
+        "The existing workflow is already admitted; should I use a new workflow id?"
+    )
+    assert result.rule_id == "decision.answer.workflow_revision"
+    assert result.reply == answer.answer
+
+
 def test_b1_answers_physical_redaction_question_deterministically() -> None:
     """The physical/governed-surface question gets the safe redaction answer."""
 

@@ -85,6 +85,24 @@ capture generation; use only the exact current pair and report an incomplete
 handoff if either path is unavailable. Never substitute an older capture,
 scratch path, or mutable authoring root.
 
+Discovery is bounded in a shellless run. Use Glob and Grep only with an
+explicit path inside the current workspace or the exact supplied fixture path
+from NXD_EVAL_FIXTURE_DIR. For a retained-capture review, the child may use
+only the exact retained_capture_root and retained_blueprint_path returned in
+the matching supervisor review_input; the owning conversation must not inspect
+those paths. Never use an unscoped Glob or Grep, a root-wide search, or a
+search rooted at /, /Users, /private, /private/tmp, /private/var, /tmp, /opt,
+/Applications, /Library, /usr, an installed package tree, a virtualenv, or a
+build/cache directory. The exact supplied paths above are the only exceptions
+to those prefix bans; never broaden them to their containing directory. Never
+ask a helper to widen that search. Load bundled skill/reference docs through
+Skill or a named supplied file instead of
+rediscovering APIs in host package trees. If the supplied workspace, fixture,
+exact retained paths, or bundled references do not contain what is needed,
+stop and report the missing input as a blocker; do not guess or wander. This
+boundary does not cancel the mandatory retained-capture reviewer dispatch:
+when the supervisor requires it, follow the exact dispatch contract above.
+
 For generated-data-product workflow-v2 construction, after the prose blueprint
 passes deterministic validation, write the complete caller-authored typed
 proposal JSON beside it as dp-blueprint.proposal.json, omitting source_hash.
@@ -259,9 +277,27 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "review child must not invoke Agent or Task, workflow/MCP tools, or any other "
     "child; it loads nxd-review-closure once, uses only its read-only tools, and "
     "returns claims to the owner.",
-    "If workflow validation or admission fails, inspect the returned workflow "
-    "state once, make a targeted repair through reset and a new capture when "
-    "required, and retry rather than repeating an identical action.",
+    "Before reporting each review requirement, write the rich job-level "
+    "review-record.json beside the workflow blueprint using schema "
+    "nxd-conversation-review-ledger-v1 and the exact existing adversarial-review "
+    "round shape from src/nxd-run-job-loop/reference/build-record.md: each "
+    "round must use status, started_at_unix_ms, ended_at_unix_ms, budget_ms, "
+    "findings, adjudications, user_decision, and deferred_finding_ids. Keep "
+    "the complete finding evidence and adjudication there; do not substitute "
+    "a summary with review_round_index, generation, reviewer, verdict, claims, "
+    "or outcome fields, because that is not the declared ledger contract.",
+    "If prepare_workflow rejects a proposal and returns a prepare_recovery_id, "
+    "call inspect_prepare_recovery immediately, verify it belongs to the "
+    "unchanged final blueprint, regenerate the complete typed proposal from "
+    "its source_spans, and retry with a fresh request id. If it returns no "
+    "recovery id, discard the proposal, reread the final blueprint, obtain a "
+    "fresh parser/source map through the installed authoring flow, regenerate "
+    "the complete proposal, and retry with a fresh request id; do not call "
+    "inspect_workflow or resubmit the same proposal. If a later workflow "
+    "validation or admission step fails after capture, inspect the returned "
+    "workflow state once, make a targeted repair through reset and a new "
+    "capture when required, and retry rather than repeating an identical "
+    "action.",
     "Do not report numeric or status results until the approved closure has "
     "completed the workflow-v2 start_run action with an admitted publication, "
     "and the result has been obtained through the governed query tool.",

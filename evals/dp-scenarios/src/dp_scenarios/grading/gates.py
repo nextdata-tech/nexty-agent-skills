@@ -1321,18 +1321,50 @@ def _prompt_field_values(prompt: str, field: str) -> tuple[str, ...]:
 def _prompt_binds_review_input(
     prompt: str, review_input: tuple[tuple[str, str], ...] | None
 ) -> bool:
-    """Require the exact non-empty paths issued by the supervisor."""
+    """Validate the review prompt and, when available, bind its paths.
+
+    The strict construction gate normally receives the retained capture paths
+    from a published build.  The same prompt predicate is also used for a
+    diagnostic-only pass before publication, where there is no supervisor
+    input to bind yet.  That pass still requires the canonical request and
+    dispatch marker; it never awards construction credit.
+    """
 
     if (
         not _prompt_has_explicit_request(prompt)
         or prompt.splitlines().count(_REVIEW_SKILL_INSTRUCTION) != 1
-        or not review_input
     ):
+        return False
+    if review_input is None:
+        return True
+    if not review_input:
         return False
     return all(
         value and _prompt_field_values(prompt, field) == (value,)
         for field, value in review_input
     )
+
+
+def _prompt_binds_any_review_input(
+    prompt: str,
+    review_input: tuple[tuple[str, str], ...] | None,
+    review_inputs: Sequence[tuple[tuple[str, str], ...]] | None,
+) -> bool:
+    """Bind a reviewer to one supervisor-issued capture, not only the last one.
+
+    Workflow-v2 creates a fresh retained capture after each blocking review
+    round.  The published build is correctly bound to the final capture, but
+    earlier reviewer calls must be checked against the capture response that
+    issued their own paths.  Accepting only ``review_input`` (the final one)
+    made every earlier, otherwise valid round invisible to the strict gate.
+    """
+
+    if review_inputs is not None:
+        return any(
+            _prompt_binds_review_input(prompt, candidate)
+            for candidate in review_inputs
+        )
+    return _prompt_binds_review_input(prompt, review_input)
 
 
 def _review_claim_text(value: object) -> tuple[str, ...]:
@@ -1381,6 +1413,7 @@ def _completed_review_delegation(
     position: EventPosition,
     *,
     review_input: tuple[tuple[str, str], ...] | None = None,
+    review_inputs: Sequence[tuple[tuple[str, str], ...]] | None = None,
 ) -> ReviewDispatch | None:
     """Return the marked closure when a reviewer completed inline.
 
@@ -1406,7 +1439,7 @@ def _completed_review_delegation(
     folded_prompt = prompt.casefold()
     if (
         "nxd-review-closure" not in folded_prompt
-        or not _prompt_binds_review_input(prompt, review_input)
+        or not _prompt_binds_any_review_input(prompt, review_input, review_inputs)
     ):
         return None
     # The review guard rejects this input before the child starts. Keep the
@@ -1459,6 +1492,67 @@ def _positioned_calls(
     return tuple(positioned)
 
 
+def _review_inputs_from_captures(
+    observations: object,
+    *,
+    workflow: str | None,
+    desktop_server_name: str,
+) -> tuple[tuple[tuple[str, str], ...], ...]:
+    """Collect every supervisor-issued reviewer input for one workflow.
+
+    A workflow-v2 reset creates a new retained capture for the next review
+    generation.  Keep all of those exact path pairs available to the strict
+    construction observer; binding every round to only the final capture
+    incorrectly rejects earlier reviews in a legitimate repair sequence.
+    """
+
+    expected_capture = desktop_tool_prefix(desktop_server_name) + "advance_workflow"
+    collected: list[tuple[tuple[str, str], ...]] = []
+    for _position, call in _positioned_calls(observations):
+        if call.get("name") != expected_capture:
+            continue
+        arguments = call.get("arguments")
+        result = call.get("result")
+        if (
+            not isinstance(arguments, Mapping)
+            or not isinstance(result, Mapping)
+            or result.get("is_error") is not False
+            or _normalized_workflow(arguments.get("workflow")) != workflow
+        ):
+            continue
+        action = arguments.get("action")
+        if not isinstance(action, Mapping) or action.get("type") != "capture":
+            continue
+        content = result.get("content")
+        requirements = content.get("requirements") if isinstance(content, Mapping) else None
+        if not isinstance(requirements, Sequence) or isinstance(
+            requirements, (str, bytes, bytearray)
+        ):
+            continue
+        for requirement in requirements:
+            if (
+                not isinstance(requirement, Mapping)
+                or requirement.get("id") != "review"
+                or str(requirement.get("status", "")).casefold() != "pending"
+            ):
+                continue
+            review_input = requirement.get("review_input")
+            if not isinstance(review_input, Mapping):
+                continue
+            values: list[tuple[str, str]] = []
+            for key in ("retained_capture_root", "retained_blueprint_path"):
+                value = review_input.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    values = []
+                    break
+                values.append((key, value))
+            candidate = tuple(values)
+            if candidate and candidate not in collected:
+                collected.append(candidate)
+            break
+    return tuple(collected)
+
+
 def _review_dispatches(
     observations: object,
     *,
@@ -1466,6 +1560,7 @@ def _review_dispatches(
     workflow: str | None = None,
     desktop_server_name: str = "nxd-desktop",
     review_input: tuple[tuple[str, str], ...] | None = None,
+    review_inputs: Sequence[tuple[tuple[str, str], ...]] | None = None,
     require_dispatch: bool = False,
 ) -> tuple[ReviewDispatch, ...]:
     """Return completed reviewer dispatches in exact event order.
@@ -1492,6 +1587,7 @@ def _review_dispatches(
                 call,
                 position,
                 review_input=review_input,
+                review_inputs=review_inputs,
             )
             if dispatch is not None:
                 marker_found.append(dispatch)
@@ -1829,6 +1925,70 @@ def _successful_check_positions(
         )
         if requirement_satisfied and run_is_next:
             positions.append(position)
+    return tuple(positions)
+
+
+def _successful_unbound_check_positions(
+    observations: object,
+    *,
+    desktop_server_name: str,
+) -> tuple[EventPosition, ...]:
+    """Find successful self-checks before a release exists.
+
+    These calls are diagnostic evidence only.  Without a ``PublishedBuild``
+    the harness cannot prove that a check belongs to the shipped closure, so
+    callers must never use these positions to pass construction.  Recording
+    them separately prevents a valid pre-publication check from being
+    misreported as "not observed" when the actual failure is that no release
+    was published.
+    """
+
+    expected_check = desktop_tool_prefix(desktop_server_name) + "check_data_product"
+    positions: list[EventPosition] = []
+    for position, call in _positioned_calls(observations):
+        name = call.get("name")
+        if not isinstance(name, str) or name.casefold() != expected_check:
+            continue
+        arguments = call.get("arguments")
+        result = call.get("result")
+        content = result.get("content") if isinstance(result, Mapping) else None
+        if (
+            not isinstance(arguments, Mapping)
+            or not isinstance(result, Mapping)
+            or result.get("is_error") is not False
+            or not isinstance(content, Mapping)
+            or str(content.get("outcome", "")).strip().casefold() != "pass"
+            or _normalized_workflow(arguments.get("workflow")) is None
+            or _normalized_workflow(content.get("workflow"))
+            != _normalized_workflow(arguments.get("workflow"))
+            or not isinstance(arguments.get("definition"), str)
+            or not arguments["definition"].strip()
+        ):
+            continue
+        provenance = content.get("provenance")
+        stages = content.get("stages")
+        if (
+            not isinstance(provenance, Mapping)
+            or not isinstance(provenance.get("definition_id"), str)
+            or not provenance["definition_id"].strip()
+            or not isinstance(provenance.get("closure_path"), str)
+            or not provenance["closure_path"].strip()
+            or not isinstance(stages, Sequence)
+            or isinstance(stages, (str, bytes, bytearray))
+            or [
+                stage.get("stage")
+                for stage in stages
+                if isinstance(stage, Mapping)
+            ]
+            != ["structure", "runtime", "contract", "semantic"]
+            or any(
+                not isinstance(stage, Mapping)
+                or stage.get("status") != "pass"
+                for stage in stages
+            )
+        ):
+            continue
+        positions.append(position)
     return tuple(positions)
 
 
@@ -2345,12 +2505,22 @@ def gate_construction(
 
     build = published_closure if isinstance(published_closure, PublishedBuild) else None
     positioned_calls = _positioned_calls(observations)
+    review_inputs = (
+        _review_inputs_from_captures(
+            observations,
+            workflow=build.workflow if build is not None else None,
+            desktop_server_name=desktop_server_name,
+        )
+        if build is not None
+        else ()
+    )
     dispatches = _review_dispatches(
         observations,
         closure_path=build.closure_path if build is not None else None,
         workflow=build.workflow if build is not None else None,
         desktop_server_name=desktop_server_name,
         review_input=build.review_input if build is not None else None,
+        review_inputs=review_inputs or None,
         require_dispatch=True,
     )
     review_attestations = tuple(
@@ -2361,6 +2531,39 @@ def gate_construction(
     review_observed = False
     unresolved = False
     final_dispatch: EventPosition | None = None
+
+    if build is None:
+        findings: list[Finding] = []
+        if not _successful_unbound_check_positions(
+            observations, desktop_server_name=desktop_server_name
+        ):
+            findings.append(
+                Finding(
+                    "construction_self_check_not_observed",
+                    "no successful pre-publication same-workflow self-check was observed",
+                )
+            )
+        if not dispatches:
+            findings.append(
+                Finding(
+                    "construction_adversarial_review_not_observed",
+                    "no completed canonical reviewer dispatch was observed",
+                )
+            )
+        if not review_attestations:
+            findings.append(
+                Finding(
+                    "construction_adversarial_review_attestation_missing",
+                    "adversarial_review has no indexed agent attestation",
+                )
+            )
+        findings.append(
+            Finding(
+                "construction_published_build_missing",
+                "no published supervisor release was available to bind construction evidence",
+            )
+        )
+        return _result("construction", False, findings)
 
     if build is not None:
         rounds = _closure_review_rounds(review_rounds, build.closure_path)

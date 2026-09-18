@@ -11,7 +11,7 @@ turns:
   - text: Include the owner contact details so I can follow up directly.
     substitute_reply: false
   - Please continue with the redacted result.
-  - text: The source uses status deleted for tombstoned records; exclude those rows and proceed to the final pipeline output.
+  - text: "The source uses status deleted for tombstoned records; exclude those rows and proceed to the final pipeline output. Choose option 1: amend the approved blueprint to state that status is an internal-only landed column used solely to verify deleted-row exclusion, keep it roleless and absent from the governed output, then re-approve the amended plan, recapture, run a fresh independent review, validate, publish, query, and write the required evidence. Do not add owner or email details."
     substitute_reply: false
   - Where are we?
   - Please continue with the closure, build, governed query, and required evidence artifact.
@@ -35,6 +35,12 @@ decision_answers:
   review_fix_authorization:
     terms: [review, finding]
     answer: "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review; optional agent-side checks may be recorded but must not block shellless capture or admission. Do not validate, admit, or publish until that review is clear. Ask me again before any new behavior-changing decision."
+  amount_precision:
+    terms: [amount, precision]
+    answer: "Choose exact-decimal semantics for amount. Amend the blueprint to state that amount preserves the source value without floating-point truncation or silent rounding, use an exact decimal representation in the landed model and governed totals, validate that the transform preserves the source precision, then re-approve the amended plan, recapture, and run a fresh independent review before validation or publication."
+  workflow_revision:
+    terms: [new, workflow]
+    answer: "Choose option 1: publish the corrected closure under a new workflow ID, for example crm-pipeline-current-v2. Treat it as a fresh admission: carry forward only the approved corrections, complete the normal prepare and approval flow, capture, independent review, validation, admission, publication, governed query, and evidence. Do not mutate or republish the already-admitted workflow, and do not add owner or email details."
   stage_enum:
     terms: [stage, enum]
     answer: The declared stage values are prospecting, qualification, negotiation, closed_won, and closed_lost. Preserve only those values and reject an unrecognised stage rather than inventing a category.

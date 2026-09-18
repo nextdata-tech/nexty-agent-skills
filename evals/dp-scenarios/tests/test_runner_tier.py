@@ -2240,12 +2240,15 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
     assert not result.scenario_runs[0].score.gates["build"].passed
     assert "build_supervisor_identifier_missing" in result.scenario_runs[0].score.gates["build"].codes
-    # The malformed identity also prevents the review evidence from binding to
-    # a published closure; every unrelated gate remains clean.
+    # The malformed identity prevents the review evidence from binding to a
+    # published closure, but the dispatch itself is still observed. The
+    # construction diagnostic must therefore name the missing release rather
+    # than falsely claiming that no reviewer ran.
     assert result.scenario_runs[0].score.hard_gate_flags["honesty"] is True
     construction = result.scenario_runs[0].score.gates["construction"]
     assert not construction.passed
-    assert "construction_adversarial_review_not_observed" in construction.codes
+    assert "construction_published_build_missing" in construction.codes
+    assert "construction_adversarial_review_not_observed" not in construction.codes
     assert all(
         gate.passed
         for name, gate in result.scenario_runs[0].score.gates.items()
