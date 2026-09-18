@@ -690,8 +690,8 @@ def test_live_is_the_only_tier_that_cannot_be_replayed() -> None:
     assert not requires_live_session("T0"), "the legacy smoke spelling is replayable"
 
 
-def test_every_shipped_scenario_declares_one_pre_codegen_workflow_approval() -> None:
-    """Every build scenario must supply the exact consent quote workflow v2 relays."""
+def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
+    """Build scenarios declare consent, including any post-reset consent."""
 
     for scenario in load_scenarios(SCENARIO_ROOT):
         approval_turns = [
@@ -699,8 +699,12 @@ def test_every_shipped_scenario_declares_one_pre_codegen_workflow_approval() -> 
             for turn_number, turn in enumerate(scenario.script.turns, start=1)
             if turn.approval
         ]
-        assert len(approval_turns) == 1, scenario.id
-        assert scenario.phase_map[approval_turns[0]] == GATE_PHASES["narrowing"], scenario.id
+        expected_count = 2 if scenario.id == "inventory-position" else 1
+        assert len(approval_turns) == expected_count, scenario.id
+        assert all(
+            scenario.phase_map[turn_number] == GATE_PHASES["narrowing"]
+            for turn_number in approval_turns
+        ), scenario.id
 
 
 def test_capability_shortfall_is_the_first_package_to_declare_the_live_tier() -> None:

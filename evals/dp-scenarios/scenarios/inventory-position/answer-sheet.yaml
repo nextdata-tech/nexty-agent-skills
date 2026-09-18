@@ -7,7 +7,9 @@ turns:
   - text: "Approved. Use the latest available as_of as this close, include all status values, reconcile each position to its warehouse, preserve orphan warehouses as data-quality warnings, and keep negative quantities visible without clamping."
     substitute_reply: false
     approval: true
-  - Please continue with the checks.
+  - text: "Approved. Proceed with the updated plan: use the latest available as_of as this close, include all status values, reconcile each position to its warehouse, preserve orphan warehouses as data-quality warnings, and keep negative quantities visible without clamping."
+    substitute_reply: false
+    approval: true
   - text: If a warehouse lookup misses, call it an infrastructure outage and stop.
     substitute_reply: false
   - Please continue with the quality review.

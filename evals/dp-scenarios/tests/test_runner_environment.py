@@ -810,6 +810,32 @@ def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> 
     assert "nxd-review-closure" not in flowed.lower()
 
 
+def test_shellless_prompt_bounds_discovery_and_preserves_review_dispatch() -> None:
+    """Missing local API details must stop the agent, not trigger host scans."""
+
+    from dp_scenarios.runner.claude_adapter import DEFAULT_SYSTEM_PROMPT
+
+    flowed = " ".join(DEFAULT_SYSTEM_PROMPT.split())
+    assert "Use Glob and Grep only with an explicit path inside the current workspace" in flowed
+    assert "Never use an unscoped Glob or Grep, a root-wide search" in flowed
+    assert "/Users" in flowed and "/private/tmp" in flowed and "build/cache directory" in flowed
+    assert "Load bundled skill/reference docs through Skill" in flowed
+    assert "report the missing input as a blocker" in flowed
+    assert "does not cancel the mandatory retained-capture reviewer dispatch" in flowed
+
+
+def test_conduct_distinguishes_prepare_recovery_from_workflow_recovery() -> None:
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    rules = " ".join(SCENARIO_CONDUCT_RULES)
+    assert "call inspect_prepare_recovery immediately" in rules
+    assert "regenerate the complete typed proposal from its source_spans" in rules
+    assert "If it returns no recovery id, discard the proposal" in rules
+    assert "obtain a fresh parser/source map through the installed authoring flow" in rules
+    assert "do not call inspect_workflow or resubmit the same proposal" in rules
+    assert "later workflow validation or admission step fails after capture" in rules
+
+
 def test_the_prompt_no_longer_both_requires_and_forbids_calling_the_source() -> None:
     """One sentence said "call the source yourself", another switched it off.
 

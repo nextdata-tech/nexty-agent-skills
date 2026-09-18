@@ -856,6 +856,51 @@ def test_strict_construction_does_not_count_free_text_tool_arguments() -> None:
     assert "construction_adversarial_review_not_observed" in result.codes
 
 
+def test_strict_construction_distinguishes_observed_evidence_from_missing_release() -> None:
+    """Observed pre-publication calls must not be mislabeled as unobserved."""
+
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"].insert(
+        1,
+        {
+            "name": "mcp__nxd-desktop__check_data_product",
+            "arguments": {"definition": "closure", "workflow": "workflow"},
+            "result": {
+                "is_error": False,
+                "content": {
+                    "outcome": "pass",
+                    "workflow": "workflow",
+                    "provenance": {
+                        "definition_id": "sha256-v1:definition",
+                        "closure_path": "closure",
+                    },
+                    "stages": [
+                        {"stage": "structure", "status": "pass"},
+                        {"stage": "runtime", "status": "pass"},
+                        {"stage": "contract", "status": "pass"},
+                        {"stage": "semantic", "status": "pass"},
+                    ],
+                },
+            },
+        },
+    )
+    result = gate_construction(
+        _ledger(
+            {"action_kind": "self_check", "claim": {"outcome": "pass"}},
+            {"action_kind": "adversarial_review", "claim": {"outcome": "clean"}},
+        ),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_published_build_missing" in result.codes
+    assert "construction_self_check_not_observed" not in result.codes
+    assert "construction_adversarial_review_not_observed" not in result.codes
+
+
 def _review_round(status: str = "complete") -> dict:
     findings: list[dict[str, object]] = []
     adjudications: list[dict[str, object]] = []
@@ -2053,6 +2098,75 @@ def test_construction_accepts_two_fully_paired_review_rounds_before_final_check(
         ),
         review_rounds={"closure": [_review_round(), _review_round()]},
         published_closure=_published_build(call_index=3),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_binds_each_review_to_its_own_retained_capture() -> None:
+    """A reset may replace the retained paths between review generations."""
+
+    def capture(root: str, blueprint: str) -> dict[str, object]:
+        return {
+            "name": "mcp__nxd-desktop__advance_workflow",
+            "arguments": {
+                "workflow": "workflow",
+                "action": {"type": "capture", "parameters": {}},
+            },
+            "result": {
+                "is_error": False,
+                "content": {
+                    "workflow": "workflow",
+                    "requirements": [
+                        {
+                            "id": "review",
+                            "status": "pending",
+                            "review_input": {
+                                "retained_capture_root": root,
+                                "retained_blueprint_path": blueprint,
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+
+    first = _review_call(0)
+    first["arguments"]["prompt"] = first["arguments"]["prompt"].replace(
+        "/captured/root", "/captured/first"
+    ).replace("/captured/blueprint.md", "/captured/first-blueprint.md")
+    second = _review_call(1)
+    second["arguments"]["prompt"] = second["arguments"]["prompt"].replace(
+        "/captured/root", "/captured/second"
+    ).replace("/captured/blueprint.md", "/captured/second-blueprint.md")
+    observations = {
+        "turns": [
+            {
+                "turn": 1,
+                "tool_calls": [
+                    capture("/captured/first", "/captured/first-blueprint.md"),
+                    first,
+                    capture("/captured/second", "/captured/second-blueprint.md"),
+                    second,
+                    _workflow_validation_call(),
+                    _workflow_start_run_call(),
+                ],
+            }
+        ]
+    }
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(
+            _review_attestation(review_round_index=0),
+            _review_attestation(review_round_index=1),
+        ),
+        review_rounds={"closure": [_review_round(), _review_round()]},
+        published_closure=_published_build(
+            call_index=5,
+        ),
         require_observed=True,
     )
 

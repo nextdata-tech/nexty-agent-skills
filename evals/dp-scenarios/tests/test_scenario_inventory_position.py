@@ -41,6 +41,17 @@ def test_b5_loads_as_core_with_an_explicit_plant() -> None:
     assert SCENARIO.events.planted_card_ids() == {"inventory_position_orphans"}
 
 
+def test_b5_declares_fresh_consent_after_a_plan_reset() -> None:
+    approvals = [
+        turn_number
+        for turn_number, turn in enumerate(SCENARIO.operator_script.turns, start=1)
+        if turn.approval
+    ]
+
+    assert approvals == [3, 4]
+    assert [SCENARIO.operator_script.phase_by_turn[turn] for turn in approvals] == [3, 3]
+
+
 def test_orphans_negative_stock_and_profile_boundary_pass() -> None:
     result = SCENARIO.follow_up_check(_good_target())
     assert result["status"] == "examined"
