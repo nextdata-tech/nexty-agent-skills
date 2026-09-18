@@ -17,24 +17,24 @@
   ],
   "checks": [
     {
-      "id": "models-grains-annotated",
-      "check": "models.py declares two semantic_model(...) objects (customer_profile, order_event), each with a {\"kind\": \"grain\"} __nxd_semantic__ blob on its key column (CUSTOMER_ID and ORDER_ID respectively)."
+      "id": "models-keys-and-descriptions",
+      "check": "models.py declares the physical semantic_model(\"customer_profile\") and semantic_model(\"order_event\") objects. CUSTOMER_ID and ORDER_ID are declared with the public field(..., primary_key(), dimension(...)) DSL, and both semantic_model objects have non-empty .description(...) text."
     },
     {
       "id": "metric-aggregations-correct",
-      "check": "A metric blob on AMOUNT_USD uses agg \"sum\" (total_revenue) and a metric blob counting orders uses agg \"count_distinct\" on ORDER_ID (order_count). Each is a {\"kind\": \"metric\", \"agg\": ...} __nxd_semantic__ blob, not a fluent SemanticRegistry().metric() call."
+      "check": "A public metric_field(metric(...)) on a semantic_view declares total_revenue with Agg.SUM over order_event.field(\"AMOUNT_USD\") and order_count with Agg.COUNT_DISTINCT over order_event.field(\"ORDER_ID\"). Metrics must use the public DSL, not a hand-written SemanticRegistry."
     },
     {
       "id": "boolean-flag-metrics-correct",
-      "check": "The churned-customer-count metric (on IS_CHURNED) and the first-order-count metric (on IS_FIRST_ORDER) set \"boolean\": true in their metric blobs so the compiler emits a boolean CASE-sum rather than a numeric cast, instead of treating the flag column as a numeric SUM."
+      "check": "The churned-customer-count metric over customer_profile.field(\"IS_CHURNED\") and the first-order-count metric over order_event.field(\"IS_FIRST_ORDER\") use Agg.SUM with boolean=True in their public metric(...) calls, so the compiler emits a boolean CASE-sum rather than a numeric cast."
     },
     {
-      "id": "join-blob-declared",
-      "check": "The order_event CUSTOMER_ID attribute carries a {\"kind\": \"join\", \"to_model\": \"customer_profile\", \"cardinality\": \"many_to_one\"} blob (directly, or inside a {\"roles\": [...]} multi-role wrapper)."
+      "id": "join-declared-on-many-side",
+      "check": "The order_event CUSTOMER_ID attribute carries the public field(..., join(to=\"customer_profile\", to_column=\"CUSTOMER_ID\")) role. The join is declared on the many-side order_event model."
     },
     {
       "id": "pii-flagged",
-      "check": "In the quoted models.py, the EMAIL and FULL_NAME dimension blobs set \"pii\": true, and no other dimension blob is marked pii. The exhaustive half is graded from the quoted file, which is the complete text — do not fail it for lack of transcript evidence."
+      "check": "In the public field(..., dimension(...)) roles, EMAIL and FULL_NAME set pii=True, and no other dimension is marked PII. The exhaustive half is graded from the complete models.py workspace file."
     },
     {
       "id": "semantic-tools-flag-used",
@@ -42,7 +42,7 @@
     },
     {
       "id": "models-promised",
-      "check": "spec.py promises every annotated model (customer_profile and order_event) on a plain storage(...) port via data_product_output().promise(...), so their attributes reach the kernel manifest and the .nxd/semantic/<model>.json payloads. The storage port is NOT configured with as_view(...)."
+      "check": "spec.py promises the physical customer_profile and order_event models on a plain storage(...) port via data_product_output().promise(...), registers every query-time semantic_view that carries metrics, and does not configure the storage port with as_view(...)."
     },
     {
       "id": "transform-seeds-no-view-ddl",
@@ -58,7 +58,7 @@
     },
     {
       "id": "all-concepts-described",
-      "check": "Every declared dimension and metric carries a non-empty \"description\" stating what the concept is and the population it covers, and each semantic_model declares a description. Graded in this scenario's own blob vocabulary, matching its other role checks — the public-DSL placement rule (description inside dimension(...)/metric(...) rather than on the field wrapper) is graded in the scenarios that use that DSL. describe_model is the only surface the querying agent reads, so a concept declared with a name and no description arrives as a bare label it cannot choose on."
+      "check": "Every declared dimension and metric carries a non-empty description inside its public dimension(description=...) or metric(description=...) role, stating what the concept is and the population it covers, and each semantic_model declares a description. A description on the enclosing field(...) or metric_field(...) is not sufficient because it does not reach describe_model."
     }
   ]
 }
