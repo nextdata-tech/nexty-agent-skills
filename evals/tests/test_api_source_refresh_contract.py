@@ -42,6 +42,13 @@ REFRESH_URL = "https://api.example.test/auth/refresh"
 SENSITIVE_TOKEN = "sensitive-test-token"
 
 
+class _HookErrorPlan:
+    def __init__(self, status, payload, headers=None):
+        self.status = status
+        self.payload = payload
+        self.headers = headers or {}
+
+
 def _doc() -> str:
     return API_SOURCE.read_text(encoding="utf-8")
 
@@ -96,6 +103,12 @@ def recipe_namespace() -> dict:
         fake_requests.PreparedRequest = PreparedRequest
         fake_requests.Request = Request
         fake_requests.Session = Session
+        class HTTPError(Exception):
+            def __init__(self, message, response=None):
+                super().__init__(message)
+                self.response = response
+
+        fake_requests.exceptions = types.SimpleNamespace(HTTPError=HTTPError)
         previous = sys.modules.get("requests")
         sys.modules["requests"] = fake_requests
         try:
@@ -149,10 +162,16 @@ def _install_transport(namespace, monkeypatch, plans, body_reads=None):
         if body_reads is not None and hasattr(request.body, "read"):
             body_reads.append(request.body.read())
         calls.append(call)
-        if isinstance(plan, BaseException):
+        if isinstance(plan, _HookErrorPlan):
+            status, payload, headers = (
+                plan.status,
+                plan.payload,
+                plan.headers,
+            )
+        elif isinstance(plan, BaseException):
             raise plan
-
-        status, payload, headers = plan
+        else:
+            status, payload, headers = plan
         class Response:
             def __init__(self) -> None:
                 self.status_code = status
@@ -178,6 +197,10 @@ def _install_transport(namespace, monkeypatch, plans, body_reads=None):
 
         response.close = close
         call["response"] = response
+        if isinstance(plan, _HookErrorPlan):
+            raise requests_module.exceptions.HTTPError(
+                "response hook failed", response=response
+            )
         return response
 
     monkeypatch.setattr(requests_module.Session, "send", fake_send)
@@ -284,6 +307,101 @@ def test_status_only_refresh_retains_the_current_bearer(
     assert calls[2]["closed"] is False
     assert all(call["kwargs"]["timeout"] == 7.5 for call in calls)
     assert all(call["kwargs"]["allow_redirects"] is False for call in calls)
+
+
+def test_response_hook_401_is_refreshed_and_replayed(
+    recipe_namespace, monkeypatch
+):
+    calls = _install_transport(
+        recipe_namespace,
+        monkeypatch,
+        [
+            _HookErrorPlan(401, {"error": "expired"}),
+            (200, {"access_token": "rotated-test-token"}, {}),
+            (200, {"data": "ok"}, {}),
+        ],
+    )
+    session = _new_session(recipe_namespace)
+
+    response = session.send(_prepared_request(recipe_namespace))
+
+    assert response.status_code == 200
+    assert [call["url"] for call in calls] == [
+        f"{BASE_URL}deals",
+        REFRESH_URL,
+        f"{BASE_URL}deals",
+    ]
+    assert calls[0]["closed"] is True
+    assert calls[1]["closed"] is True
+
+
+def test_response_hook_429_uses_the_bounded_retry_policy(
+    recipe_namespace, monkeypatch
+):
+    calls = _install_transport(
+        recipe_namespace,
+        monkeypatch,
+        [
+            _HookErrorPlan(429, {"error": "rate limited"}, {"Retry-After": "0"}),
+            (200, {"data": "ok"}, {}),
+        ],
+    )
+    delays = []
+    monkeypatch.setattr(recipe_namespace["time"], "sleep", delays.append)
+    session = _new_session(recipe_namespace)
+
+    response = session.send(_prepared_request(recipe_namespace))
+
+    assert response.status_code == 200
+    assert delays == [0.0]
+    assert len(calls) == 2
+    assert calls[0]["closed"] is True
+    assert calls[1]["closed"] is False
+
+
+def test_response_hook_second_401_fails_after_one_refresh(
+    recipe_namespace, monkeypatch
+):
+    calls = _install_transport(
+        recipe_namespace,
+        monkeypatch,
+        [
+            _HookErrorPlan(401, {"error": "expired"}),
+            (200, {"access_token": "rotated-test-token"}, {}),
+            _HookErrorPlan(401, {"error": "still expired"}),
+        ],
+    )
+    session = _new_session(recipe_namespace)
+
+    with pytest.raises(RuntimeError, match="one refresh"):
+        session.send(_prepared_request(recipe_namespace))
+
+    assert len(calls) == 3
+    assert all(call["closed"] is True for call in calls)
+
+
+def test_response_hook_second_429_is_raised_and_closed(
+    recipe_namespace, monkeypatch
+):
+    requests_module = _requests_module(recipe_namespace)
+    calls = _install_transport(
+        recipe_namespace,
+        monkeypatch,
+        [
+            _HookErrorPlan(429, {"error": "rate limited"}, {"Retry-After": "0"}),
+            _HookErrorPlan(429, {"error": "still limited"}, {"Retry-After": "0"}),
+        ],
+    )
+    delays = []
+    monkeypatch.setattr(recipe_namespace["time"], "sleep", delays.append)
+    session = _new_session(recipe_namespace)
+
+    with pytest.raises(requests_module.exceptions.HTTPError, match="response hook failed"):
+        session.send(_prepared_request(recipe_namespace))
+
+    assert delays == [0.0]
+    assert len(calls) == 2
+    assert all(call["closed"] is True for call in calls)
 
 
 def test_custom_headers_reach_an_ordinary_request(recipe_namespace, monkeypatch):

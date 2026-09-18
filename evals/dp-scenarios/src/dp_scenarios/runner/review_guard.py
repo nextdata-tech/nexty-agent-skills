@@ -803,7 +803,6 @@ def _review_prompt_issues(prompt: object, state: dict[str, object]) -> tuple[str
         return ("supervisor-retained paths are unavailable; do not retry with a fallback path",)
     lines = prompt.splitlines()
     issues: list[str] = []
-
     for label, expected in (
         ("retained_capture_root", retained_capture_root),
         ("retained_blueprint_path", retained_blueprint_path),
@@ -873,7 +872,6 @@ def _review_prompt_validation_message(
             "do not retry without the exact protocol lines."
         )
     return "Reviewer dispatch rejected: " + "; ".join(issues) + "."
-
 
 def _child_pre(
     event: dict[str, object], state: dict[str, object]
