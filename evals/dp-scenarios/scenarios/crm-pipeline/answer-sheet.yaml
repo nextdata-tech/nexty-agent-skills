@@ -38,6 +38,9 @@ decision_answers:
   amount_precision:
     terms: [amount, precision]
     answer: "Choose exact-decimal semantics for amount. Amend the blueprint to state that amount preserves the source value without floating-point truncation or silent rounding, use an exact decimal representation in the landed model and governed totals, validate that the transform preserves the source precision, then re-approve the amended plan, recapture, and run a fresh independent review before validation or publication."
+  workflow_revision:
+    terms: [new, workflow]
+    answer: "Choose option 1: publish the corrected closure under a new workflow ID, for example crm-pipeline-current-v2. Treat it as a fresh admission: carry forward only the approved corrections, complete the normal prepare and approval flow, capture, independent review, validation, admission, publication, governed query, and evidence. Do not mutate or republish the already-admitted workflow, and do not add owner or email details."
   stage_enum:
     terms: [stage, enum]
     answer: The declared stage values are prospecting, qualification, negotiation, closed_won, and closed_lost. Preserve only those values and reject an unrecognised stage rather than inventing a category.

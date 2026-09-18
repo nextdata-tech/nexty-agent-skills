@@ -144,6 +144,18 @@ def test_b1_answers_amount_precision_as_an_explicit_data_contract() -> None:
     assert result.reply == answer.answer
 
 
+def test_b1_answers_an_admitted_workflow_revision_with_a_new_id() -> None:
+    """A published workflow cannot be revised in place through this path."""
+
+    answer = SCENARIO.answer_sheet.decision_answers["workflow_revision"]
+    assert answer.terms == ("new", "workflow")
+    result = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet).reply_for(
+        "The existing workflow is already admitted; should I use a new workflow id?"
+    )
+    assert result.rule_id == "decision.answer.workflow_revision"
+    assert result.reply == answer.answer
+
+
 def test_b1_answers_physical_redaction_question_deterministically() -> None:
     """The physical/governed-surface question gets the safe redaction answer."""
 
