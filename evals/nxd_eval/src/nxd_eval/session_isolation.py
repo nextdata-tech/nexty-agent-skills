@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,15 +25,27 @@ logger = logging.getLogger(__name__)
 
 
 class SessionIsolationError(RuntimeError):
-    """An isolated run completed partially; ``log_path`` holds its error log."""
+    """An isolated run completed partially; ``log_path`` holds its error log.
 
-    def __init__(self, log_path: Path, errors: list[tuple[str, str]]) -> None:
+    ``log_path`` is ``None`` when no case produced a log to collate.
+    """
+
+    def __init__(self, log_path: Path | None, errors: list[tuple[str, str]]) -> None:
         self.log_path = log_path
         self.errors = errors
         details = "; ".join(f"{case_id}: {detail}" for case_id, detail in errors)
+        artifact = f"partial log written to {log_path}" if log_path else "no partial log was written"
         super().__init__(
-            f"{len(errors)} isolated case(s) failed; partial log written to {log_path}: {details}"
+            f"{len(errors)} isolated case(s) failed; {artifact}: {details}"
         )
+
+
+def _parse_timestamp(value: str) -> datetime:
+    """Parse an Inspect timestamp into a timezone-aware UTC datetime."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _fold_eval_log(base: Any | None, addition: Any) -> Any:
@@ -52,13 +63,19 @@ def _fold_eval_log(base: Any | None, addition: Any) -> Any:
 
     if base.stats and addition.stats:
         if addition.stats.started_at and (
-            not base.stats.started_at or addition.stats.started_at < base.stats.started_at
+            not base.stats.started_at
+            or _parse_timestamp(addition.stats.started_at)
+            < _parse_timestamp(base.stats.started_at)
         ):
             base.stats.started_at = addition.stats.started_at
         if addition.stats.completed_at and (
-            not base.stats.completed_at or addition.stats.completed_at > base.stats.completed_at
+            not base.stats.completed_at
+            or _parse_timestamp(addition.stats.completed_at)
+            > _parse_timestamp(base.stats.completed_at)
         ):
             base.stats.completed_at = addition.stats.completed_at
+        if base.stats.model_usage is None:
+            base.stats.model_usage = {}
         for model, usage in (addition.stats.model_usage or {}).items():
             if model not in base.stats.model_usage:
                 base.stats.model_usage[model] = usage
@@ -66,10 +83,10 @@ def _fold_eval_log(base: Any | None, addition: Any) -> Any:
             existing = base.stats.model_usage[model]
             for key, value in usage.model_dump().items():
                 if isinstance(value, (int, float)):
-                    setattr(existing, key, getattr(existing, key, 0) + value)
+                    setattr(existing, key, (getattr(existing, key, None) or 0) + value)
 
-    if addition.status == "error":
-        base.status = "error"
+    if addition.status != "success" and base.status == "success":
+        base.status = addition.status
         if not base.error:
             base.error = addition.error
 
@@ -89,6 +106,7 @@ def _fold_eval_log(base: Any | None, addition: Any) -> Any:
         base.results.completed_samples = sum(
             1 for sample in base.samples if not getattr(sample, "error", None)
         )
+        base.results.scores = []
     return base
 
 
@@ -125,7 +143,7 @@ def run_suite_isolated(
 
     from inspect_ai.log import read_eval_log, write_eval_log
 
-    accumulated_log: Any | None = None
+    case_logs: list[Any] = []
     errors: list[tuple[str, str]] = []
     with tempfile.TemporaryDirectory(prefix="nxd_eval_case_") as scratch_dir:
         for index, case in enumerate(suite.cases, start=1):
@@ -147,23 +165,7 @@ def run_suite_isolated(
                     display=display,
                 )
                 case_log = read_eval_log(str(case_log_path))
-                trial_log = deepcopy(accumulated_log) if accumulated_log is not None else None
-                trial_log = _fold_eval_log(trial_log, case_log)
-
-                # A completed per-case log is successful unless a preceding
-                # case's completed log was itself marked as an Inspect error.
-                if trial_log.status != "error" and case_log.status != "error":
-                    trial_log.status = "success"
-
-                tmp_out = out_path.with_name(f"{out_path.stem}.tmp{index}.eval")
-                try:
-                    write_eval_log(trial_log, str(tmp_out), format="eval")
-                    os.replace(tmp_out, out_path)
-                finally:
-                    if tmp_out.exists():
-                        tmp_out.unlink(missing_ok=True)
-
-                accumulated_log = trial_log
+                case_logs.append(case_log)
                 Path(case_log_path).unlink(missing_ok=True)
                 if case_log.status != "success":
                     errors.append((case.id, f"Inspect completed with status {case_log.status!r}"))
@@ -171,9 +173,20 @@ def run_suite_isolated(
                 errors.append((case.id, f"{type(exc).__name__}: {exc}"))
                 logger.exception("Case %s errored; continuing with remaining isolated cases", case.id)
 
-    if accumulated_log is None:
-        details = "; ".join(f"{case_id}: {detail}" for case_id, detail in errors)
-        raise RuntimeError(f"All test cases errored before producing a log; {details}")
+    if not case_logs:
+        raise SessionIsolationError(None, errors)
+
+    accumulated_log: Any | None = None
+    for case_log in case_logs:
+        accumulated_log = _fold_eval_log(accumulated_log, case_log)
+
+    tmp_out = out_path.with_name(f"{out_path.stem}.tmp.eval")
+    try:
+        write_eval_log(accumulated_log, str(tmp_out), format="eval")
+        os.replace(tmp_out, out_path)
+    finally:
+        if tmp_out.exists():
+            tmp_out.unlink(missing_ok=True)
     if errors:
         logger.error(
             "%s/%s isolated cases failed; partial log written to %s",

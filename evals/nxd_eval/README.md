@@ -93,10 +93,11 @@ from nxd_eval import run_suite
 log_path = run_suite(suite, server_factory=server_factory, isolate_sessions=True)
 ```
 
-The isolated runner completes the remaining cases if one case fails and writes
-the partial log atomically after each completed case. It then raises
-`SessionIsolationError` (whose `log_path` points at that artifact), preventing a
-partial run from being accidentally reported or certified as a successful suite.
+The isolated runner completes the remaining cases if one case fails, then writes
+the collated partial log atomically. It raises `SessionIsolationError` (whose
+`log_path` points at that artifact) so a partial run cannot be accidentally
+reported or certified as successful. If every case fails before producing a log,
+it still raises `SessionIsolationError`, with `log_path` set to `None`.
 
 ### 2. Prove the substrate (no model, no API key needed)
 
