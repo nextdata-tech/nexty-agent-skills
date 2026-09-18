@@ -364,7 +364,7 @@ def build_task(
     )
 
 
-def run_suite(
+def _run_suite_once(
     suite: "Suite",
     *,
     variant: str = "current_pack",
@@ -442,3 +442,77 @@ def run_suite(
             f"suite {suite.name!r}: eval log has no on-disk location to read back"
         )
     return Path(location)
+
+
+def run_suite(
+    suite: "Suite",
+    *,
+    variant: str = "current_pack",
+    mcp_url: str | None = None,
+    server_factory: "Callable[[], Any] | None" = None,
+    agent_prompt: str | None = None,
+    agent_model: str | None = None,
+    authorization: str | None = None,
+    grader_model: str | None = None,
+    epochs: int = 1,
+    epochs_reducer: str = "pass_at",
+    log_dir: str | Path = "./logs",
+    display: str = "none",
+    isolate_sessions: bool = False,
+) -> Path:
+    """Run a suite and return its ``.eval`` log.
+
+    Set ``isolate_sessions=True`` for stateful MCP servers. Each case then runs
+    as its own Inspect task (and therefore gets a fresh MCP connection); their
+    logs are collated atomically into the one path returned here.
+    """
+    if isolate_sessions:
+        # Validate suite-wide configuration outside the per-case error boundary.
+        # A missing provider package or unreachable endpoint is a setup error,
+        # not one failed case repeated N times.
+        if variant not in VARIANTS:
+            raise ValueError(f"variant must be one of {VARIANTS}; got {variant!r}")
+        check_inspect_model_dependency(agent_model, role="agent_model")
+        check_inspect_model_dependency(grader_model, role="grader_model")
+        factory = server_factory or suite.server_factory
+        target = mcp_url or suite.target
+        if factory is None and not target:
+            raise ValueError(
+                f"suite {suite.name!r}: no MCP server (pass server_factory= / target= "
+                f"or set Suite.server_factory / Suite.target) — the react agent has "
+                "no server to drive"
+            )
+        if factory is None:
+            preflight_mcp_http_endpoint(target, authorization=authorization)
+
+        from .session_isolation import run_suite_isolated
+
+        return run_suite_isolated(
+            suite,
+            run_one=_run_suite_once,
+            variant=variant,
+            mcp_url=mcp_url,
+            server_factory=server_factory,
+            agent_prompt=agent_prompt,
+            agent_model=agent_model,
+            authorization=authorization,
+            grader_model=grader_model,
+            epochs=epochs,
+            epochs_reducer=epochs_reducer,
+            log_dir=log_dir,
+            display=display,
+        )
+    return _run_suite_once(
+        suite,
+        variant=variant,
+        mcp_url=mcp_url,
+        server_factory=server_factory,
+        agent_prompt=agent_prompt,
+        agent_model=agent_model,
+        authorization=authorization,
+        grader_model=grader_model,
+        epochs=epochs,
+        epochs_reducer=epochs_reducer,
+        log_dir=log_dir,
+        display=display,
+    )
