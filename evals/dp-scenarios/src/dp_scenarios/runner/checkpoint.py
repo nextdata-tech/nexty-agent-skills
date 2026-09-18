@@ -41,7 +41,7 @@ _IDENTITY_GROUPS: tuple[IdentityGroup, ...] = (
     "substrate",
     "grading",
 )
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SECRET_KEY_PARTS = ("token", "key", "secret", "password", "auth", "credential")
 _CHECKPOINT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -127,6 +127,12 @@ def _digest(value: object) -> str:
     return hashlib.sha256(_canonical_json(value)).hexdigest()
 
 
+def canonical_digest(value: object) -> str:
+    """Return the digest used for a validated, credential-free JSON value."""
+
+    return _digest(_validate_json(value))
+
+
 def _require_mapping(value: object, description: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise CheckpointError(f"{description} must be a mapping")
@@ -139,6 +145,12 @@ def _require_exact_keys(value: Mapping[str, object], expected: set[str], descrip
         raise CheckpointError(
             f"{description} has unexpected fields: expected {sorted(expected)}, got {sorted(actual)}"
         )
+
+
+def _validate_payload_ref(value: str) -> None:
+    path = Path(value)
+    if not value or path.is_absolute() or ".." in path.parts:
+        raise CheckpointError("payload_ref must be a non-empty relative path")
 
 
 def _read_json(path: Path) -> object:
@@ -283,6 +295,8 @@ class CheckpointState:
     continuity_mode: Literal["native-resume", "handoff"]
     turn_prefix_digest: str
     identity_digest: str
+    payload_ref: str | None = None
+    payload_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not _CHECKPOINT_ID_RE.fullmatch(self.checkpoint_id):
@@ -305,6 +319,13 @@ class CheckpointState:
         ):
             if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
                 raise CheckpointError(f"{field_name} must be a sha256 hex digest")
+        if (self.payload_ref is None) != (self.payload_digest is None):
+            raise CheckpointError("payload_ref and payload_digest must be provided together")
+        if self.payload_ref is not None:
+            _validate_payload_ref(self.payload_ref)
+            assert self.payload_digest is not None
+            if not _SHA256_RE.fullmatch(self.payload_digest):
+                raise CheckpointError("payload_digest must be a sha256 hex digest")
         _validate_json(self.to_dict())
 
     @classmethod
@@ -323,6 +344,8 @@ class CheckpointState:
             "continuity_mode",
             "turn_prefix_digest",
             "identity_digest",
+            "payload_ref",
+            "payload_digest",
         }
         _require_exact_keys(payload, expected, "checkpoint state")
         if payload["schema"] != _SCHEMA_VERSION:
@@ -357,6 +380,8 @@ class CheckpointState:
             "continuity_mode": self.continuity_mode,
             "turn_prefix_digest": self.turn_prefix_digest,
             "identity_digest": self.identity_digest,
+            "payload_ref": self.payload_ref,
+            "payload_digest": self.payload_digest,
         }
 
 
@@ -400,6 +425,50 @@ class CheckpointStore:
 
         return CheckpointIdentity.from_dict(_read_json(self.identity_path))  # type: ignore[arg-type]
 
+    def write_payload(self, checkpoint_id: str, payload: object) -> tuple[str, str]:
+        """Write a credential-free JSON payload before its state is committed.
+
+        Payloads are deliberately separate from state records so a caller can
+        persist a redacted replay or handoff manifest first and then make the
+        corresponding turn checkpoint visible atomically.  The returned
+        relative reference and digest belong in ``CheckpointState``.
+        """
+
+        if not _CHECKPOINT_ID_RE.fullmatch(checkpoint_id):
+            raise CheckpointError("checkpoint_id is invalid")
+        validated = _validate_json(payload)
+        if not isinstance(validated, Mapping):
+            raise CheckpointError("checkpoint payload must be a JSON object")
+        payload_ref = f"checkpoints/{checkpoint_id}.payload.json"
+        payload_path = self.root / payload_ref
+        payload_digest = _digest(validated)
+        if payload_path.exists():
+            existing = _validate_json(_read_json(payload_path))
+            if not isinstance(existing, Mapping) or _digest(existing) != payload_digest:
+                raise CheckpointError("checkpoint payload already exists with different content")
+            return payload_ref, payload_digest
+        _atomic_write_json(payload_path, validated)
+        return payload_ref, payload_digest
+
+    def read_payload(self, state: CheckpointState) -> Mapping[str, object] | None:
+        """Read and verify a checkpoint payload without repairing the store."""
+
+        if state.payload_ref is None:
+            return None
+        assert state.payload_digest is not None
+        _validate_payload_ref(state.payload_ref)
+        payload_path = (self.root / state.payload_ref).resolve()
+        root = self.root.resolve()
+        if root not in payload_path.parents:
+            raise CheckpointError("checkpoint payload escapes the store root")
+        payload = _read_json(payload_path)
+        validated = _validate_json(payload)
+        if not isinstance(validated, Mapping):
+            raise CheckpointError("checkpoint payload must be a JSON object")
+        if _digest(validated) != state.payload_digest:
+            raise CheckpointError("checkpoint payload digest does not match state")
+        return validated
+
     def commit(self, state: CheckpointState) -> None:
         """Atomically append a state checkpoint and advance ``latest.json``.
 
@@ -412,6 +481,8 @@ class CheckpointStore:
         identity = self.read_identity()
         if state.identity_digest != identity.digest:
             raise CheckpointError("checkpoint state identity does not match the store")
+        if state.payload_ref is not None:
+            self.read_payload(state)
         current = self.latest()
         if current is None:
             if state.parent_id is not None:
@@ -574,6 +645,7 @@ class CheckpointStore:
 
 
 __all__ = [
+    "canonical_digest",
     "CheckpointError",
     "CheckpointIdentity",
     "CheckpointState",

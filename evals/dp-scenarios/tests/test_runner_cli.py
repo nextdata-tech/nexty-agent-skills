@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,15 @@ import pytest
 
 import dp_scenarios.runner.cli as cli
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchPlan
+
+
+def _local_claude_cli():
+    path = Path(__file__).parents[1] / "scripts" / "run_local_claude.py"
+    spec = importlib.util.spec_from_file_location("run_local_claude_for_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: Path) -> None:
@@ -85,6 +95,14 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     assert captured["replay_recordings"] == {}
     assert captured["knob_plan"] == knob_plan
     assert captured["max_workers"] == 2
+
+
+def test_local_live_cli_accepts_an_explicit_stable_checkpoint_directory(tmp_path: Path) -> None:
+    local_cli = _local_claude_cli()
+    args = local_cli.build_parser().parse_args(
+        ["--checkpoint-dir", str(tmp_path / "stable-checkpoints")]
+    )
+    assert args.checkpoint_dir == tmp_path / "stable-checkpoints"
 
 
 def test_cli_rejects_workflow_switch_without_endpoint_callbacks(

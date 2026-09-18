@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -121,6 +122,73 @@ def test_live_recording_relativizes_absolute_paths_and_collects_artifacts(tmp_pa
     replay.start_fresh_session()
     replay.send_message("expected")
     assert (tmp_path / "replayed/closure/spec.json").read_bytes() == b'{"metric":"m"}'
+
+
+def test_recording_turn_callback_receives_complete_ordered_immutable_snapshots(tmp_path: Path) -> None:
+    snapshots: list[tuple[ReplayRecording, int]] = []
+    artifact_root = tmp_path / "artifacts"
+    responses = [
+        TurnResult(
+            agent_message="first",
+            tool_calls=(ToolCall("first", {"step": 1}),),
+            files_touched=(TouchedFile("first.txt", b"first"),),
+        ),
+        TurnResult(
+            agent_message="second",
+            tool_calls=(ToolCall("second", {"step": 2}),),
+            files_touched=(TouchedFile("second.txt", b"second"),),
+        ),
+    ]
+
+    def on_turn_complete(snapshot: ReplayRecording, turn_number: int) -> None:
+        snapshots.append((snapshot, turn_number))
+        assert snapshot.turns[-1].result.files_touched[0].path == f"{['first', 'second'][turn_number - 1]}.txt"
+        assert (artifact_root / f"{['first', 'second'][turn_number - 1]}.txt").is_file()
+        assert tuple(turn.operator_message.text for turn in snapshot.turns) == tuple(
+            ["first message", "second message"][:turn_number]
+        )
+        assert isinstance(snapshot.turns, tuple)
+        with pytest.raises(FrozenInstanceError):
+            snapshot.turns = ()  # type: ignore[misc]
+        with pytest.raises(TypeError):
+            snapshot.turns[-1].result.tool_calls[0].arguments["mutated"] = True  # type: ignore[index]
+
+    recorder = RecordingSession(
+        InMemoryTransport(responses),
+        artifact_root=artifact_root,
+        on_turn_complete=on_turn_complete,
+    )
+    recorder.start_fresh_session()
+    recorder.send_message("first message")
+    recorder.send_message("second message")
+
+    assert [turn_number for _, turn_number in snapshots] == [1, 2]
+    assert [len(snapshot.turns) for snapshot, _ in snapshots] == [1, 2]
+    assert len(snapshots[0][0].turns) == 1
+    assert len(snapshots[1][0].turns) == 2
+    assert snapshots[0][0] is not snapshots[1][0]
+
+
+def test_recording_turn_callback_failure_is_reported_as_session_error() -> None:
+    calls = 0
+
+    def on_turn_complete(snapshot: ReplayRecording, turn_number: int) -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("checkpoint write failed")
+
+    recorder = RecordingSession(
+        InMemoryTransport([TurnResult(agent_message="complete")]),
+        on_turn_complete=on_turn_complete,
+    )
+    recorder.start_fresh_session()
+
+    with pytest.raises(SessionError, match="turn-complete callback failed"):
+        recorder.send_message("expected")
+
+    assert calls == 1
+    assert len(recorder.turns) == 1
+    assert recorder.turns[0].result.agent_message == "complete"
 
 
 def test_replay_rejects_a_changed_operator_message(tmp_path: Path) -> None:

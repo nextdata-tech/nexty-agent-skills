@@ -25,8 +25,10 @@ live success.
 ## Evidence
 
 The carrying evidence is
-`evals/dp-scenarios/tests/test_runner_checkpoint.py`, which covers canonical
+`evals/dp-scenarios/tests/test_runner_checkpoint.py` plus the focused runner
+tests in `evals/dp-scenarios/tests/test_runner_tier.py`. They cover canonical
 identity stability, strict mismatch handling, report-only grading changes,
 atomic persistence and journal recovery, incomplete checkpoints, prefix-chain
-validation, and secret safety. Live runner wiring and native Claude session
-continuation remain follow-up work, so this entry makes no scenario claim.
+validation, secret safety, and per-turn handoff checkpoint emission from a live
+runner. Native Claude session continuation and report-only regrading from a
+checkpoint remain follow-up work, so this entry makes no scenario claim.

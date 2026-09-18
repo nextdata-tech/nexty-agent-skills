@@ -351,6 +351,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path, help="directory for report.json and summary.txt (default: a retained temp directory)")
     parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=None,
+        help=(
+            "stable directory for per-turn live handoff checkpoints; omitted means "
+            "checkpoint emission is disabled"
+        ),
+    )
+    parser.add_argument(
         "--env-file",
         type=Path,
         help=(
@@ -524,6 +533,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             session_factory=session_factory,
             environment_root=report_dir,
             evidence_root=report_dir / "evidence",
+            checkpoint_root=args.checkpoint_dir,
             budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
             supervisor_reader=supervisor_reader,
             live_command=adapter_command,

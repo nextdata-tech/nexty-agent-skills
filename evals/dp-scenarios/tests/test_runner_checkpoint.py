@@ -96,6 +96,36 @@ def test_commit_persists_atomic_pointer_and_journal(tmp_path: Path) -> None:
     assert store.latest() == state
 
 
+def test_payload_is_written_before_and_bound_to_a_checkpoint(tmp_path: Path) -> None:
+    identity = _identity()
+    store = CheckpointStore(tmp_path)
+    store.initialize(identity)
+    payload_ref, payload_digest = store.write_payload("cp-1", {"turns": 1, "status": "partial"})
+    state = replace(_state(identity), payload_ref=payload_ref, payload_digest=payload_digest)
+    store.commit(state)
+
+    assert store.read_payload(store.latest()) == {"turns": 1, "status": "partial"}  # type: ignore[arg-type]
+
+
+def test_payload_secrets_are_rejected_before_checkpoint_commit(tmp_path: Path) -> None:
+    identity = _identity()
+    store = CheckpointStore(tmp_path)
+    store.initialize(identity)
+    with pytest.raises(CheckpointError, match="secret-like"):
+        store.write_payload("cp-1", {"access_token": "do-not-write"})
+    assert not (tmp_path / "checkpoints" / "cp-1.payload.json").exists()
+
+
+def test_payload_retries_cannot_overwrite_an_existing_checkpoint_payload(tmp_path: Path) -> None:
+    identity = _identity()
+    store = CheckpointStore(tmp_path)
+    store.initialize(identity)
+    first = store.write_payload("cp-1", {"turns": 1})
+    assert store.write_payload("cp-1", {"turns": 1}) == first
+    with pytest.raises(CheckpointError, match="different content"):
+        store.write_payload("cp-1", {"turns": 2})
+
+
 def test_missing_or_corrupt_latest_recovers_from_journal_without_repair(tmp_path: Path) -> None:
     identity = _identity()
     store = CheckpointStore(tmp_path)

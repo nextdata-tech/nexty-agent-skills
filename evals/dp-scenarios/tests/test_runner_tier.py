@@ -35,6 +35,8 @@ from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner import (
     CanaryResult,
+    CheckpointState,
+    CheckpointStore,
     PinnedVersions,
     ReplayRecording,
     RecordingSession,
@@ -298,6 +300,52 @@ def test_tier_runner_drives_the_same_operator_factory_on_replay_and_live_paths(t
         )
     ] == [0, 0, 0, 0]
     assert all(turn["driver_skip_reason"] is None for turn in scripted_observations["turns"])
+
+
+def test_live_tier_emits_secret_safe_chained_handoff_checkpoints(tmp_path: Path) -> None:
+    scenario = make_scenario("checkpoint-live", turns=3)
+    (tmp_path / "runs").mkdir()
+    responses = [
+        TurnResult(
+            agent_message=f"turn {index}",
+            files_touched=(TouchedFile("closure.csv", "PRIVATE-CONTENT"),),
+        )
+        for index in range(1, 4)
+    ]
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(responses),
+        environment_root=tmp_path / "runs",
+        checkpoint_root=tmp_path / "checkpoints",
+    ).run()
+
+    assert result.scenario_runs[0].transcript_turns == 3
+    store = CheckpointStore(tmp_path / "checkpoints" / scenario.id / "epoch-1")
+    identity = store.read_identity()
+    records = [
+        CheckpointState.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(store.records_dir.glob("turn-[0-9]*.json"))
+        if ".payload." not in path.name
+    ]
+    assert [state.checkpoint_id for state in records] == [
+        "turn-000001",
+        "turn-000002",
+        "turn-000003",
+    ]
+    assert [state.parent_id for state in records] == [None, "turn-000001", "turn-000002"]
+    assert [state.phase for state in records] == ["1", "2", "3"]
+    assert all(state.continuity_mode == "handoff" for state in records)
+    assert all(state.identity_digest == identity.digest for state in records)
+    payloads = [store.read_payload(state) for state in records]
+    assert all(payload is not None for payload in payloads)
+    assert all("PRIVATE-CONTENT" not in json.dumps(payload) for payload in payloads)
+    assert all(
+        isinstance(payload, dict)
+        and payload["metadata"]["touched_file_contents_redacted"] is True
+        for payload in payloads
+    )
 
 
 def recording_for(

@@ -242,12 +242,21 @@ evidence directory; the report and transcript artifacts are retained under
 runs smoke by default; `--tier live` selects the current live package when no
 package is named.
 
+For long live runs, pass an explicit stable `--checkpoint-dir` to emit a
+credential-free, per-turn handoff checkpoint after each completed turn. The
+checkpoint identity binds the scenario, script, skill/model, supervisor,
+fixture, and grading pins; it fails closed on drift and never overwrites a
+checkpoint payload. This is durable handoff evidence, not native Claude
+continuation or a passing replay: those require an explicit resume policy and
+are not enabled by this flag yet.
+
 ```bash
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
   --scenario capability-shortfall \
   --epochs 1 \
   --allow-host-home --allow-host-home-bash \
-  --output-dir /tmp/dp-scenarios-local-run
+  --output-dir /tmp/dp-scenarios-local-run \
+  --checkpoint-dir /tmp/dp-scenarios-local-checkpoints
 ```
 
 `--allow-host-home` exposes the host credential/configuration home to the agent

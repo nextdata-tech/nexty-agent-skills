@@ -21,6 +21,7 @@ import select
 import signal
 import subprocess
 import time
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
@@ -440,6 +441,44 @@ def _materialize_touched_files(
         target.write_bytes(content)
 
 
+def _freeze_value(value: object) -> object:
+    """Recursively freeze mapping and sequence values in a callback snapshot."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
+def _immutable_recording_snapshot(turns: Sequence[RecordedTurn]) -> ReplayRecording:
+    """Copy completed turns into a snapshot that cannot be mutated by a callback."""
+
+    copied_turns: list[RecordedTurn] = []
+    for turn in turns:
+        message = turn.operator_message
+        result = turn.result
+        copied_result = replace(
+            result,
+            tool_calls=tuple(
+                replace(
+                    call,
+                    arguments=_freeze_value(call.arguments),
+                    result=_freeze_value(call.result),
+                )
+                for call in result.tool_calls
+            ),
+            tool_results=tuple(_freeze_value(item) for item in result.tool_results),
+        )
+        copied_turns.append(RecordedTurn(message, copied_result))
+    return ReplayRecording(
+        tuple(copied_turns),
+        metadata=MappingProxyType({}),
+    )
+
+
 class ReplaySession:
     """Replay structured turns and materialize recorded files into a sandbox."""
 
@@ -511,6 +550,7 @@ ResponseHandler = Callable[[OperatorMessage], TurnResult]
 WorkflowRestart = Callable[[str], Transport]
 WorkflowObserver = Callable[[OperatorMessage, TurnResult, str], EndpointObservation]
 WorkflowEvidenceSink = Callable[[WorkflowSwitchEvidence, int], None]
+TurnCompleteCallback = Callable[[ReplayRecording, int], None]
 
 
 class DesktopSessionLifecycle(Protocol):
@@ -799,6 +839,7 @@ class RecordingSession:
         workflow_restart: WorkflowRestart | None = None,
         workflow_observer: WorkflowObserver | None = None,
         workflow_evidence: WorkflowEvidenceSink | None = None,
+        on_turn_complete: TurnCompleteCallback | None = None,
     ) -> None:
         self.transport = transport
         self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
@@ -810,6 +851,7 @@ class RecordingSession:
         self.workflow_restart = workflow_restart
         self.workflow_observer = workflow_observer
         self.workflow_evidence = workflow_evidence
+        self.on_turn_complete = on_turn_complete
         self._session_started = False
         self._workflow_switched = False
         self._workflow_observation_pending = False
@@ -872,6 +914,12 @@ class RecordingSession:
         if self.artifact_root is not None:
             _materialize_touched_files(normalized, self.artifact_root, source_root=self.sandbox_home)
         self.turns.append(RecordedTurn(message, normalized))
+        if self.on_turn_complete is not None:
+            snapshot = _immutable_recording_snapshot(self.turns)
+            try:
+                self.on_turn_complete(snapshot, len(self.turns))
+            except Exception as exc:
+                raise SessionError("turn-complete callback failed") from exc
         return result
 
     send = send_message
