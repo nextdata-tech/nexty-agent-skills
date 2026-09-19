@@ -222,6 +222,7 @@ def enabled_runtime_knobs():
         PlanShape("naive", 8),
         PlanShape("bounded", 2),
         per_call_latency_ms=10,
+        route_keys=("GET /market-data",),
     )
     return SupervisorKnobs(
         transform_window=sizing,

@@ -224,6 +224,7 @@ def test_report_redaction_preserves_secret_key_shape_without_echoing_values() ->
         "monkey": "ordinary-monkey-value",
         "turnkey": "ordinary-turnkey-value",
         "handler": "ordinary-handler-value",
+        "route_keys": ["GET /market-data"],
     }
     redacted = redact_json(
         {

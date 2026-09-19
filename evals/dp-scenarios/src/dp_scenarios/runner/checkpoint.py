@@ -105,23 +105,29 @@ def _is_secret_key(key: str) -> bool:
         return False
     if len(words) == 1 and words[0] in _SECRET_COMPOUND_WORDS:
         return True
-    # Preserve the old predicate's protection for plural field names without
-    # returning to substring matching, which marked ordinary prose such as
-    # ``handler`` as credential-bearing.
+    # Preserve the old predicate's protection for credential-bearing words
+    # without treating every generic ``*_key`` field as a credential.  Runtime
+    # metadata legitimately contains names such as ``route_keys`` and
+    # ``key_id``; only a key paired with a credential qualifier is sensitive.
     normalized_words = tuple(
         word[:-1] if word.endswith("s") and word[:-1] in _SECRET_WORDS else word
         for word in words
     )
-    if any(word in _SECRET_WORDS for word in normalized_words):
+    if any(word in _SECRET_WORDS - {"key"} for word in normalized_words):
         return True
     return any(
         normalized_words[index : index + 2]
         in {
             ("access", "token"),
             ("api", "key"),
+            ("access", "key"),
+            ("client", "key"),
             ("oauth", "key"),
             ("oauth", "token"),
+            ("private", "key"),
             ("refresh", "token"),
+            ("session", "key"),
+            ("secret", "key"),
             ("set", "cookie"),
         }
         for index in range(len(words) - 1)

@@ -74,6 +74,11 @@ and `contracts`. Frontmatter-only `name` and `workflow` must not be added to
 this payload. Use these exact item shapes (with no legacy aliases or extra
 keys):
 
+The only allowed typed v3 transform operations are `filter`, `project`,
+`derive`, `join`, `aggregate`, `union`, `deduplicate`, and `apply_procedure`.
+API fetch and pagination are connector behavior, not typed transform
+operations; do not add `fetch` or `paginate` steps to `proposal.transform`.
+
 ```json
 {
   "intent": "Provide a queryable order summary.",
@@ -93,6 +98,10 @@ keys):
   ]
 }
 ```
+
+If the prose `## Open Questions` section is empty, produce
+`proposal.open_questions: []`. It must not contain a prose placeholder such as
+`None`; `None` is not an open-question item.
 
 When a term priority is omitted, materialize the platform default as `P3` with
 `platform_fixed` provenance and disclose that default; an explicitly written
