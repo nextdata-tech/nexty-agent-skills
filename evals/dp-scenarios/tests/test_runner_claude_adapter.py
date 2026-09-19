@@ -808,9 +808,12 @@ def _spawned_claude_argv(
     *,
     allow_bash: bool,
     supervisor_data_dir: Path | None = None,
+    native_continuation: bool = False,
+    resume_session_id: str | None = None,
 ) -> list[str]:
     """Return the argv the adapter really hands to ``subprocess.Popen``."""
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
     claude = tmp_path / "claude"
     claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     claude.chmod(0o700)
@@ -863,9 +866,43 @@ def _spawned_claude_argv(
         mcp_config=mcp_config,
         allowed_tools="mcp__nxd-desktop__build_data_product",
         supervisor_data_dir=supervisor_data_dir,
+        native_continuation=native_continuation,
+        resume_session_id=resume_session_id,
     )
     adapter.start()
     return captured["argv"]
+
+
+def test_claude_command_keeps_fresh_and_native_resume_modes_disjoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fresh = _spawned_claude_argv(tmp_path / "fresh", monkeypatch, allow_bash=False)
+    assert "--session-id" in fresh
+    assert "--no-session-persistence" in fresh
+    assert "--resume" not in fresh
+
+    native_fresh = _spawned_claude_argv(
+        tmp_path / "native-fresh",
+        monkeypatch,
+        allow_bash=False,
+        native_continuation=True,
+    )
+    assert "--session-id" in native_fresh
+    assert "--no-session-persistence" not in native_fresh
+    assert "--resume" not in native_fresh
+
+    session_id = "00000000-0000-4000-8000-000000000001"
+    native_resume = _spawned_claude_argv(
+        tmp_path / "native-resume",
+        monkeypatch,
+        allow_bash=False,
+        native_continuation=True,
+        resume_session_id=session_id,
+    )
+    assert "--resume" in native_resume
+    assert native_resume[native_resume.index("--resume") + 1] == session_id
+    assert "--session-id" not in native_resume
+    assert "--no-session-persistence" not in native_resume
 
 
 def test_spawned_claude_can_read_only_supervisor_retained_content_roots(

@@ -113,6 +113,100 @@ class RequestCounters:
 
     as_dict = snapshot
 
+    @classmethod
+    def _decode_snapshot(
+        cls, snapshot: Mapping[str, Any]
+    ) -> tuple[list[RequestEvent], Counter[str], Counter[tuple[str, str]], dict[str, dict[str, Any]], int]:
+        """Validate and decode a persisted counter snapshot without mutating state."""
+
+        if not isinstance(snapshot, Mapping) or set(snapshot) != {"total", "pages", "routes", "events"}:
+            raise ValueError("counter snapshot has an invalid shape")
+        total = snapshot["total"]
+        pages = snapshot["pages"]
+        if (
+            isinstance(total, bool)
+            or not isinstance(total, int)
+            or total < 0
+            or isinstance(pages, bool)
+            or not isinstance(pages, int)
+            or pages < 0
+        ):
+            raise ValueError("counter snapshot has invalid totals")
+        raw_events = snapshot["events"]
+        if not isinstance(raw_events, list) or len(raw_events) != total:
+            raise ValueError("counter snapshot events do not match total")
+
+        events: list[RequestEvent] = []
+        route_counts: Counter[str] = Counter()
+        method_counts: Counter[tuple[str, str]] = Counter()
+        buckets: dict[str, dict[str, Any]] = {}
+        for expected_sequence, raw_event in enumerate(raw_events, start=1):
+            if not isinstance(raw_event, Mapping) or set(raw_event) != {
+                "sequence", "route", "method", "identity"
+            }:
+                raise ValueError("counter snapshot contains a malformed event")
+            sequence = raw_event["sequence"]
+            route = raw_event["route"]
+            method = raw_event["method"]
+            identity = raw_event["identity"]
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence != expected_sequence
+                or not isinstance(route, str)
+                or not route
+                or not isinstance(method, str)
+                or not method
+                or method != method.upper()
+                or (identity is not None and (not isinstance(identity, str) or not identity))
+            ):
+                raise ValueError("counter snapshot contains an invalid event")
+            event = RequestEvent(sequence, route, method, identity)
+            events.append(event)
+            route_counts[route] += 1
+            method_counts[(route, method)] += 1
+            bucket = buckets.setdefault(
+                route,
+                {"count": 0, "methods": Counter(), "identities": Counter()},
+            )
+            bucket["count"] += 1
+            bucket["methods"][method] += 1
+            bucket["identities"][identity if identity is not None else "anonymous"] += 1
+
+        raw_routes = snapshot["routes"]
+        if not isinstance(raw_routes, Mapping) or set(raw_routes) != set(buckets):
+            raise ValueError("counter snapshot routes do not match events")
+        expected_routes = {
+            route: {
+                "count": int(bucket["count"]),
+                "methods": dict(bucket["methods"]),
+                "identities": dict(bucket["identities"]),
+            }
+            for route, bucket in buckets.items()
+        }
+        if dict(raw_routes) != expected_routes:
+            raise ValueError("counter snapshot route aggregates do not match events")
+        return events, route_counts, method_counts, buckets, pages
+
+    @classmethod
+    def validate_snapshot(cls, snapshot: Mapping[str, Any]) -> None:
+        """Validate a JSON counter snapshot without changing the live oracle."""
+
+        cls._decode_snapshot(snapshot)
+
+    def restore_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+        """Restore a previously captured snapshot after strict validation."""
+
+        decoded = self._decode_snapshot(snapshot)
+        events, route_counts, method_counts, buckets, _pages = decoded
+        pages = snapshot["pages"]
+        with self._lock:
+            self._events = events
+            self._route_counts = route_counts
+            self._method_counts = method_counts
+            self._buckets = buckets
+            self._pages = int(pages)
+
     def count(self, route: str | None = None, method: str | None = None) -> int:
         """Count events optionally restricted to a route and method."""
 

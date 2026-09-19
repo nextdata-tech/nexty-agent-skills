@@ -7,11 +7,21 @@ mistaken for agent behaviour.
 """
 
 from .environment import Environment, MockSourceHandle, PinnedVersions, RunEnvironment, RunEnvironmentError, RunSetup
+from .checkpoint import (
+    CheckpointError,
+    CheckpointIdentity,
+    CheckpointState,
+    CheckpointStore,
+    ClaudeSessionIdentity,
+    ResumeDecision,
+    canonical_digest,
+)
 from .report import ReportError, emit_report, human_summary, machine_report, write_report
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     LiveSession,
     LiveTransport,
+    NativeResumeSession,
     RecordedSession,
     RecordedTurn,
     RecordingSession,
@@ -37,9 +47,16 @@ from .tier import (
 
 __all__ = [
     "CanaryResult",
+    "CheckpointError",
+    "CheckpointIdentity",
+    "CheckpointState",
+    "CheckpointStore",
+    "ClaudeSessionIdentity",
+    "canonical_digest",
     "Environment",
     "LiveSession",
     "LiveTransport",
+    "NativeResumeSession",
     "MockSourceHandle",
     "PinnedVersions",
     "QualificationDisposition",
@@ -51,6 +68,7 @@ __all__ = [
     "ReplayRecording",
     "ReplaySession",
     "ReplayTransport",
+    "ResumeDecision",
     "ReportError",
     "RunBudgets",
     "RunEnvironment",

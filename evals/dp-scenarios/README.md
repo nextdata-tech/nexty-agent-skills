@@ -242,12 +242,63 @@ evidence directory; the report and transcript artifacts are retained under
 runs smoke by default; `--tier live` selects the current live package when no
 package is named.
 
+For long live runs, pass an explicit stable `--checkpoint-dir` to emit a
+credential-free, per-turn handoff checkpoint after each completed turn. The
+checkpoint identity binds the scenario, script, skill/model, supervisor,
+fixture, and grading pins; it fails closed on drift and never overwrites a
+checkpoint payload. This is durable handoff evidence, not native Claude
+continuation, and it does not claim that B1 passes.
+
+Native Claude continuation is a separate, explicit opt-in seam. Add
+`--native-continuation --native-run-root <persistent-root>` to a fresh run
+(alongside `--checkpoint-dir`). The native checkpoint stores only a canonical
+Claude session UUID and the SHA-256 execution-identity digest. To resume one
+committed prefix, pass `--native-resume-checkpoint` together with the same
+persistent run root; the runner replays the committed operator prefix locally,
+verifies each message, and starts Claude at the next operator turn with
+`--resume <session-id>`, continuing through the remaining declared turns in
+that provider session. It never sends the committed prefix to Claude again or
+injects a synthetic opening prompt.
+Redacted touched-file observations are rehydrated only from the retained
+workspace and must match their committed hash and size; changed or missing
+files reject the resume.
+
+This seam is intentionally bounded: native continuation requires one scenario,
+one epoch, `--jobs 1`, the original persistent run root, and an unchanged
+checkpoint identity. Route-backed/mock-source environments are supported when
+the fresh run persists `native-source-contract.json`; resume validates the
+credential-free source contract, checks the current route configuration digest,
+and restarts the source on the recorded data/control endpoints. The paired
+`native-source-state.json` snapshot restores the non-secret auth budget,
+mutable route state, and request counters needed for rate-limit and oracle
+continuity; pagination cursors are regenerated from the restored route state.
+The snapshot is refreshed after each committed native turn and during orderly
+environment cleanup.
+Missing, malformed, drifted, or occupied-port state fails closed; the default
+fresh-run path and the handoff path are unchanged. This enables B1-style
+resumption, but B1 still requires a separate live rerun for evidence. Auth
+tokens and control secrets are never persisted.
+
 ```bash
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
   --scenario capability-shortfall \
   --epochs 1 \
   --allow-host-home --allow-host-home-bash \
-  --output-dir /tmp/dp-scenarios-local-run
+  --output-dir /tmp/dp-scenarios-local-run \
+  --checkpoint-dir /tmp/dp-scenarios-local-checkpoints
+```
+
+The native continuation flags are deliberately absent from this handoff
+example. A native run must name its persistent contract explicitly, for
+example:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario capability-shortfall \
+  --output-dir /tmp/dp-scenarios-native-run \
+  --checkpoint-dir /tmp/dp-scenarios-native-checkpoints \
+  --native-continuation \
+  --native-run-root /tmp/dp-scenarios-native-root
 ```
 
 `--allow-host-home` exposes the host credential/configuration home to the agent

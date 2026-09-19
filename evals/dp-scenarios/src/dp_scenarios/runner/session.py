@@ -17,11 +17,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import subprocess
 import time
+from types import MappingProxyType
 from typing import Any, Protocol
+import uuid
 
 from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
 from dp_scenarios.failure_reasons import (
@@ -426,6 +429,8 @@ def _materialize_touched_files(
         if root not in target.parents and target != root:
             raise SessionError(f"touched-file path escapes artifact root: {relative}")
         content = touched.content
+        if isinstance(content, Mapping) and content.get("redacted") is True:
+            continue
         if content is None and source_root is not None:
             source = (source_root.resolve() / relative).resolve()
             home = source_root.resolve()
@@ -436,8 +441,48 @@ def _materialize_touched_files(
         if content is None:
             continue
         content = content.encode("utf-8") if isinstance(content, str) else content
+        if not isinstance(content, bytes):
+            raise SessionError("touched-file content is not bytes")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
+
+
+def _freeze_value(value: object) -> object:
+    """Recursively freeze mapping and sequence values in a callback snapshot."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
+def _immutable_recording_snapshot(turns: Sequence[RecordedTurn]) -> ReplayRecording:
+    """Copy completed turns into a snapshot that cannot be mutated by a callback."""
+
+    copied_turns: list[RecordedTurn] = []
+    for turn in turns:
+        message = turn.operator_message
+        result = turn.result
+        copied_result = replace(
+            result,
+            tool_calls=tuple(
+                replace(
+                    call,
+                    arguments=_freeze_value(call.arguments),
+                    result=_freeze_value(call.result),
+                )
+                for call in result.tool_calls
+            ),
+            tool_results=tuple(_freeze_value(item) for item in result.tool_results),
+        )
+        copied_turns.append(RecordedTurn(message, copied_result))
+    return ReplayRecording(
+        tuple(copied_turns),
+        metadata=MappingProxyType({}),
+    )
 
 
 class ReplaySession:
@@ -483,7 +528,14 @@ class ReplaySession:
             target = (self.artifact_root / raw_path).resolve()
             if self.artifact_root not in target.parents and target != self.artifact_root:
                 raise SessionError(f"replay touched-file path escapes artifact root: {raw_path}")
+            # Report-safe checkpoint payloads retain only a digest/size marker
+            # for touched bytes.  That marker is evidence, not file content,
+            # and must never be materialized as if it were raw bytes.
+            if isinstance(touched.content, Mapping) and touched.content.get("redacted") is True:
+                continue
             content = touched.content.encode("utf-8") if isinstance(touched.content, str) else touched.content
+            if not isinstance(content, bytes):
+                raise SessionError("replay touched-file content is not bytes")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
 
@@ -506,11 +558,149 @@ class ReplaySession:
     send = send_message
 
 
+def _hydrate_report_safe_recording(
+    recording: ReplayRecording,
+    source_root: str | Path | None,
+) -> ReplayRecording:
+    """Recover redacted touched bytes from the retained private workspace.
+
+    Native checkpoints deliberately persist only a hash and size for touched
+    bytes. A resumed grader still needs the exact prefix observations, so the
+    corresponding files are read from the persistent agent workspace and
+    verified against those commitments. Missing or changed files reject the
+    resume instead of silently dropping evidence.
+    """
+
+    if source_root is None:
+        if any(
+            isinstance(touched.content, Mapping) and touched.content.get("redacted") is True
+            for turn in recording.turns
+            for touched in turn.result.files_touched
+        ):
+            raise SessionError(
+                "native checkpoint with redacted touched bytes requires the retained workspace"
+            )
+        return recording
+    root = Path(source_root).expanduser().resolve()
+    turns: list[RecordedTurn] = []
+    for turn in recording.turns:
+        files: list[TouchedFile] = []
+        for touched in turn.result.files_touched:
+            content = touched.content
+            if isinstance(content, Mapping) and content.get("redacted") is True:
+                digest = content.get("sha256")
+                size = content.get("size_bytes")
+                if (
+                    not isinstance(digest, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    or not isinstance(size, int)
+                    or isinstance(size, bool)
+                    or size < 0
+                ):
+                    raise SessionError("native checkpoint touched-file commitment is invalid")
+                relative = Path(touched.path)
+                if relative.is_absolute():
+                    raise SessionError("native checkpoint touched-file path must be relative")
+                source = (root / relative).resolve()
+                if root not in source.parents and source != root:
+                    raise SessionError("native checkpoint touched-file path escapes the workspace")
+                try:
+                    raw = source.read_bytes()
+                except OSError as exc:
+                    raise SessionError("native checkpoint touched-file bytes are unavailable") from exc
+                if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+                    raise SessionError("native checkpoint touched-file bytes changed")
+                content = raw
+            files.append(TouchedFile(touched.path, content))
+        turns.append(RecordedTurn(turn.operator_message, replace(turn.result, files_touched=tuple(files))))
+    return ReplayRecording(
+        tuple(turns),
+        recording.manifest,
+        recording.supervisor_facts,
+        recording.metadata,
+    )
+
+
+class NativeResumeSession:
+    """Replay a committed prefix locally, then continue the provider session.
+
+    The resumed provider already owns the prefix in its Claude conversation.
+    The local replay exists only to let the deterministic operator engine
+    rebuild its state and verify that the script still names the same prefix.
+    No prefix message is forwarded to ``transport``.
+    """
+
+    def __init__(
+        self,
+        prefix: ReplayRecording | str | Path,
+        transport: Transport,
+        *,
+        session_id: str,
+        artifact_root: str | Path | None = None,
+        source_root: str | Path | None = None,
+    ) -> None:
+        try:
+            parsed = uuid.UUID(session_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise SessionError("native resume session id must be a UUID") from exc
+        if str(parsed) != session_id:
+            raise SessionError("native resume session id must use canonical UUID spelling")
+        self.prefix = prefix if isinstance(prefix, ReplayRecording) else ReplayRecording.read(prefix)
+        self.prefix = _hydrate_report_safe_recording(self.prefix, source_root)
+        self._replay = ReplaySession(self.prefix, artifact_root=artifact_root)
+        self.transport = transport
+        self.session_id = session_id
+        self._started = False
+
+    @property
+    def remaining_prefix_turns(self) -> int:
+        """Return the number of committed turns still being replayed locally."""
+
+        return self._replay.remaining_turns
+
+    def start_fresh_session(self) -> str:
+        """Arm provider continuation without inventing an initial prompt."""
+
+        if self._started:
+            raise SessionError("native resume session was started more than once")
+        resumed = self.transport.resume_session(self.session_id)
+        if resumed != self.session_id:
+            raise SessionError("native transport did not accept the checkpoint Claude session id")
+        self._started = True
+        return self.session_id
+
+    start_fresh = start_fresh_session
+
+    def resume_session(self, session_id: str | None = None) -> str:
+        requested = self.session_id if session_id is None else session_id
+        if requested != self.session_id:
+            raise SessionError("native resume session id cannot change after checkpoint validation")
+        return self.start_fresh_session()
+
+    resume = resume_session
+
+    def send_message(self, message: OperatorMessage | str) -> TurnResult:
+        if not self._started:
+            raise SessionError("native resume session must be started before sending a turn")
+        if self._replay.remaining_turns:
+            return self._replay.send_message(message)
+        return self.transport.send_message(message)
+
+    send = send_message
+
+    def close(self) -> None:
+        close = getattr(self.transport, "close", None)
+        if callable(close):
+            close()
+
+
 ResponseHandler = Callable[[OperatorMessage], TurnResult]
+ResumeCommandBuilder = Callable[[str], Sequence[str]]
 
 WorkflowRestart = Callable[[str], Transport]
 WorkflowObserver = Callable[[OperatorMessage, TurnResult, str], EndpointObservation]
 WorkflowEvidenceSink = Callable[[WorkflowSwitchEvidence, int], None]
+TurnCompleteCallback = Callable[[ReplayRecording, int], None]
 
 
 class DesktopSessionLifecycle(Protocol):
@@ -541,6 +731,7 @@ class LiveSession:
         timeout: float = 300.0,
         handler: ResponseHandler | None = None,
         desktop_session: DesktopSessionLifecycle | None = None,
+        resume_command_builder: ResumeCommandBuilder | None = None,
     ) -> None:
         if command is None and handler is None:
             raise SessionError("live session requires a command or structured response handler")
@@ -553,6 +744,7 @@ class LiveSession:
         self.cwd = str(cwd) if cwd is not None else None
         self.timeout = timeout
         self.handler = handler
+        self.resume_command_builder = resume_command_builder
         # The shared DesktopStdioSession is the owner of a live process group
         # when this session was created by DesktopStdioTransport.  The
         # protocol keeps replay and handler-backed sessions independent of the
@@ -561,35 +753,62 @@ class LiveSession:
         self._process: subprocess.Popen[bytes] | None = None
         self._session_counter = 0
         self._stdout_buffer = bytearray()
+        self._pending_resume_session_id: str | None = None
+        self._resume_command: tuple[str, ...] = ()
+
+    def _start_process(self, command: Sequence[str]) -> None:
+        """Start one child with the already-selected fresh/resume argv."""
+
+        if self.handler is not None:
+            return
+        if self._process is not None:
+            self._stop_process(wait_timeout=min(self.timeout, 5.0))
+        if self.desktop_session is not None:
+            self.desktop_session.ensure_started()
+        self._process = subprocess.Popen(
+            list(command),
+            cwd=self.cwd,
+            env=self.environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            start_new_session=True,
+        )
+        self._stdout_buffer.clear()
+        if self.desktop_session is not None:
+            self.desktop_session.attach_process(self._process)
 
     def start_fresh_session(self) -> str:
         self._session_counter += 1
+        self._pending_resume_session_id = None
         if self.handler is None:
-            if self._process is not None:
-                # A fresh session must discard the persistent child, not just
-                # mint a new harness label over the same conversation.
-                self._stop_process(wait_timeout=min(self.timeout, 5.0))
-            if self.desktop_session is not None:
-                self.desktop_session.ensure_started()
             assert self.command is not None
-            self._process = subprocess.Popen(
-                list(self.command),
-                cwd=self.cwd,
-                env=self.environment,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-                start_new_session=True,
-            )
-            self._stdout_buffer.clear()
-            if self.desktop_session is not None:
-                self.desktop_session.attach_process(self._process)
+            self._start_process(self.command)
         return f"live-session-{self._session_counter}"
 
     start_fresh = start_fresh_session
 
     def resume_session(self, session_id: str | None = None) -> str | None:
+        if self.handler is not None:
+            raise SessionError("native resume is unsupported for handler-backed sessions")
+        if self.resume_command_builder is None:
+            raise SessionError("native resume requires an explicit resume command builder")
+        if not isinstance(session_id, str) or not session_id:
+            raise SessionError("native resume requires a session id")
+        try:
+            parsed = uuid.UUID(session_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise SessionError("native resume session id must be a UUID") from exc
+        if str(parsed) != session_id:
+            raise SessionError("native resume session id must use canonical UUID spelling")
+        if self._process is not None:
+            raise SessionError("native resume cannot replace an active live process")
+        command = tuple(self.resume_command_builder(session_id))
+        if not command:
+            raise SessionError("native resume command builder returned an empty command")
+        self._pending_resume_session_id = session_id
+        self._resume_command = command
         return session_id
 
     resume = resume_session
@@ -602,8 +821,11 @@ class LiveSession:
             if not isinstance(result, TurnResult):
                 raise SessionError("live response handler returned no TurnResult")
             return result
-        if self._process is None or self._process.stdin is None or self._process.stdout is None:
-            self.start_fresh_session()
+        if self._process is None:
+            if self._pending_resume_session_id is not None:
+                self._start_process(self._resume_command)
+            else:
+                self.start_fresh_session()
         assert self._process is not None and self._process.stdin is not None and self._process.stdout is not None
         request = {"type": "turn", "message": operator_message_to_dict(message)}
         self._process.stdin.write((json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
@@ -799,17 +1021,21 @@ class RecordingSession:
         workflow_restart: WorkflowRestart | None = None,
         workflow_observer: WorkflowObserver | None = None,
         workflow_evidence: WorkflowEvidenceSink | None = None,
+        on_turn_complete: TurnCompleteCallback | None = None,
+        initial_recording: ReplayRecording | None = None,
     ) -> None:
         self.transport = transport
         self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
         self.sandbox_home = Path(sandbox_home).resolve() if sandbox_home is not None else None
         if self.artifact_root is not None:
             self.artifact_root.mkdir(parents=True, exist_ok=True)
-        self.turns: list[RecordedTurn] = []
+        self.turns: list[RecordedTurn] = list(initial_recording.turns) if initial_recording is not None else []
+        self._initial_turn_count = len(self.turns)
         self.workflow_switch = workflow_switch
         self.workflow_restart = workflow_restart
         self.workflow_observer = workflow_observer
         self.workflow_evidence = workflow_evidence
+        self.on_turn_complete = on_turn_complete
         self._session_started = False
         self._workflow_switched = False
         self._workflow_observation_pending = False
@@ -842,6 +1068,12 @@ class RecordingSession:
     def send_message(self, message: OperatorMessage | str) -> TurnResult:
         if isinstance(message, str):
             message = OperatorMessage(message)
+        # ``NativeResumeSession`` replays the committed prefix through its
+        # own ``ReplaySession`` so the operator engine can rebuild its state.
+        # ``RecordingSession`` is initialized with that same prefix already;
+        # appending it a second time would shift the next checkpoint number
+        # and make the resumed run appear to have an extra turn.
+        prefix_replayed = bool(getattr(self.transport, "remaining_prefix_turns", 0))
         result = self.transport.send_message(message)
         if not isinstance(result, TurnResult):
             raise SessionError("recorded transport returned no TurnResult")
@@ -871,7 +1103,18 @@ class RecordingSession:
         normalized = _normalized_turn_result(result, self.sandbox_home)
         if self.artifact_root is not None:
             _materialize_touched_files(normalized, self.artifact_root, source_root=self.sandbox_home)
+        if prefix_replayed:
+            return result
         self.turns.append(RecordedTurn(message, normalized))
+        # Prefix turns in a native continuation are replayed locally. They
+        # already have committed checkpoints; only the newly delegated turn
+        # may advance the durable chain.
+        if self.on_turn_complete is not None and len(self.turns) > self._initial_turn_count:
+            snapshot = _immutable_recording_snapshot(self.turns)
+            try:
+                self.on_turn_complete(snapshot, len(self.turns))
+            except Exception as exc:
+                raise SessionError("turn-complete callback failed") from exc
         return result
 
     send = send_message
@@ -904,6 +1147,7 @@ RecordedSession = RecordingSession
 __all__ = [
     "LiveSession",
     "LiveTransport",
+    "NativeResumeSession",
     "RecordedSession",
     "RecordedTurn",
     "RecordingSession",

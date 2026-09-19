@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import socket
 import stat
 import subprocess
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -16,6 +18,7 @@ from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.runner import environment as environment_module
 from dp_scenarios.runner.environment import PinnedVersions, RunEnvironment, RunEnvironmentError
+from dp_scenarios.mockrest.config import load_config
 from dp_scenarios.canary import probe
 from dp_scenarios.synthgen.generator import GenerationResult
 
@@ -75,6 +78,31 @@ def make_scenario() -> FixtureScenario:
 
 def pins() -> PinnedVersions:
     return PinnedVersions("skills-1", "supervisor-1", "wheel-1", "mock-1", "claims-1")
+
+
+def mock_route_config(*, data_port: int = 0, control_port: int = 0, row_id: str = "row-1"):
+    return load_config(
+        {
+            "version": 1,
+            "data_port": data_port,
+            "control_port": control_port,
+            "auth": {"token": "source-secret", "initial_requests": 2},
+            "routes": [
+                {
+                    "path": "/rows",
+                    "method": "GET",
+                    "auth_required": True,
+                    "response": {"json": [{"id": row_id}]},
+                }
+            ],
+        }
+    )
+
+
+def available_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
 
 
 def test_missing_pinned_value_is_a_hard_error() -> None:
@@ -356,6 +384,236 @@ def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(RunEnvironmentError, match="replay manifest mismatch"):
         with RunEnvironment(scenario, pins(), root=tmp_path, manifest_override=manifest):
+            pass
+
+
+def test_native_continuation_requires_an_explicit_persistent_run_root(tmp_path: Path) -> None:
+    with pytest.raises(RunEnvironmentError, match="persistent run root"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            root=tmp_path,
+            native_continuation=True,
+        ):
+            pass
+
+
+def test_native_source_contract_supports_fresh_and_resume_without_secrets(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "native-run"
+    config = mock_route_config()
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        route_config=config,
+        control_secret="control-secret",
+    ) as fresh:
+        contract_path = run_root / environment_module.NATIVE_SOURCE_CONTRACT_FILENAME
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        assert set(contract) == {
+            "schema",
+            "data_host",
+            "data_port",
+            "control_host",
+            "control_port",
+            "route_config_digest",
+            "state_model",
+        }
+        assert contract["schema"] == 1
+        assert contract["state_model"] == environment_module.NATIVE_SOURCE_STATE_MODEL
+        assert contract["data_port"] == fresh.mock_source.server.data_port  # type: ignore[union-attr]
+        assert contract["control_port"] == fresh.mock_source.server.control_port  # type: ignore[union-attr]
+        contract_text = contract_path.read_text(encoding="utf-8")
+        assert "source-secret" not in contract_text
+        assert "control-secret" not in contract_text
+        assert "counters" not in contract_text
+        assert "remaining_requests" not in contract_text
+        fresh_url = fresh.mock_source.server.data_url  # type: ignore[union-attr]
+        fresh_profile = fresh.source_profile_path.read_text(encoding="utf-8")  # type: ignore[union-attr]
+        with urlopen(  # noqa: S310 - this is a loopback-only test source
+            Request(
+                fresh_url + "/rows",
+                headers={"Authorization": "Bearer source-secret"},
+            ),
+            timeout=5,
+        ) as response:
+            assert response.status == 200
+            response.read()
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        native_resume=True,
+        route_config=config,
+    ) as resumed:
+        assert resumed.mock_source.server.data_url == fresh_url  # type: ignore[union-attr]
+        assert resumed.source_profile_path.read_text(encoding="utf-8") == fresh_profile  # type: ignore[union-attr]
+        state = resumed.mock_source.snapshot_runtime_state()  # type: ignore[union-attr]
+        assert state["remaining_requests"] == 1
+        assert state["counters"]["total"] == 1  # type: ignore[index]
+        state_text = (run_root / environment_module.NATIVE_SOURCE_STATE_FILENAME).read_text(
+            encoding="utf-8"
+        )
+        assert "source-secret" not in state_text
+        assert "control-secret" not in state_text
+
+
+def test_native_resume_rejects_route_configuration_drift(tmp_path: Path) -> None:
+    run_root = tmp_path / "native-run"
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        route_config=mock_route_config(),
+    ):
+        pass
+
+    with pytest.raises(RunEnvironmentError, match="route configuration drifted"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            persistent_root=run_root,
+            native_continuation=True,
+            native_resume=True,
+            route_config=mock_route_config(row_id="different-row"),
+        ):
+            pass
+
+
+@pytest.mark.parametrize("contract_contents", [None, '{"schema": 1}\n'])
+def test_native_resume_rejects_missing_or_malformed_source_contract(
+    tmp_path: Path, contract_contents: str | None
+) -> None:
+    run_root = tmp_path / "native-run"
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        route_config=mock_route_config(),
+    ):
+        pass
+    contract_path = run_root / environment_module.NATIVE_SOURCE_CONTRACT_FILENAME
+    if contract_contents is None:
+        contract_path.unlink()
+    else:
+        contract_path.write_text(contract_contents, encoding="utf-8")
+
+    with pytest.raises(RunEnvironmentError, match="native source contract is missing or malformed|native source contract is malformed"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            persistent_root=run_root,
+            native_continuation=True,
+            native_resume=True,
+            route_config=mock_route_config(),
+        ):
+            pass
+
+
+def test_native_resume_rejects_malformed_source_runtime_state(tmp_path: Path) -> None:
+    run_root = tmp_path / "native-run"
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        route_config=mock_route_config(),
+    ):
+        pass
+    (run_root / environment_module.NATIVE_SOURCE_STATE_FILENAME).write_text(
+        '{"schema": 1}\n', encoding="utf-8"
+    )
+
+    with pytest.raises(RunEnvironmentError, match="native source runtime state is malformed"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            persistent_root=run_root,
+            native_continuation=True,
+            native_resume=True,
+            route_config=mock_route_config(),
+        ):
+            pass
+
+
+def test_native_resume_reuses_fixed_ports_and_fails_on_occupied_port(
+    tmp_path: Path,
+) -> None:
+    data_port = available_port()
+    control_port = available_port()
+    run_root = tmp_path / "native-run"
+    config = mock_route_config(data_port=data_port, control_port=control_port)
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        route_config=config,
+    ):
+        pass
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        native_resume=True,
+        route_config=config,
+    ) as resumed:
+        assert resumed.mock_source.server.data_port == data_port  # type: ignore[union-attr]
+        assert resumed.mock_source.server.control_port == control_port  # type: ignore[union-attr]
+
+    occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    occupied.bind(("127.0.0.1", data_port))
+    occupied.listen(1)
+    try:
+        with pytest.raises(RunEnvironmentError, match="mock source failed during startup"):
+            with RunEnvironment(
+                make_scenario(),
+                pins(),
+                persistent_root=run_root,
+                native_continuation=True,
+                native_resume=True,
+                route_config=config,
+            ):
+                pass
+    finally:
+        occupied.close()
+
+
+def test_native_resume_rejects_a_persisted_environment_manifest_mismatch(
+    tmp_path: Path,
+) -> None:
+    scenario = make_scenario()
+    run_root = tmp_path / "native-run"
+    with RunEnvironment(
+        scenario,
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+    ):
+        pass
+
+    changed_pins = PinnedVersions(
+        "different-skills", "supervisor-1", "wheel-1", "mock-1", "claims-1"
+    )
+    with pytest.raises(RunEnvironmentError, match="replay manifest mismatch in skill_pack_version"):
+        with RunEnvironment(
+            scenario,
+            changed_pins,
+            persistent_root=run_root,
+            native_continuation=True,
+            native_resume=True,
+        ):
             pass
 
 

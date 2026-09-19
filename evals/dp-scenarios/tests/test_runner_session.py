@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import sys
+from dataclasses import FrozenInstanceError
 
 import pytest
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner.session import (
     LiveSession,
+    NativeResumeSession,
     RecordedTurn,
     RecordingSession,
     ReplayMismatch,
@@ -123,6 +126,73 @@ def test_live_recording_relativizes_absolute_paths_and_collects_artifacts(tmp_pa
     assert (tmp_path / "replayed/closure/spec.json").read_bytes() == b'{"metric":"m"}'
 
 
+def test_recording_turn_callback_receives_complete_ordered_immutable_snapshots(tmp_path: Path) -> None:
+    snapshots: list[tuple[ReplayRecording, int]] = []
+    artifact_root = tmp_path / "artifacts"
+    responses = [
+        TurnResult(
+            agent_message="first",
+            tool_calls=(ToolCall("first", {"step": 1}),),
+            files_touched=(TouchedFile("first.txt", b"first"),),
+        ),
+        TurnResult(
+            agent_message="second",
+            tool_calls=(ToolCall("second", {"step": 2}),),
+            files_touched=(TouchedFile("second.txt", b"second"),),
+        ),
+    ]
+
+    def on_turn_complete(snapshot: ReplayRecording, turn_number: int) -> None:
+        snapshots.append((snapshot, turn_number))
+        assert snapshot.turns[-1].result.files_touched[0].path == f"{['first', 'second'][turn_number - 1]}.txt"
+        assert (artifact_root / f"{['first', 'second'][turn_number - 1]}.txt").is_file()
+        assert tuple(turn.operator_message.text for turn in snapshot.turns) == tuple(
+            ["first message", "second message"][:turn_number]
+        )
+        assert isinstance(snapshot.turns, tuple)
+        with pytest.raises(FrozenInstanceError):
+            snapshot.turns = ()  # type: ignore[misc]
+        with pytest.raises(TypeError):
+            snapshot.turns[-1].result.tool_calls[0].arguments["mutated"] = True  # type: ignore[index]
+
+    recorder = RecordingSession(
+        InMemoryTransport(responses),
+        artifact_root=artifact_root,
+        on_turn_complete=on_turn_complete,
+    )
+    recorder.start_fresh_session()
+    recorder.send_message("first message")
+    recorder.send_message("second message")
+
+    assert [turn_number for _, turn_number in snapshots] == [1, 2]
+    assert [len(snapshot.turns) for snapshot, _ in snapshots] == [1, 2]
+    assert len(snapshots[0][0].turns) == 1
+    assert len(snapshots[1][0].turns) == 2
+    assert snapshots[0][0] is not snapshots[1][0]
+
+
+def test_recording_turn_callback_failure_is_reported_as_session_error() -> None:
+    calls = 0
+
+    def on_turn_complete(snapshot: ReplayRecording, turn_number: int) -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("checkpoint write failed")
+
+    recorder = RecordingSession(
+        InMemoryTransport([TurnResult(agent_message="complete")]),
+        on_turn_complete=on_turn_complete,
+    )
+    recorder.start_fresh_session()
+
+    with pytest.raises(SessionError, match="turn-complete callback failed"):
+        recorder.send_message("expected")
+
+    assert calls == 1
+    assert len(recorder.turns) == 1
+    assert recorder.turns[0].result.agent_message == "complete"
+
+
 def test_replay_rejects_a_changed_operator_message(tmp_path: Path) -> None:
     recording = ReplayRecording((RecordedTurn(OperatorMessage("expected"), TurnResult()),))
     replay = ReplaySession(recording)
@@ -130,6 +200,94 @@ def test_replay_rejects_a_changed_operator_message(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayMismatch, match="turn 1"):
         replay.send_message("different")
+
+
+def test_native_resume_replays_prefix_locally_and_continues_the_provider_session() -> None:
+    prefix = ReplayRecording(
+        (
+            RecordedTurn(OperatorMessage("first"), TurnResult(agent_message="one")),
+            RecordedTurn(OperatorMessage("second"), TurnResult(agent_message="two")),
+        )
+    )
+    provider = InMemoryTransport(
+        [TurnResult(agent_message="three"), TurnResult(agent_message="four")]
+    )
+    session_id = "00000000-0000-4000-8000-000000000001"
+    resumed = NativeResumeSession(prefix, provider, session_id=session_id)
+
+    assert resumed.start_fresh_session() == session_id
+    assert resumed.send_message("first").agent_message == "one"
+    assert resumed.send_message("second").agent_message == "two"
+    assert resumed.send_message("third").agent_message == "three"
+    assert resumed.send_message("fourth").agent_message == "four"
+    assert provider.resumed == [session_id]
+    assert provider.message_texts == ("third", "fourth")
+
+
+def test_native_resume_rejects_a_prefix_message_mismatch_before_provider_use() -> None:
+    prefix = ReplayRecording((RecordedTurn(OperatorMessage("expected"), TurnResult()),))
+    provider = InMemoryTransport([TurnResult(agent_message="not-used")])
+    resumed = NativeResumeSession(
+        prefix,
+        provider,
+        session_id="00000000-0000-4000-8000-000000000001",
+    )
+    resumed.start_fresh_session()
+
+    with pytest.raises(ReplayMismatch, match="turn 1"):
+        resumed.send_message("different")
+    assert provider.message_texts == ()
+
+
+def test_native_resume_hydrates_redacted_prefix_files_from_the_retained_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "agent"
+    content = b"private-but-retained"
+    target = workspace / "closure" / "spec.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(content)
+    prefix = ReplayRecording(
+        (
+            RecordedTurn(
+                OperatorMessage("first"),
+                TurnResult(
+                    files_touched=(
+                        TouchedFile(
+                            "closure/spec.json",
+                            {
+                                "redacted": True,
+                                "sha256": hashlib.sha256(content).hexdigest(),
+                                "size_bytes": len(content),
+                            },
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+    provider = InMemoryTransport([TurnResult(agent_message="next")])
+    resumed = NativeResumeSession(
+        prefix,
+        provider,
+        session_id="00000000-0000-4000-8000-000000000001",
+        source_root=workspace,
+    )
+
+    resumed.start_fresh_session()
+    result = resumed.send_message("first")
+
+    assert result.files_touched[0].content == content
+    assert provider.message_texts == ()
+
+    target.write_bytes(b"changed")
+    with pytest.raises(SessionError, match="bytes changed"):
+        NativeResumeSession(
+            prefix,
+            InMemoryTransport([TurnResult(agent_message="not-used")]),
+            session_id="00000000-0000-4000-8000-000000000001",
+            source_root=workspace,
+        )
 
 
 def test_replay_rejects_touched_file_escape(tmp_path: Path) -> None:
@@ -217,3 +375,22 @@ def test_live_fresh_session_restarts_a_persistent_child() -> None:
     assert first_session == "live-session-1"
     assert second_session == "live-session-2"
     assert first_pid != second_pid
+
+
+def test_live_session_resume_uses_an_explicit_resume_command_without_faking_a_prompt(
+    tmp_path: Path,
+) -> None:
+    fresh = [sys.executable, "-c", "import time; time.sleep(60)"]
+    resumed = [sys.executable, "-c", "import time; time.sleep(60)"]
+    session = LiveSession(
+        fresh,
+        timeout=1.0,
+        resume_command_builder=lambda session_id: [*resumed, session_id],
+    )
+    try:
+        session_id = "00000000-0000-4000-8000-000000000001"
+        assert session.resume_session(session_id) == session_id
+        assert session._resume_command[-1] == session_id
+        assert session._pending_resume_session_id == session_id
+    finally:
+        session.close()
