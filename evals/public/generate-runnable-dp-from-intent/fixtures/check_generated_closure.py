@@ -383,6 +383,22 @@ def has_description(call: ast.Call) -> bool:
     return False
 
 
+def documents_concept(entry: ast.expr, roles: list[ast.Call]) -> bool:
+    """True when the description reaches describe_model from field or role.
+
+    The compiler gives a dimension/metric with no description of its own the
+    attribute's, so either placement documents the concept. Mirrors
+    `documents_concept` in nxd-run-job-loop/scripts/self_check.py; the two gates
+    must agree.
+    """
+    if isinstance(entry, ast.Call) and call_name(entry.func) in ("field", "metric_field"):
+        if has_description(entry):
+            return True
+    if isinstance(entry, ast.Tuple) and any(joined_string(e) for e in entry.elts):
+        return True
+    return any(has_description(role) for role in roles)
+
+
 def annotation_errors(
     tree: ast.AST, inferred: dict[str, object], promised: set[str], registered_views: set[str]
 ) -> list[str]:
@@ -399,48 +415,14 @@ def annotation_errors(
     views = semantic_view_schemas(tree)
     descriptions = base_model_descriptions(tree)
 
-    # A description on the field()/metric_field() WRAPPER becomes an attribute
-    # description: it reaches the structural data_model block and never
-    # describe_model. The author believes the concept is documented and it is
-    # not, so this is an error rather than a warning.
-    # Column names, so a wrapper-description error can name the field it is on
-    # rather than repeating an identical location-less sentence per occurrence.
-    column_of: dict[int, str] = {}
-    for model, schema in schemas.items():
-        for column, field_spec in zip(schema.keys, schema.values, strict=True):
-            if isinstance(column, ast.Constant) and isinstance(column.value, str):
-                column_of[id(field_spec)] = f"{model}.{column.value}"
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if call_name(node.func) not in ("field", "metric_field"):
-            continue
-        if not has_description(node):
-            continue
-        # Matches nxd-run-job-loop/scripts/self_check.py: a wrapper description is a legal
-        # attribute description (it reaches the structural data_model block).
-        # The defect is using it INSTEAD of the role's, so fail only when no
-        # sibling role carries one. The two gates must agree or correctly
-        # annotated code passes the closure's own self-check and then fails
-        # acceptance, which reads as a harness bug.
-        siblings = [a for a in node.args[1:] if isinstance(a, ast.Call)]
-        for kw in node.keywords:          # documented roles=[...] form
-            if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
-                siblings += [e for e in kw.value.elts if isinstance(e, ast.Call)]
-        describable = [r for r in siblings
-                       if call_name(r.func) in ("dimension", "metric")]
-        if any(has_description(r) for r in describable):
-            continue
-        # Same branching as nxd-run-job-loop/scripts/self_check.py: with no dimension/metric
-        # role there is nowhere to move the text to, so the remedy is deletion.
-        remedy = ("move it inside dimension(...) / metric(...)" if describable
-                  else "primary_key()/join() take no description — drop it")
-        location = column_of.get(id(node), ast.unparse(node)[:60])
-        errors.append(
-            f"{location}: description= on {call_name(node.func)}() never "
-            f"reaches describe_model and no role carries one — {remedy}"
-        )
+    # A description on the field()/metric_field() WRAPPER is no longer a defect:
+    # the compiler gives a dimension/metric with no description of its own the
+    # attribute's, so the wrapper placement reaches describe_model. What still
+    # matters is that a description the inferred model supplied was placed
+    # SOMEWHERE the compiler reads — checked per concept below. This must agree
+    # with nxd-run-job-loop/scripts/self_check.py, or correctly annotated code
+    # passes the closure's own self-check and then fails acceptance, which reads
+    # as a harness bug.
 
     for model in sorted(promised):
         spec = inferred.get(model) or {}
@@ -471,7 +453,7 @@ def annotation_errors(
                         if call_name(call.func) == "dimension"
                         and string_keyword(call, "name") == role.get("name")
                     ]
-                    if matched and not any(has_description(call) for call in matched):
+                    if matched and not documents_concept(field_specs[column], matched):
                         errors.append(
                             f"{model}.{column}: dimension {role.get('name')!r} "
                             f"placed without the supplied description"
@@ -488,7 +470,7 @@ def annotation_errors(
                                 if isinstance(argument, ast.Call)
                                 and call_name(argument.func) == "metric"
                             )
-                            if not has_description(metric_call):
+                            if not documents_concept(field_spec, [metric_call]):
                                 errors.append(
                                     f"{model}.{column}: metric "
                                     f"{role.get('name')!r} placed without the "

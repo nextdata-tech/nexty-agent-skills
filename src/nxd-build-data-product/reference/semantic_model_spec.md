@@ -29,7 +29,8 @@ trending_sales = (
                 # Roles compose, and a key needs the pairing: primary_key()
                 # alone never reaches describe_models, so no query can group by
                 # it and "which sale..." has no answerable form.
-                dimension(name="sale_id", description="Sale key. Group by this to name a sale."),
+                dimension(name="sale_id"),
+                description="Sale key. Group by this to name a sale.",
             ),
             "product_id": field(
                 string(),
@@ -37,10 +38,8 @@ trending_sales = (
             ),
             "sales_channel": field(
                 string(),
-                dimension(
-                    name="sales_channel",
-                    description="Sales channel from which transaction data was aggregated.",
-                ),
+                dimension(name="sales_channel"),
+                description="Sales channel from which transaction data was aggregated.",
             ),
             "amount_usd": float64(),
         }
@@ -63,8 +62,8 @@ trending_sales_metrics = semantic_view("trending_sales_metrics", trending_sales)
                 Agg.COUNT,
                 of=trending_sales.field("sale_id"),
                 name="sale_count",
-                description="Number of sale events.",
             ),
+            description="Number of sale events.",
         ),
         "total_sales_usd": metric_field(
             float64(),
@@ -72,8 +71,8 @@ trending_sales_metrics = semantic_view("trending_sales_metrics", trending_sales)
                 Agg.SUM,
                 of=trending_sales.field("amount_usd"),
                 name="total_sales_usd",
-                description="Total sales amount in USD.",
             ),
+            description="Total sales amount in USD.",
         ),
     }
 )
@@ -106,13 +105,11 @@ from nxd.spec.data_types import int64, string
 orders = semantic_model("orders").schema(
     {
         # primary_key() alone is not groupable — pair it with a dimension.
-        "order_id": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),
+        "order_id": field(int64(), primary_key(), dimension(name="order_id"), description="Order key."),
         "status": field(
             string(),
-            dimension(
-                name="order_status",
-                description="Order lifecycle state.",
-            ),
+            dimension(name="order_status"),
+            description="Order lifecycle state.",
         ),
         "customer_id": field(
             string(),
@@ -125,7 +122,7 @@ orders = semantic_model("orders").schema(
 | Role | Meaning | Where to use it |
 | --- | --- | --- |
 | `primary_key()` | Entity key for one physical model row. Use multiple key fields for a composite key. **Pair it with a `dimension(...)` on the same field** — roles compose, and a key carrying only this role is not groupable, so no query can return which entity a row is about. | Physical `semantic_model` field |
-| `dimension(name=None, pii=False, label=None, description="")` | Query concept that can be used for grouping and filtering. Put agent-visible dimension descriptions here. `pii=True` marks governed personal data. | Physical `semantic_model` field |
+| `dimension(name=None, pii=False, label=None)` | Query concept that can be used for grouping and filtering. It takes its description from the field. `pii=True` marks governed personal data. | Physical `semantic_model` field |
 | `join(to, to_column=None, cardinality=None, to_data_product=None)` | Validated foreign-key edge to another semantic model. Declare it on the many-side field. | Physical `semantic_model` field |
 
 `join(...)` defaults to many-to-one cardinality. Import `Cardinality` from
@@ -139,13 +136,11 @@ orders = semantic_model("orders").schema(
         # The pairing rule holds in every shape that carries roles: a tuple
         # holding only a type and a key role is the same bare key as the call
         # form, and just as unqueryable.
-        "order_id": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),
+        "order_id": field(int64(), primary_key(), dimension(name="order_id"), description="Order key."),
         "status": (
             string(),
-            dimension(
-                name="order_status",
-                description="Order lifecycle state.",
-            ),
+            "Order lifecycle state.",
+            dimension(name="order_status"),
         ),
         "amount_usd": float64(),
     }
@@ -155,10 +150,15 @@ orders = semantic_model("orders").schema(
 Use source column names for schema keys. The logical `dimension(name=...)` is the
 stable name used in semantic queries.
 
-Put agent-visible descriptions on the semantic role: `dimension(description=...)`
-or `metric(description=...)`. `field(description=...)`, `metric_field(description=...)`,
-and tuple string descriptions become the physical `AttributeSpec` description;
-they do not reach `describe_model`.
+Write each description once, on the field: `field(description=...)`,
+`metric_field(description=...)`, or the string in a tuple. Discover UI shows it,
+and a dimension or metric on that field serves the same text to agents through
+`describe_model`. On a `metric_field`, describe the aggregate ("Total order
+revenue"), not the column it reads.
+
+`dimension(description=...)` and `metric(description=...)` are deprecated and
+emit a `FutureWarning`. They still take precedence over the field description
+until they are removed.
 
 ## Linking models
 
@@ -213,8 +213,8 @@ order_metrics = semantic_view("order_metrics", orders).schema(
                 Agg.COUNT,
                 of=orders.field("order_id"),
                 name="order_count",
-                description="Number of orders.",
             ),
+            description="Number of orders.",
         ),
         "total_revenue": metric_field(
             float64(),
@@ -222,16 +222,16 @@ order_metrics = semantic_view("order_metrics", orders).schema(
                 Agg.SUM,
                 of=orders.field("amount_usd"),
                 name="total_revenue",
-                description="Total order revenue.",
             ),
+            description="Total order revenue.",
         ),
         "warehouse_revenue_sql": metric_field(
             float64(),
             metric(
                 Agg.EXPRESSION,
                 name="warehouse_revenue_sql",
-                description="Warehouse-registered SQL SUM over order amount.",
             ),
+            description="Warehouse-registered SQL SUM over order amount.",
         ),
     }
 )
@@ -262,7 +262,7 @@ output = (
 | `agg` | Aggregation from `Agg`: `COUNT`, `COUNT_DISTINCT`, `SUM`, `AVG`, `MIN`, `MAX`, `EXPRESSION` |
 | `of` | Optional base field reference, usually `base_model.field("column")`. Omit it for `Agg.EXPRESSION`; the SQL expression names the fields. |
 | `name` | Stable metric name used in semantic queries |
-| `description` | Agent-visible metric description |
+| `description` | Deprecated - put the description on the `metric_field(...)` instead |
 | `boolean` | Marks a boolean metric |
 | `extra_dimensions` | Explicit additional dimensions that may slice the metric |
 | `column` | Optional explicit aggregation column; mutually exclusive with `of`. Use `"*"` only for `COUNT(*)`. For `Agg.EXPRESSION`, omit both `of` and `column`; the SQL expression names the fields. |
