@@ -1,0 +1,11 @@
+{
+  "casefold_whitespace_match_count": 2,
+  "conversion_row_count": 5,
+  "conversion_row_match_rate_bps": 6000,
+  "matched_pair_count": 3,
+  "spend_row_count": 5,
+  "spend_row_match_rate_bps": 6000,
+  "unique_50_character_truncation_match_count": 1,
+  "unmatched_conversion_count": 2,
+  "unmatched_spend_count": 2
+}

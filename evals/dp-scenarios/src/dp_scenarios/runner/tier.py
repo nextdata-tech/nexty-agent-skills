@@ -67,6 +67,7 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
+from .checkpoint import CheckpointIdentity, CheckpointState, CheckpointStore, canonical_digest
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     ReplayRecording,
@@ -1580,6 +1581,7 @@ class TierRunner:
         replay_recordings: Mapping[str, object] | None = None,
         environment_root: str | Path | None = None,
         evidence_root: str | Path | None = None,
+        checkpoint_root: str | Path | None = None,
         budgets: RunBudgets | None = None,
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
@@ -1593,6 +1595,7 @@ class TierRunner:
         workflow_observer: WorkflowObserver | None = None,
         operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
         allow_host_home: bool = False,
+        review_timeout_seconds: float | None = None,
         staged_job_helper_dir: str | Path | None = None,
         max_workers: int = 1,
     ) -> None:
@@ -1612,6 +1615,9 @@ class TierRunner:
         self.evidence_root = Path(evidence_root).expanduser().resolve() if evidence_root is not None else None
         if self.evidence_root is not None:
             self.evidence_root.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_root = (
+            Path(checkpoint_root).expanduser().resolve() if checkpoint_root is not None else None
+        )
         self.budgets = budgets or RunBudgets()
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
@@ -1631,6 +1637,7 @@ class TierRunner:
         self.workflow_observer = workflow_observer
         self.operator_factory = operator_factory
         self.allow_host_home = allow_host_home
+        self.review_timeout_seconds = review_timeout_seconds
         self.staged_job_helper_dir = (
             Path(staged_job_helper_dir).expanduser().resolve()
             if staged_job_helper_dir is not None
@@ -1767,6 +1774,77 @@ class TierRunner:
         if value is not None and not (hasattr(value, "read_facts") or hasattr(value, "read")):
             raise TierError("supervisor reader factory returned no reader")
         return value
+
+    def _checkpoint_store(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> CheckpointStore | None:
+        """Initialize the durable handoff store for one live scenario epoch."""
+
+        if self.checkpoint_root is None:
+            return None
+        manifest = environment.manifest
+        identity = CheckpointIdentity.from_groups(
+            {
+                "run": {
+                    "scenario_id": manifest.scenario_id,
+                    "epoch": epoch,
+                    "run_id": manifest.run_id,
+                    "operator_script_hash": manifest.operator_script_hash,
+                },
+                "behavior": {
+                    "skill_pack_version": manifest.skill_pack_version,
+                    "agent_model_id": manifest.agent_model_id,
+                },
+                "substrate": {
+                    "supervisor_version": manifest.supervisor_version,
+                    "nxd_data_product_wheel_version": manifest.nxd_data_product_wheel_version,
+                    "fixture_dir_hash": manifest.fixture_dir_hash,
+                    "mock_api_version": manifest.mock_api_version,
+                },
+                "grading": {
+                    "judge_model_id": manifest.judge_model_id,
+                    "judge_prompt_hash": manifest.judge_prompt_hash,
+                    "canary_claims_hash": manifest.canary_claims_hash,
+                    "judge_calibration_set_hash": manifest.judge_calibration_set_hash,
+                },
+            }
+        )
+        store = CheckpointStore(self.checkpoint_root / scenario.id / f"epoch-{epoch}")
+        store.initialize(identity)
+        return store
+
+    @staticmethod
+    def _checkpoint_callback(
+        store: CheckpointStore,
+        scenario: Scenario,
+    ) -> Callable[[ReplayRecording, int], None]:
+        """Create a fail-closed callback for complete live turn snapshots."""
+
+        def persist(snapshot: ReplayRecording, turn_number: int) -> None:
+            checkpoint_id = f"turn-{turn_number:06d}"
+            payload = snapshot.to_report_dict()
+            payload_ref, payload_digest = store.write_payload(checkpoint_id, payload)
+            phase = scenario.script.phase_by_turn[turn_number]
+            store.commit(
+                CheckpointState(
+                    checkpoint_id=checkpoint_id,
+                    parent_id=(f"turn-{turn_number - 1:06d}" if turn_number > 1 else None),
+                    committed_turn=turn_number,
+                    next_turn=turn_number + 1,
+                    phase=str(phase),
+                    status="complete",
+                    continuity_mode="handoff",
+                    turn_prefix_digest=canonical_digest(payload),
+                    identity_digest=store.read_identity().digest,
+                    payload_ref=payload_ref,
+                    payload_digest=payload_digest,
+                )
+            )
+
+        return persist
 
     def _run_scenario_summary(self, scenario: Scenario, *, pins: PinnedVersions) -> ScenarioSummary:
         """Run all epochs for one scenario and build its ordered summary."""
@@ -1986,6 +2064,7 @@ class TierRunner:
                 supervisor_environment=self.supervisor_environment,
                 workflow_activation_bundle=self.workflow_activation_bundle,
                 allow_host_home=self.allow_host_home,
+                review_timeout_seconds=self.review_timeout_seconds,
                 staged_job_helper_dir=self.staged_job_helper_dir,
                 knobs=knobs,
                 attempt=epoch,
@@ -2013,6 +2092,11 @@ class TierRunner:
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
                 if recording is not None and recording.supervisor_facts is not None:
                     _write_json(artifact_root / "supervisor-facts.json", recording.supervisor_facts)
+                checkpoint_store = (
+                    self._checkpoint_store(scenario, environment, epoch)
+                    if recording is None
+                    else None
+                )
                 if recording is not None:
                     transport: Transport = ReplaySession(recording, artifact_root=artifact_root)
                 else:
@@ -2027,6 +2111,11 @@ class TierRunner:
                         workflow_evidence=lambda evidence, turn: environment.record_workflow_switch(
                             evidence,
                             turn=turn,
+                        ),
+                        on_turn_complete=(
+                            self._checkpoint_callback(checkpoint_store, scenario)
+                            if checkpoint_store is not None
+                            else None
                         ),
                     )
                 started = time.monotonic()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,15 @@ import pytest
 
 import dp_scenarios.runner.cli as cli
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchPlan
+
+
+def _local_claude_cli():
+    path = Path(__file__).parents[1] / "scripts" / "run_local_claude.py"
+    spec = importlib.util.spec_from_file_location("run_local_claude_for_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: Path) -> None:
@@ -87,6 +97,14 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     assert captured["max_workers"] == 2
 
 
+def test_local_live_cli_accepts_an_explicit_stable_checkpoint_directory(tmp_path: Path) -> None:
+    local_cli = _local_claude_cli()
+    args = local_cli.build_parser().parse_args(
+        ["--checkpoint-dir", str(tmp_path / "stable-checkpoints")]
+    )
+    assert args.checkpoint_dir == tmp_path / "stable-checkpoints"
+
+
 def test_cli_rejects_workflow_switch_without_endpoint_callbacks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -140,7 +158,7 @@ def test_a_live_tier_run_in_replay_mode_is_refused_before_anything_loads(
         cli.main(_replay_argv(tmp_path, "live", "replay"))
 
 
-@pytest.mark.parametrize("tier", ["smoke", "core"])
+@pytest.mark.parametrize("tier", ["smoke", "core", "full"])
 def test_a_non_live_tier_is_not_refused_in_replay_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tier: str
 ) -> None:

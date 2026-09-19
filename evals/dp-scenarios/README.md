@@ -119,7 +119,9 @@ fell back.
 
 ## Scenarios
 
-Scenarios are selected by the `tier` each one declares.
+Scenarios are selected by the `tier` each one declares. `smoke`, `core`, and
+`full` packages grade replayable supplied evidence; `live` packages grade a
+live agent session and cannot be replayed.
 
 **Smoke** runs on every skill, runtime, or generator change, takes minutes, and
 spends nearly nothing on models. It runs in `run_order`:
@@ -168,6 +170,13 @@ never pulled into a smoke run:
   transition, and UTC date-boundary event, where source-local and UTC daily
   views preserve totals while one of 14 rows shifts.
 
+**Full** covers deterministic cross-source decisions that are too specific for
+the routine core suite:
+
+- **marketing-attribution** — B3's safe campaign-name matching, including
+  case/whitespace normalization, one unique 50-character truncation, and a
+  matched-conversions-only CPA policy.
+
 **Live** is the only tier whose runs cannot be replayed:
 
 - **capability-shortfall** — a mock REST source that genuinely cannot answer some
@@ -202,6 +211,7 @@ scenario.
 | [inventory-position](scenarios/inventory-position/README.md) | core | 9 | profile-backed inventory and warehouse lookup with quality warnings |
 | [application-reconciliation](scenarios/application-reconciliation/README.md) | core | 10 | 391-to-353 count dispute with status/tombstone lineage |
 | [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
+| [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign-name normalization, unique truncation, and unmatched-CPA policy |
 
 ## Running
 
@@ -242,12 +252,21 @@ evidence directory; the report and transcript artifacts are retained under
 runs smoke by default; `--tier live` selects the current live package when no
 package is named.
 
+For long live runs, pass an explicit stable `--checkpoint-dir` to emit a
+credential-free, per-turn handoff checkpoint after each completed turn. The
+checkpoint identity binds the scenario, script, skill/model, supervisor,
+fixture, and grading pins; it fails closed on drift and never overwrites a
+checkpoint payload. This is durable handoff evidence, not native Claude
+continuation or a passing replay: those require an explicit resume policy and
+are not enabled by this flag yet.
+
 ```bash
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
   --scenario capability-shortfall \
   --epochs 1 \
   --allow-host-home --allow-host-home-bash \
-  --output-dir /tmp/dp-scenarios-local-run
+  --output-dir /tmp/dp-scenarios-local-run \
+  --checkpoint-dir /tmp/dp-scenarios-local-checkpoints
 ```
 
 `--allow-host-home` exposes the host credential/configuration home to the agent
