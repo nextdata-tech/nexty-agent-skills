@@ -32,6 +32,7 @@ from dp_scenarios.failure_reasons import (
     CHILD_NO_TERMINAL_RESULT,
     classify_failure_reason,
 )
+from dp_scenarios.runner.checkpoint import redact_json
 from dp_scenarios.operator.transport import (
     Attachment,
     OperatorMessage,
@@ -69,6 +70,15 @@ _RESERVED_HARNESS_ARTIFACT_NAMES = frozenset(
         "ledger_rows.json",
     }
 )
+
+
+def _mcp_call_in_flight(result: TurnResult) -> bool:
+    """Return whether the transport exposed an unmatched MCP tool use."""
+
+    return any(
+        call.name.startswith("mcp__") and call.result is None
+        for call in result.tool_calls
+    ) or bool(result.last_mcp_call and result.last_mcp_call.endswith(":unanswered"))
 
 
 def _encode(value: object) -> object:
@@ -315,7 +325,10 @@ class ReplayRecording:
         metadata = document.get("metadata")
         if isinstance(metadata, dict):
             metadata["touched_file_contents_redacted"] = True
-        return document
+        redacted = redact_json(document)
+        if not isinstance(redacted, dict):
+            raise SessionError("report recording must remain a JSON object")
+        return redacted
 
     def write(self, path: str | Path) -> Path:
         """Write the replay artifact with stable JSON formatting."""
@@ -1109,6 +1122,12 @@ class RecordingSession:
         # Prefix turns in a native continuation are replayed locally. They
         # already have committed checkpoints; only the newly delegated turn
         # may advance the durable chain.
+        if _mcp_call_in_flight(normalized):
+            # The observation is retained for diagnostics, but an unmatched
+            # tool use is not a turn boundary. Persisting it would make a
+            # resume look complete while the provider still owns an active
+            # MCP request.
+            return result
         if self.on_turn_complete is not None and len(self.turns) > self._initial_turn_count:
             snapshot = _immutable_recording_snapshot(self.turns)
             try:

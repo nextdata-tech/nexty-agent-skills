@@ -72,7 +72,7 @@ from .checkpoint import (
     CheckpointState,
     CheckpointStore,
     ClaudeSessionIdentity,
-    canonical_digest,
+    checkpoint_prefix_digest,
 )
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
@@ -1819,7 +1819,20 @@ class TierRunner:
         if self.checkpoint_root is None:
             return None
         manifest = environment.manifest
-        identity = CheckpointIdentity.from_groups(
+        identity = self._checkpoint_identity(manifest, epoch)
+        store_root = (
+            self.native_resume_checkpoint
+            if self.native_resume_checkpoint is not None
+            else self.checkpoint_root / scenario.id / f"epoch-{epoch}"
+        )
+        store = CheckpointStore(store_root)
+        store.initialize(identity)
+        return store
+
+    def _checkpoint_identity(self, manifest: Any, epoch: int) -> CheckpointIdentity:
+        """Build the expected identity from the current run's manifest."""
+
+        return CheckpointIdentity.from_groups(
             {
                 "run": {
                     "scenario_id": manifest.scenario_id,
@@ -1846,14 +1859,6 @@ class TierRunner:
                 },
             }
         )
-        store_root = (
-            self.native_resume_checkpoint
-            if self.native_resume_checkpoint is not None
-            else self.checkpoint_root / scenario.id / f"epoch-{epoch}"
-        )
-        store = CheckpointStore(store_root)
-        store.initialize(identity)
-        return store
 
     @staticmethod
     def _checkpoint_callback(
@@ -1870,6 +1875,13 @@ class TierRunner:
             payload = snapshot.to_report_dict()
             payload_ref, payload_digest = store.write_payload(checkpoint_id, payload)
             phase = scenario.script.phase_by_turn[turn_number]
+            current = store.latest()
+            parent_id = current.checkpoint_id if current is not None else None
+            parent_prefix_digest = current.turn_prefix_digest if current is not None else None
+            identity = store.read_identity()
+            operator_script_hash = identity.groups["run"].get("operator_script_hash")
+            if not isinstance(operator_script_hash, str) or not operator_script_hash:
+                raise TierError("checkpoint identity has no operator script hash")
             native_session = None
             if native_continuation:
                 session_id = snapshot.turns[-1].result.session_id if snapshot.turns else None
@@ -1879,19 +1891,28 @@ class TierRunner:
                     )
                 native_session = ClaudeSessionIdentity(
                     session_id=session_id,
-                    execution_identity_digest=store.read_identity().digest,
+                    execution_identity_digest=identity.digest,
                 )
             store.commit(
                 CheckpointState(
                     checkpoint_id=checkpoint_id,
-                    parent_id=(f"turn-{turn_number - 1:06d}" if turn_number > 1 else None),
+                    parent_id=parent_id,
                     committed_turn=turn_number,
                     next_turn=turn_number + 1,
                     phase=str(phase),
                     status="complete",
                     continuity_mode=("native-resume" if native_continuation else "handoff"),
-                    turn_prefix_digest=canonical_digest(payload),
-                    identity_digest=store.read_identity().digest,
+                    turn_prefix_digest=checkpoint_prefix_digest(
+                        payload,
+                        checkpoint_id=checkpoint_id,
+                        parent_id=parent_id,
+                        parent_prefix_digest=parent_prefix_digest,
+                        committed_turn=turn_number,
+                        phase=str(phase),
+                        operator_script_hash=operator_script_hash,
+                        identity_digest=identity.digest,
+                    ),
+                    identity_digest=identity.digest,
                     payload_ref=payload_ref,
                     payload_digest=payload_digest,
                     native_session=native_session,
@@ -1910,7 +1931,7 @@ class TierRunner:
     ) -> tuple[ReplayRecording, str]:
         """Load and validate the one local prefix used by native continuation."""
 
-        decision = store.decide(identity)
+        decision = store.decide(expected_identity=identity)
         if decision.action != "resume" or decision.checkpoint is None:
             raise TierError(f"native resume rejected: {decision.reason}")
         checkpoint = decision.checkpoint
@@ -1921,7 +1942,7 @@ class TierRunner:
         if checkpoint.committed_turn >= len(scenario.script.turns):
             raise TierError("native resume checkpoint has no next operator turn")
         payload = store.read_payload(checkpoint)
-        if payload is None or canonical_digest(payload) != checkpoint.turn_prefix_digest:
+        if payload is None or not store.verify_prefix_digest(checkpoint):
             raise TierError("native resume checkpoint prefix digest is invalid")
         try:
             recording = ReplayRecording.from_dict(payload)
@@ -2170,8 +2191,14 @@ class TierRunner:
                 artifact_root = environment.base_dir / "artifacts"
                 # A native resume reopens the persistent environment that
                 # owns the committed prefix and its artifact root. Fresh
-                # runs retain the collision guard supplied by ``mkdir()``.
-                artifact_root.mkdir(exist_ok=self.native_resume_checkpoint is not None)
+                # runs retain the collision guard supplied by ``mkdir()``;
+                # resume refuses a missing root instead of silently creating
+                # a new artifact surface and losing the committed prefix.
+                if self.native_resume_checkpoint is not None:
+                    if not artifact_root.is_dir():
+                        raise TierError("native resume artifact root is missing")
+                else:
+                    artifact_root.mkdir()
                 # Resolve the operator surface before any transport exists.
                 # The consistency gate inside can refuse the run, and a live
                 # session started first would be a spawned agent process that
@@ -2196,10 +2223,11 @@ class TierRunner:
                 if self.native_resume_checkpoint is not None:
                     if checkpoint_store is None:
                         raise TierError("native resume has no checkpoint store")
+                    expected_identity = self._checkpoint_identity(environment.manifest, epoch)
                     resume_prefix, resume_session_id = self._native_resume_context(
                         checkpoint_store,
                         scenario,
-                        checkpoint_store.read_identity(),
+                        expected_identity,
                     )
                 if recording is not None:
                     transport: Transport = ReplaySession(recording, artifact_root=artifact_root)

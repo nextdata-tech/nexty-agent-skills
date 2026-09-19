@@ -633,6 +633,24 @@ def test_pinned_driver_identity_is_written_to_the_manifest(tmp_path: Path) -> No
         assert environment.manifest.driver_sampling_params == {"temperature": 0.7}
 
 
+def test_pinned_grading_identity_is_written_to_the_manifest(tmp_path: Path) -> None:
+    grading_pins = PinnedVersions(
+        "skills-1",
+        "supervisor-1",
+        "wheel-1",
+        "mock-1",
+        "claims-1",
+        judge_model_id="judge-v2",
+        judge_prompt_hash="prompt-sha",
+        judge_calibration_set_hash="calibration-sha",
+    )
+
+    with RunEnvironment(make_scenario(), grading_pins, root=tmp_path) as environment:
+        assert environment.manifest.judge_model_id == "judge-v2"
+        assert environment.manifest.judge_prompt_hash == "prompt-sha"
+        assert environment.manifest.judge_calibration_set_hash == "calibration-sha"
+
+
 def test_replay_stored_driver_pin_cannot_override_na_pins(tmp_path: Path) -> None:
     driver_pins = PinnedVersions(
         "skills-1",

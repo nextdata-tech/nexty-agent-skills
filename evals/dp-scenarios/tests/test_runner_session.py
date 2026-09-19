@@ -193,6 +193,29 @@ def test_recording_turn_callback_failure_is_reported_as_session_error() -> None:
     assert recorder.turns[0].result.agent_message == "complete"
 
 
+def test_recording_does_not_emit_a_checkpoint_for_an_inflight_mcp_call() -> None:
+    checkpoints: list[int] = []
+    recorder = RecordingSession(
+        InMemoryTransport(
+            [
+                TurnResult(
+                    tool_calls=(ToolCall("mcp__nxd-desktop__advance_workflow"),),
+                    last_mcp_call="advance_workflow:unanswered",
+                    environment_wedged=True,
+                )
+            ]
+        ),
+        on_turn_complete=lambda _snapshot, turn_number: checkpoints.append(turn_number),
+    )
+    recorder.start_fresh_session()
+
+    result = recorder.send_message("expected")
+
+    assert result.environment_wedged
+    assert len(recorder.turns) == 1
+    assert checkpoints == []
+
+
 def test_replay_rejects_a_changed_operator_message(tmp_path: Path) -> None:
     recording = ReplayRecording((RecordedTurn(OperatorMessage("expected"), TurnResult()),))
     replay = ReplaySession(recording)

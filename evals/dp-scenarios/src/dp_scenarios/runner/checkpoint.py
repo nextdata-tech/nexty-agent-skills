@@ -43,7 +43,43 @@ _IDENTITY_GROUPS: tuple[IdentityGroup, ...] = (
     "grading",
 )
 _SCHEMA_VERSION = 2
-_SECRET_KEY_PARTS = ("token", "key", "secret", "password", "auth", "credential")
+_SECRET_KEY_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+_SECRET_WORDS = frozenset(
+    {
+        "key",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "auth",
+        "authorization",
+        "credential",
+        "cookie",
+        "oauth",
+        "apikey",
+        "accesstoken",
+        "refreshtoken",
+        "oauthtoken",
+        "oauthkey",
+        "setcookie",
+        "keychain",
+    }
+)
+# Lowercase run-together spellings are not recoverable by the tokenizer above;
+# keep the common credential compounds explicit instead of restoring broad
+# substring matching (which classified ordinary keys such as ``monkey``).
+_SECRET_COMPOUND_WORDS = frozenset(
+    {
+        "clientsecret",
+        "privatekey",
+        "secretkey",
+        "sessionkey",
+        "accesskey",
+        "authtoken",
+        "bearertoken",
+    }
+)
+_SEMVER_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _CHECKPOINT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -64,8 +100,32 @@ def _canonical_json(value: object) -> bytes:
 
 
 def _is_secret_key(key: str) -> bool:
-    lowered = key.casefold()
-    return any(part in lowered for part in _SECRET_KEY_PARTS)
+    words = tuple(part.casefold() for part in _SECRET_KEY_RE.findall(key))
+    if not words:
+        return False
+    if len(words) == 1 and words[0] in _SECRET_COMPOUND_WORDS:
+        return True
+    # Preserve the old predicate's protection for plural field names without
+    # returning to substring matching, which marked ordinary prose such as
+    # ``handler`` as credential-bearing.
+    normalized_words = tuple(
+        word[:-1] if word.endswith("s") and word[:-1] in _SECRET_WORDS else word
+        for word in words
+    )
+    if any(word in _SECRET_WORDS for word in normalized_words):
+        return True
+    return any(
+        normalized_words[index : index + 2]
+        in {
+            ("access", "token"),
+            ("api", "key"),
+            ("oauth", "key"),
+            ("oauth", "token"),
+            ("refresh", "token"),
+            ("set", "cookie"),
+        }
+        for index in range(len(words) - 1)
+    )
 
 
 def _is_obvious_secret_value(value: str) -> bool:
@@ -88,12 +148,43 @@ def _is_obvious_secret_value(value: str) -> bool:
         return True
     if stripped.startswith(("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-")):
         return True
+    # Three-component release versions are common identity values, not JWTs.
+    if _SEMVER_RE.fullmatch(stripped):
+        return False
     if stripped.startswith("-----BEGIN ") and stripped.endswith("-----"):
         return True
-    # JWTs are structurally obvious even when their contents are opaque.
-    if len(stripped.split(".")) == 3 and all(stripped.split(".")):
-        return all(re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in stripped.split("."))
+    # Compact JWTs have a base64url-encoded JSON header beginning with ``eyJ``.
+    # Requiring that marker avoids treating ordinary prose with three periods
+    # as a credential while still rejecting the common bearer-token shape.
+    parts = stripped.split(".")
+    if len(parts) == 3 and parts[0].startswith("eyJ") and all(
+        len(part) >= 8 and re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in parts
+    ):
+        return True
     return False
+
+
+def redact_json(value: object) -> object:
+    """Return JSON data safe to retain in a checkpoint or report.
+
+    Live transcripts and tool results can contain credential-shaped text even
+    when the surrounding observation is useful for local continuation.  The
+    general payload writer remains fail-closed; this explicit boundary instead
+    replaces secret-looking mapping values and scalar values before a
+    report-safe recording is handed to that writer.  Secret keys remain in
+    the result with an explicit placeholder so the JSON shape is preserved.
+    """
+
+    if isinstance(value, str):
+        return "[redacted]" if _is_obvious_secret_value(value) else value
+    if isinstance(value, Mapping):
+        return {
+            str(key): "[redacted]" if _is_secret_key(str(key)) else redact_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [redact_json(item) for item in value]
+    return value
 
 
 def _validate_json(value: object, path: str = "$", *, reject_secrets: bool = True) -> object:
@@ -112,7 +203,7 @@ def _validate_json(value: object, path: str = "$", *, reject_secrets: bool = Tru
         for raw_key, raw_item in value.items():
             if not isinstance(raw_key, str):
                 raise CheckpointError(f"non-string key at {path} is not allowed")
-            if reject_secrets and _is_secret_key(raw_key):
+            if reject_secrets and _is_secret_key(raw_key) and raw_item != "[redacted]":
                 raise CheckpointError(f"secret-like key at {path} is not allowed")
             copied[raw_key] = _validate_json(raw_item, f"{path}.{raw_key}", reject_secrets=reject_secrets)
         return copied
@@ -132,6 +223,45 @@ def canonical_digest(value: object) -> str:
     """Return the digest used for a validated, credential-free JSON value."""
 
     return _digest(_validate_json(value))
+
+
+def checkpoint_prefix_digest(
+    payload: Mapping[str, object],
+    *,
+    checkpoint_id: str,
+    parent_id: str | None,
+    parent_prefix_digest: str | None,
+    committed_turn: int,
+    phase: str,
+    operator_script_hash: str,
+    identity_digest: str,
+) -> str:
+    """Digest a prefix together with the metadata that gives it meaning."""
+
+    if parent_prefix_digest is not None and not _SHA256_RE.fullmatch(parent_prefix_digest):
+        raise CheckpointError("parent prefix digest is invalid")
+    if not _SHA256_RE.fullmatch(identity_digest):
+        raise CheckpointError("checkpoint identity digest is invalid")
+    if not isinstance(committed_turn, int) or isinstance(committed_turn, bool) or committed_turn < 1:
+        raise CheckpointError("committed_turn must be a positive integer")
+    if not isinstance(phase, str) or not phase.strip():
+        raise CheckpointError("phase must not be empty")
+    if not isinstance(operator_script_hash, str) or not operator_script_hash.strip():
+        raise CheckpointError("operator script hash must not be empty")
+    return _digest(
+        _validate_json(
+            {
+                "schema": 1,
+                "checkpoint_id": checkpoint_id,
+                "parent": {"id": parent_id, "prefix_digest": parent_prefix_digest},
+                "committed_turn": committed_turn,
+                "phase": phase,
+                "operator_script_hash": operator_script_hash,
+                "identity_digest": identity_digest,
+                "payload": payload,
+            }
+        )
+    )
 
 
 def _require_mapping(value: object, description: str) -> Mapping[str, object]:
@@ -539,6 +669,60 @@ class CheckpointStore:
             raise CheckpointError("checkpoint payload digest does not match state")
         return validated
 
+    def _prefix_digest_matches(
+        self,
+        state: CheckpointState,
+        *,
+        parent_prefix_digest: str | None,
+    ) -> bool:
+        """Verify a payload-backed prefix against its chain and script pins."""
+
+        # Payload-less states predate the durable handoff payload contract.
+        # Keep them readable for the low-level store tests; all harness-emitted
+        # checkpoints carry a payload and take the strict path below.
+        if state.payload_ref is None:
+            return True
+        try:
+            identity = self.read_identity()
+            operator_script_hash = identity.groups["run"].get("operator_script_hash")
+            if not isinstance(operator_script_hash, str):
+                return False
+            payload = self.read_payload(state)
+            if payload is None:
+                return False
+            expected = checkpoint_prefix_digest(
+                payload,
+                checkpoint_id=state.checkpoint_id,
+                parent_id=state.parent_id,
+                parent_prefix_digest=parent_prefix_digest,
+                committed_turn=state.committed_turn,
+                phase=state.phase,
+                operator_script_hash=operator_script_hash,
+                identity_digest=identity.digest,
+            )
+        except CheckpointError:
+            return False
+        return expected == state.turn_prefix_digest
+
+    def verify_prefix_digest(self, state: CheckpointState) -> bool:
+        """Verify one persisted prefix against its stored parent chain."""
+
+        parent_prefix_digest: str | None = None
+        if state.parent_id is not None:
+            try:
+                parent = CheckpointState.from_dict(
+                    _read_json(self.records_dir / f"{state.parent_id}.json")
+                )  # type: ignore[arg-type]
+            except CheckpointError:
+                return False
+            if parent.identity_digest != state.identity_digest:
+                return False
+            parent_prefix_digest = parent.turn_prefix_digest
+        return self._prefix_digest_matches(
+            state,
+            parent_prefix_digest=parent_prefix_digest,
+        )
+
     def commit(self, state: CheckpointState) -> None:
         """Atomically append a state checkpoint and advance ``latest.json``.
 
@@ -557,6 +741,8 @@ class CheckpointStore:
         if current is None:
             if state.parent_id is not None:
                 raise CheckpointError("first checkpoint cannot have a parent")
+            if state.committed_turn != 1:
+                raise CheckpointError("first checkpoint must commit turn 1")
         else:
             if current.status != "complete":
                 raise CheckpointError("cannot append after an incomplete checkpoint")
@@ -564,6 +750,11 @@ class CheckpointStore:
                 raise CheckpointError("checkpoint parent does not match the committed prefix")
             if state.committed_turn != current.committed_turn + 1:
                 raise CheckpointError("checkpoint turn does not immediately follow the committed prefix")
+        if not self._prefix_digest_matches(
+            state,
+            parent_prefix_digest=current.turn_prefix_digest if current is not None else None,
+        ):
+            raise CheckpointError("checkpoint prefix digest does not match its chain or script metadata")
         record = state.to_dict()
         record_path = self.records_dir / f"{state.checkpoint_id}.json"
         if record_path.exists():
@@ -597,8 +788,13 @@ class CheckpointStore:
                 return state
         return self._recover_from_journal()
 
-    def decide(self, identity: CheckpointIdentity, *, mode: ResumeMode = "native-resume") -> ResumeDecision:
-        """Decide whether ``identity`` may resume or explicitly regrade.
+    def decide(
+        self,
+        expected_identity: CheckpointIdentity,
+        *,
+        mode: ResumeMode = "native-resume",
+    ) -> ResumeDecision:
+        """Compare a caller-supplied identity before resuming or regrading.
 
         ``native-resume`` requires all four identity groups to match.  The
         separate ``report-only`` mode permits only a grading-group change and
@@ -610,7 +806,7 @@ class CheckpointStore:
         if mode not in {"native-resume", "report-only"}:
             raise ValueError("mode must be native-resume or report-only")
         stored_identity = self.read_identity()
-        differences = stored_identity.differing_groups(identity)
+        differences = stored_identity.differing_groups(expected_identity)
         forbidden = tuple(group for group in differences if group != "grading")
         if forbidden:
             return ResumeDecision(
@@ -676,8 +872,16 @@ class CheckpointStore:
             if current.checkpoint_id in seen:
                 return False
             seen.add(current.checkpoint_id)
+            try:
+                if current.identity_digest != self.read_identity().digest:
+                    return False
+            except CheckpointError:
+                return False
             if current.parent_id is None:
-                return current.committed_turn == 0 or current.committed_turn == 1
+                return current.committed_turn == 1 and self._prefix_digest_matches(
+                    current,
+                    parent_prefix_digest=None,
+                )
             parent_path = self.records_dir / f"{current.parent_id}.json"
             try:
                 parent = CheckpointState.from_dict(_read_json(parent_path))  # type: ignore[arg-type]
@@ -685,7 +889,14 @@ class CheckpointStore:
                 return False
             if parent.identity_digest != current.identity_digest:
                 return False
+            if parent.status != "complete":
+                return False
             if current.committed_turn != parent.committed_turn + 1:
+                return False
+            if not self._prefix_digest_matches(
+                current,
+                parent_prefix_digest=parent.turn_prefix_digest,
+            ):
                 return False
             current = parent
 
@@ -716,6 +927,7 @@ class CheckpointStore:
 
 __all__ = [
     "canonical_digest",
+    "checkpoint_prefix_digest",
     "ClaudeSessionIdentity",
     "CheckpointError",
     "CheckpointIdentity",

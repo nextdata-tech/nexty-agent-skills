@@ -1287,6 +1287,33 @@ def test_tier_rejects_existing_evidence_destination_before_running_a_session(tmp
     assert called == []
 
 
+def test_native_resume_rejects_existing_evidence_destination_before_running_a_session(
+    tmp_path: Path,
+) -> None:
+    scenario = make_scenario("native-resume-evidence-collision")
+    evidence_root = tmp_path / "evidence"
+    destination = evidence_root / scenario.id / "epoch-1"
+    destination.mkdir(parents=True)
+    called: list[str] = []
+
+    def forbidden_session() -> object:
+        called.append("constructed")
+        raise AssertionError("session must not be constructed after a resume artifact collision")
+
+    with pytest.raises(TierError, match="evidence bundle destination already exists"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=forbidden_session,
+            evidence_root=evidence_root,
+            native_continuation=True,
+            native_resume_checkpoint=tmp_path / "checkpoint",
+            native_run_root=tmp_path / "native-run",
+        ).run()
+    assert called == []
+
+
 def test_malformed_agent_attestation_is_a_grade_finding_not_a_tier_abort(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()

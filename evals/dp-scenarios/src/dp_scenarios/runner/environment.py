@@ -443,6 +443,9 @@ class PinnedVersions:
     mock_api_version: str
     canary_claims_hash: str
     agent_model_id: str = "replay"
+    judge_model_id: str = NOT_APPLICABLE
+    judge_prompt_hash: str = NOT_APPLICABLE
+    judge_calibration_set_hash: str = NOT_APPLICABLE
     agent_sampling_params: Mapping[str, object] = field(
         default_factory=lambda: MappingProxyType({"temperature": 0})
     )
@@ -461,6 +464,9 @@ class PinnedVersions:
             "mock_api_version",
             "canary_claims_hash",
             "agent_model_id",
+            "judge_model_id",
+            "judge_prompt_hash",
+            "judge_calibration_set_hash",
             "driver_model_id",
             "supervisor_binary_path",
             "session_config_sha256",
@@ -510,6 +516,14 @@ class PinnedVersions:
         agent_model_id = value.get("agent_model_id", "replay")
         if not isinstance(agent_model_id, str) or not agent_model_id.strip():
             raise EnvironmentError("pinned value agent_model_id must be a non-empty string")
+        grading = {
+            name: value.get(name, NOT_APPLICABLE)
+            for name in (
+                "judge_model_id",
+                "judge_prompt_hash",
+                "judge_calibration_set_hash",
+            )
+        }
         sampling = value.get("agent_sampling_params", {"temperature": 0})
         driver_model_id = value.get("driver_model_id", NOT_APPLICABLE)
         driver_sampling_params = value.get("driver_sampling_params", {})
@@ -520,6 +534,9 @@ class PinnedVersions:
             mock_api_version=required["mock_api_version"],  # type: ignore[arg-type]
             canary_claims_hash=required["canary_claims_hash"],  # type: ignore[arg-type]
             agent_model_id=agent_model_id,
+            judge_model_id=grading["judge_model_id"],  # type: ignore[arg-type]
+            judge_prompt_hash=grading["judge_prompt_hash"],  # type: ignore[arg-type]
+            judge_calibration_set_hash=grading["judge_calibration_set_hash"],  # type: ignore[arg-type]
             agent_sampling_params=sampling,  # type: ignore[arg-type]
             # Absence is unambiguous: the driver fields did not exist before
             # the driver operator, so a mapping without them is a scripted run.
@@ -1415,8 +1432,8 @@ class RunEnvironment:
             agent_sampling_params=dict(self.pins.agent_sampling_params),
             driver_model_id=self.pins.driver_model_id,
             driver_sampling_params=dict(self.pins.driver_sampling_params),
-            judge_model_id="not-applicable",
-            judge_prompt_hash="not-applicable",
+            judge_model_id=self.pins.judge_model_id,
+            judge_prompt_hash=self.pins.judge_prompt_hash,
             skill_pack_version=self.pins.skill_pack_version,
             supervisor_version=self.pins.supervisor_version,
             nxd_data_product_wheel_version=self.pins.runtime_wheel_version,
@@ -1430,7 +1447,7 @@ class RunEnvironment:
             trial_index=self.trial_index,
             canary_claims_hash=self.pins.canary_claims_hash,
             persona_paraphrase_prompt_hash="not-applicable",
-            judge_calibration_set_hash="not-applicable",
+            judge_calibration_set_hash=self.pins.judge_calibration_set_hash,
             fixture_seed=self.scenario.seed,
             fixture_base_instant=base_instant,
             run_id=effective_run_id,
