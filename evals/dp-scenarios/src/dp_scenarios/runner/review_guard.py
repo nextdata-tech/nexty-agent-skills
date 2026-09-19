@@ -13,7 +13,9 @@ inspection tools.
 
 from __future__ import annotations
 
+import argparse
 import json
+import math
 import os
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
@@ -30,9 +32,10 @@ except ImportError:  # pragma: no cover - Windows is not a supported live host.
 
 STATE_ENV = "NXD_EVAL_REVIEW_GUARD_STATE"
 STATE_VERSION = 1
-REVIEW_DEADLINE_MS = 300_000
+DEFAULT_REVIEW_TIMEOUT_SECONDS = 300.0
+REVIEW_DEADLINE_MS = int(DEFAULT_REVIEW_TIMEOUT_SECONDS * 1000)
 REVIEW_FINALIZATION_RESERVE_MS = 60_000
-REVIEW_INSPECTION_CUTOFF_MS = REVIEW_DEADLINE_MS - REVIEW_FINALIZATION_RESERVE_MS
+REVIEW_FINALIZATION_RESERVE_SECONDS = REVIEW_FINALIZATION_RESERVE_MS / 1000.0
 NORMAL = "normal"
 REVIEW_DISPATCH_PENDING = "review_dispatch_pending"
 RELAY_PENDING = "relay_pending"
@@ -56,25 +59,73 @@ _REVIEW_HANDOFF_STATE_KEYS = (
     "review_input_error",
 )
 SANITIZED_REQUEST_LABEL = "Sanitized original request:"
-# Runner-owned protocol line: the accepted child must see the same absolute
+# Runner-owned protocol lines: the accepted child must see the same absolute
 # wall-clock bound that the transport enforces.
-REVIEW_BUDGET_LINE = f"review_time_budget_seconds: {REVIEW_DEADLINE_MS / 1000:.0f}"
-REVIEW_INSPECTION_CUTOFF_LINE = (
-    f"review_inspection_cutoff_seconds: {REVIEW_INSPECTION_CUTOFF_MS / 1000:.0f}"
-)
-REVIEW_RESERVE_INSTRUCTION = (
-    f"After {REVIEW_INSPECTION_CUTOFF_MS / 1000:.0f} seconds, the runner-owned "
-    "guard denies further child Read, Glob, and Grep calls and the reviewer "
-    "must return complete or explicitly partial evidenced claims immediately. "
-    "The finalization reserve remains available for terminal return and does "
-    "not extend or reset the hard deadline."
-)
-REVIEW_RESERVE_DIAGNOSTIC = (
-    f"The retained-capture reviewer inspection window ended after "
-    f"{REVIEW_INSPECTION_CUTOFF_MS / 1000:.0f} seconds; return complete or "
-    "explicitly partial evidenced claims immediately. The finalization reserve "
-    "remains available for terminal return."
-)
+
+
+def validate_review_timeout_seconds(value: object) -> float:
+    """Validate and normalize a retained-review timeout in seconds."""
+
+    if isinstance(value, bool):
+        raise ValueError("review timeout must be a positive finite number")
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("review timeout must be a positive finite number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("review timeout must be a positive finite number")
+    return timeout
+
+
+def _review_timing(timeout_seconds: object) -> tuple[float, float]:
+    timeout = validate_review_timeout_seconds(timeout_seconds)
+    reserve = min(REVIEW_FINALIZATION_RESERVE_SECONDS, timeout / 5.0)
+    return timeout, timeout - reserve
+
+
+def review_budget_line(timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS) -> str:
+    timeout, _ = _review_timing(timeout_seconds)
+    return f"review_time_budget_seconds: {timeout:.15g}"
+
+
+def review_inspection_cutoff_line(timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS) -> str:
+    _, cutoff = _review_timing(timeout_seconds)
+    return f"review_inspection_cutoff_seconds: {cutoff:.15g}"
+
+
+def review_reserve_instruction(timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS) -> str:
+    _, cutoff = _review_timing(timeout_seconds)
+    return (
+        f"After {cutoff:.15g} seconds, the runner-owned guard denies further child "
+        "Read, Glob, and Grep calls and the reviewer must return complete or "
+        "explicitly partial evidenced claims immediately. The finalization reserve "
+        "remains available for terminal return and does not extend or reset the "
+        "hard deadline."
+    )
+
+
+def review_reserve_diagnostic(timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS) -> str:
+    _, cutoff = _review_timing(timeout_seconds)
+    return (
+        "The retained-capture reviewer inspection window ended after "
+        f"{cutoff:.15g} seconds; return complete or explicitly partial evidenced "
+        "claims immediately. The finalization reserve remains available for "
+        "terminal return."
+    )
+
+
+def _review_timeout_arg(value: str) -> float:
+    try:
+        return validate_review_timeout_seconds(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+REVIEW_BUDGET_LINE = review_budget_line()
+REVIEW_INSPECTION_CUTOFF_MS = int(_review_timing(DEFAULT_REVIEW_TIMEOUT_SECONDS)[1] * 1000)
+REVIEW_INSPECTION_CUTOFF_LINE = review_inspection_cutoff_line()
+REVIEW_RESERVE_INSTRUCTION = review_reserve_instruction()
+REVIEW_RESERVE_DIAGNOSTIC = review_reserve_diagnostic()
 REVIEW_SKILL_INSTRUCTION = "Load and follow nxd-review-closure."
 REVIEW_ALLOWED_SUBAGENT_TYPES = frozenset({"general-purpose"})
 REVIEW_METADATA_STATUSES = frozenset(
@@ -127,12 +178,21 @@ def write_initial_state(
         raise
 
 
-def settings_payload(*, python: str | Path, script: str | Path) -> dict[str, object]:
+def settings_payload(
+    *,
+    python: str | Path,
+    script: str | Path,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> dict[str, object]:
     """Return isolated settings that install the guard for one Claude run."""
 
     import shlex
 
-    command = f"{shlex.quote(str(python))} {shlex.quote(str(script))}"
+    timeout, _ = _review_timing(review_timeout_seconds)
+    command = (
+        f"{shlex.quote(str(python))} {shlex.quote(str(script))}"
+        f" --review-timeout {shlex.quote(f'{timeout:.15g}')}"
+    )
     hook = {"type": "command", "command": command, "timeout": 5}
     return {
         "hooks": {
@@ -606,7 +666,9 @@ def _owner_bash_targets_review_root(value: object, state: dict[str, object]) -> 
     return False
 
 
-def _review_inspection_window_is_open(state: dict[str, object]) -> bool:
+def _review_inspection_window_is_open(
+    state: dict[str, object], *, review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS
+) -> bool:
     """Return whether child inspection is still allowed in this dispatch."""
 
     started_at = state.get("review_started_at")
@@ -615,7 +677,8 @@ def _review_inspection_window_is_open(state: dict[str, object]) -> bool:
         # fail-closed condition: the guard cannot establish that inspection is
         # still inside the pre-reserve window.
         return False
-    return time.monotonic() - started_at < REVIEW_INSPECTION_CUTOFF_MS / 1000.0
+    _, cutoff = _review_timing(review_timeout_seconds)
+    return time.monotonic() - started_at < cutoff
 
 
 def _report_parameters(tool_input: dict[str, object]) -> tuple[dict[str, object], dict[str, object]] | None:
@@ -779,13 +842,25 @@ def _is_review_skill(value: object) -> bool:
     return skill in REVIEW_SKILL_NAMES
 
 
-def _review_prompt_has_required_input(prompt: object, state: dict[str, object]) -> bool:
+def _review_prompt_has_required_input(
+    prompt: object,
+    state: dict[str, object],
+    *,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> bool:
     """Return whether the owner supplied one complete review handoff."""
 
-    return not _review_prompt_issues(prompt, state)
+    return not _review_prompt_issues(
+        prompt, state, review_timeout_seconds=review_timeout_seconds
+    )
 
 
-def _review_prompt_issues(prompt: object, state: dict[str, object]) -> tuple[str, ...]:
+def _review_prompt_issues(
+    prompt: object,
+    state: dict[str, object],
+    *,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> tuple[str, ...]:
     """Return safe, actionable issues for a malformed review handoff.
 
     Keep the issue calculation shared by the boolean validator and its
@@ -819,8 +894,8 @@ def _review_prompt_issues(prompt: object, state: dict[str, object]) -> tuple[str
 
     for exact_line in (
         REVIEW_SKILL_INSTRUCTION,
-        REVIEW_BUDGET_LINE,
-        REVIEW_INSPECTION_CUTOFF_LINE,
+        review_budget_line(review_timeout_seconds),
+        review_inspection_cutoff_line(review_timeout_seconds),
     ):
         count = lines.count(exact_line)
         if count == 1:
@@ -853,7 +928,10 @@ def _review_prompt_issues(prompt: object, state: dict[str, object]) -> tuple[str
 
 
 def _review_prompt_validation_message(
-    prompt: object, state: dict[str, object]
+    prompt: object,
+    state: dict[str, object],
+    *,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
 ) -> str:
     """Explain which canonical review-dispatch inputs are still missing.
 
@@ -865,7 +943,9 @@ def _review_prompt_validation_message(
     to surface in the agent session.
     """
 
-    issues = _review_prompt_issues(prompt, state)
+    issues = _review_prompt_issues(
+        prompt, state, review_timeout_seconds=review_timeout_seconds
+    )
     if not issues:
         return (
             "Reviewer dispatch rejected: the canonical review prompt is invalid; "
@@ -874,14 +954,19 @@ def _review_prompt_validation_message(
     return "Reviewer dispatch rejected: " + "; ".join(issues) + "."
 
 def _child_pre(
-    event: dict[str, object], state: dict[str, object]
+    event: dict[str, object],
+    state: dict[str, object],
+    *,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
     """Keep the retained-input reviewer read-only and single-level."""
 
     tool = _event_tool_name(event)
     if tool in {"read", "glob", "grep"}:
-        if not _review_inspection_window_is_open(state):
-            return _deny(REVIEW_RESERVE_DIAGNOSTIC)
+        if not _review_inspection_window_is_open(
+            state, review_timeout_seconds=review_timeout_seconds
+        ):
+            return _deny(review_reserve_diagnostic(review_timeout_seconds))
         if _review_read_path_is_allowed(event, state):
             return _allow()
         return _deny(
@@ -898,10 +983,17 @@ def _child_pre(
     return _deny("The retained-capture reviewer is read-only and may not use workflow, file-write, or other tools.")
 
 
-def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, object]:
+def _owner_pre(
+    event: dict[str, object],
+    state: dict[str, object],
+    *,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> dict[str, object]:
     tool = _event_tool_name(event)
     if _is_child(event, state):
-        return _child_pre(event, state)
+        return _child_pre(
+            event, state, review_timeout_seconds=review_timeout_seconds
+        )
     if tool in {"write", "edit"}:
         path = _event_tool_input(event).get(
             "file_path", _event_tool_input(event).get("path")
@@ -982,9 +1074,17 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
             )
         if tool_input.get("run_in_background") is True:
             return _deny("The retained-capture reviewer must run inline in this turn.")
-        if not _review_prompt_has_required_input(tool_input.get("prompt"), state):
+        if not _review_prompt_has_required_input(
+            tool_input.get("prompt"),
+            state,
+            review_timeout_seconds=review_timeout_seconds,
+        ):
             return _deny(
-                _review_prompt_validation_message(tool_input.get("prompt"), state)
+                _review_prompt_validation_message(
+                    tool_input.get("prompt"),
+                    state,
+                    review_timeout_seconds=review_timeout_seconds,
+                )
             )
         state["review_tool_use_id"] = _event_id(event, "tool_use_id", "toolUseId")
         state["review_round_index"] = marker[1]
@@ -1031,7 +1131,12 @@ def _owner_pre(event: dict[str, object], state: dict[str, object]) -> dict[str, 
     return _allow()
 
 
-def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, object]:
+def _handle(
+    event: dict[str, object],
+    state: dict[str, object],
+    *,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> dict[str, object]:
     event_name = _string(event.get("hook_event_name", event.get("event", "")))
     event_name = (event_name or "").casefold()
     tool = _event_tool_name(event)
@@ -1109,26 +1214,41 @@ def _handle(event: dict[str, object], state: dict[str, object]) -> dict[str, obj
         return _allow()
 
     if event_name == "pretooluse":
-        return _owner_pre(event, state)
+        return _owner_pre(
+            event, state, review_timeout_seconds=review_timeout_seconds
+        )
     return _allow()
 
 
-def handle_event(event: dict[str, object], *, state_path: Path | None = None) -> dict[str, object]:
+def handle_event(
+    event: dict[str, object],
+    *,
+    state_path: Path | None = None,
+    review_timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> dict[str, object]:
     """Process one hook event and persist the new state."""
 
     if not isinstance(event, dict):
         raise GuardError("hook event is not an object")
+    timeout = validate_review_timeout_seconds(review_timeout_seconds)
     with locked_state(state_path) as state:
-        return _handle(event, state)
+        return _handle(event, state, review_timeout_seconds=timeout)
 
 
 def main() -> int:
     event: object = None
     try:
+        parser = argparse.ArgumentParser(description="Enforce the live review handoff")
+        parser.add_argument(
+            "--review-timeout",
+            type=_review_timeout_arg,
+            default=DEFAULT_REVIEW_TIMEOUT_SECONDS,
+        )
+        args, _ = parser.parse_known_args()
         event = json.load(sys.stdin)
         if not isinstance(event, dict):
             raise GuardError("hook event is not an object")
-        decision = handle_event(event)
+        decision = handle_event(event, review_timeout_seconds=args.review_timeout)
     except Exception:
         # A hook process failure must never silently permit a pending relay.
         # Keep the diagnostic generic: event payloads can contain user data.
@@ -1150,11 +1270,17 @@ __all__ = [
     "DESKTOP_ADVANCE",
     "NORMAL",
     "REVIEW_DEADLINE_MS",
+    "DEFAULT_REVIEW_TIMEOUT_SECONDS",
     "REVIEW_BUDGET_LINE",
     "REVIEW_INSPECTION_CUTOFF_MS",
     "REVIEW_INSPECTION_CUTOFF_LINE",
     "REVIEW_RESERVE_INSTRUCTION",
     "REVIEW_RESERVE_DIAGNOSTIC",
+    "review_budget_line",
+    "review_inspection_cutoff_line",
+    "review_reserve_instruction",
+    "review_reserve_diagnostic",
+    "validate_review_timeout_seconds",
     "REPORT_IN_FLIGHT",
     "RELAY_PENDING",
     "REVIEW_DISPATCH_PENDING",
