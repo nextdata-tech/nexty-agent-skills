@@ -16,7 +16,10 @@ from dp_scenarios.runner.review_guard import (
     REVIEW_INSPECTION_CUTOFF_MS,
     REVIEW_INSPECTION_CUTOFF_LINE,
     handle_event,
+    review_budget_line,
+    review_inspection_cutoff_line,
     settings_payload,
+    validate_review_timeout_seconds,
     write_initial_state,
 )
 
@@ -1120,6 +1123,44 @@ def test_owner_dispatch_requires_the_declared_review_budget(tmp_path: Path) -> N
     assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
 
 
+def test_owner_dispatch_accepts_the_configured_review_budget(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    prompt = _review_prompt()
+    prompt = prompt.replace(REVIEW_BUDGET_LINE, review_budget_line(600))
+    prompt = prompt.replace(
+        REVIEW_INSPECTION_CUTOFF_LINE, review_inspection_cutoff_line(600)
+    )
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "review-tool",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": prompt,
+            },
+        },
+        state_path=state_path,
+        review_timeout_seconds=600,
+    )
+
+    assert decision == {}
+    assert _state(state_path)["review_tool_use_id"] == "review-tool"
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), "not-a-number"])
+def test_review_timeout_validation_rejects_non_positive_or_non_finite_values(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match="positive finite"):
+        validate_review_timeout_seconds(value)
+
+
 def test_owner_dispatch_explains_each_missing_protocol_line(tmp_path: Path) -> None:
     state_path = tmp_path / "guard-state.json"
     workspace = tmp_path / "agent"
@@ -1246,3 +1287,13 @@ def test_settings_install_all_three_hook_phases() -> None:
     assert set(settings["hooks"]) == {"PreToolUse", "PostToolUse", "Stop"}
     assert settings["hooks"]["PreToolUse"][0]["matcher"] == "*"
     assert "review_guard.py" in settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+
+
+def test_settings_carries_the_configured_review_timeout() -> None:
+    settings = settings_payload(
+        python="/usr/bin/python3",
+        script="/tmp/review_guard.py",
+        review_timeout_seconds=600,
+    )
+    command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "--review-timeout 600" in command

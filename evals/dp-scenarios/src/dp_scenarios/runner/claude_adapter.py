@@ -31,6 +31,7 @@ from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner.review_guard import (
+    DEFAULT_REVIEW_TIMEOUT_SECONDS,
     REVIEW_BUDGET_LINE,
     REVIEW_DEADLINE_MS,
     REVIEW_DISPATCH_PENDING,
@@ -40,7 +41,11 @@ from dp_scenarios.runner.review_guard import (
     REVIEW_RESERVE_INSTRUCTION,
     RETAINED_REVIEW_ROOT_NAMES,
     STATE_VERSION,
+    review_budget_line,
+    review_inspection_cutoff_line,
+    review_reserve_instruction,
     settings_payload,
+    validate_review_timeout_seconds,
     write_initial_state,
 )
 from dp_scenarios.failure_reasons import (
@@ -418,6 +423,31 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "than fabricating them; populate the independently observed output rows, "
     "contract, and product surfaces normally.",
 )
+
+
+def scenario_conduct_rules(review_timeout_seconds: object | None = None) -> tuple[str, ...]:
+    """Return conduct rules with the configured retained-review budget."""
+
+    timeout = validate_review_timeout_seconds(
+        DEFAULT_REVIEW_TIMEOUT_SECONDS
+        if review_timeout_seconds is None
+        else review_timeout_seconds
+    )
+    default_timeout_label = f"{DEFAULT_REVIEW_TIMEOUT_SECONDS:.15g}"
+    configured_timeout_label = f"{timeout:.15g}"
+    default_absolute_budget = (
+        f"The reviewer has a hard absolute {default_timeout_label}-second budget "
+    )
+    configured_absolute_budget = (
+        f"The reviewer has a hard absolute {configured_timeout_label}-second budget "
+    )
+    return tuple(
+        rule.replace(REVIEW_BUDGET_LINE, review_budget_line(timeout))
+        .replace(REVIEW_INSPECTION_CUTOFF_LINE, review_inspection_cutoff_line(timeout))
+        .replace(REVIEW_RESERVE_INSTRUCTION, review_reserve_instruction(timeout))
+        .replace(default_absolute_budget, configured_absolute_budget)
+        for rule in SCENARIO_CONDUCT_RULES
+    )
 
 
 #: The whole shell surface.  ``Bash`` starts a shell; ``BashOutput`` and
@@ -1269,6 +1299,7 @@ class ClaudeCodeAdapter:
         timeout_s: float,
         max_budget_usd: float | None,
         append_system_prompt: str,
+        review_timeout_seconds: float | None = None,
         allow_bash: bool = True,
         mcp_config: Path | None = None,
         strict_mcp_config: bool = False,
@@ -1290,6 +1321,14 @@ class ClaudeCodeAdapter:
         self.timeout_s = timeout_s
         self.max_budget_usd = max_budget_usd
         self.append_system_prompt = append_system_prompt
+        if review_timeout_seconds is None:
+            # Keep direct adapter tests and callers that monkeypatch the
+            # legacy millisecond constant compatible with the default path.
+            self._review_deadline_ms = float(REVIEW_DEADLINE_MS)
+            self.review_timeout_seconds = self._review_deadline_ms / 1000.0
+        else:
+            self.review_timeout_seconds = validate_review_timeout_seconds(review_timeout_seconds)
+            self._review_deadline_ms = self.review_timeout_seconds * 1000.0
         # An OAuth token is intentionally injected only into this trusted
         # adapter-to-Claude boundary.  Do not let an agent shell inherit it.
         self.allow_bash = allow_bash and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
@@ -1542,6 +1581,7 @@ class ClaudeCodeAdapter:
                 settings_payload(
                     python=sys.executable,
                     script=Path(__file__).resolve().with_name("review_guard.py"),
+                    review_timeout_seconds=self.review_timeout_seconds,
                 ),
                 sort_keys=True,
                 separators=(",", ":"),
@@ -1729,7 +1769,7 @@ class ClaudeCodeAdapter:
             # the child another full deadline.
             elif self._review_deadline_at is None:
                 self._review_deadline_id = tool_use_id
-                self._review_deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
+                self._review_deadline_at = now + self._review_deadline_ms / 1000.0
         elif (
             self._review_deadline_id is not None
             and tool_use_id == self._review_deadline_id
@@ -1833,7 +1873,7 @@ class ClaudeCodeAdapter:
         if reviewer:
             message = (
                 "The retained-capture reviewer did not complete within "
-                f"{REVIEW_DEADLINE_MS / 1000.0:.1f}s{suffix}"
+                f"{self.review_timeout_seconds:.1f}s{suffix}"
             )
         else:
             message = f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
@@ -2116,6 +2156,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--desktop-python", type=Path, required=True)
     parser.add_argument("--claude-config-dir", type=Path)
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--review-timeout",
+        type=float,
+        default=DEFAULT_REVIEW_TIMEOUT_SECONDS,
+    )
     parser.add_argument("--max-budget-usd", type=float)
     parser.add_argument("--mcp-config", type=Path, help="use a runner-owned MCP config instead of starting a nested Desktop server")
     parser.add_argument("--strict-mcp-config", action="store_true")
@@ -2161,6 +2206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout_s=args.timeout,
         max_budget_usd=args.max_budget_usd,
         append_system_prompt=args.append_system_prompt,
+        review_timeout_seconds=args.review_timeout,
         allow_bash=not args.no_bash,
         mcp_config=args.mcp_config.expanduser().resolve() if args.mcp_config is not None else None,
         strict_mcp_config=args.strict_mcp_config,

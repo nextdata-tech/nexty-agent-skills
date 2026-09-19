@@ -1027,6 +1027,18 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
     for name in with_conduct:
         assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"
 
+    marketing = next(
+        scenario
+        for scenario in load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
+        if scenario.id == "marketing-attribution"
+    )
+    configured = _evidence_contract(marketing, review_timeout_seconds=600)
+    assert configured is not None
+    review_rule = next(rule for rule in configured["conduct"] if "review_time_budget_seconds" in rule)
+    assert "review_time_budget_seconds: 600" in review_rule
+    assert "hard absolute 600-second budget" in review_rule
+    assert "review_time_budget_seconds: 120" not in review_rule
+
 
 def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
     """The prompt is harness mechanics; conduct travels with the scenario."""
