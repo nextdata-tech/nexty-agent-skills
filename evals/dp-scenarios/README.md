@@ -265,10 +265,17 @@ files reject the resume.
 
 This seam is intentionally bounded: native continuation requires one scenario,
 one epoch, `--jobs 1`, the original persistent run root, and an unchanged
-checkpoint identity. Route-backed/mock-source environments are rejected on
-resume because their process-owned state cannot be safely reconstructed by
-this harness. Unsupported or mismatched combinations fail closed; the default
-fresh-run path and the handoff path are unchanged.
+checkpoint identity. Route-backed/mock-source environments are supported when
+the fresh run persists `native-source-contract.json`; resume validates the
+credential-free source contract, checks the current route configuration digest,
+and restarts the source on the recorded data/control endpoints. The paired
+`native-source-state.json` snapshot restores the non-secret auth budget,
+mutable route state, and request counters needed for rate-limit and oracle
+continuity; pagination cursors are regenerated from the restored route state.
+Missing, malformed, drifted, or occupied-port state fails closed; the default
+fresh-run path and the handoff path are unchanged. This enables B1-style
+resumption, but B1 still requires a separate live rerun for evidence. Auth
+tokens and control secrets are never persisted.
 
 ```bash
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \

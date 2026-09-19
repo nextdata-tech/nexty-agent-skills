@@ -20,9 +20,17 @@ only a canonical Claude UUID and an execution-identity digest, requires an
 explicit persistent run root, locally replays and verifies the committed
 operator prefix, starts at the next operator turn through Claude's native
 `--resume` path, and continues the remaining turns in that session.
+Route-backed/mock sources additionally persist a credential-free source
+contract containing the selected data/control endpoints and a route-config
+digest. Resume validates that contract and restarts the source on the same
+endpoints. A paired runtime snapshot restores the non-secret auth budget,
+mutable route state, and request counters; pagination cursors are regenerated
+from the restored route state. Missing, malformed, drifted, or occupied-port
+state fails closed. No source token or control secret is stored.
 Redacted touched-file observations are rehydrated only from the retained
-workspace and must match their committed hash and size. Unsupported
-environment reuse, changed prefix files, and identity mismatch fail closed.
+workspace and must match their committed hash and size. This is still harness
+evidence only: B1 requires a separate live rerun and is not claimed here as a
+pass.
 
 ## Evidence
 

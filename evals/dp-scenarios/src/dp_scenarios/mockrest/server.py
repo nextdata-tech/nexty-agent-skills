@@ -370,6 +370,70 @@ class MockRestServer:
         self._data_site = None
         self._control_site = None
 
+    async def snapshot_runtime_state(self) -> dict[str, Any]:
+        """Capture the non-secret state needed to continue this source."""
+
+        async with self._state_lock:
+            return {
+                "schema": 1,
+                "remaining_requests": self._remaining_requests,
+                "current_states": dict(self._current_states),
+                "counters": self.counters.snapshot(),
+            }
+
+    async def restore_runtime_state(self, state: Mapping[str, Any]) -> None:
+        """Restore a validated source snapshot after the readiness probe."""
+
+        if not isinstance(state, Mapping) or set(state) != {
+            "schema",
+            "remaining_requests",
+            "current_states",
+            "counters",
+        }:
+            raise ValueError("mock source runtime state has an invalid shape")
+        if state["schema"] != 1:
+            raise ValueError("mock source runtime state has an unsupported schema")
+        remaining = state["remaining_requests"]
+        if remaining is not None and (
+            isinstance(remaining, bool)
+            or not isinstance(remaining, int)
+            or remaining < 0
+        ):
+            raise ValueError("mock source runtime state has an invalid auth budget")
+        if self.config.auth is None:
+            if remaining is not None:
+                raise ValueError("mock source runtime state has an auth budget without auth")
+        elif remaining is None or remaining > self.config.auth.initial_requests:
+            raise ValueError("mock source runtime state has an invalid auth budget")
+
+        current_states = state["current_states"]
+        if not isinstance(current_states, Mapping):
+            raise ValueError("mock source runtime state has invalid route state")
+        expected_families = {
+            route.state_family
+            for route in self.config.routes
+            if route.states and route.state_family is not None
+        }
+        if set(current_states) != expected_families:
+            raise ValueError("mock source runtime state does not match route state families")
+        for family, selected in current_states.items():
+            if not isinstance(family, str) or not isinstance(selected, str):
+                raise ValueError("mock source runtime state has invalid route state")
+            family_routes = [
+                route for route in self.config.routes if route.state_family == family
+            ]
+            if not family_routes or any(selected not in route.states for route in family_routes):
+                raise ValueError("mock source runtime state has an unknown route state")
+
+        counters = state["counters"]
+        if not isinstance(counters, Mapping):
+            raise ValueError("mock source runtime state has invalid counters")
+        async with self._state_lock:
+            self._remaining_requests = remaining
+            self._current_states = dict(current_states)
+            self._cursor_maps.clear()
+            self.counters.restore_snapshot(counters)
+
     async def __aenter__(self) -> "MockRestServer":
         return await self.start()
 

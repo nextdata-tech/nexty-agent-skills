@@ -16,7 +16,7 @@ import os
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import tempfile
 import threading
@@ -27,6 +27,7 @@ from typing import Any, Mapping
 from dp_scenarios.ledger import LedgerRow, LedgerStore, Manifest, fixture_dir_hash
 from dp_scenarios.ledger.manifest import NOT_APPLICABLE, REPLAY_SESSION_PATH_FIELDS
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_transform_latency
+from dp_scenarios.mockrest.config import ScenarioConfig, load_config
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
@@ -47,6 +48,11 @@ WORKFLOW_ACTIVATION_DIGEST_ENV = "NXD_EVAL_WORKFLOW_ACTIVATION_SHA256"
 SOURCE_SERVICE_NAME = "api-source"
 SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
 TRUSTED_CREDENTIAL_ENVS_ENV = "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"
+NATIVE_SOURCE_CONTRACT_FILENAME = "native-source-contract.json"
+NATIVE_SOURCE_STATE_FILENAME = "native-source-state.json"
+NATIVE_SOURCE_CONTRACT_SCHEMA = 1
+NATIVE_SOURCE_STATE_SCHEMA = 1
+NATIVE_SOURCE_STATE_MODEL = "runtime-v1"
 API_SOURCE_CREDENTIAL_MAPPING = f"{SOURCE_SERVICE_NAME}={SOURCE_CREDENTIAL_ENV}"
 _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
 _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
@@ -527,11 +533,19 @@ class PinnedVersions:
 class MockSourceHandle:
     """Run :class:`MockRestServer` on a private event-loop thread."""
 
-    def __init__(self, config: object, *, control_secret: str | None = None) -> None:
+    def __init__(
+        self,
+        config: object,
+        *,
+        control_secret: str | None = None,
+        runtime_state: Mapping[str, Any] | None = None,
+    ) -> None:
         self.config = config
         self.requested_control_secret = control_secret
+        self.requested_runtime_state = runtime_state
         self._server: MockRestServer | None = None
         self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
         self._stopped = threading.Event()
         self._error: BaseException | None = None
@@ -544,17 +558,23 @@ class MockSourceHandle:
 
         def serve() -> None:
             async def run() -> None:
+                server: MockRestServer | None = None
                 try:
+                    self._loop = asyncio.get_running_loop()
                     server = MockRestServer(self.config, control_secret=self.requested_control_secret)
                     await server.start()
                     self._server = server
+                    if self.requested_runtime_state is not None:
+                        await server.restore_runtime_state(self.requested_runtime_state)
                     self._ready.set()
                     while not self._stopped.is_set():
                         await asyncio.sleep(0.01)
-                    await server.stop()
                 except BaseException as exc:  # surfaced to the owning thread
                     self._error = exc
                     self._ready.set()
+                finally:
+                    if server is not None:
+                        await server.stop()
 
             asyncio.run(run())
 
@@ -580,6 +600,23 @@ class MockSourceHandle:
 
         return self.server.control_secret
 
+    def snapshot_runtime_state(self) -> Mapping[str, Any]:
+        """Capture source state through its owning event loop."""
+
+        loop = self._loop
+        if loop is None:
+            raise EnvironmentError("mock source event loop is not running")
+        future = asyncio.run_coroutine_threadsafe(
+            self.server.snapshot_runtime_state(), loop
+        )
+        try:
+            state = future.result(timeout=30)
+        except BaseException as exc:
+            raise EnvironmentError("mock source runtime state could not be captured") from exc
+        if not isinstance(state, Mapping):
+            raise EnvironmentError("mock source runtime state is not a mapping")
+        return state
+
     def stop(self) -> None:
         """Stop the source and join its private event-loop thread."""
 
@@ -590,6 +627,7 @@ class MockSourceHandle:
                 raise EnvironmentError("mock source did not stop cleanly")
         self._thread = None
         self._server = None
+        self._loop = None
 
     close = stop
 
@@ -790,6 +828,227 @@ def _scenario_route_config(scenario: Scenario) -> object | None:
     return None
 
 
+def _mock_response_material(response: object | None) -> object | None:
+    """Return the route response semantics without its source-file path."""
+
+    if response is None:
+        return None
+    return {
+        "data": getattr(response, "data"),
+        "format": getattr(response, "format"),
+        "item_key": getattr(response, "item_key"),
+    }
+
+
+def _mock_route_material(route: object) -> dict[str, object]:
+    required_header = getattr(route, "required_header")
+    pagination = getattr(route, "pagination")
+    fanout = getattr(route, "fanout")
+    return {
+        "path": getattr(route, "path"),
+        "method": getattr(route, "method"),
+        "response": _mock_response_material(getattr(route, "response")),
+        "states": {
+            str(name): _mock_response_material(response)
+            for name, response in getattr(route, "states").items()
+        },
+        "state_family": getattr(route, "state_family"),
+        "initial_state": getattr(route, "initial_state"),
+        "pagination": (
+            {
+                "page_size": getattr(pagination, "page_size"),
+                "cursor_param": getattr(pagination, "cursor_param"),
+                "items_field": getattr(pagination, "items_field"),
+                "cursor_field": getattr(pagination, "cursor_field"),
+            }
+            if pagination is not None
+            else None
+        ),
+        "fanout": (
+            {
+                "parent_id_field": getattr(fanout, "parent_id_field"),
+                "child_parent_field": getattr(fanout, "child_parent_field"),
+            }
+            if fanout is not None
+            else None
+        ),
+        "require_user_agent": getattr(route, "require_user_agent"),
+        "required_header": (
+            {"name": getattr(required_header, "name"), "value": getattr(required_header, "value")}
+            if required_header is not None
+            else None
+        ),
+        "auth_required": getattr(route, "auth_required"),
+        "rate_limit_every": getattr(route, "rate_limit_every"),
+        "latency_ms": getattr(route, "latency_ms"),
+        "status": getattr(route, "status"),
+        "write_forbidden": getattr(route, "write_forbidden"),
+        "publish_contract": getattr(route, "publish_contract"),
+    }
+
+
+def _mock_route_config_material(config: ScenarioConfig) -> dict[str, object]:
+    """Build the source behavior identity without persisting any secret value."""
+
+    auth = config.auth
+    return {
+        "version": 1,
+        "routes": [_mock_route_material(route) for route in config.routes],
+        "docs": {
+            str(path): {"body": page.body, "content_type": page.content_type}
+            for path, page in config.docs.items()
+        },
+        "capability": config.capability,
+        "auth": (
+            {
+                # Authentication material is deliberately not part of the
+                # persisted digest. The resumed supervisor gets its current
+                # in-memory source credential from the current config.
+                "credential": "configured",
+                "initial_requests": auth.initial_requests,
+                "header": auth.header,
+                "scheme": auth.scheme,
+                "refresh_path": auth.refresh_path,
+            }
+            if auth is not None
+            else None
+        ),
+        "control": {
+            "health_path": config.control.health_path,
+            "counters_path": config.control.counters_path,
+            "reset_path": config.control.reset_path,
+            "capability_path": config.control.capability_path,
+            "state_path": config.control.state_path,
+        },
+        "data_host": config.data_host,
+        "control_host": config.control_host,
+    }
+
+
+def _as_mock_route_config(value: object) -> ScenarioConfig:
+    """Load a route table into the exact type used by ``MockRestServer``."""
+
+    if isinstance(value, ScenarioConfig):
+        return value
+    return load_config(value)  # type: ignore[arg-type]
+
+
+def _mock_route_config_digest(value: object) -> str:
+    """Return a stable digest of source behavior, excluding selected ports."""
+
+    config = _as_mock_route_config(value)
+    encoded = json.dumps(
+        _mock_route_config_material(config),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _native_source_contract_path(base: Path) -> Path:
+    return base / NATIVE_SOURCE_CONTRACT_FILENAME
+
+
+def _native_source_state_path(base: Path) -> Path:
+    return base / NATIVE_SOURCE_STATE_FILENAME
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
+    """Publish a small native-run JSON artifact without torn writes."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = handle.name
+            handle.write(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                + "\n"
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+
+def _read_native_source_contract(path: Path) -> dict[str, object]:
+    """Read and strictly validate the credential-free source binding contract."""
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise EnvironmentError("native source contract is missing or malformed") from exc
+    if not isinstance(raw, Mapping):
+        raise EnvironmentError("native source contract is malformed")
+    expected = {
+        "schema",
+        "data_host",
+        "data_port",
+        "control_host",
+        "control_port",
+        "route_config_digest",
+        "state_model",
+    }
+    if set(raw) != expected or raw.get("schema") != NATIVE_SOURCE_CONTRACT_SCHEMA:
+        raise EnvironmentError("native source contract is malformed")
+    values: dict[str, object] = {}
+    for field_name in ("data_host", "control_host"):
+        value = raw.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise EnvironmentError("native source contract has an invalid host")
+        values[field_name] = value
+    for field_name in ("data_port", "control_port"):
+        value = raw.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+            raise EnvironmentError("native source contract has an invalid port")
+        values[field_name] = value
+    if (
+        values["data_host"] == values["control_host"]
+        and values["data_port"] == values["control_port"]
+    ):
+        raise EnvironmentError("native source contract reuses one data/control endpoint")
+    digest = raw.get("route_config_digest")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise EnvironmentError("native source contract has an invalid route configuration digest")
+    values["route_config_digest"] = digest
+    if raw.get("state_model") != NATIVE_SOURCE_STATE_MODEL:
+        raise EnvironmentError("native source contract has an unsupported state model")
+    return values
+
+
+def _read_native_source_state(path: Path) -> dict[str, object]:
+    """Read the non-secret runtime snapshot paired with a source contract."""
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise EnvironmentError("native source runtime state is missing or malformed") from exc
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "schema",
+        "remaining_requests",
+        "current_states",
+        "counters",
+    }:
+        raise EnvironmentError("native source runtime state is malformed")
+    if raw.get("schema") != NATIVE_SOURCE_STATE_SCHEMA:
+        raise EnvironmentError("native source runtime state has an unsupported schema")
+    return dict(raw)
+
+
 @dataclass(slots=True)
 class RunEnvironment:
     """Disposable home, fixture, optional source, and ledger for one trial."""
@@ -852,12 +1111,6 @@ class RunEnvironment:
         if self.native_continuation and self.persistent_root is None:
             raise EnvironmentError(
                 "native continuation requires an explicit persistent run root"
-            )
-        if self.native_resume and (self.route_config is not None or _scenario_route_config(self.scenario) is not None):
-            raise EnvironmentError(
-                "native resume cannot reuse a mock source across processes; "
-                "the original environment must be resumed through an explicit "
-                "provider-owned persistent source contract"
             )
         if self.staged_job_helper_dir is not None:
             helper = self.staged_job_helper_dir.expanduser().resolve()
@@ -959,6 +1212,7 @@ class RunEnvironment:
                 raise
 
         route_config = self.route_config if self.route_config is not None else _scenario_route_config(self.scenario)
+        source_runtime_state: Mapping[str, Any] | None = None
         requested_validation_mode = "live" if self.live_command is not None else "replay"
 
         # A live desktop transport must exist before row zero is anchored: its
@@ -974,8 +1228,21 @@ class RunEnvironment:
                 route_config = apply_transform_latency(route_config, self.knobs.transform_window)
             if self.knobs.broker_fault is not None and self.live_command is None:
                 raise EnvironmentError("broker_fault requires a live desktop environment")
+            if self.native_resume and route_config is not None:
+                route_config, source_runtime_state = self._resume_native_source(route_config)
+            elif self.native_resume and _native_source_contract_path(base).exists():
+                raise EnvironmentError(
+                    "native source contract exists but the current route configuration is missing"
+                )
             if route_config is not None:
-                self._mock_source = MockSourceHandle(route_config, control_secret=self.control_secret).start()
+                self._mock_source = MockSourceHandle(
+                    route_config,
+                    control_secret=self.control_secret,
+                    runtime_state=source_runtime_state,
+                ).start()
+                if self.native_continuation and not self.native_resume:
+                    self._write_native_source_contract()
+                    self._persist_native_source_state()
                 self._write_source_profile()
             if self.live_command is not None:
                 if self.supervisor_command is None:
@@ -1239,6 +1506,68 @@ class RunEnvironment:
             raise
         return self
 
+    def _resume_native_source(
+        self, route_config: object
+    ) -> tuple[ScenarioConfig, Mapping[str, Any]]:
+        """Validate and rebind a route source to its fresh-run endpoints."""
+
+        base = self._base_dir
+        if base is None:
+            raise EnvironmentError("environment has not been prepared")
+        contract = _read_native_source_contract(_native_source_contract_path(base))
+        try:
+            current = _as_mock_route_config(route_config)
+        except Exception as exc:
+            raise EnvironmentError("native source route configuration is invalid") from exc
+
+        for field_name in ("data_port", "control_port"):
+            configured = getattr(current, field_name)
+            selected = contract[field_name]
+            if configured not in (0, selected):
+                raise EnvironmentError(
+                    f"native source route configuration {field_name} differs from its persisted endpoint"
+                )
+        if _mock_route_config_digest(current) != contract["route_config_digest"]:
+            raise EnvironmentError("native source route configuration drifted from its persisted contract")
+        return (
+            replace(
+                current,
+                data_host=contract["data_host"],
+                data_port=contract["data_port"],
+                control_host=contract["control_host"],
+                control_port=contract["control_port"],
+            ),
+            _read_native_source_state(_native_source_state_path(base)),
+        )
+
+    def _write_native_source_contract(self) -> None:
+        """Persist only source binding identity after a fresh source starts."""
+
+        if self._base_dir is None or self._mock_source is None:
+            raise EnvironmentError("native source contract requires a started source")
+        server = self._mock_source.server
+        addresses = server.addresses
+        contract = {
+            "schema": NATIVE_SOURCE_CONTRACT_SCHEMA,
+            "data_host": addresses.data_host,
+            "data_port": addresses.data_port,
+            "control_host": addresses.control_host,
+            "control_port": addresses.control_port,
+            "route_config_digest": _mock_route_config_digest(server.config),
+            "state_model": NATIVE_SOURCE_STATE_MODEL,
+        }
+        _atomic_write_json(_native_source_contract_path(self._base_dir), contract)
+
+    def _persist_native_source_state(self) -> None:
+        """Persist only the source runtime state; it contains no credentials."""
+
+        if self._base_dir is None or self._mock_source is None:
+            raise EnvironmentError("native source runtime state requires a started source")
+        state = self._mock_source.snapshot_runtime_state()
+        if not isinstance(state, Mapping):
+            raise EnvironmentError("native source runtime state is not a mapping")
+        _atomic_write_json(_native_source_state_path(self._base_dir), dict(state))
+
     @property
     def base_dir(self) -> Path:
         """Return the private run directory."""
@@ -1435,6 +1764,11 @@ class RunEnvironment:
         """Close the ledger/source and remove the disposable run tree."""
 
         first_error: BaseException | None = None
+        if self.native_continuation and self._mock_source is not None and self._base_dir is not None:
+            try:
+                self._persist_native_source_state()
+            except BaseException as exc:
+                first_error = exc
         resources = (
             ("_live_transport", "cleanup"),
             ("_ledger", "close"),

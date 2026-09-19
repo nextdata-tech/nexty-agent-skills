@@ -521,3 +521,58 @@ def test_refresh_waits_for_the_authentication_state_lock(tmp_path: Path) -> None
             await server.stop()
 
     run(check())
+
+
+def test_runtime_state_restores_auth_budget_counters_and_route_state() -> None:
+    async def check() -> None:
+        config = load_config(
+            {
+                "auth": {"token": "secret", "initial_requests": 2},
+                "routes": [
+                    {
+                        "path": "/rows",
+                        "method": "GET",
+                        "auth_required": True,
+                        "rate_limit_every": 3,
+                        "response": {"json": [{"id": 1}]},
+                    },
+                    {
+                        "path": "/stateful",
+                        "method": "GET",
+                        "state_family": "catalog",
+                        "states": {
+                            "v1": {"json": [{"label": "old"}]},
+                            "v2": {"json": [{"label": "new"}]},
+                        },
+                    },
+                ],
+            }
+        )
+        first = MockRestServer(config)
+        second = MockRestServer(config)
+        await first.start()
+        await second.start()
+        try:
+            async with ClientSession() as client:
+                response = await client.get(
+                    first.data_url + "/rows",
+                    headers={"Authorization": "Bearer secret"},
+                )
+                assert response.status == 200
+                switched = await client.post(
+                    first.control_url + "/state",
+                    headers=first.control_headers,
+                    json={"family": "catalog", "state": "v2"},
+                )
+                assert switched.status == 200
+            snapshot = await first.snapshot_runtime_state()
+            await second.restore_runtime_state(snapshot)
+            assert await second.snapshot_runtime_state() == snapshot
+            assert snapshot["remaining_requests"] == 1
+            assert snapshot["counters"]["total"] == 1  # type: ignore[index]
+            assert snapshot["current_states"] == {"catalog": "v2"}
+        finally:
+            await first.stop()
+            await second.stop()
+
+    run(check())
