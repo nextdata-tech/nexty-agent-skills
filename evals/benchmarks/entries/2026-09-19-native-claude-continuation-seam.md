@@ -25,7 +25,8 @@ contract containing the selected data/control endpoints and a route-config
 digest. Resume validates that contract and restarts the source on the same
 endpoints. A paired runtime snapshot restores the non-secret auth budget,
 mutable route state, and request counters; pagination cursors are regenerated
-from the restored route state. Missing, malformed, drifted, or occupied-port
+from the restored route state. It is refreshed after each committed native
+turn and during orderly cleanup. Missing, malformed, drifted, or occupied-port
 state fails closed. No source token or control secret is stored.
 Redacted touched-file observations are rehydrated only from the retained
 workspace and must match their committed hash and size. This is still harness

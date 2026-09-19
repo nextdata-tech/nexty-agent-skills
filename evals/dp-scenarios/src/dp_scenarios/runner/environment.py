@@ -1568,6 +1568,13 @@ class RunEnvironment:
             raise EnvironmentError("native source runtime state is not a mapping")
         _atomic_write_json(_native_source_state_path(self._base_dir), dict(state))
 
+    def persist_native_source_state(self) -> None:
+        """Persist source state after a committed native continuation turn."""
+
+        if not self.native_continuation or self._mock_source is None:
+            return
+        self._persist_native_source_state()
+
     @property
     def base_dir(self) -> Path:
         """Return the private run directory."""

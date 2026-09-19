@@ -272,6 +272,8 @@ and restarts the source on the recorded data/control endpoints. The paired
 `native-source-state.json` snapshot restores the non-secret auth budget,
 mutable route state, and request counters needed for rate-limit and oracle
 continuity; pagination cursors are regenerated from the restored route state.
+The snapshot is refreshed after each committed native turn and during orderly
+environment cleanup.
 Missing, malformed, drifted, or occupied-port state fails closed; the default
 fresh-run path and the handoff path are unchanged. This enables B1-style
 resumption, but B1 still requires a separate live rerun for evidence. Auth

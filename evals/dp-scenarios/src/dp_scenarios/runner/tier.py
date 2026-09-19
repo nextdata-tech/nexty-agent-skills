@@ -1861,6 +1861,7 @@ class TierRunner:
         scenario: Scenario,
         *,
         native_continuation: bool = False,
+        source_state_writer: Callable[[], None] | None = None,
     ) -> Callable[[ReplayRecording, int], None]:
         """Create a fail-closed callback for complete live turn snapshots."""
 
@@ -1896,6 +1897,8 @@ class TierRunner:
                     native_session=native_session,
                 )
             )
+            if source_state_writer is not None:
+                source_state_writer()
 
         return persist
 
@@ -2227,6 +2230,11 @@ class TierRunner:
                                 checkpoint_store,
                                 scenario,
                                 native_continuation=self.native_continuation,
+                                source_state_writer=(
+                                    environment.persist_native_source_state
+                                    if self.native_continuation and environment.mock_source is not None
+                                    else None
+                                ),
                             )
                             if checkpoint_store is not None
                             else None
