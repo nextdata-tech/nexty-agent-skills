@@ -332,19 +332,32 @@ class DesktopStdioTransport:
 
     ensure_started = start
 
-    def live_session(self, *, timeout: float = 300.0) -> Any:
+    def live_session(self, *, timeout: float = 300.0, native_resume: bool = False) -> Any:
         """Return a turn-protocol session owned by this desktop transport."""
 
         from .session import LiveSession
 
         self.start()
         assert self.command is not None
+        resume_builder = None
+        if native_resume:
+            if "--native-continuation" not in self.command:
+                raise DesktopTransportError(
+                    "native resume requires an adapter command explicitly enabled with "
+                    "--native-continuation"
+                )
+            resume_builder = lambda session_id: (
+                *self.command,
+                "--resume-session-id",
+                session_id,
+            )
         return LiveSession(
             self.command,
             environment=self.environment,
             cwd=self.cwd,
             timeout=timeout,
             desktop_session=self.session,
+            resume_command_builder=resume_builder,
         )
 
     build_live_session = live_session

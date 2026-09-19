@@ -1171,6 +1171,8 @@ class ClaudeCodeAdapter:
         strict_mcp_config: bool = False,
         allowed_tools: str | None = None,
         supervisor_data_dir: Path | None = None,
+        native_continuation: bool = False,
+        resume_session_id: str | None = None,
     ) -> None:
         self.claude = claude
         self.model = model
@@ -1191,6 +1193,8 @@ class ClaudeCodeAdapter:
         self.mcp_config = mcp_config
         self.strict_mcp_config = strict_mcp_config
         self.allowed_tools = allowed_tools
+        self.native_continuation = bool(native_continuation)
+        self._resume_session_id = resume_session_id
         self._stdio: Any = None
         self._temp: tempfile.TemporaryDirectory[str] | None = None
         self._review_guard_temp: tempfile.TemporaryDirectory[str] | None = None
@@ -1207,6 +1211,17 @@ class ClaudeCodeAdapter:
         # identity lives in the harness manifest and report, so the Claude
         # transport only needs a fresh valid session identifier here.
         self._session_id = str(uuid.uuid4())
+        for candidate in (self._resume_session_id, self._session_id):
+            if candidate is None:
+                continue
+            try:
+                parsed = uuid.UUID(candidate)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ClaudeAdapterError("Claude session identity must be a UUID") from exc
+            if str(parsed) != candidate:
+                raise ClaudeAdapterError("Claude session identity must use canonical UUID spelling")
+        if self._resume_session_id is not None and not self.native_continuation:
+            raise ClaudeAdapterError("--resume-session-id requires native continuation mode")
         self._stdout_buffer = b""
         self._before: dict[str, bytes] = {}
         self._facts: dict[str, object] = {}
@@ -1258,6 +1273,7 @@ class ClaudeCodeAdapter:
         strict_mcp_config: bool,
         mcp_allowed_tools: str,
         settings_path: Path | str | None = None,
+        resume_session_id: str | None = None,
     ) -> list[str]:
         """Return the exact Claude Code argv this adapter would spawn.
 
@@ -1276,13 +1292,22 @@ class ClaudeCodeAdapter:
         ]
         if self.allow_bash:
             allowed_tools.insert(0, "Bash")
+        effective_resume_id = resume_session_id if resume_session_id is not None else self._resume_session_id
+        if effective_resume_id is not None:
+            if not self.native_continuation:
+                raise ClaudeAdapterError("Claude --resume requires native continuation mode")
+            try:
+                parsed = uuid.UUID(effective_resume_id)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ClaudeAdapterError("Claude --resume session id must be a UUID") from exc
+            if str(parsed) != effective_resume_id:
+                raise ClaudeAdapterError("Claude --resume session id must use canonical UUID spelling")
+
         command = [
             str(self.claude),
             "-p",
             "--input-format",
             "stream-json",
-            "--session-id",
-            self._session_id,
             "--output-format",
             "stream-json",
             # Forward child messages with parent_tool_use_id so the run-scoped
@@ -1306,10 +1331,24 @@ class ClaudeCodeAdapter:
             str(mcp_config),
             "--permission-mode",
             "acceptEdits",
-            "--no-session-persistence",
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        if effective_resume_id is not None:
+            # Native continuation is intentionally a different CLI mode:
+            # --resume must never be paired with either --session-id or the
+            # fresh-run --no-session-persistence switch.
+            command[command.index("--input-format") + 2:command.index("--output-format")] = [
+                "--resume",
+                effective_resume_id,
+            ]
+        else:
+            command[command.index("--input-format") + 2:command.index("--output-format")] = [
+                "--session-id",
+                self._session_id,
+            ]
+            if not self.native_continuation:
+                command.extend(("--no-session-persistence",))
         # The supervisor retains the fresh capture and approved blueprint
         # outside the agent workspace. Grant only those content roots to
         # Claude, not the whole supervisor data directory, which may contain
@@ -1424,6 +1463,7 @@ class ClaudeCodeAdapter:
             mcp_config=mcp_config,
             strict_mcp_config=strict_mcp_config,
             mcp_allowed_tools=mcp_allowed_tools,
+            resume_session_id=self._resume_session_id,
         )
         environment = dict(os.environ)
         # The operator driver's provider key belongs to the harness process
@@ -1725,7 +1765,7 @@ class ClaudeCodeAdapter:
             events,
             redact_json_rpc=self._redact_json_rpc,
             redact_text=self._redact_text,
-            session_id=self._session_id,
+            session_id=getattr(self, "_resume_session_id", None) or self._session_id,
         )
         if result.last_mcp_call is not None:
             self._last_mcp_call = result.last_mcp_call
@@ -1899,6 +1939,24 @@ class ClaudeCodeAdapter:
             return result
         return self._finish_turn(events)
 
+    def resume_session(self, session_id: str | None = None) -> str:
+        """Select a persisted Claude session for the next process start."""
+
+        if not self.native_continuation:
+            raise ClaudeAdapterError("native Claude continuation is not enabled")
+        if not isinstance(session_id, str) or not session_id:
+            raise ClaudeAdapterError("native continuation requires a session id")
+        try:
+            parsed = uuid.UUID(session_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ClaudeAdapterError("native continuation session id must be a UUID") from exc
+        if str(parsed) != session_id:
+            raise ClaudeAdapterError("native continuation session id must use canonical UUID spelling")
+        if self._process is not None:
+            raise ClaudeAdapterError("cannot resume while a Claude process is active")
+        self._resume_session_id = session_id
+        return session_id
+
     def _approval_artifact(self, snapshot: Mapping[str, bytes]) -> bytes | None:
         """Expose the actual blueprint bytes to the operator approval gate."""
 
@@ -1965,6 +2023,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--allowedTools")
     parser.add_argument(
+        "--native-continuation",
+        action="store_true",
+        help="opt into persisted Claude sessions and the explicit --resume continuation seam",
+    )
+    parser.add_argument(
+        "--resume-session-id",
+        help="resume this canonical Claude UUID; requires --native-continuation",
+    )
+    parser.add_argument(
         "--no-bash",
         action="store_true",
         help="do not grant the Claude subprocess Bash access",
@@ -2000,6 +2067,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.supervisor_data_dir is not None
             else None
         ),
+        native_continuation=args.native_continuation,
+        resume_session_id=args.resume_session_id,
     )
 
     def terminate_on_signal(signum: int, _frame: Any) -> None:

@@ -25,6 +25,7 @@ from pathlib import Path
 import re
 import tempfile
 from typing import Literal
+import uuid
 
 
 class CheckpointError(RuntimeError):
@@ -283,6 +284,52 @@ class CheckpointIdentity:
 
 
 @dataclass(frozen=True)
+class ClaudeSessionIdentity:
+    """Credential-free Claude continuation identity.
+
+    Claude session ids are opaque provider identifiers, so the checkpoint
+    contract accepts only their canonical UUID spelling.  The execution
+    digest binds the provider session to the exact runner identity that
+    created it; a UUID from another run is never enough to resume.
+    """
+
+    session_id: str
+    execution_identity_digest: str
+
+    def __post_init__(self) -> None:
+        try:
+            parsed = uuid.UUID(self.session_id)
+        except (AttributeError, ValueError, TypeError) as exc:
+            raise CheckpointError("Claude session id must be a UUID") from exc
+        if str(parsed) != self.session_id:
+            raise CheckpointError("Claude session id must use canonical UUID spelling")
+        if not _SHA256_RE.fullmatch(self.execution_identity_digest):
+            raise CheckpointError("Claude session execution identity must be a sha256 hex digest")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the only session facts allowed in a checkpoint."""
+
+        return {
+            "session_id": self.session_id,
+            "execution_identity_digest": self.execution_identity_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ClaudeSessionIdentity":
+        payload = _require_mapping(value, "Claude session identity")
+        _require_exact_keys(
+            payload,
+            {"session_id", "execution_identity_digest"},
+            "Claude session identity",
+        )
+        if not isinstance(payload["session_id"], str) or not isinstance(
+            payload["execution_identity_digest"], str
+        ):
+            raise CheckpointError("Claude session identity fields are invalid")
+        return cls(payload["session_id"], payload["execution_identity_digest"])
+
+
+@dataclass(frozen=True)
 class CheckpointState:
     """One immutable turn-boundary checkpoint."""
 
@@ -297,6 +344,7 @@ class CheckpointState:
     identity_digest: str
     payload_ref: str | None = None
     payload_digest: str | None = None
+    native_session: ClaudeSessionIdentity | None = None
 
     def __post_init__(self) -> None:
         if not _CHECKPOINT_ID_RE.fullmatch(self.checkpoint_id):
@@ -313,6 +361,12 @@ class CheckpointState:
             raise CheckpointError("status must be complete or incomplete")
         if self.continuity_mode not in {"native-resume", "handoff"}:
             raise CheckpointError("continuity_mode is invalid")
+        if self.continuity_mode == "native-resume" and self.native_session is None:
+            raise CheckpointError("native-resume checkpoints require a Claude session identity")
+        if self.continuity_mode == "handoff" and self.native_session is not None:
+            raise CheckpointError("handoff checkpoints must not contain a Claude session identity")
+        if self.native_session is not None and self.native_session.execution_identity_digest != self.identity_digest:
+            raise CheckpointError("Claude session identity does not match checkpoint execution identity")
         for field_name, value in (
             ("turn_prefix_digest", self.turn_prefix_digest),
             ("identity_digest", self.identity_digest),
@@ -346,11 +400,17 @@ class CheckpointState:
             "identity_digest",
             "payload_ref",
             "payload_digest",
+            "native_session",
         }
-        _require_exact_keys(payload, expected, "checkpoint state")
+        # Checkpoint schema v2 handoff records predate native continuation.
+        # They remain readable as handoff evidence, but can never become a
+        # native resume because the required session identity is absent.
+        legacy = set(payload) == expected - {"native_session"}
+        if not legacy:
+            _require_exact_keys(payload, expected, "checkpoint state")
         if payload["schema"] != _SCHEMA_VERSION:
             raise CheckpointError("unsupported checkpoint state schema")
-        fields = {key: payload[key] for key in expected - {"schema"}}
+        fields = {key: payload.get(key) for key in expected - {"schema"}}
         if not isinstance(fields["checkpoint_id"], str) or not isinstance(fields["phase"], str):
             raise CheckpointError("checkpoint state string field is invalid")
         if fields["parent_id"] is not None and not isinstance(fields["parent_id"], str):
@@ -364,12 +424,19 @@ class CheckpointState:
         for key in ("turn_prefix_digest", "identity_digest"):
             if not isinstance(fields[key], str):
                 raise CheckpointError(f"{key} must be a string")
+        raw_native_session = fields.get("native_session")
+        native_session = (
+            ClaudeSessionIdentity.from_dict(raw_native_session)
+            if isinstance(raw_native_session, Mapping)
+            else None
+        )
+        fields["native_session"] = native_session
         return cls(**fields)  # type: ignore[arg-type]
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON object persisted in a state record and journal."""
 
-        return {
+        result = {
             "schema": _SCHEMA_VERSION,
             "checkpoint_id": self.checkpoint_id,
             "parent_id": self.parent_id,
@@ -383,6 +450,9 @@ class CheckpointState:
             "payload_ref": self.payload_ref,
             "payload_digest": self.payload_digest,
         }
+        if self.native_session is not None:
+            result["native_session"] = self.native_session.to_dict()
+        return result
 
 
 @dataclass(frozen=True)
@@ -646,6 +716,7 @@ class CheckpointStore:
 
 __all__ = [
     "canonical_digest",
+    "ClaudeSessionIdentity",
     "CheckpointError",
     "CheckpointIdentity",
     "CheckpointState",

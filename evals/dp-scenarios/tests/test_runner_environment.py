@@ -359,6 +359,62 @@ def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
             pass
 
 
+def test_native_continuation_requires_an_explicit_persistent_run_root(tmp_path: Path) -> None:
+    with pytest.raises(RunEnvironmentError, match="persistent run root"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            root=tmp_path,
+            native_continuation=True,
+        ):
+            pass
+
+
+def test_native_resume_rejects_unsupported_source_reuse_before_starting_it(
+    tmp_path: Path,
+) -> None:
+    # A mock source is process-owned and cannot be reconstructed from the
+    # credential-free checkpoint contract. Native resume must refuse it rather
+    # than silently creating a new URL/token and claiming continuity.
+    with pytest.raises(RunEnvironmentError, match="cannot reuse a mock source"):
+        with RunEnvironment(
+            make_scenario(),
+            pins(),
+            persistent_root=tmp_path / "native-run",
+            native_continuation=True,
+            native_resume=True,
+            route_config={"version": 1, "routes": []},
+        ):
+            pass
+
+
+def test_native_resume_rejects_a_persisted_environment_manifest_mismatch(
+    tmp_path: Path,
+) -> None:
+    scenario = make_scenario()
+    run_root = tmp_path / "native-run"
+    with RunEnvironment(
+        scenario,
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+    ):
+        pass
+
+    changed_pins = PinnedVersions(
+        "different-skills", "supervisor-1", "wheel-1", "mock-1", "claims-1"
+    )
+    with pytest.raises(RunEnvironmentError, match="replay manifest mismatch in skill_pack_version"):
+        with RunEnvironment(
+            scenario,
+            changed_pins,
+            persistent_root=run_root,
+            native_continuation=True,
+            native_resume=True,
+        ):
+            pass
+
+
 def test_pinned_driver_identity_is_written_to_the_manifest(tmp_path: Path) -> None:
     driver_pins = PinnedVersions(
         "skills-1",

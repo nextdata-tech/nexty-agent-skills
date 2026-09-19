@@ -67,10 +67,17 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
-from .checkpoint import CheckpointIdentity, CheckpointState, CheckpointStore, canonical_digest
+from .checkpoint import (
+    CheckpointIdentity,
+    CheckpointState,
+    CheckpointStore,
+    ClaudeSessionIdentity,
+    canonical_digest,
+)
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     ReplayRecording,
+    NativeResumeSession,
     ReplaySession,
     RecordingSession,
     WorkflowObserver,
@@ -1582,6 +1589,9 @@ class TierRunner:
         environment_root: str | Path | None = None,
         evidence_root: str | Path | None = None,
         checkpoint_root: str | Path | None = None,
+        native_continuation: bool = False,
+        native_resume_checkpoint: str | Path | None = None,
+        native_run_root: str | Path | None = None,
         budgets: RunBudgets | None = None,
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
@@ -1617,6 +1627,31 @@ class TierRunner:
         self.checkpoint_root = (
             Path(checkpoint_root).expanduser().resolve() if checkpoint_root is not None else None
         )
+        self.native_continuation = bool(native_continuation)
+        self.native_resume_checkpoint = (
+            Path(native_resume_checkpoint).expanduser().resolve()
+            if native_resume_checkpoint is not None
+            else None
+        )
+        self.native_run_root = (
+            Path(native_run_root).expanduser().resolve() if native_run_root is not None else None
+        )
+        if self.native_continuation:
+            if self.checkpoint_root is None and self.native_resume_checkpoint is None:
+                raise TierError("native continuation requires an explicit checkpoint root")
+            if self.native_run_root is None:
+                raise TierError("native continuation requires an explicit persistent run root")
+            if self.max_workers != 1:
+                raise TierError("native continuation requires --jobs 1")
+        if self.native_resume_checkpoint is not None:
+            if not self.native_continuation:
+                raise TierError("native resume requires native continuation mode")
+            if self.native_run_root is None:
+                raise TierError("native resume requires the original persistent run root")
+            if len(self.scenarios) != 1 or self.scenarios[0].epochs != 1:
+                raise TierError(
+                    "native resume is bounded to one explicitly selected scenario and epoch"
+                )
         self.budgets = budgets or RunBudgets()
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
@@ -1795,6 +1830,7 @@ class TierRunner:
                 "behavior": {
                     "skill_pack_version": manifest.skill_pack_version,
                     "agent_model_id": manifest.agent_model_id,
+                    "continuity_mode": "native-resume" if self.native_continuation else "handoff",
                 },
                 "substrate": {
                     "supervisor_version": manifest.supervisor_version,
@@ -1810,7 +1846,12 @@ class TierRunner:
                 },
             }
         )
-        store = CheckpointStore(self.checkpoint_root / scenario.id / f"epoch-{epoch}")
+        store_root = (
+            self.native_resume_checkpoint
+            if self.native_resume_checkpoint is not None
+            else self.checkpoint_root / scenario.id / f"epoch-{epoch}"
+        )
+        store = CheckpointStore(store_root)
         store.initialize(identity)
         return store
 
@@ -1818,6 +1859,8 @@ class TierRunner:
     def _checkpoint_callback(
         store: CheckpointStore,
         scenario: Scenario,
+        *,
+        native_continuation: bool = False,
     ) -> Callable[[ReplayRecording, int], None]:
         """Create a fail-closed callback for complete live turn snapshots."""
 
@@ -1826,6 +1869,17 @@ class TierRunner:
             payload = snapshot.to_report_dict()
             payload_ref, payload_digest = store.write_payload(checkpoint_id, payload)
             phase = scenario.script.phase_by_turn[turn_number]
+            native_session = None
+            if native_continuation:
+                session_id = snapshot.turns[-1].result.session_id if snapshot.turns else None
+                if not isinstance(session_id, str):
+                    raise TierError(
+                        "native continuation turn did not return a Claude session UUID"
+                    )
+                native_session = ClaudeSessionIdentity(
+                    session_id=session_id,
+                    execution_identity_digest=store.read_identity().digest,
+                )
             store.commit(
                 CheckpointState(
                     checkpoint_id=checkpoint_id,
@@ -1834,15 +1888,45 @@ class TierRunner:
                     next_turn=turn_number + 1,
                     phase=str(phase),
                     status="complete",
-                    continuity_mode="handoff",
+                    continuity_mode=("native-resume" if native_continuation else "handoff"),
                     turn_prefix_digest=canonical_digest(payload),
                     identity_digest=store.read_identity().digest,
                     payload_ref=payload_ref,
                     payload_digest=payload_digest,
+                    native_session=native_session,
                 )
             )
 
         return persist
+
+    def _native_resume_context(
+        self,
+        store: CheckpointStore,
+        scenario: Scenario,
+        identity: CheckpointIdentity,
+    ) -> tuple[ReplayRecording, str]:
+        """Load and validate the one local prefix used by native continuation."""
+
+        decision = store.decide(identity)
+        if decision.action != "resume" or decision.checkpoint is None:
+            raise TierError(f"native resume rejected: {decision.reason}")
+        checkpoint = decision.checkpoint
+        if checkpoint.native_session is None:
+            raise TierError("native resume checkpoint has no Claude session identity")
+        if checkpoint.native_session.execution_identity_digest != identity.digest:
+            raise TierError("native resume checkpoint execution identity does not match the current run")
+        if checkpoint.committed_turn >= len(scenario.script.turns):
+            raise TierError("native resume checkpoint has no next operator turn")
+        payload = store.read_payload(checkpoint)
+        if payload is None or canonical_digest(payload) != checkpoint.turn_prefix_digest:
+            raise TierError("native resume checkpoint prefix digest is invalid")
+        try:
+            recording = ReplayRecording.from_dict(payload)
+        except Exception as exc:
+            raise TierError("native resume checkpoint prefix is not replayable") from exc
+        if len(recording.turns) != checkpoint.committed_turn:
+            raise TierError("native resume checkpoint prefix length does not match its committed turn")
+        return recording, checkpoint.native_session.session_id
 
     def _run_scenario_summary(self, scenario: Scenario, *, pins: PinnedVersions) -> ScenarioSummary:
         """Run all epochs for one scenario and build its ordered summary."""
@@ -2048,11 +2132,18 @@ class TierRunner:
                 raise TierError(
                     f"knob plan returned an invalid workflow switch for {scenario.id} epoch {epoch}"
                 )
+            persistent_root = None
+            if self.native_continuation:
+                assert self.native_run_root is not None
+                persistent_root = self.native_run_root / scenario.id / f"epoch-{epoch}"
             with RunEnvironment(
                 scenario,
                 pins,
                 trial_index=epoch - 1,
                 root=self.environment_root,
+                persistent_root=persistent_root,
+                native_continuation=self.native_continuation,
+                native_resume=self.native_resume_checkpoint is not None,
                 run_id=run_id,
                 route_config=self.route_configs.get(scenario.id),
                 manifest_override=manifest_override,
@@ -2074,7 +2165,10 @@ class TierRunner:
                         "workflow switching requires workflow_restart_factory and workflow_observer"
                     )
                 artifact_root = environment.base_dir / "artifacts"
-                artifact_root.mkdir()
+                # A native resume reopens the persistent environment that
+                # owns the committed prefix and its artifact root. Fresh
+                # runs retain the collision guard supplied by ``mkdir()``.
+                artifact_root.mkdir(exist_ok=self.native_resume_checkpoint is not None)
                 # Resolve the operator surface before any transport exists.
                 # The consistency gate inside can refuse the run, and a live
                 # session started first would be a spawned agent process that
@@ -2094,12 +2188,31 @@ class TierRunner:
                     if recording is None
                     else None
                 )
+                resume_prefix: ReplayRecording | None = None
+                resume_session_id: str | None = None
+                if self.native_resume_checkpoint is not None:
+                    if checkpoint_store is None:
+                        raise TierError("native resume has no checkpoint store")
+                    resume_prefix, resume_session_id = self._native_resume_context(
+                        checkpoint_store,
+                        scenario,
+                        checkpoint_store.read_identity(),
+                    )
                 if recording is not None:
                     transport: Transport = ReplaySession(recording, artifact_root=artifact_root)
                 else:
                     assert self.session_factory is not None
+                    base_transport = _session_factory(self.session_factory, scenario, environment, epoch)
+                    if resume_prefix is not None and resume_session_id is not None:
+                        base_transport = NativeResumeSession(
+                            resume_prefix,
+                            base_transport,
+                            session_id=resume_session_id,
+                            artifact_root=artifact_root,
+                            source_root=environment.workspace_dir,
+                        )
                     transport = RecordingSession(
-                        _session_factory(self.session_factory, scenario, environment, epoch),
+                        base_transport,
                         artifact_root=artifact_root,
                         sandbox_home=environment.home,
                         workflow_switch=workflow_switch,
@@ -2110,10 +2223,15 @@ class TierRunner:
                             turn=turn,
                         ),
                         on_turn_complete=(
-                            self._checkpoint_callback(checkpoint_store, scenario)
+                            self._checkpoint_callback(
+                                checkpoint_store,
+                                scenario,
+                                native_continuation=self.native_continuation,
+                            )
                             if checkpoint_store is not None
                             else None
                         ),
+                        initial_recording=resume_prefix,
                     )
                 started = time.monotonic()
                 transport_closed = False

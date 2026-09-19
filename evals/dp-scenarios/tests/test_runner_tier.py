@@ -348,6 +348,69 @@ def test_live_tier_emits_secret_safe_chained_handoff_checkpoints(tmp_path: Path)
     )
 
 
+def test_native_continuation_persists_identity_and_resumes_only_the_next_turn(
+    tmp_path: Path,
+) -> None:
+    scenario = make_scenario("native-continuation", turns=2)
+    session_id = "00000000-0000-4000-8000-000000000001"
+    checkpoint_root = tmp_path / "checkpoints"
+    native_run_root = tmp_path / "native-runs"
+    (tmp_path / "first-environments").mkdir()
+    (tmp_path / "resumed-environments").mkdir()
+    def first_response(_message: object, index: int) -> TurnResult:
+        if index == 1:
+            return TurnResult(agent_message="first", session_id=session_id)
+        raise SessionError("bounded test interruption")
+
+    first_transport = InMemoryTransport(first_response)
+    with pytest.raises(SessionError, match="bounded test interruption"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=lambda *_args: first_transport,
+            environment_root=tmp_path / "first-environments",
+            checkpoint_root=checkpoint_root,
+            native_continuation=True,
+            native_run_root=native_run_root,
+        ).run()
+
+    checkpoint_store = CheckpointStore(checkpoint_root / scenario.id / "epoch-1")
+    checkpoint = checkpoint_store.latest()
+    assert checkpoint is not None
+    assert checkpoint.committed_turn == 1
+    assert checkpoint.continuity_mode == "native-resume"
+    assert checkpoint.native_session is not None
+    assert checkpoint.native_session.session_id == session_id
+    assert checkpoint.native_session.execution_identity_digest == checkpoint.identity_digest
+    persisted_native_session = json.loads(
+        (checkpoint_store.records_dir / "turn-000001.json").read_text(encoding="utf-8")
+    )["native_session"]
+    assert set(persisted_native_session) == {"session_id", "execution_identity_digest"}
+
+    resumed_transport = InMemoryTransport(
+        [TurnResult(agent_message="second", session_id=session_id)]
+    )
+    resumed = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: resumed_transport,
+        environment_root=tmp_path / "resumed-environments",
+        checkpoint_root=checkpoint_root,
+        native_continuation=True,
+        native_resume_checkpoint=checkpoint_store.root,
+        native_run_root=native_run_root,
+    ).run()
+
+    assert resumed.scenario_runs[0].transcript_turns == 2
+    assert resumed_transport.resumed == [session_id]
+    assert resumed_transport.started_fresh == []
+    assert resumed_transport.message_texts == ("Please continue 1.",)
+    assert checkpoint_store.latest() is not None
+    assert checkpoint_store.latest().committed_turn == 2  # type: ignore[union-attr]
+
+
 def recording_for(
     scenario: FakeScenario,
     responses: list[TurnResult],
@@ -596,6 +659,31 @@ def test_tier_rejects_invalid_max_workers(max_workers: object) -> None:
             pins=pins(),
             canary=clean_canary(),
             max_workers=max_workers,  # type: ignore[arg-type]
+        )
+
+
+def test_tier_rejects_native_continuation_without_its_persistent_contract() -> None:
+    with pytest.raises(TierError, match="persistent run root"):
+        TierRunner(
+            [],
+            pins=pins(),
+            canary=clean_canary(),
+            checkpoint_root=Path("checkpoints"),
+            native_continuation=True,
+        )
+
+
+def test_tier_rejects_native_resume_for_multiple_scenarios_or_epochs(tmp_path: Path) -> None:
+    scenarios = (make_scenario("native-one"), make_scenario("native-two"))
+    with pytest.raises(TierError, match="one explicitly selected scenario and epoch"):
+        TierRunner(
+            scenarios,
+            pins=pins(),
+            canary=clean_canary(),
+            checkpoint_root=tmp_path / "checkpoints",
+            native_continuation=True,
+            native_resume_checkpoint=tmp_path / "checkpoint",
+            native_run_root=tmp_path / "native-runs",
         )
 
 

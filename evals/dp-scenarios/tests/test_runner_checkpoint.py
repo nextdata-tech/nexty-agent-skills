@@ -11,6 +11,7 @@ from dp_scenarios.runner.checkpoint import (
     CheckpointIdentity,
     CheckpointState,
     CheckpointStore,
+    ClaudeSessionIdentity,
 )
 
 
@@ -36,6 +37,10 @@ def _state(identity: CheckpointIdentity, checkpoint_id: str = "cp-1", *, parent_
         continuity_mode="native-resume",
         turn_prefix_digest=f"{turn:064x}",
         identity_digest=identity.digest,
+        native_session=ClaudeSessionIdentity(
+            session_id="00000000-0000-4000-8000-000000000001",
+            execution_identity_digest=identity.digest,
+        ),
     )
 
 
@@ -176,7 +181,7 @@ def test_handoff_checkpoint_is_not_accepted_as_native_resume(tmp_path: Path) -> 
     identity = _identity()
     store = CheckpointStore(tmp_path)
     store.initialize(identity)
-    handoff = replace(_state(identity), continuity_mode="handoff")
+    handoff = replace(_state(identity), continuity_mode="handoff", native_session=None)
     store.commit(handoff)
 
     decision = store.decide(identity)
@@ -229,3 +234,41 @@ def test_obvious_secret_value_is_rejected_without_echoing_it() -> None:
             }
         )
     assert token not in str(error.value)
+
+
+def test_native_session_identity_persists_only_uuid_and_execution_digest(tmp_path: Path) -> None:
+    identity = _identity()
+    store = CheckpointStore(tmp_path)
+    store.initialize(identity)
+    state = _state(identity)
+    store.commit(state)
+
+    persisted = json.loads((store.records_dir / "cp-1.json").read_text(encoding="utf-8"))
+    assert persisted["native_session"] == {
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "execution_identity_digest": identity.digest,
+    }
+    assert set(persisted["native_session"]) == {"session_id", "execution_identity_digest"}
+
+
+def test_native_session_identity_rejects_non_uuid_or_mismatched_execution_digest() -> None:
+    with pytest.raises(CheckpointError, match="UUID"):
+        ClaudeSessionIdentity("not-a-session", "0" * 64)
+    with pytest.raises(CheckpointError, match="execution identity"):
+        ClaudeSessionIdentity("00000000-0000-4000-8000-000000000001", "not-a-digest")
+
+
+def test_native_checkpoint_requires_a_session_identity() -> None:
+    identity = _identity()
+    with pytest.raises(CheckpointError, match="session identity"):
+        CheckpointState(
+            checkpoint_id="cp-1",
+            parent_id=None,
+            committed_turn=1,
+            next_turn=2,
+            phase="construction",
+            status="complete",
+            continuity_mode="native-resume",
+            turn_prefix_digest="1" * 64,
+            identity_digest=identity.digest,
+        )

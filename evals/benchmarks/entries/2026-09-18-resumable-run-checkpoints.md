@@ -20,7 +20,8 @@ grouped execution identity, immutable complete-turn state, an atomic latest
 pointer, and an fsynced journal. It fails closed on identity drift, incomplete
 turns, broken prefix chains, and credential-like payloads. It distinguishes
 native continuation from report-only regrading; it does not call a replay a
-live success.
+live success. Native Claude continuation was added as a separate opt-in seam
+in the follow-up entry; this foundation entry makes no B1 claim.
 
 ## Evidence
 
@@ -30,5 +31,5 @@ tests in `evals/dp-scenarios/tests/test_runner_tier.py`. They cover canonical
 identity stability, strict mismatch handling, report-only grading changes,
 atomic persistence and journal recovery, incomplete checkpoints, prefix-chain
 validation, secret safety, and per-turn handoff checkpoint emission from a live
-runner. Native Claude session continuation and report-only regrading from a
-checkpoint remain follow-up work, so this entry makes no scenario claim.
+runner. The follow-up native continuation seam has its own focused harness
+tests and makes no scenario claim.

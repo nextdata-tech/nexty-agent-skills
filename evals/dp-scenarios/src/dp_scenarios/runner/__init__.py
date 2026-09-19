@@ -12,6 +12,7 @@ from .checkpoint import (
     CheckpointIdentity,
     CheckpointState,
     CheckpointStore,
+    ClaudeSessionIdentity,
     ResumeDecision,
     canonical_digest,
 )
@@ -20,6 +21,7 @@ from .qualification import QualificationDisposition, QualificationRecord, qualif
 from .session import (
     LiveSession,
     LiveTransport,
+    NativeResumeSession,
     RecordedSession,
     RecordedTurn,
     RecordingSession,
@@ -49,10 +51,12 @@ __all__ = [
     "CheckpointIdentity",
     "CheckpointState",
     "CheckpointStore",
+    "ClaudeSessionIdentity",
     "canonical_digest",
     "Environment",
     "LiveSession",
     "LiveTransport",
+    "NativeResumeSession",
     "MockSourceHandle",
     "PinnedVersions",
     "QualificationDisposition",

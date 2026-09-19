@@ -798,6 +798,9 @@ class RunEnvironment:
     pins: PinnedVersions
     trial_index: int = 0
     root: Path | None = None
+    persistent_root: Path | None = None
+    native_continuation: bool = False
+    native_resume: bool = False
     run_id: str | None = None
     route_config: object | None = None
     control_secret: str | None = None
@@ -826,6 +829,7 @@ class RunEnvironment:
     _home: Path | None = field(default=None, init=False, repr=False)
     _live_transport: Any | None = field(default=None, init=False, repr=False)
     _source_profile_path: Path | None = field(default=None, init=False, repr=False)
+    _base_dir: Path | None = field(default=None, init=False, repr=False)
 
     def __enter__(self) -> "RunEnvironment":
         return self.prepare()
@@ -841,8 +845,20 @@ class RunEnvironment:
     def prepare(self) -> "RunEnvironment":
         """Generate the fixture, anchor row zero, then start the optional source."""
 
-        if self._temporary is not None:
+        if self._temporary is not None or self._base_dir is not None:
             return self
+        if self.native_resume and not self.native_continuation:
+            raise EnvironmentError("native resume requires native continuation mode")
+        if self.native_continuation and self.persistent_root is None:
+            raise EnvironmentError(
+                "native continuation requires an explicit persistent run root"
+            )
+        if self.native_resume and (self.route_config is not None or _scenario_route_config(self.scenario) is not None):
+            raise EnvironmentError(
+                "native resume cannot reuse a mock source across processes; "
+                "the original environment must be resumed through an explicit "
+                "provider-owned persistent source contract"
+            )
         if self.staged_job_helper_dir is not None:
             helper = self.staged_job_helper_dir.expanduser().resolve()
             if not helper.is_dir():
@@ -853,43 +869,94 @@ class RunEnvironment:
         parent = str(self.root.expanduser().resolve()) if self.root is not None else None
         if parent is not None and not Path(parent).is_dir():
             raise EnvironmentError(f"environment root is not a directory: {parent}")
-        self._temporary = tempfile.TemporaryDirectory(prefix="dp-scenario-run-", dir=parent)
-        base = Path(self._temporary.name)
-        self._home = base / "home"
-        self._home.mkdir()
-        for relative in (".nxd", ".config", ".local/share", ".cache", ".state"):
-            (self._home / relative).mkdir(parents=True, exist_ok=True)
-        self._fixture = base / "fixture"
-        generation = self.scenario.generate_fixture(self._fixture)
-        self._generated_fixture_manifest = dict(generation.manifest)
-        base_instant = generation.manifest.get("base_instant")
-        if not isinstance(base_instant, str) or not base_instant:
-            self.close()
-            raise EnvironmentError("generated fixture manifest has no pinned base_instant")
-        try:
-            self._oracle = base / "oracle"
-            self._oracle.mkdir()
-            oracle_manifest = self._oracle / "fixture-manifest.json"
-            shutil.move(str(generation.manifest_path), str(oracle_manifest))
-            shutil.move(str(generation.gold_dir), str(self._oracle / "gold"))
-            (self._fixture / "fixture-manifest.json").write_text(
-                json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            contract = _evidence_contract(self.scenario)
-            if contract is not None:
-                workspace = self.workspace_dir
-                workspace.mkdir(parents=True, exist_ok=True)
-                (workspace / "scenario-evidence-contract.json").write_text(
-                    json.dumps(contract, indent=2, sort_keys=True) + "\n",
+        if self.persistent_root is not None:
+            base = self.persistent_root.expanduser().resolve()
+            if self.native_resume:
+                if not base.is_dir() or not (base / "native-run-contract.json").is_file():
+                    raise EnvironmentError(
+                        "native resume requires an existing persistent run root with "
+                        "native-run-contract.json"
+                    )
+            else:
+                if base.exists() and any(base.iterdir()):
+                    raise EnvironmentError(
+                        f"persistent native run root is not empty: {base}"
+                    )
+                base.mkdir(parents=True, exist_ok=True, mode=0o700)
+                base.chmod(0o700)
+            self._base_dir = base
+        else:
+            self._temporary = tempfile.TemporaryDirectory(prefix="dp-scenario-run-", dir=parent)
+            self._base_dir = Path(self._temporary.name)
+        base = self._base_dir
+        assert base is not None
+        if self.native_resume:
+            try:
+                contract = json.loads(
+                    (base / "native-run-contract.json").read_text(encoding="utf-8")
+                )
+                if not isinstance(contract, Mapping) or contract.get("schema") != 1:
+                    raise EnvironmentError("native run contract is invalid")
+                raw_manifest = contract.get("manifest")
+                if not isinstance(raw_manifest, Mapping):
+                    raise EnvironmentError("native run contract has no manifest")
+                # Preserve the persisted validation mode. A replay-created
+                # native contract must not become a live manifest merely
+                # because this process is loading it for continuation.
+                self.manifest_override = Manifest.from_mapping(raw_manifest, replay=None)
+                if self.manifest_override.scenario_id != self.scenario.id:
+                    raise EnvironmentError("native run contract scenario does not match the requested scenario")
+                self._home = base / "home"
+                self._fixture = base / "fixture"
+                self._oracle = base / "oracle"
+                required = (self._home, self._fixture, self._oracle / "gold")
+                if any(not path.exists() for path in required):
+                    raise EnvironmentError("native run root is missing its persisted environment")
+                self._generated_fixture_manifest = json.loads(
+                    (self._oracle / "fixture-manifest.json").read_text(encoding="utf-8")
+                )
+                if not isinstance(self._generated_fixture_manifest, Mapping):
+                    raise EnvironmentError("persisted fixture manifest is invalid")
+                base_instant = self.manifest_override.fixture_base_instant
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                self.close()
+                raise EnvironmentError("native run contract cannot be reused safely") from exc
+        else:
+            self._home = base / "home"
+            self._home.mkdir()
+            for relative in (".nxd", ".config", ".local/share", ".cache", ".state"):
+                (self._home / relative).mkdir(parents=True, exist_ok=True)
+            self._fixture = base / "fixture"
+            generation = self.scenario.generate_fixture(self._fixture)
+            self._generated_fixture_manifest = dict(generation.manifest)
+            base_instant = generation.manifest.get("base_instant")
+            if not isinstance(base_instant, str) or not base_instant:
+                self.close()
+                raise EnvironmentError("generated fixture manifest has no pinned base_instant")
+            try:
+                self._oracle = base / "oracle"
+                self._oracle.mkdir()
+                oracle_manifest = self._oracle / "fixture-manifest.json"
+                shutil.move(str(generation.manifest_path), str(oracle_manifest))
+                shutil.move(str(generation.gold_dir), str(self._oracle / "gold"))
+                (self._fixture / "fixture-manifest.json").write_text(
+                    json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
-        except Exception as error:
-            try:
-                self.close()
-            except BaseException as cleanup_error:
-                error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
-            raise
+                contract = _evidence_contract(self.scenario)
+                if contract is not None:
+                    workspace = self.workspace_dir
+                    workspace.mkdir(parents=True, exist_ok=True)
+                    (workspace / "scenario-evidence-contract.json").write_text(
+                        json.dumps(contract, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+            except Exception as error:
+                try:
+                    self.close()
+                except BaseException as cleanup_error:
+                    error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
+                raise
 
         route_config = self.route_config if self.route_config is not None else _scenario_route_config(self.scenario)
         requested_validation_mode = "live" if self.live_command is not None else "replay"
@@ -1150,6 +1217,20 @@ class RunEnvironment:
         self._manifest = manifest
         try:
             self._ledger = LedgerStore.open(base / "evidence.jsonl", manifest)
+            if self.native_continuation and not self.native_resume:
+                # The contract contains only manifest identity and paths. It
+                # is deliberately separate from checkpoint payloads and never
+                # carries provider credentials or session transcripts.
+                (base / "native-run-contract.json").write_text(
+                    json.dumps(
+                        {"schema": 1, "manifest": manifest.to_dict()},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
         except Exception as error:
             try:
                 self.close()
@@ -1162,9 +1243,9 @@ class RunEnvironment:
     def base_dir(self) -> Path:
         """Return the private run directory."""
 
-        if self._temporary is None:
+        if self._base_dir is None:
             raise EnvironmentError("environment has not been prepared")
-        return Path(self._temporary.name)
+        return self._base_dir
 
     @property
     def home(self) -> Path:
@@ -1226,9 +1307,9 @@ class RunEnvironment:
     def workspace_dir(self) -> Path:
         """Return the directory the agent process runs in."""
 
-        if self._temporary is None:
+        if self._base_dir is None:
             raise EnvironmentError("environment has not been prepared")
-        return self.live_cwd or (Path(self._temporary.name) / "agent")
+        return self.live_cwd or (self._base_dir / "agent")
 
     @property
     def source_profile_path(self) -> Path | None:
@@ -1281,10 +1362,10 @@ class RunEnvironment:
             raise EnvironmentError("environment has no live desktop transport")
         return self._live_transport
 
-    def live_session(self, *, timeout: float = 300.0) -> Any:
+    def live_session(self, *, timeout: float = 300.0, native_resume: bool = False) -> Any:
         """Build the turn-protocol session from the prepared desktop adapter."""
 
-        return self.live_transport.live_session(timeout=timeout)
+        return self.live_transport.live_session(timeout=timeout, native_resume=native_resume)
 
     def record_workflow_switch(
         self,
@@ -1314,7 +1395,7 @@ class RunEnvironment:
     def agent_environment(self) -> Mapping[str, str]:
         """Return only explicitly safe parent variables plus run-local values."""
 
-        if self._temporary is None:
+        if self._base_dir is None:
             raise EnvironmentError("environment has not been prepared")
         values = {
             key: value
@@ -1376,6 +1457,7 @@ class RunEnvironment:
         self._oracle = None
         self._generated_fixture_manifest = None
         self._home = None
+        self._base_dir = None
         self._source_profile_path = None
         if first_error is not None:
             raise first_error

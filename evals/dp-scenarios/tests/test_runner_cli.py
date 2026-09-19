@@ -100,9 +100,20 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
 def test_local_live_cli_accepts_an_explicit_stable_checkpoint_directory(tmp_path: Path) -> None:
     local_cli = _local_claude_cli()
     args = local_cli.build_parser().parse_args(
-        ["--checkpoint-dir", str(tmp_path / "stable-checkpoints")]
+        [
+            "--checkpoint-dir",
+            str(tmp_path / "stable-checkpoints"),
+            "--native-continuation",
+            "--native-run-root",
+            str(tmp_path / "native-runs"),
+            "--native-resume-checkpoint",
+            str(tmp_path / "stable-checkpoints" / "scenario" / "epoch-1"),
+        ]
     )
     assert args.checkpoint_dir == tmp_path / "stable-checkpoints"
+    assert args.native_continuation is True
+    assert args.native_run_root == tmp_path / "native-runs"
+    assert args.native_resume_checkpoint == tmp_path / "stable-checkpoints" / "scenario" / "epoch-1"
 
 
 def test_cli_rejects_workflow_switch_without_endpoint_callbacks(

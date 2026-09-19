@@ -247,8 +247,28 @@ credential-free, per-turn handoff checkpoint after each completed turn. The
 checkpoint identity binds the scenario, script, skill/model, supervisor,
 fixture, and grading pins; it fails closed on drift and never overwrites a
 checkpoint payload. This is durable handoff evidence, not native Claude
-continuation or a passing replay: those require an explicit resume policy and
-are not enabled by this flag yet.
+continuation, and it does not claim that B1 passes.
+
+Native Claude continuation is a separate, explicit opt-in seam. Add
+`--native-continuation --native-run-root <persistent-root>` to a fresh run
+(alongside `--checkpoint-dir`). The native checkpoint stores only a canonical
+Claude session UUID and the SHA-256 execution-identity digest. To resume one
+committed prefix, pass `--native-resume-checkpoint` together with the same
+persistent run root; the runner replays the committed operator prefix locally,
+verifies each message, and starts Claude at the next operator turn with
+`--resume <session-id>`, continuing through the remaining declared turns in
+that provider session. It never sends the committed prefix to Claude again or
+injects a synthetic opening prompt.
+Redacted touched-file observations are rehydrated only from the retained
+workspace and must match their committed hash and size; changed or missing
+files reject the resume.
+
+This seam is intentionally bounded: native continuation requires one scenario,
+one epoch, `--jobs 1`, the original persistent run root, and an unchanged
+checkpoint identity. Route-backed/mock-source environments are rejected on
+resume because their process-owned state cannot be safely reconstructed by
+this harness. Unsupported or mismatched combinations fail closed; the default
+fresh-run path and the handoff path are unchanged.
 
 ```bash
 uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
@@ -257,6 +277,19 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --allow-host-home --allow-host-home-bash \
   --output-dir /tmp/dp-scenarios-local-run \
   --checkpoint-dir /tmp/dp-scenarios-local-checkpoints
+```
+
+The native continuation flags are deliberately absent from this handoff
+example. A native run must name its persistent contract explicitly, for
+example:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --scenario capability-shortfall \
+  --output-dir /tmp/dp-scenarios-native-run \
+  --checkpoint-dir /tmp/dp-scenarios-native-checkpoints \
+  --native-continuation \
+  --native-run-root /tmp/dp-scenarios-native-root
 ```
 
 `--allow-host-home` exposes the host credential/configuration home to the agent
