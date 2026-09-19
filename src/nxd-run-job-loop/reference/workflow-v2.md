@@ -101,11 +101,16 @@ operations; do not add `fetch` or `paginate` steps to `proposal.transform`.
 
 If the prose `## Open Questions` section is empty, produce
 `proposal.open_questions: []`. It must not contain a prose placeholder such as
-`None`; `None` is not an open-question item.
+`None`; `None` is not an open-question item. Because the parser has no
+populated source block in that case, omit `v3:open_questions.text` from
+`provenance`, `source_spans`, and `echo.coverage`; only cover populated parser
+`.text` paths.
 
 When a term priority is omitted, materialize the platform default as `P3` with
 `platform_fixed` provenance and disclose that default; an explicitly written
-priority uses `explicit` provenance.
+priority uses `explicit` provenance. The natural-language echo must also name
+the affected term and say that it uses the platform-default `P3` priority;
+putting `P3` only in the typed term is not disclosure.
 
 Input expectation and output promise source entries each have exactly `id`,
 `model`, `guarantee`, `rule`, and `fields`. Compiled contracts each have exactly

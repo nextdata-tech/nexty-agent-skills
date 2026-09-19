@@ -402,6 +402,8 @@ def test_workflow_v2_reference_pins_empty_open_questions_and_transform_enum() ->
     normalized = " ".join(reference.split())
     assert "If the prose `## Open Questions` section is empty, produce `proposal.open_questions: []`." in normalized
     assert "must not contain a prose placeholder such as `None`" in normalized
+    assert "omit `v3:open_questions.text` from `provenance`, `source_spans`, and `echo.coverage`" in normalized
+    assert "echo must also name the affected term and say that it uses the platform-default `P3` priority" in normalized
 
     operations = _closed_v3_shapes()["transform_operations"]
     expected = (

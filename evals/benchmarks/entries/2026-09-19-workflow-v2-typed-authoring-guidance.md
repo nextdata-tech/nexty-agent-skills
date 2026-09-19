@@ -14,10 +14,12 @@ record: null
 No public eval scenario can distinguish these narrow authoring-guidance
 clarifications in a valid before/after arm. The change makes the existing v3
 contract explicit in the workflow reference: an empty Open Questions section
-maps to an empty typed list, and API fetching/pagination remains connector
-behavior rather than a typed transform operation. Running a broader workflow
-scenario would measure unrelated construction, provider, and grading behavior,
-so it would manufacture evidence for this documentation-only correction.
+maps to an empty typed list with no empty source-map entry, platform-fixed P3
+defaults must be stated in the echo, and API fetching/pagination remains
+connector behavior rather than a typed transform operation. Running a broader
+workflow scenario would measure unrelated construction, provider, and grading
+behavior, so it would manufacture evidence for this documentation-only
+correction.
 
 ## Evidence
 
