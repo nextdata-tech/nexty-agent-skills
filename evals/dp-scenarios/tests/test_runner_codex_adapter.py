@@ -357,7 +357,7 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     fake = tmp_path / "fake-codex"
     fake.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, sys, time\n"
+        "import json, os, sys, time\n"
         "thread_id = '00000000-0000-4000-8000-000000000020'\n"
         "for line in sys.stdin:\n"
         "    request = json.loads(line)\n"
@@ -371,6 +371,7 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         "        call = {'type': 'mcpToolCall', 'id': 'call-1', 'server': 'nxd-desktop', 'tool': 'inspect_run', 'arguments': {'run_id': 'run-1'}, 'status': 'inProgress'}\n"
         "        print(json.dumps({'method': 'item/started', 'params': {'item': call}}), flush=True)\n"
         "        print(json.dumps({'method': 'item/agentMessage/delta', 'params': {'delta': 'partial'}}), flush=True)\n"
+        "        os.close(2)\n"
         "        time.sleep(5)\n",
         encoding="utf-8",
     )

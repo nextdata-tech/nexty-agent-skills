@@ -450,6 +450,7 @@ class CodexAdapter:
         self._stdout_buffer = b""
         self._stdout_events: deque[Mapping[str, object]] = deque()
         self._stderr_tail: deque[str] = deque(maxlen=80)
+        self._stderr_open = True
         self._startup_events: list[Mapping[str, object]] = []
         self._codex_home_temp: tempfile.TemporaryDirectory[str] | None = None
         if resume_session_id is not None and not native_continuation:
@@ -652,7 +653,10 @@ class CodexAdapter:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Codex app-server response deadline expired")
-            ready, _, _ = select.select((process.stdout, process.stderr), (), (), remaining)
+            streams = [process.stdout]
+            if self._stderr_open:
+                streams.append(process.stderr)
+            ready, _, _ = select.select(streams, (), (), remaining)
             if not ready:
                 raise TimeoutError("Codex app-server response deadline expired")
             for stream in ready:
@@ -661,6 +665,11 @@ class CodexAdapter:
                     if chunk:
                         text = chunk.decode("utf-8", errors="replace")
                         self._stderr_tail.extend(text.splitlines())
+                    else:
+                        # EOF is readable forever on a pipe. Remove stderr
+                        # from the selector or a quiet provider child can
+                        # bypass the response deadline indefinitely.
+                        self._stderr_open = False
                     continue
                 chunk = os.read(process.stdout.fileno(), 65536)
                 if not chunk:
