@@ -9,6 +9,7 @@ from pathlib import Path
 import socket
 import stat
 import subprocess
+import sys
 from urllib.request import Request, urlopen
 
 import pytest
@@ -462,6 +463,52 @@ def test_native_source_contract_supports_fresh_and_resume_without_secrets(
         )
         assert "source-secret" not in state_text
         assert "control-secret" not in state_text
+
+
+def test_native_resume_accepts_a_pre_normalization_session_digest(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "native-run"
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        persistent_root=run_root,
+        native_continuation=True,
+        live_command=(sys.executable, "-c", "pass"),
+        supervisor_command=(sys.executable,),
+    ) as fresh:
+        current_digest = fresh.manifest.session_config_sha256
+        legacy_digest = fresh.live_transport.legacy_session_config_sha256
+        assert current_digest != legacy_digest
+        contract_path = run_root / "native-run-contract.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract.pop("session_config_digest_version")
+        contract["manifest"]["session_config_sha256"] = legacy_digest
+        contract_path.write_text(json.dumps(contract), encoding="utf-8")
+        evidence_path = run_root / "evidence.jsonl"
+        first = json.loads(evidence_path.read_text(encoding="utf-8").splitlines()[0])
+        first["manifest"]["session_config_sha256"] = legacy_digest
+        from dp_scenarios.ledger.store import _digest, _encode_record
+
+        unsigned = {key: value for key, value in first.items() if key != "chain_anchor"}
+        first["chain_anchor"] = _digest(_encode_record(unsigned))
+        evidence_path.write_text(json.dumps(first) + "\n", encoding="utf-8")
+        (run_root / "evidence.jsonl.anchor").write_text(
+            _digest(evidence_path.read_bytes()), encoding="ascii"
+        )
+
+    with RunEnvironment(
+        make_scenario(),
+        pins(),
+        root=tmp_path,
+        persistent_root=run_root,
+        native_continuation=True,
+        native_resume=True,
+        live_command=(sys.executable, "-c", "pass"),
+        supervisor_command=(sys.executable,),
+    ) as resumed:
+        assert resumed.manifest.session_config_sha256 == legacy_digest
 
 
 def test_native_resume_rejects_route_configuration_drift(tmp_path: Path) -> None:

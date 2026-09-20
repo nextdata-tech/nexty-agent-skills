@@ -399,7 +399,7 @@ def test_native_continuation_persists_identity_and_resumes_only_the_next_turn(
         environment_root=tmp_path / "resumed-environments",
         checkpoint_root=checkpoint_root,
         native_continuation=True,
-        native_resume_checkpoint=checkpoint_store.root,
+        native_resume_checkpoint=checkpoint_store.records_dir / "turn-000001.json",
         native_run_root=native_run_root,
     ).run()
 
@@ -409,6 +409,42 @@ def test_native_continuation_persists_identity_and_resumes_only_the_next_turn(
     assert resumed_transport.message_texts == ("Please continue 1.",)
     assert checkpoint_store.latest() is not None
     assert checkpoint_store.latest().committed_turn == 2  # type: ignore[union-attr]
+
+
+def test_native_continuation_does_not_commit_an_interrupted_turn(tmp_path: Path) -> None:
+    scenario = make_scenario("native-interruption", turns=2)
+    session_id = "00000000-0000-4000-8000-000000000002"
+    checkpoint_root = tmp_path / "checkpoints"
+    (tmp_path / "runs").mkdir()
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="first", session_id=session_id),
+            TurnResult(
+                agent_message="partial",
+                session_id=session_id,
+                turn_timed_out=True,
+                failure_reason="child_no_terminal_result",
+            ),
+        ]
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: transport,
+        environment_root=tmp_path / "runs",
+        checkpoint_root=checkpoint_root,
+        native_continuation=True,
+        native_run_root=tmp_path / "native-runs",
+    ).run()
+
+    assert result.scenario_runs[0].terminal_state is EngineTerminalState.TURN_TIMEOUT
+    store = CheckpointStore(checkpoint_root / scenario.id / "epoch-1")
+    latest = store.latest()
+    assert latest is not None
+    assert latest.committed_turn == 1
+    assert not (store.records_dir / "turn-000002.json").exists()
 
 
 def recording_for(

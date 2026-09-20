@@ -799,6 +799,7 @@ class CheckpointStore:
         expected_identity: CheckpointIdentity,
         *,
         mode: ResumeMode = "native-resume",
+        checkpoint_id: str | None = None,
     ) -> ResumeDecision:
         """Compare a caller-supplied identity before resuming or regrading.
 
@@ -822,9 +823,15 @@ class CheckpointStore:
             )
         if "grading" in differences and mode != "report-only":
             return ResumeDecision("reject", None, "grading identity differs; use report-only explicitly")
-        checkpoint = self.latest()
+        checkpoint = self.latest() if checkpoint_id is None else self._checkpoint_by_id(checkpoint_id)
         if checkpoint is None:
-            return ResumeDecision("reject", None, "no checkpoint is available")
+            return ResumeDecision(
+                "reject",
+                None,
+                "requested checkpoint is unavailable"
+                if checkpoint_id is not None
+                else "no checkpoint is available",
+            )
         if checkpoint.identity_digest != stored_identity.digest:
             return ResumeDecision("reject", None, "checkpoint identity digest does not match the store")
         if checkpoint.status != "complete":
@@ -838,6 +845,19 @@ class CheckpointStore:
                 f"checkpoint requires {checkpoint.continuity_mode}; native resume is unavailable",
             )
         return ResumeDecision("resume", checkpoint, "complete checkpoint accepted for native resume")
+
+    def _checkpoint_by_id(self, checkpoint_id: str) -> CheckpointState | None:
+        """Read one requested checkpoint and validate its committed prefix."""
+
+        if not _CHECKPOINT_ID_RE.fullmatch(checkpoint_id):
+            return None
+        try:
+            state = CheckpointState.from_dict(
+                _read_json(self.records_dir / f"{checkpoint_id}.json")
+            )  # type: ignore[arg-type]
+        except CheckpointError:
+            return None
+        return state if self._valid_chain(state) else None
 
     def _read_latest_pointer(self) -> Mapping[str, object] | None:
         if not self.latest_path.exists():

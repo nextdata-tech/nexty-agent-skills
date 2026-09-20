@@ -53,6 +53,7 @@ NATIVE_SOURCE_STATE_FILENAME = "native-source-state.json"
 NATIVE_SOURCE_CONTRACT_SCHEMA = 1
 NATIVE_SOURCE_STATE_SCHEMA = 1
 NATIVE_SOURCE_STATE_MODEL = "runtime-v1"
+NATIVE_SESSION_DIGEST_VERSION = 2
 API_SOURCE_CREDENTIAL_MAPPING = f"{SOURCE_SERVICE_NAME}={SOURCE_CREDENTIAL_ENV}"
 _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
 _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
@@ -1106,6 +1107,7 @@ class RunEnvironment:
     _live_transport: Any | None = field(default=None, init=False, repr=False)
     _source_profile_path: Path | None = field(default=None, init=False, repr=False)
     _base_dir: Path | None = field(default=None, init=False, repr=False)
+    _native_session_digest_version: int = field(default=2, init=False, repr=False)
 
     def __enter__(self) -> "RunEnvironment":
         return self.prepare()
@@ -1170,6 +1172,14 @@ class RunEnvironment:
                 raw_manifest = contract.get("manifest")
                 if not isinstance(raw_manifest, Mapping):
                     raise EnvironmentError("native run contract has no manifest")
+                digest_version = contract.get("session_config_digest_version", 1)
+                if (
+                    isinstance(digest_version, bool)
+                    or not isinstance(digest_version, int)
+                    or digest_version not in {1, NATIVE_SESSION_DIGEST_VERSION}
+                ):
+                    raise EnvironmentError("native run contract has an unsupported session digest version")
+                self._native_session_digest_version = digest_version
                 # Preserve the persisted validation mode. A replay-created
                 # native contract must not become a live manifest merely
                 # because this process is loading it for continuation.
@@ -1491,7 +1501,35 @@ class RunEnvironment:
                 if self._live_transport is None and field_name in REPLAY_SESSION_PATH_FIELDS:
                     continue
                 if getattr(override, field_name) != getattr(manifest, field_name):
-                    error = EnvironmentError(f"replay manifest mismatch in {field_name}")
+                    legacy_session_digest = (
+                        getattr(self._live_transport, "legacy_session_config_sha256", None)
+                        if self._live_transport is not None
+                        else None
+                    )
+                    if (
+                        self.native_resume
+                        and field_name == "session_config_sha256"
+                        and self._native_session_digest_version == 1
+                    ):
+                        # A checkpoint created before the session-digest
+                        # normalization has no retained record of the host
+                        # PATH/locale values that fed its hash.  The rest of
+                        # the native contract and checkpoint identity still
+                        # bind this continuation; accept that legacy hash only
+                        # for an explicitly version-1 contract, then new
+                        # checkpoints use the normalized digest below.
+                        continue
+                    error = EnvironmentError(
+                        f"replay manifest mismatch in {field_name}: "
+                        f"expected={getattr(override, field_name)!r} "
+                        f"actual={getattr(manifest, field_name)!r}"
+                        + (
+                            f" legacy={legacy_session_digest!r}"
+                            if field_name == "session_config_sha256"
+                            and legacy_session_digest is not None
+                            else ""
+                        )
+                    )
                     try:
                         self.close()
                     except BaseException as cleanup_error:
@@ -1507,7 +1545,11 @@ class RunEnvironment:
                 # carries provider credentials or session transcripts.
                 (base / "native-run-contract.json").write_text(
                     json.dumps(
-                        {"schema": 1, "manifest": manifest.to_dict()},
+                        {
+                            "schema": 1,
+                            "session_config_digest_version": NATIVE_SESSION_DIGEST_VERSION,
+                            "manifest": manifest.to_dict(),
+                        },
                         ensure_ascii=False,
                         sort_keys=True,
                         separators=(",", ":"),

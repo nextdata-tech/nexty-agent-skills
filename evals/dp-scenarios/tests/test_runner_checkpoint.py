@@ -340,6 +340,22 @@ def test_first_checkpoint_must_start_at_turn_one(tmp_path: Path) -> None:
         store.commit(_state(identity, turn=0))
 
 
+def test_decide_can_select_an_older_valid_checkpoint(tmp_path: Path) -> None:
+    identity = _identity()
+    store = CheckpointStore(tmp_path)
+    store.initialize(identity)
+    first = _state(identity, checkpoint_id="cp-1", turn=1)
+    second = _state(identity, checkpoint_id="cp-2", parent_id="cp-1", turn=2)
+    store.commit(first)
+    store.commit(second)
+
+    decision = store.decide(identity, checkpoint_id="cp-1")
+
+    assert decision.action == "resume"
+    assert decision.checkpoint == first
+    assert store.latest() == second
+
+
 def test_prefix_digest_binds_payload_chain_and_script_metadata() -> None:
     identity = _identity()
     payload = {"turns": [], "metadata": {"touched_file_contents_redacted": True}}

@@ -1820,11 +1820,21 @@ class TierRunner:
             return None
         manifest = environment.manifest
         identity = self._checkpoint_identity(manifest, epoch)
-        store_root = (
-            self.native_resume_checkpoint
-            if self.native_resume_checkpoint is not None
-            else self.checkpoint_root / scenario.id / f"epoch-{epoch}"
-        )
+        if self.native_resume_checkpoint is not None:
+            # The CLI accepts either the checkpoint store or one committed
+            # checkpoint JSON.  Records live below the store's ``checkpoints``
+            # directory, while identity/latest/journal files live at the
+            # store root, so resolve a record file two levels upward.
+            resume_path = self.native_resume_checkpoint
+            store_root = (
+                resume_path.parent.parent
+                if resume_path.is_file() and resume_path.parent.name == "checkpoints"
+                else resume_path.parent
+                if resume_path.is_file()
+                else resume_path
+            )
+        else:
+            store_root = self.checkpoint_root / scenario.id / f"epoch-{epoch}"
         store = CheckpointStore(store_root)
         store.initialize(identity)
         return store
@@ -1871,6 +1881,15 @@ class TierRunner:
         """Create a fail-closed callback for complete live turn snapshots."""
 
         def persist(snapshot: ReplayRecording, turn_number: int) -> None:
+            # A timeout or environment wedge is an interruption boundary, not
+            # a committed prefix.  Replaying such a result would make the
+            # operator stop before it ever sent the next turn, while marking
+            # the checkpoint complete would let native resume accept it.
+            if snapshot.turns and (
+                snapshot.turns[-1].result.turn_timed_out
+                or snapshot.turns[-1].result.environment_wedged
+            ):
+                return
             checkpoint_id = f"turn-{turn_number:06d}"
             payload = snapshot.to_report_dict()
             payload_ref, payload_digest = store.write_payload(checkpoint_id, payload)
@@ -1931,7 +1950,12 @@ class TierRunner:
     ) -> tuple[ReplayRecording, str]:
         """Load and validate the one local prefix used by native continuation."""
 
-        decision = store.decide(expected_identity=identity)
+        checkpoint_id = None
+        if self.native_resume_checkpoint is not None:
+            resume_path = self.native_resume_checkpoint
+            if resume_path.is_file() and resume_path.parent.name == "checkpoints":
+                checkpoint_id = resume_path.stem
+        decision = store.decide(expected_identity=identity, checkpoint_id=checkpoint_id)
         if decision.action != "resume" or decision.checkpoint is None:
             raise TierError(f"native resume rejected: {decision.reason}")
         checkpoint = decision.checkpoint
