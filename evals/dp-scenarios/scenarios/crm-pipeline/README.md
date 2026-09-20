@@ -44,6 +44,10 @@ ask for adjudication; they do not authorize remediation on their own.
   admission. The answer is matched only when the agent reports
   both a review and a finding, so it is not a fixed-position approval and is
   not the initial blueprint approval.
+- The final phase-7 turn is a narrow adjudication for a repeated-429 finding. It
+  authorizes only bounded retry/backoff with an explicit failure after
+  exhaustion, followed by reset, recapture, and a fresh independent review; it
+  does not authorize unrelated behavior changes or publication before review.
 
 The answer sheet supplies the current-snapshot scope, profile location, source
 fields, access behavior, history limitation, privacy decision, and closed stage

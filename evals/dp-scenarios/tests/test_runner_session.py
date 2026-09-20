@@ -23,6 +23,7 @@ from dp_scenarios.runner.session import (
     turn_result_to_dict,
 )
 from dp_scenarios.operator.transport import InMemoryTransport, OperatorMessage
+from dp_scenarios.runner.checkpoint import CheckpointError, CheckpointStore
 
 
 @pytest.mark.parametrize("count", [True, 1.5, "1"])
@@ -311,6 +312,63 @@ def test_native_resume_hydrates_redacted_prefix_files_from_the_retained_workspac
             session_id="00000000-0000-4000-8000-000000000001",
             source_root=workspace,
         )
+
+
+def test_native_resume_hydrates_from_an_immutable_checkpoint_snapshot(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "agent"
+    target = workspace / "closure" / "spec.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"later-turn-content")
+    original = b"checkpoint-prefix-content"
+    prefix = ReplayRecording(
+        (
+            RecordedTurn(
+                OperatorMessage("first"),
+                TurnResult(
+                    files_touched=(
+                        TouchedFile(
+                            "closure/spec.json",
+                            {
+                                "redacted": True,
+                                "sha256": hashlib.sha256(original).hexdigest(),
+                                "size_bytes": len(original),
+                            },
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+    store = CheckpointStore(tmp_path / "checkpoints")
+    store.write_source_snapshot("turn-000001", ((1, 0, "closure/spec.json", original),))
+
+    source_snapshot = store.read_source_snapshot("turn-000001")
+    assert source_snapshot == {(1, 0): ("closure/spec.json", original)}
+    provider = InMemoryTransport([TurnResult(agent_message="next")])
+    resumed = NativeResumeSession(
+        prefix,
+        provider,
+        session_id="00000000-0000-4000-8000-000000000001",
+        source_root=workspace,
+        source_snapshot=source_snapshot,
+    )
+
+    resumed.start_fresh_session()
+    assert resumed.send_message("first").files_touched[0].content == original
+
+    private_file = (
+        tmp_path
+        / "checkpoints"
+        / "source-snapshots"
+        / "turn-000001"
+        / "files"
+        / "000000.bin"
+    )
+    private_file.write_bytes(b"tampered")
+    with pytest.raises(CheckpointError, match="bytes changed"):
+        store.read_source_snapshot("turn-000001")
 
 
 def test_replay_rejects_touched_file_escape(tmp_path: Path) -> None:

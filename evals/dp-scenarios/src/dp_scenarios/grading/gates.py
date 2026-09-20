@@ -475,6 +475,7 @@ def gate_intake(
                 and successful(call)
                 and isinstance((arguments := call.get("arguments")), Mapping)
                 and isinstance(arguments.get("workflow"), str)
+                and arguments["workflow"] in publication_workflows
                 and isinstance((result := call.get("result")), Mapping)
                 and isinstance((content := result.get("content")), Mapping)
                 and content.get("workflow") == arguments["workflow"]
@@ -512,6 +513,7 @@ def gate_intake(
                     not isinstance(parameters, Mapping)
                     or parameters.get("approved") is not True
                     or not isinstance(workflow, str)
+                    or workflow not in publication_workflows
                     or not isinstance(content, Mapping)
                     or content.get("workflow") != workflow
                 ):
@@ -1915,8 +1917,22 @@ def _successful_check_positions(
             not isinstance(requirement_id, str)
             or not requirement_id
             or _normalized_workflow(arguments.get("workflow")) != build.workflow
-            or _normalized_workflow(content.get("workflow")) != build.workflow
         ):
+            continue
+        # The supervisor's workflow-operation response carries the canonical
+        # workflow on ``operation.workflow``.  Some responses also project it
+        # at the content root, but that projection is not part of the v3
+        # response contract.  Bind to the operation when the root field is
+        # absent rather than dropping an otherwise successful validation.
+        response_workflow = _normalized_workflow(content.get("workflow"))
+        if response_workflow is None:
+            operation = content.get("operation")
+            response_workflow = (
+                _normalized_workflow(operation.get("workflow"))
+                if isinstance(operation, Mapping)
+                else None
+            )
+        if response_workflow != build.workflow:
             continue
         requirements = content.get("requirements")
         if not isinstance(requirements, Sequence) or isinstance(
@@ -2647,13 +2663,30 @@ def gate_construction(
 
     check_observed = False
     stale_after_check = False
-    if build is not None and final_dispatch is not None:
+    if build is not None:
+        # Self-check evidence is independent of whether the review ledger
+        # paired successfully.  Keep the last observed, input-bound reviewer
+        # dispatch as the ordering boundary when the ledger is malformed;
+        # otherwise one bad review-record shape would also misdiagnose an
+        # already observed supervisor validation as ``self_check_not_observed``.
+        review_boundary = final_dispatch
+        if review_boundary is None:
+            prior_dispatches = tuple(
+                dispatch.position
+                for dispatch in closure_dispatches
+                if dispatch.position < build.position
+            )
+            if prior_dispatches:
+                review_boundary = max(prior_dispatches)
+    else:
+        review_boundary = None
+    if build is not None and review_boundary is not None:
         candidates = tuple(
             position
             for position in _successful_check_positions(
                 observations, build, desktop_server_name=desktop_server_name
             )
-            if final_dispatch < position < build.position
+            if review_boundary < position < build.position
         )
         if candidates:
             credited_check = max(candidates)

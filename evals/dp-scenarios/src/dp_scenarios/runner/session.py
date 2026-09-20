@@ -574,6 +574,7 @@ class ReplaySession:
 def _hydrate_report_safe_recording(
     recording: ReplayRecording,
     source_root: str | Path | None,
+    source_snapshot: Mapping[tuple[int, int], tuple[str, bytes]] | None = None,
 ) -> ReplayRecording:
     """Recover redacted touched bytes from the retained private workspace.
 
@@ -584,7 +585,7 @@ def _hydrate_report_safe_recording(
     resume instead of silently dropping evidence.
     """
 
-    if source_root is None:
+    if source_root is None and source_snapshot is None:
         if any(
             isinstance(touched.content, Mapping) and touched.content.get("redacted") is True
             for turn in recording.turns
@@ -594,11 +595,11 @@ def _hydrate_report_safe_recording(
                 "native checkpoint with redacted touched bytes requires the retained workspace"
             )
         return recording
-    root = Path(source_root).expanduser().resolve()
+    root = Path(source_root).expanduser().resolve() if source_root is not None else None
     turns: list[RecordedTurn] = []
-    for turn in recording.turns:
+    for turn_index, turn in enumerate(recording.turns, start=1):
         files: list[TouchedFile] = []
-        for touched in turn.result.files_touched:
+        for file_index, touched in enumerate(turn.result.files_touched):
             content = touched.content
             if isinstance(content, Mapping) and content.get("redacted") is True:
                 digest = content.get("sha256")
@@ -611,16 +612,26 @@ def _hydrate_report_safe_recording(
                     or size < 0
                 ):
                     raise SessionError("native checkpoint touched-file commitment is invalid")
-                relative = Path(touched.path)
-                if relative.is_absolute():
-                    raise SessionError("native checkpoint touched-file path must be relative")
-                source = (root / relative).resolve()
-                if root not in source.parents and source != root:
-                    raise SessionError("native checkpoint touched-file path escapes the workspace")
-                try:
-                    raw = source.read_bytes()
-                except OSError as exc:
-                    raise SessionError("native checkpoint touched-file bytes are unavailable") from exc
+                if source_snapshot is not None:
+                    snapshot_entry = source_snapshot.get((turn_index, file_index))
+                    if snapshot_entry is None:
+                        raise SessionError("native checkpoint source snapshot is incomplete")
+                    snapshot_path, raw = snapshot_entry
+                    if snapshot_path != str(touched.path):
+                        raise SessionError("native checkpoint source snapshot path changed")
+                else:
+                    if root is None:
+                        raise SessionError("native checkpoint retained workspace is unavailable")
+                    relative = Path(touched.path)
+                    if relative.is_absolute():
+                        raise SessionError("native checkpoint touched-file path must be relative")
+                    source = (root / relative).resolve()
+                    if root not in source.parents and source != root:
+                        raise SessionError("native checkpoint touched-file path escapes the workspace")
+                    try:
+                        raw = source.read_bytes()
+                    except OSError as exc:
+                        raise SessionError("native checkpoint touched-file bytes are unavailable") from exc
                 if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
                     raise SessionError("native checkpoint touched-file bytes changed")
                 content = raw
@@ -651,6 +662,7 @@ class NativeResumeSession:
         session_id: str,
         artifact_root: str | Path | None = None,
         source_root: str | Path | None = None,
+        source_snapshot: Mapping[tuple[int, int], tuple[str, bytes]] | None = None,
     ) -> None:
         try:
             parsed = uuid.UUID(session_id)
@@ -659,7 +671,7 @@ class NativeResumeSession:
         if str(parsed) != session_id:
             raise SessionError("native resume session id must use canonical UUID spelling")
         self.prefix = prefix if isinstance(prefix, ReplayRecording) else ReplayRecording.read(prefix)
-        self.prefix = _hydrate_report_safe_recording(self.prefix, source_root)
+        self.prefix = _hydrate_report_safe_recording(self.prefix, source_root, source_snapshot)
         self._replay = ReplaySession(self.prefix, artifact_root=artifact_root)
         self.transport = transport
         self.session_id = session_id

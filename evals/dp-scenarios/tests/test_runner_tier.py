@@ -170,6 +170,17 @@ def driver_pins() -> PinnedVersions:
     )
 
 
+def test_source_evidence_uses_the_final_complete_pagination_attempt() -> None:
+    pages = [
+        {"next_cursor": "present", "rows": [{"id": "old-1"}]},
+        {"next_cursor": None, "rows": [{"id": "old-2"}]},
+        {"next_cursor": "present", "rows": [{"id": "new-1"}]},
+        {"next_cursor": None, "rows": [{"id": "new-2"}]},
+    ]
+
+    assert tier_module._latest_paginated_pages(pages) == pages[2:]
+
+
 def clean_canary() -> CanaryResult:
     return CanaryResult(Verdict("clean", (), ()), claims_hash="claims-1")
 
@@ -359,7 +370,11 @@ def test_native_continuation_persists_identity_and_resumes_only_the_next_turn(
     (tmp_path / "resumed-environments").mkdir()
     def first_response(_message: object, index: int) -> TurnResult:
         if index == 1:
-            return TurnResult(agent_message="first", session_id=session_id)
+            return TurnResult(
+                agent_message="first",
+                session_id=session_id,
+                files_touched=(TouchedFile("closure/spec.py", b"checkpoint-prefix"),),
+            )
         raise SessionError("bounded test interruption")
 
     first_transport = InMemoryTransport(first_response)
@@ -383,6 +398,9 @@ def test_native_continuation_persists_identity_and_resumes_only_the_next_turn(
     assert checkpoint.native_session is not None
     assert checkpoint.native_session.session_id == session_id
     assert checkpoint.native_session.execution_identity_digest == checkpoint.identity_digest
+    assert checkpoint_store.read_source_snapshot("turn-000001") == {
+        (1, 0): ("closure/spec.py", b"checkpoint-prefix")
+    }
     persisted_native_session = json.loads(
         (checkpoint_store.records_dir / "turn-000001.json").read_text(encoding="utf-8")
     )["native_session"]

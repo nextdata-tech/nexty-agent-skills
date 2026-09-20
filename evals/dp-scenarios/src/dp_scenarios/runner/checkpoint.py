@@ -22,6 +22,7 @@ import json
 import math
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import tempfile
 from typing import Literal
@@ -43,6 +44,9 @@ _IDENTITY_GROUPS: tuple[IdentityGroup, ...] = (
     "grading",
 )
 _SCHEMA_VERSION = 2
+_SOURCE_SNAPSHOT_SCHEMA = 1
+_SOURCE_SNAPSHOT_DIR = "source-snapshots"
+_SOURCE_SNAPSHOT_MANIFEST = "manifest.json"
 _SECRET_KEY_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
 _SECRET_WORDS = frozenset(
     {
@@ -288,6 +292,63 @@ def _validate_payload_ref(value: str) -> None:
     path = Path(value)
     if not value or path.is_absolute() or ".." in path.parts:
         raise CheckpointError("payload_ref must be a non-empty relative path")
+
+
+def _validate_source_snapshot_file_ref(value: str) -> None:
+    if not value or "\\" in value:
+        raise CheckpointError("checkpoint source snapshot path is invalid")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
+        raise CheckpointError("checkpoint source snapshot path is invalid")
+    if path.name == _SOURCE_SNAPSHOT_MANIFEST:
+        raise CheckpointError("checkpoint source snapshot path is reserved")
+
+
+def _validate_source_snapshot_content(path: str, _content: bytes) -> None:
+    """Reject obvious credential files before private bytes are retained.
+
+    Do not scan ordinary source text for credential-shaped examples: closure
+    code commonly contains literal ``Bearer``/environment-name strings that
+    are not credential values.  The trusted supervisor credential is not in
+    the agent workspace; path-level exclusion is the safe boundary here.
+    """
+
+    names = {part.casefold() for part in PurePosixPath(path).parts}
+    if any(
+        name == ".env"
+        or name.startswith(".env.")
+        or name in {"credentials", "credentials.json", "secrets", "secrets.json", "keychain"}
+        for name in names
+    ):
+        raise CheckpointError("checkpoint source snapshot refuses environment files")
+
+
+def _private_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _read_json(path: Path) -> object:
@@ -655,6 +716,159 @@ class CheckpointStore:
             return payload_ref, payload_digest
         _atomic_write_json(payload_path, validated)
         return payload_ref, payload_digest
+
+    def _source_snapshot_root(self, checkpoint_id: str) -> Path:
+        if not _CHECKPOINT_ID_RE.fullmatch(checkpoint_id):
+            raise CheckpointError("checkpoint_id is invalid")
+        return self.root / _SOURCE_SNAPSHOT_DIR / checkpoint_id
+
+    def write_source_snapshot(
+        self,
+        checkpoint_id: str,
+        files: Sequence[tuple[int, int, str, bytes]],
+    ) -> None:
+        """Persist the private bytes needed to replay one checkpoint prefix.
+
+        The report payload keeps only touched-file digests.  Those digests are
+        insufficient when a later turn edits the retained agent workspace,
+        so native continuation also keeps an owner-readable, mode-0700 source
+        snapshot outside the report payload.  The snapshot is addressed by
+        checkpoint id and is never copied into evidence artifacts.
+        """
+
+        snapshot_root = self._source_snapshot_root(checkpoint_id)
+        entries: list[dict[str, object]] = []
+        seen: set[tuple[int, int]] = set()
+        for entry_index, item in enumerate(files):
+            if len(item) != 4:
+                raise CheckpointError("checkpoint source snapshot entry is invalid")
+            turn_index, file_index, path, content = item
+            if (
+                not isinstance(turn_index, int)
+                or isinstance(turn_index, bool)
+                or turn_index < 1
+                or not isinstance(file_index, int)
+                or isinstance(file_index, bool)
+                or file_index < 0
+                or not isinstance(path, str)
+                or not isinstance(content, bytes)
+            ):
+                raise CheckpointError("checkpoint source snapshot entry is invalid")
+            _validate_source_snapshot_file_ref(path)
+            _validate_source_snapshot_content(path, content)
+            key = (turn_index, file_index)
+            if key in seen:
+                raise CheckpointError("checkpoint source snapshot has duplicate file entries")
+            seen.add(key)
+            file_ref = f"files/{entry_index:06d}.bin"
+            entries.append(
+                {
+                    "turn_index": turn_index,
+                    "file_index": file_index,
+                    "path": path,
+                    "file_ref": file_ref,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size_bytes": len(content),
+                }
+            )
+
+        manifest: dict[str, object] = {
+            "schema": _SOURCE_SNAPSHOT_SCHEMA,
+            "checkpoint_id": checkpoint_id,
+            "files": entries,
+        }
+        validated = _validate_json(manifest)
+        if not isinstance(validated, Mapping):
+            raise CheckpointError("checkpoint source snapshot manifest is invalid")
+
+        existing_manifest = snapshot_root / _SOURCE_SNAPSHOT_MANIFEST
+        if existing_manifest.exists():
+            existing = _read_json(existing_manifest)
+            if not isinstance(existing, Mapping) or _digest(existing) != _digest(validated):
+                raise CheckpointError("checkpoint source snapshot already exists with different content")
+            # Re-read below so an existing manifest cannot make a missing or
+            # modified private file look complete.
+            self.read_source_snapshot(checkpoint_id)
+            return
+
+        _private_directory(snapshot_root)
+        files_root = snapshot_root / "files"
+        _private_directory(files_root)
+        for entry, item in zip(entries, files, strict=True):
+            file_path = (snapshot_root / str(entry["file_ref"])).resolve()
+            if snapshot_root.resolve() not in file_path.parents:
+                raise CheckpointError("checkpoint source snapshot path escapes the store")
+            _atomic_write_bytes(file_path, item[3])
+        _atomic_write_json(existing_manifest, validated)
+
+    def read_source_snapshot(
+        self,
+        checkpoint_id: str,
+    ) -> dict[tuple[int, int], tuple[str, bytes]] | None:
+        """Read and verify one private source snapshot, if present.
+
+        ``None`` means the checkpoint predates private source snapshots and
+        deliberately preserves the old retained-workspace fallback.
+        """
+
+        snapshot_root = self._source_snapshot_root(checkpoint_id)
+        manifest_path = snapshot_root / _SOURCE_SNAPSHOT_MANIFEST
+        if not manifest_path.exists():
+            return None
+        raw = _read_json(manifest_path)
+        manifest = _require_mapping(raw, "checkpoint source snapshot manifest")
+        _require_exact_keys(manifest, {"schema", "checkpoint_id", "files"}, "checkpoint source snapshot manifest")
+        if manifest["schema"] != _SOURCE_SNAPSHOT_SCHEMA or manifest["checkpoint_id"] != checkpoint_id:
+            raise CheckpointError("checkpoint source snapshot manifest identity is invalid")
+        raw_files = manifest["files"]
+        if not isinstance(raw_files, Sequence) or isinstance(raw_files, (str, bytes)):
+            raise CheckpointError("checkpoint source snapshot files must be a list")
+        result: dict[tuple[int, int], tuple[str, bytes]] = {}
+        for raw_entry in raw_files:
+            entry = _require_mapping(raw_entry, "checkpoint source snapshot entry")
+            _require_exact_keys(
+                entry,
+                {"turn_index", "file_index", "path", "file_ref", "sha256", "size_bytes"},
+                "checkpoint source snapshot entry",
+            )
+            turn_index = entry["turn_index"]
+            file_index = entry["file_index"]
+            path = entry["path"]
+            file_ref = entry["file_ref"]
+            digest = entry["sha256"]
+            size_bytes = entry["size_bytes"]
+            if (
+                not isinstance(turn_index, int)
+                or isinstance(turn_index, bool)
+                or turn_index < 1
+                or not isinstance(file_index, int)
+                or isinstance(file_index, bool)
+                or file_index < 0
+                or not isinstance(path, str)
+                or not isinstance(file_ref, str)
+                or not isinstance(digest, str)
+                or not _SHA256_RE.fullmatch(digest)
+                or not isinstance(size_bytes, int)
+                or isinstance(size_bytes, bool)
+                or size_bytes < 0
+            ):
+                raise CheckpointError("checkpoint source snapshot entry is invalid")
+            _validate_source_snapshot_file_ref(path)
+            _validate_source_snapshot_file_ref(file_ref)
+            key = (turn_index, file_index)
+            if key in result:
+                raise CheckpointError("checkpoint source snapshot has duplicate file entries")
+            file_path = (snapshot_root / file_ref).resolve()
+            if snapshot_root.resolve() not in file_path.parents:
+                raise CheckpointError("checkpoint source snapshot path escapes the store")
+            try:
+                content = file_path.read_bytes()
+            except OSError as exc:
+                raise CheckpointError("checkpoint source snapshot bytes are unavailable") from exc
+            if len(content) != size_bytes or hashlib.sha256(content).hexdigest() != digest:
+                raise CheckpointError("checkpoint source snapshot bytes changed")
+            result[key] = (path, content)
+        return result
 
     def read_payload(self, state: CheckpointState) -> Mapping[str, object] | None:
         """Read and verify a checkpoint payload without repairing the store."""

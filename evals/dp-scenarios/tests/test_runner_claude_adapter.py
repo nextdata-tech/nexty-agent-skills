@@ -184,11 +184,20 @@ def test_default_prompt_describes_channels_and_review_dispatch_mechanics_not_sce
     assert "omitting source_hash" in collapsed
     assert "dp-blueprint.proposal.json" in collapsed
     assert "include the same object inline as typed_proposal" in collapsed
+    assert "Recovery source_spans keys are parser paths" in collapsed
+    assert "add exactly one anchors entry" in collapsed
+    assert "v3:decisions[as_of_instant_for_current].text" in collapsed
+    assert "use the typed target in provenance, source_spans, and echo.coverage" in collapsed
     assert "Only the returned session_decision consent action is approval" in collapsed
     assert "Supervisor capture materializes and verifies" in collapsed
     assert "dp-blueprint.proposal.approved.json" in collapsed
     assert "do not hand-author hashes" in collapsed
     assert "supervisor owns the canonical source_hash" in collapsed
+    assert "copy the complete current operator message byte-for-byte" in collapsed
+    assert '"Approved." or another shortened summary is not the approval quote' in collapsed
+    assert "actual current Unix epoch time in integer milliseconds" in collapsed
+    assert "artifact_path as a required, workspace-relative output" in collapsed
+    assert "source-evidence.json is a different artifact" in collapsed
     assert "Background execution is disabled" in collapsed
     assert prompt.splitlines().count(canonical_marker) == 1
     assert (
