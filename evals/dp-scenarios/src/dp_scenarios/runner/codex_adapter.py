@@ -216,6 +216,67 @@ def _collab_agent_result(item: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
+_COLLAB_SUCCESS_STATUSES = {"completed", "success", "succeeded"}
+_COLLAB_FAILURE_STATUSES = {"failed", "errored", "interrupted", "shutdown", "notFound"}
+
+
+def _collab_states(item: Mapping[str, object]) -> tuple[tuple[str, ...], list[object]]:
+    """Return child statuses and non-empty child messages from one collab item."""
+
+    states = item.get("agentsStates")
+    statuses: list[str] = []
+    messages: list[object] = []
+    if not isinstance(states, Mapping):
+        return (), messages
+    for state in states.values():
+        if not isinstance(state, Mapping):
+            continue
+        status = state.get("status")
+        if isinstance(status, str):
+            statuses.append(status)
+        message = state.get("message")
+        if isinstance(message, str) and message.strip():
+            messages.append(message)
+    return tuple(statuses), messages
+
+
+def _collab_result_ready(item: Mapping[str, object]) -> bool:
+    """Whether a collab item contains a terminal child outcome to grade."""
+
+    status = item.get("status")
+    child_statuses, messages = _collab_states(item)
+    if status in _COLLAB_FAILURE_STATUSES or any(
+        child_status in _COLLAB_FAILURE_STATUSES for child_status in child_statuses
+    ):
+        return True
+    if status not in _COLLAB_SUCCESS_STATUSES:
+        return False
+    # ``spawnAgent`` completing means the request was accepted, not that the
+    # child answered.  The child state and its message are required before the
+    # adapter emits the shared Agent observation.  A later ``wait`` item may
+    # carry that state.
+    return bool(child_statuses) and all(value in _COLLAB_SUCCESS_STATUSES for value in child_statuses) and bool(messages)
+
+
+def _merge_collab_item(
+    base: Mapping[str, object], update: Mapping[str, object]
+) -> dict[str, object]:
+    """Merge a later wait/update snapshot into its original spawn item."""
+
+    merged = dict(base)
+    for key in ("status", "agentsStates", "receiverThreadIds"):
+        if key in update:
+            merged[key] = update[key]
+    return merged
+
+
+def _collab_receiver_ids(item: Mapping[str, object]) -> set[str]:
+    values = item.get("receiverThreadIds")
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return set()
+    return {value for value in values if isinstance(value, str) and value}
+
+
 def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, object]:
     """Map one app-server notification to the adapter's event vocabulary."""
 
@@ -341,6 +402,30 @@ def parse_codex_events(
     environment_details: list[str] = []
     partial_answer: list[str] = []
 
+    def record_collab_call(
+        started: Mapping[str, object], completed: Mapping[str, object]
+    ) -> None:
+        prompt = started.get("prompt", completed.get("prompt", ""))
+        arguments = {
+            # Codex's built-in spawnAgent is the provider-native equivalent
+            # of the general-purpose Agent/Task child required by the
+            # workflow contract. The mapping is emitted only for an
+            # observed, completed child; it is not agent prose.
+            "subagent_type": "general-purpose",
+            "prompt": prompt,
+        }
+        result_value = _collab_agent_result(completed)
+        calls.append(ToolCall("Agent", redact_json_rpc(arguments), result_value))
+        flat_results.append(redact_json_rpc(result_value))
+        transcript.append(
+            "[tool_use:Agent] "
+            + redact_text(json.dumps(arguments, default=str)[:600])
+        )
+        transcript.append(
+            "[tool_result] "
+            + redact_text(json.dumps(result_value, default=str)[:1500])
+        )
+
     for event in events:
         event = _normalise_app_server_event(event)
         event_type = event.get("type")
@@ -406,33 +491,40 @@ def parse_codex_events(
             transcript.append("[tool_use:file_change] " + redact_text(json.dumps(dict(item), default=str)[:600]))
             continue
         if item_type == "collab_agent_tool_call":
-            if item.get("tool") != "spawnAgent":
-                continue
+            tool = item.get("tool")
             key = str(item.get("id") or f"Agent:{len(calls)}")
-            if event_type == "item.started":
+            if tool == "spawnAgent" and event_type == "item.started":
                 pending_collab[key] = item
                 continue
-            started = pending_collab.pop(key, item)
-            prompt = started.get("prompt", item.get("prompt", ""))
-            arguments = {
-                # Codex's built-in spawnAgent is the provider-native equivalent
-                # of the general-purpose Agent/Task child required by the
-                # workflow contract. The mapping is emitted only for an
-                # observed, completed spawnAgent item; it is not agent prose.
-                "subagent_type": "general-purpose",
-                "prompt": prompt,
-            }
-            result_value = _collab_agent_result(item)
-            calls.append(ToolCall("Agent", redact_json_rpc(arguments), result_value))
-            flat_results.append(redact_json_rpc(result_value))
-            transcript.append(
-                "[tool_use:Agent] "
-                + redact_text(json.dumps(arguments, default=str)[:600])
-            )
-            transcript.append(
-                "[tool_result] "
-                + redact_text(json.dumps(result_value, default=str)[:1500])
-            )
+            if tool == "spawnAgent" and event_type == "item.completed":
+                started = pending_collab.get(key, item)
+                candidate = _merge_collab_item(started, item)
+                if not _collab_result_ready(candidate):
+                    # A completed spawn request only means that the child was
+                    # accepted. Keep it until a later wait item reports the
+                    # child's terminal state and response.
+                    pending_collab[key] = candidate
+                    continue
+                pending_collab.pop(key, None)
+                record_collab_call(started, candidate)
+                continue
+            if tool == "wait" and event_type == "item.completed":
+                wait_ids = _collab_receiver_ids(item)
+                matches = [
+                    pending_key
+                    for pending_key, pending_item in pending_collab.items()
+                    if wait_ids & _collab_receiver_ids(pending_item)
+                ]
+                if not matches and len(pending_collab) == 1:
+                    matches = [next(iter(pending_collab))]
+                for pending_key in matches:
+                    started = pending_collab[pending_key]
+                    candidate = _merge_collab_item(started, item)
+                    if not _collab_result_ready(candidate):
+                        pending_collab[pending_key] = candidate
+                        continue
+                    pending_collab.pop(pending_key, None)
+                    record_collab_call(started, candidate)
             continue
         if item_type not in {"mcp_tool_call", "mcp_tool_result"}:
             continue
@@ -683,6 +775,8 @@ class CodexAdapter:
             "--stdio",
             "--enable",
             "multi_agent",
+            "--enable",
+            "multi_agent_v2",
             "-c",
             'approval_policy="never"',
             "-c",
