@@ -205,6 +205,34 @@ def test_parse_codex_events_maps_reviewer_after_waiting_for_spawned_child() -> N
     assert result.tool_calls[0].result == {"is_error": False, "content": ["claims"]}
 
 
+def test_parse_codex_events_accepts_legacy_collaboration_field_names() -> None:
+    result, _ = parse_codex_events(
+        [
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "collab_tool_call",
+                        "id": "agent-call-1",
+                        "tool": "spawn_agent",
+                        "prompt": "review closure",
+                        "status": "completed",
+                        "receiver_thread_ids": ["child-1"],
+                        "agents_states": {"child-1": {"status": "completed", "message": "claims"}},
+                    }
+                },
+            },
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        ],
+        redact_json_rpc=lambda value: value,
+        redact_text=lambda value: value,
+        session_id="thread-1",
+    )
+
+    assert result.tool_calls[0].name == "Agent"
+    assert result.tool_calls[0].result == {"is_error": False, "content": ["claims"]}
+
+
 def test_parse_codex_events_does_not_credit_spawn_without_child_completion() -> None:
     result, _ = parse_codex_events(
         [
@@ -309,7 +337,7 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
 
     app_command = adapter._app_server_command()
     assert app_command[:3] == ["/bin/true", "app-server", "--stdio"]
-    assert app_command[3:7] == ["--enable", "multi_agent", "--enable", "multi_agent_v2"]
+    assert app_command[3:5] == ["--enable", "multi_agent"]
     assert 'mcp_servers.nxd-desktop.command="/bin/echo"' in app_command
     assert 'mcp_servers.nxd-desktop.args=["--proxy", "server-spec.json"]' in app_command
     assert 'mcp_servers.nxd-desktop.default_tools_approval_mode="approve"' in app_command

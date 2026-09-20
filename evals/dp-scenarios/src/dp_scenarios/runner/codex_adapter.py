@@ -342,9 +342,19 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             normalized = dict(item)
             normalized["type"] = "file_change"
             return {"type": method.replace("/", "."), "item": normalized}
-        if item_type == "collabAgentToolCall":
+        if item_type in {"collabAgentToolCall", "collab_tool_call"}:
             normalized = dict(item)
             normalized["type"] = "collab_agent_tool_call"
+            if "agents_states" in normalized and "agentsStates" not in normalized:
+                normalized["agentsStates"] = normalized.pop("agents_states")
+            if "receiver_thread_ids" in normalized and "receiverThreadIds" not in normalized:
+                normalized["receiverThreadIds"] = normalized.pop("receiver_thread_ids")
+            tool = normalized.get("tool")
+            if tool == "spawn_agent":
+                normalized["tool"] = "spawnAgent"
+            status = normalized.get("status")
+            if status == "in_progress":
+                normalized["status"] = "inProgress"
             return {"type": method.replace("/", "."), "item": normalized}
         return {"type": method.replace("/", "."), "item": dict(item)}
     return event
@@ -780,8 +790,6 @@ class CodexAdapter:
             "--stdio",
             "--enable",
             "multi_agent",
-            "--enable",
-            "multi_agent_v2",
             "-c",
             'approval_policy="never"',
             "-c",
