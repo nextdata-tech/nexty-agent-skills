@@ -74,11 +74,24 @@ def check(
 ) -> Mapping[str, object]:
     """Grade pagination, retry evidence, redaction, and the output contract."""
 
-    del context
     if not isinstance(target, Mapping):
         return _not_examined("crm_pipeline_not_examined")
     pages = target.get("pages")
     trace = target.get("transport_trace")
+    harness_evidence = context.source_evidence
+    if isinstance(harness_evidence, Mapping):
+        if harness_evidence.get("schema") != "dp-scenario-source-evidence-v1":
+            return _not_examined("source_evidence_not_examined")
+        observed_pages = harness_evidence.get("pages")
+        observed_trace = harness_evidence.get("transport_trace")
+        if isinstance(observed_pages, Sequence) and not isinstance(
+            observed_pages, (str, bytes, bytearray)
+        ):
+            pages = observed_pages
+        if isinstance(observed_trace, Sequence) and not isinstance(
+            observed_trace, (str, bytes, bytearray)
+        ):
+            trace = observed_trace
     result_rows = target.get("result_rows")
     surfaces = target.get("surfaces")
     if not isinstance(pages, Sequence) or isinstance(pages, (str, bytes, bytearray)) or not pages:

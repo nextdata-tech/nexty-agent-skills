@@ -67,9 +67,17 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
+from .checkpoint import (
+    CheckpointIdentity,
+    CheckpointState,
+    CheckpointStore,
+    ClaudeSessionIdentity,
+    checkpoint_prefix_digest,
+)
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     ReplayRecording,
+    NativeResumeSession,
     ReplaySession,
     RecordingSession,
     WorkflowObserver,
@@ -831,12 +839,75 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
     )
 
 
+def _latest_paginated_pages(pages: Sequence[object]) -> list[object]:
+    """Keep only the final complete pagination attempt from the mock oracle.
+
+    Workflow-v2 may execute the source more than once while an agent repairs a
+    closure.  ``RequestCounters`` intentionally retains every successful page
+    observation for transport auditing, but follow-up output must describe the
+    published attempt rather than concatenate pages from earlier attempts.
+    A ``next_cursor`` of ``None`` terminates one attempt; select the suffix
+    after the preceding terminal page through the final terminal page.
+    """
+
+    terminal_positions = [
+        index
+        for index, page in enumerate(pages)
+        if isinstance(page, Mapping) and page.get("next_cursor") in (None, "")
+    ]
+    if not terminal_positions:
+        return list(pages)
+    start = terminal_positions[-2] + 1 if len(terminal_positions) >= 2 else 0
+    return list(pages[start : terminal_positions[-1] + 1])
+
+
 def _snapshot_source_artifacts(environment: RunEnvironment, artifact_root: Path) -> None:
     source = environment.mock_source
     if source is None:
         return
     _write_json(artifact_root / "capability.json", source.server.capability.as_dict())
-    _write_json(artifact_root / "server-counters.json", source.server.counters.snapshot())
+    counters = source.server.counters.snapshot()
+    _write_json(artifact_root / "server-counters.json", counters)
+    events = counters.get("events")
+    statuses = counters.get("response_statuses")
+    pages = counters.get("page_observations")
+    if not isinstance(events, list) or not isinstance(statuses, list) or not isinstance(pages, list):
+        return
+    status_by_sequence = {
+        item.get("sequence"): item.get("status")
+        for item in statuses
+        if isinstance(item, Mapping)
+    }
+    paginated_paths = {
+        route.path
+        for route in source.server.config.routes
+        if route.pagination is not None
+    }
+    refresh_path = (
+        source.server.config.auth.refresh_path
+        if source.server.config.auth is not None
+        else None
+    )
+    transport_trace = [
+        {
+            "sequence": event.get("sequence"),
+            "route": event.get("route"),
+            "method": event.get("method"),
+            "status": status_by_sequence.get(event.get("sequence")),
+        }
+        for event in events
+        if isinstance(event, Mapping)
+        and event.get("route") in paginated_paths | ({refresh_path} if refresh_path else set())
+        and isinstance(status_by_sequence.get(event.get("sequence")), int)
+    ]
+    _write_json(
+        artifact_root / "source-evidence.json",
+        {
+            "schema": "dp-scenario-source-evidence-v1",
+            "pages": _latest_paginated_pages(pages),
+            "transport_trace": transport_trace,
+        },
+    )
 
 
 def _append_artifact_rows(artifact_root: Path) -> None:
@@ -1580,6 +1651,10 @@ class TierRunner:
         replay_recordings: Mapping[str, object] | None = None,
         environment_root: str | Path | None = None,
         evidence_root: str | Path | None = None,
+        checkpoint_root: str | Path | None = None,
+        native_continuation: bool = False,
+        native_resume_checkpoint: str | Path | None = None,
+        native_run_root: str | Path | None = None,
         budgets: RunBudgets | None = None,
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
@@ -1612,6 +1687,34 @@ class TierRunner:
         self.evidence_root = Path(evidence_root).expanduser().resolve() if evidence_root is not None else None
         if self.evidence_root is not None:
             self.evidence_root.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_root = (
+            Path(checkpoint_root).expanduser().resolve() if checkpoint_root is not None else None
+        )
+        self.native_continuation = bool(native_continuation)
+        self.native_resume_checkpoint = (
+            Path(native_resume_checkpoint).expanduser().resolve()
+            if native_resume_checkpoint is not None
+            else None
+        )
+        self.native_run_root = (
+            Path(native_run_root).expanduser().resolve() if native_run_root is not None else None
+        )
+        if self.native_continuation:
+            if self.checkpoint_root is None and self.native_resume_checkpoint is None:
+                raise TierError("native continuation requires an explicit checkpoint root")
+            if self.native_run_root is None:
+                raise TierError("native continuation requires an explicit persistent run root")
+            if self.max_workers != 1:
+                raise TierError("native continuation requires --jobs 1")
+        if self.native_resume_checkpoint is not None:
+            if not self.native_continuation:
+                raise TierError("native resume requires native continuation mode")
+            if self.native_run_root is None:
+                raise TierError("native resume requires the original persistent run root")
+            if len(self.scenarios) != 1 or self.scenarios[0].epochs != 1:
+                raise TierError(
+                    "native resume is bounded to one explicitly selected scenario and epoch"
+                )
         self.budgets = budgets or RunBudgets()
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
@@ -1767,6 +1870,188 @@ class TierRunner:
         if value is not None and not (hasattr(value, "read_facts") or hasattr(value, "read")):
             raise TierError("supervisor reader factory returned no reader")
         return value
+
+    def _checkpoint_store(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> CheckpointStore | None:
+        """Initialize the durable handoff store for one live scenario epoch."""
+
+        if self.checkpoint_root is None:
+            return None
+        manifest = environment.manifest
+        identity = self._checkpoint_identity(manifest, epoch)
+        if self.native_resume_checkpoint is not None:
+            # The CLI accepts either the checkpoint store or one committed
+            # checkpoint JSON.  Records live below the store's ``checkpoints``
+            # directory, while identity/latest/journal files live at the
+            # store root, so resolve a record file two levels upward.
+            resume_path = self.native_resume_checkpoint
+            store_root = (
+                resume_path.parent.parent
+                if resume_path.is_file() and resume_path.parent.name == "checkpoints"
+                else resume_path.parent
+                if resume_path.is_file()
+                else resume_path
+            )
+        else:
+            store_root = self.checkpoint_root / scenario.id / f"epoch-{epoch}"
+        store = CheckpointStore(store_root)
+        store.initialize(identity)
+        return store
+
+    def _checkpoint_identity(self, manifest: Any, epoch: int) -> CheckpointIdentity:
+        """Build the expected identity from the current run's manifest."""
+
+        return CheckpointIdentity.from_groups(
+            {
+                "run": {
+                    "scenario_id": manifest.scenario_id,
+                    "epoch": epoch,
+                    "run_id": manifest.run_id,
+                    "operator_script_hash": manifest.operator_script_hash,
+                },
+                "behavior": {
+                    "skill_pack_version": manifest.skill_pack_version,
+                    "agent_model_id": manifest.agent_model_id,
+                    "continuity_mode": "native-resume" if self.native_continuation else "handoff",
+                },
+                "substrate": {
+                    "supervisor_version": manifest.supervisor_version,
+                    "nxd_data_product_wheel_version": manifest.nxd_data_product_wheel_version,
+                    "fixture_dir_hash": manifest.fixture_dir_hash,
+                    "mock_api_version": manifest.mock_api_version,
+                },
+                "grading": {
+                    "judge_model_id": manifest.judge_model_id,
+                    "judge_prompt_hash": manifest.judge_prompt_hash,
+                    "canary_claims_hash": manifest.canary_claims_hash,
+                    "judge_calibration_set_hash": manifest.judge_calibration_set_hash,
+                },
+            }
+        )
+
+    @staticmethod
+    def _checkpoint_callback(
+        store: CheckpointStore,
+        scenario: Scenario,
+        *,
+        native_continuation: bool = False,
+        source_state_writer: Callable[[], None] | None = None,
+    ) -> Callable[[ReplayRecording, int], None]:
+        """Create a fail-closed callback for complete live turn snapshots."""
+
+        def persist(snapshot: ReplayRecording, turn_number: int) -> None:
+            # A timeout or environment wedge is an interruption boundary, not
+            # a committed prefix.  Replaying such a result would make the
+            # operator stop before it ever sent the next turn, while marking
+            # the checkpoint complete would let native resume accept it.
+            if snapshot.turns and (
+                snapshot.turns[-1].result.turn_timed_out
+                or snapshot.turns[-1].result.environment_wedged
+            ):
+                return
+            checkpoint_id = f"turn-{turn_number:06d}"
+            payload = snapshot.to_report_dict()
+            payload_ref, payload_digest = store.write_payload(checkpoint_id, payload)
+            phase = scenario.script.phase_by_turn[turn_number]
+            current = store.latest()
+            parent_id = current.checkpoint_id if current is not None else None
+            parent_prefix_digest = current.turn_prefix_digest if current is not None else None
+            identity = store.read_identity()
+            operator_script_hash = identity.groups["run"].get("operator_script_hash")
+            if not isinstance(operator_script_hash, str) or not operator_script_hash:
+                raise TierError("checkpoint identity has no operator script hash")
+            native_session = None
+            if native_continuation:
+                session_id = snapshot.turns[-1].result.session_id if snapshot.turns else None
+                if not isinstance(session_id, str):
+                    raise TierError(
+                        "native continuation turn did not return a Claude session UUID"
+                    )
+                native_session = ClaudeSessionIdentity(
+                    session_id=session_id,
+                    execution_identity_digest=identity.digest,
+                )
+            if native_continuation:
+                source_files: list[tuple[int, int, str, bytes]] = []
+                for turn_index, turn in enumerate(snapshot.turns, start=1):
+                    for file_index, touched in enumerate(turn.result.files_touched):
+                        content = touched.content
+                        if isinstance(content, str):
+                            content = content.encode("utf-8")
+                        if isinstance(content, bytes):
+                            source_files.append((turn_index, file_index, str(touched.path), content))
+                store.write_source_snapshot(checkpoint_id, tuple(source_files))
+            store.commit(
+                CheckpointState(
+                    checkpoint_id=checkpoint_id,
+                    parent_id=parent_id,
+                    committed_turn=turn_number,
+                    next_turn=turn_number + 1,
+                    phase=str(phase),
+                    status="complete",
+                    continuity_mode=("native-resume" if native_continuation else "handoff"),
+                    turn_prefix_digest=checkpoint_prefix_digest(
+                        payload,
+                        checkpoint_id=checkpoint_id,
+                        parent_id=parent_id,
+                        parent_prefix_digest=parent_prefix_digest,
+                        committed_turn=turn_number,
+                        phase=str(phase),
+                        operator_script_hash=operator_script_hash,
+                        identity_digest=identity.digest,
+                    ),
+                    identity_digest=identity.digest,
+                    payload_ref=payload_ref,
+                    payload_digest=payload_digest,
+                    native_session=native_session,
+                )
+            )
+            if source_state_writer is not None:
+                source_state_writer()
+
+        return persist
+
+    def _native_resume_context(
+        self,
+        store: CheckpointStore,
+        scenario: Scenario,
+        identity: CheckpointIdentity,
+    ) -> tuple[ReplayRecording, str, Mapping[tuple[int, int], tuple[str, bytes]] | None]:
+        """Load and validate the one local prefix used by native continuation."""
+
+        checkpoint_id = None
+        if self.native_resume_checkpoint is not None:
+            resume_path = self.native_resume_checkpoint
+            if resume_path.is_file() and resume_path.parent.name == "checkpoints":
+                checkpoint_id = resume_path.stem
+        decision = store.decide(expected_identity=identity, checkpoint_id=checkpoint_id)
+        if decision.action != "resume" or decision.checkpoint is None:
+            raise TierError(f"native resume rejected: {decision.reason}")
+        checkpoint = decision.checkpoint
+        if checkpoint.native_session is None:
+            raise TierError("native resume checkpoint has no Claude session identity")
+        if checkpoint.native_session.execution_identity_digest != identity.digest:
+            raise TierError("native resume checkpoint execution identity does not match the current run")
+        if checkpoint.committed_turn >= len(scenario.script.turns):
+            raise TierError("native resume checkpoint has no next operator turn")
+        payload = store.read_payload(checkpoint)
+        if payload is None or not store.verify_prefix_digest(checkpoint):
+            raise TierError("native resume checkpoint prefix digest is invalid")
+        try:
+            recording = ReplayRecording.from_dict(payload)
+        except Exception as exc:
+            raise TierError("native resume checkpoint prefix is not replayable") from exc
+        if len(recording.turns) != checkpoint.committed_turn:
+            raise TierError("native resume checkpoint prefix length does not match its committed turn")
+        try:
+            source_snapshot = store.read_source_snapshot(checkpoint.checkpoint_id)
+        except Exception as exc:
+            raise TierError("native resume checkpoint source snapshot is invalid") from exc
+        return recording, checkpoint.native_session.session_id, source_snapshot
 
     def _run_scenario_summary(self, scenario: Scenario, *, pins: PinnedVersions) -> ScenarioSummary:
         """Run all epochs for one scenario and build its ordered summary."""
@@ -1972,11 +2257,18 @@ class TierRunner:
                 raise TierError(
                     f"knob plan returned an invalid workflow switch for {scenario.id} epoch {epoch}"
                 )
+            persistent_root = None
+            if self.native_continuation:
+                assert self.native_run_root is not None
+                persistent_root = self.native_run_root / scenario.id / f"epoch-{epoch}"
             with RunEnvironment(
                 scenario,
                 pins,
                 trial_index=epoch - 1,
                 root=self.environment_root,
+                persistent_root=persistent_root,
+                native_continuation=self.native_continuation,
+                native_resume=self.native_resume_checkpoint is not None,
                 run_id=run_id,
                 route_config=self.route_configs.get(scenario.id),
                 manifest_override=manifest_override,
@@ -1998,7 +2290,16 @@ class TierRunner:
                         "workflow switching requires workflow_restart_factory and workflow_observer"
                     )
                 artifact_root = environment.base_dir / "artifacts"
-                artifact_root.mkdir()
+                # A native resume reopens the persistent environment that
+                # owns the committed prefix and its artifact root. Fresh
+                # runs retain the collision guard supplied by ``mkdir()``;
+                # resume refuses a missing root instead of silently creating
+                # a new artifact surface and losing the committed prefix.
+                if self.native_resume_checkpoint is not None:
+                    if not artifact_root.is_dir():
+                        raise TierError("native resume artifact root is missing")
+                else:
+                    artifact_root.mkdir()
                 # Resolve the operator surface before any transport exists.
                 # The consistency gate inside can refuse the run, and a live
                 # session started first would be a spawned agent process that
@@ -2013,12 +2314,40 @@ class TierRunner:
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
                 if recording is not None and recording.supervisor_facts is not None:
                     _write_json(artifact_root / "supervisor-facts.json", recording.supervisor_facts)
+                checkpoint_store = (
+                    self._checkpoint_store(scenario, environment, epoch)
+                    if recording is None
+                    else None
+                )
+                resume_prefix: ReplayRecording | None = None
+                resume_session_id: str | None = None
+                if self.native_resume_checkpoint is not None:
+                    if checkpoint_store is None:
+                        raise TierError("native resume has no checkpoint store")
+                    expected_identity = self._checkpoint_identity(environment.manifest, epoch)
+                    resume_prefix, resume_session_id, resume_source_snapshot = self._native_resume_context(
+                        checkpoint_store,
+                        scenario,
+                        expected_identity,
+                    )
+                else:
+                    resume_source_snapshot = None
                 if recording is not None:
                     transport: Transport = ReplaySession(recording, artifact_root=artifact_root)
                 else:
                     assert self.session_factory is not None
+                    base_transport = _session_factory(self.session_factory, scenario, environment, epoch)
+                    if resume_prefix is not None and resume_session_id is not None:
+                        base_transport = NativeResumeSession(
+                            resume_prefix,
+                            base_transport,
+                            session_id=resume_session_id,
+                            artifact_root=artifact_root,
+                            source_root=environment.workspace_dir,
+                            source_snapshot=resume_source_snapshot,
+                        )
                     transport = RecordingSession(
-                        _session_factory(self.session_factory, scenario, environment, epoch),
+                        base_transport,
                         artifact_root=artifact_root,
                         sandbox_home=environment.home,
                         workflow_switch=workflow_switch,
@@ -2028,6 +2357,21 @@ class TierRunner:
                             evidence,
                             turn=turn,
                         ),
+                        on_turn_complete=(
+                            self._checkpoint_callback(
+                                checkpoint_store,
+                                scenario,
+                                native_continuation=self.native_continuation,
+                                source_state_writer=(
+                                    environment.persist_native_source_state
+                                    if self.native_continuation and environment.mock_source is not None
+                                    else None
+                                ),
+                            )
+                            if checkpoint_store is not None
+                            else None
+                        ),
+                        initial_recording=resume_prefix,
                     )
                 started = time.monotonic()
                 transport_closed = False
@@ -2232,6 +2576,7 @@ class TierRunner:
             else None
         )
         query = _query_artifact(artifact_root)
+        source_evidence = _first_json(artifact_root, ("source-evidence.json",))
         facts = supervisor_facts
         observations = _load_json(artifact_root / "operator-observations.json")
         if not isinstance(observations, Mapping):
@@ -2341,6 +2686,8 @@ class TierRunner:
             follow_up_kwargs: dict[str, object] = {"fired_plants": fired_plants}
             if "row_count_oracle" in follow_up_parameters:
                 follow_up_kwargs["row_count_oracle"] = row_counts
+            if "source_evidence" in follow_up_parameters:
+                follow_up_kwargs["source_evidence"] = source_evidence
             follow_up = follow_up_method(
                 follow_up_target,
                 environment.oracle_dir,
@@ -2349,6 +2696,11 @@ class TierRunner:
             )
         elif "query_rows" in follow_up_parameters:
             follow_up = follow_up_method(follow_up_target, query_rows)
+        elif "source_evidence" in follow_up_parameters:
+            follow_up = follow_up_method(
+                follow_up_target,
+                source_evidence=source_evidence,
+            )
         else:
             follow_up = follow_up_method(follow_up_target)
         ungraded = observations.get("ungraded_criteria", ())

@@ -351,6 +351,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path, help="directory for report.json and summary.txt (default: a retained temp directory)")
     parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=None,
+        help=(
+            "stable directory for per-turn live handoff checkpoints; omitted means "
+            "checkpoint emission is disabled"
+        ),
+    )
+    parser.add_argument(
+        "--native-continuation",
+        action="store_true",
+        help=(
+            "explicitly opt into persisted Claude sessions and native-resume "
+            "checkpoints; requires --native-run-root and --checkpoint-dir "
+            "for a fresh run"
+        ),
+    )
+    parser.add_argument(
+        "--native-run-root",
+        type=Path,
+        help="persistent per-scenario run root required by native continuation",
+    )
+    parser.add_argument(
+        "--native-resume-checkpoint",
+        type=Path,
+        help=(
+            "resume one committed native checkpoint; requires the same "
+            "--native-run-root and exactly one scenario/epoch"
+        ),
+    )
+    parser.add_argument(
         "--env-file",
         type=Path,
         help=(
@@ -424,6 +455,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise TierError("--jobs must be a positive integer")
     if args.allow_host_home_bash and not args.allow_host_home:
         raise TierError("--allow-host-home-bash requires --allow-host-home")
+    if args.native_continuation and args.native_run_root is None:
+        raise TierError("--native-continuation requires --native-run-root")
+    if args.native_resume_checkpoint is not None and not args.native_continuation:
+        raise TierError("--native-resume-checkpoint requires --native-continuation")
+    if args.native_resume_checkpoint is not None and args.native_run_root is None:
+        raise TierError("--native-resume-checkpoint requires --native-run-root")
+    if args.native_continuation and args.jobs != 1:
+        raise TierError("--native-continuation requires --jobs 1")
     repo_root = REPO_ROOT
     skill_pack_root = _validated_skill_pack_root(args.skill_pack_root)
     scenarios = _configure_scenarios(
@@ -498,15 +537,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         adapter_kwargs["claude-config-dir"] = str(claude_config_dir)
     if args.max_budget_usd is not None:
         adapter_kwargs["max-budget-usd"] = str(args.max_budget_usd)
+    if args.native_continuation:
+        adapter_kwargs["native-continuation"] = ""
 
     adapter_command = [sys.executable, "-m", ADAPTER_MODULE]
     for key, value in adapter_kwargs.items():
-        adapter_command.extend((f"--{key}", value))
+        if value:
+            adapter_command.extend((f"--{key}", value))
+        else:
+            adapter_command.append(f"--{key}")
     adapter_command.extend(_tool_grant_arguments(args, oauth_token_present=claude_oauth_token is not None))
     adapter_command.extend(("--fixture-dir", "../fixture", "--artifact-dir", "../artifacts"))
 
     def session_factory(scenario: Scenario, environment: Any, epoch: int) -> LiveSession:
-        return environment.live_session(timeout=args.turn_timeout)
+        return environment.live_session(
+            timeout=args.turn_timeout,
+            native_resume=args.native_continuation,
+        )
 
     def supervisor_reader(scenario: Scenario, environment: Any, epoch: int) -> FileSupervisorRecordReader:
         return FileSupervisorRecordReader(environment.base_dir / "artifacts" / "supervisor-facts.json")
@@ -524,6 +571,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             session_factory=session_factory,
             environment_root=report_dir,
             evidence_root=report_dir / "evidence",
+            checkpoint_root=args.checkpoint_dir,
+            native_continuation=args.native_continuation,
+            native_resume_checkpoint=args.native_resume_checkpoint,
+            native_run_root=args.native_run_root,
             budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
             supervisor_reader=supervisor_reader,
             live_command=adapter_command,

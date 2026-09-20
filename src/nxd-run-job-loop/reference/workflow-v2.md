@@ -74,6 +74,11 @@ and `contracts`. Frontmatter-only `name` and `workflow` must not be added to
 this payload. Use these exact item shapes (with no legacy aliases or extra
 keys):
 
+The only allowed typed v3 transform operations are `filter`, `project`,
+`derive`, `join`, `aggregate`, `union`, `deduplicate`, and `apply_procedure`.
+API fetch and pagination are connector behavior, not typed transform
+operations; do not add `fetch` or `paginate` steps to `proposal.transform`.
+
 ```json
 {
   "intent": "Provide a queryable order summary.",
@@ -94,9 +99,18 @@ keys):
 }
 ```
 
+If the prose `## Open Questions` section is empty, produce
+`proposal.open_questions: []`. It must not contain a prose placeholder such as
+`None`; `None` is not an open-question item. Because the parser has no
+populated source block in that case, omit `v3:open_questions.text` from
+`provenance`, `source_spans`, and `echo.coverage`; only cover populated parser
+`.text` paths.
+
 When a term priority is omitted, materialize the platform default as `P3` with
 `platform_fixed` provenance and disclose that default; an explicitly written
-priority uses `explicit` provenance.
+priority uses `explicit` provenance. The natural-language echo must also name
+the affected term and say that it uses the platform-default `P3` priority;
+putting `P3` only in the typed term is not disclosure.
 
 Input expectation and output promise source entries each have exactly `id`,
 `model`, `guarantee`, `rule`, and `fields`. Compiled contracts each have exactly
@@ -468,6 +482,14 @@ rejected, indeterminate, and scope-refused outcomes. Use schema
 with the existing adversarial-review round shape. Never write a review result
 into the captured closure. The ledger is the user-facing record; the supervisor
 receives only this bounded summary through `report_requirement`:
+
+The ledger round's `status` is the ledger-completeness vocabulary
+(`complete`, `needs_user`, or `timed_out`). The supervisor projection has a
+different `report.verdict` vocabulary (`clear`, `findings`, `rejected`, or
+`indeterminate`); never copy that verdict into the ledger `status` field.
+`findings` is a supervisor report verdict, not a ledger round status, and a
+round with findings is still recorded as `complete` only when its rich claims,
+adjudications, and any required user decision are complete.
 
 ```json
 {

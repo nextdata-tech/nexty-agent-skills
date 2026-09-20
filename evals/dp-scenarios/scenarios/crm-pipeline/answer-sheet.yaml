@@ -20,6 +20,9 @@ turns:
   - Please continue with the final pipeline result and report any build or query blocker honestly.
   - Where are we now?
   - Please finish the final pipeline result and report any build or query blocker honestly.
+  - "I authorize only the specific repeated-429 retry correction: ensure a repeated 429 can never be treated as a successful page, using bounded retry/backoff or fail-loud exhaustion. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, publish, or make unrelated behavior changes until that review is clear."
+  - "The fresh independent review is clear. Proceed now with validation, admission, publication, the governed query, and the required evidence artifact. Do not introduce any further behavior change or expand the approved scope."
+  - "The documentation correction is complete and the fresh independent review is clear. Proceed now with validation, admission, publication, the governed query, and the required evidence artifact. Do not introduce any further behavior change or expand the approved scope."
 source_answers:
   source: Use the CRM deals endpoint from the supplied profile; it returns current deal records in pages.
   data: Each record contains an id, stage, amount, last-updated timestamp, a status field, and a nested owner object. The status value deleted marks a tombstoned record and must be excluded from the active output.
@@ -35,6 +38,9 @@ decision_answers:
   review_fix_authorization:
     terms: [review, finding]
     answer: "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review; optional agent-side checks may be recorded but must not block shellless capture or admission. Do not validate, admit, or publish until that review is clear. Ask me again before any new behavior-changing decision."
+  rate_limit_retry:
+    terms: [retries, consecutive, "429"]
+    answer: "I authorize only the specific repeated-429 retry correction: ensure a repeated 429 can never be treated as a successful page, using bounded retry/backoff or fail-loud exhaustion. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, publish, or make unrelated behavior changes until that review is clear."
   amount_precision:
     terms: [amount, precision]
     answer: "Choose exact-decimal semantics for amount. Amend the blueprint to state that amount preserves the source value without floating-point truncation or silent rounding, use an exact decimal representation in the landed model and governed totals, validate that the transform preserves the source precision, then re-approve the amended plan, recapture, and run a fresh independent review before validation or publication."

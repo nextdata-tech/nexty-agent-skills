@@ -7,6 +7,9 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-19 | workflow-v2: pin empty open questions and typed transform operations | NO_EVAL | — | [`2026-09-19-workflow-v2-typed-authoring-guidance`](entries/2026-09-19-workflow-v2-typed-authoring-guidance.md) |
+| 2026-09-19 | add an explicit opt-in native Claude continuation seam | NO_EVAL | — | [`2026-09-19-native-claude-continuation-seam`](entries/2026-09-19-native-claude-continuation-seam.md) |
+| 2026-09-18 | add a durable checkpoint contract before live resumption | NO_EVAL | — | [`2026-09-18-resumable-run-checkpoints`](entries/2026-09-18-resumable-run-checkpoints.md) |
 | 2026-09-18 | distinguish observed construction evidence from an unpublished build | NO_EVAL | — | [`2026-09-18-construction-evidence-binding-diagnostics`](entries/2026-09-18-construction-evidence-binding-diagnostics.md) |
 | 2026-09-17 | harden workflow-v2 review handoff and contract evidence | NO_EVAL | — | [`2026-09-17-workflow-v2-review-handoff-hardening`](entries/2026-09-17-workflow-v2-review-handoff-hardening.md) |
 | 2026-09-16 | bound partial JSON responses in the live runner | NO_EVAL | — | [`2026-09-16-runner-partial-json-deadline`](entries/2026-09-16-runner-partial-json-deadline.md) |

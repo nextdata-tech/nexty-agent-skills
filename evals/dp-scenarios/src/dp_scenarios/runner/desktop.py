@@ -113,11 +113,21 @@ def _resolved_supervisor_identity(command: Sequence[str]) -> str:
     return identity
 
 
-def _session_config_digest(session: DesktopStdioSession) -> str:
+def _session_config_digest(
+    session: DesktopStdioSession, *, legacy: bool = False
+) -> str:
     """Hash semantic session inputs while excluding run-local artifact paths."""
 
     run_parent = session.root.parent.resolve()
     ephemeral_url_environment_keys = frozenset({"NXD_EVAL_SOURCE_URL"})
+    # These values are deliberately reconstructed for a native continuation.
+    # ``TMPDIR`` belongs to the host process rather than the admitted workflow,
+    # and the source token is supervisor-only state that must never become part
+    # of a persisted identity (or make a resume depend on its value).
+    run_local_environment_keys = frozenset({"TMPDIR"}) if not legacy else frozenset()
+    secret_environment_keys = (
+        frozenset({"NXD_EVAL_SOURCE_TOKEN"}) if not legacy else frozenset()
+    )
 
     def canonical_environment_value(key: str, value: str) -> str:
         path = Path(value).expanduser()
@@ -173,8 +183,13 @@ def _session_config_digest(session: DesktopStdioSession) -> str:
     semantic_config = {
         "server_command": [canonical_command_argument(value) for value in session.server_command],
         "server_environment": {
-            key: canonical_environment_value(key, value)
+            key: (
+                "<secret>"
+                if key in secret_environment_keys
+                else canonical_environment_value(key, value)
+            )
             for key, value in sorted(session.server_env.items())
+            if key not in run_local_environment_keys
         },
         "shutdown_timeout_s": session.shutdown_timeout_s,
         "startup_timeout_s": session.startup_timeout_s,
@@ -286,6 +301,13 @@ class DesktopStdioTransport:
         return _session_config_digest(self.session)
 
     @property
+    def legacy_session_config_sha256(self) -> str:
+        """Return the pre-normalization digest for checkpoint migration only."""
+
+        self.start()
+        return _session_config_digest(self.session, legacy=True)
+
+    @property
     def artifact_paths(self) -> Mapping[str, str]:
         """Return paths only; trace bytes never become manifest evidence."""
 
@@ -332,19 +354,32 @@ class DesktopStdioTransport:
 
     ensure_started = start
 
-    def live_session(self, *, timeout: float = 300.0) -> Any:
+    def live_session(self, *, timeout: float = 300.0, native_resume: bool = False) -> Any:
         """Return a turn-protocol session owned by this desktop transport."""
 
         from .session import LiveSession
 
         self.start()
         assert self.command is not None
+        resume_builder = None
+        if native_resume:
+            if "--native-continuation" not in self.command:
+                raise DesktopTransportError(
+                    "native resume requires an adapter command explicitly enabled with "
+                    "--native-continuation"
+                )
+            resume_builder = lambda session_id: (
+                *self.command,
+                "--resume-session-id",
+                session_id,
+            )
         return LiveSession(
             self.command,
             environment=self.environment,
             cwd=self.cwd,
             timeout=timeout,
             desktop_session=self.session,
+            resume_command_builder=resume_builder,
         )
 
     build_live_session = live_session

@@ -205,6 +205,48 @@ def test_rejected_paginated_responses_do_not_count_as_pages() -> None:
     run(check())
 
 
+def test_response_observations_are_status_bound_and_pii_projected() -> None:
+    counters = RequestCounters()
+    request_number = counters.record("/deals", "GET")
+    counters.record_response("/deals", request_number, 200)
+    counters.record_page_observation(
+        rows=[
+            {
+                "id": "DEAL-1",
+                "stage": "prospecting",
+                "amount": 10,
+                "status": "active",
+                "updatedAt": "2024-01-01T00:00:00+00:00",
+                "owner": {"email": "must-not-escape"},
+            }
+        ],
+        next_cursor="cursor-1",
+    )
+
+    snapshot = counters.snapshot()
+
+    assert snapshot["response_statuses"] == [{"sequence": 1, "status": 200}]
+    assert snapshot["page_observations"] == [
+        {
+            "status": 200,
+            "rows": [
+                {
+                    "id": "DEAL-1",
+                    "stage": "prospecting",
+                    "amount": 10,
+                    "status": "active",
+                    "updatedAt": "2024-01-01T00:00:00+00:00",
+                }
+            ],
+            "next_cursor": "present",
+        }
+    ]
+
+    restored = RequestCounters()
+    restored.restore_snapshot(snapshot)
+    assert restored.snapshot() == snapshot
+
+
 def test_caller_identity_ignores_whitespace_and_matches_header_names_case_insensitively() -> None:
     assert caller_identity({"X-Caller-Id": "   \t"}) is None
     assert caller_identity({"x-cAlLeR-iD": "worker-a"}) == "worker-a"

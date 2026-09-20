@@ -399,6 +399,25 @@ def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval(
     assert "intake_workflow_approval_not_relayed" in malformed.codes
 
 
+def test_intake_ignores_a_later_prepared_but_unpublished_workflow() -> None:
+    published = _workflow_v2_intake()
+    later = _workflow_v2_intake()
+    later_prepare = later["observations"]["turns"][1]["tool_calls"][0]
+    later_prepare["arguments"]["workflow"] = "later-workflow"
+    later_prepare["result"]["content"]["workflow"] = "later-workflow"
+
+    # The later workflow has a successful prepare call with an inline proposal,
+    # but no matching proposal file, approval, or successful start_run. Its
+    # incomplete preparation must not invalidate the workflow that published.
+    published["observations"]["turns"].append(
+        {"turn": 5, "files_touched": [], "tool_calls": [later_prepare]}
+    )
+
+    result = gate_intake(published)
+
+    assert result.passed, result.codes
+
+
 def test_intake_requires_inline_proposal_and_real_file_before_prepare() -> None:
     missing_inline = _workflow_v2_intake()
     prepare = missing_inline["observations"]["turns"][1]["tool_calls"][0]
@@ -1393,24 +1412,22 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
                 "construction_adversarial_review_not_observed",
             ),
         ),
-        (
-            True,
-            False,
-            True,
             (
-                "construction_self_check_not_observed",
-                "construction_adversarial_review_not_observed",
+                True,
+                False,
+                True,
+                (
+                    "construction_adversarial_review_not_observed",
+                ),
             ),
-        ),
         (
-            True,
-            True,
-            False,
-            (
-                "construction_self_check_not_observed",
-                "construction_adversarial_review_not_observed",
-                "construction_adversarial_review_attestation_missing",
-            ),
+                True,
+                True,
+                False,
+                (
+                    "construction_adversarial_review_not_observed",
+                    "construction_adversarial_review_attestation_missing",
+                ),
         ),
     ],
 )
@@ -1941,7 +1958,10 @@ def test_construction_accepts_trusted_v2_validation_before_admission() -> None:
     assert result.codes == ()
 
 
-def test_construction_accepts_a_successful_supervisor_check_as_self_check_evidence() -> None:
+@pytest.mark.parametrize("provenance_path", ["/workspace/closure", "<path>/closure"])
+def test_construction_accepts_a_successful_supervisor_check_as_self_check_evidence(
+    provenance_path: str,
+) -> None:
     observations = {
         "turns": [
             {
@@ -1961,7 +1981,7 @@ def test_construction_accepts_a_successful_supervisor_check_as_self_check_eviden
                                 "workflow": "workflow",
                                 "provenance": {
                                     "definition_id": "sha256-v1:definition",
-                                    "closure_path": "/workspace/closure",
+                                    "closure_path": provenance_path,
                                 },
                                 "stages": [
                                     {"stage": stage, "status": "pass", "checks": []}
@@ -1993,11 +2013,56 @@ def test_construction_accepts_a_successful_supervisor_check_as_self_check_eviden
     assert result.codes == ()
 
 
+def test_construction_accepts_validation_workflow_from_operation_projection() -> None:
+    """Real start_requirement responses project workflow under operation."""
+
+    observations = _dispatch_observations()
+    validation = observations["turns"][0]["tool_calls"][1]
+    content = validation["result"]["content"]
+    content.pop("workflow")
+    content["operation"] = {
+        "operation_id": "validation-operation",
+        "workflow": "workflow",
+        "status": "succeeded",
+    }
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_does_not_misdiagnose_self_check_when_review_ledger_is_invalid() -> None:
+    """An invalid review ledger must not erase independently observed checks."""
+
+    observations = _dispatch_observations()
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds={"closure": [{"status": "complete"}]},
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+    assert "construction_self_check_not_observed" not in result.codes
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
         "wrong_definition_id",
         "wrong_provenance_closure",
+        "wrong_redacted_provenance_closure",
         "wrong_closure",
         "wrong_workflow",
         "missing_stage",
@@ -2052,6 +2117,10 @@ def test_construction_rejects_an_unbound_or_incomplete_supervisor_check(
     elif mutation == "wrong_provenance_closure":
         check["result"]["content"]["provenance"]["closure_path"] = (
             "/workspace/other-closure"
+        )
+    elif mutation == "wrong_redacted_provenance_closure":
+        check["result"]["content"]["provenance"]["closure_path"] = (
+            "<path>/other-closure"
         )
     elif mutation == "wrong_closure":
         check["arguments"]["definition"] = "/workspace/other-closure"

@@ -116,6 +116,16 @@ and verifies dp-blueprint.approved.md, dp-blueprint.proposal.approved.json,
 dp-blueprint.lock.json, and the trusted self_check.py; a placeholder or
 agent-authored copy is rejected.
 
+Recovery source_spans keys are parser paths, not necessarily typed proposal
+paths. Preserve the typed IDs. When an ID differs, use the typed target in
+provenance, source_spans, and echo.coverage, and add exactly one anchors
+entry from the exact parser path to that typed target path before strict
+validation. For example, map
+v3:decisions[as_of_instant_for_current].text to
+v3:decisions[as-of-instant-for-current].text, and apply the same rule to every
+other populated .text path; never slugify, snake-case, or patch only the path
+named by the error.
+
 After the review child returns claims, keep the rich review ledger in the
 job-level review-record.json. Relay only the bounded report in
 action.parameters.report. That value must be an object with exactly this
@@ -140,6 +150,38 @@ dependency_evidence_sha256, and session_ref as siblings of report, using the
 values returned by the supervisor; do not put those binding fields inside
 report. The supervisor derives evidence identity from its current binding;
 caller-provided claims are not execution authority.
+
+The review ledger is a real append-only record, not a summary of the
+supervisor report. For every round, fill started_at_unix_ms and
+ended_at_unix_ms with the actual current Unix epoch time in integer
+milliseconds, use a positive budget_ms, and keep the complete finding and
+adjudication objects. Null timestamps, a copied report verdict, or a compact
+claims-only record is invalid. The exact approval quote has the same rule:
+when relaying session_decision, copy the complete current operator message
+byte-for-byte into parameters.quote; "Approved." or another shortened
+summary is not the approval quote.
+
+Use this exact ledger envelope and round shape (replace values, do not rename
+keys):
+{
+  "schema": "nxd-conversation-review-ledger-v1",
+  "workflow": "<workflow>",
+  "review_rounds": [{
+    "status": "complete",
+    "started_at_unix_ms": <integer>,
+    "ended_at_unix_ms": <integer>,
+    "budget_ms": 300000,
+    "findings": [],
+    "adjudications": [],
+    "user_decision": null,
+    "deferred_finding_ids": []
+  }]
+}
+If findings are present, each finding must contain id, claim, evidence,
+classification, proposed_effect, applied_files, and state, and each finding
+must have one matching adjudication containing finding_id, disposition, and
+citation. If a user decision is present, it must contain only
+approved_at_unix_ms, citation, and approved_finding_ids.
 
 After a report_requirement result, inspect its report verdict before using the
 returned next_actions. For findings, rejected, or indeterminate, relay the
@@ -181,11 +223,14 @@ build-record.json#self_check, while review uses the adjacent job-level
 review-record.json#review_rounds/<review_round_index> as shown. Do not add
 keys, use an object wrapper, or use a different reference.
 
-If scenario-evidence-contract.json exists at the workspace root, read it and
-write the requested JSON object at its artifact_path, and follow every entry in
-its "conduct" list for the rest of the run. The runner grades that artifact
-against independent references; do not edit the contract or place credentials
-in the evidence object.
+If scenario-evidence-contract.json exists at the workspace root, read it
+before advancing the workflow and treat its artifact_path as a required,
+workspace-relative output. Create its parent directory when needed and write
+the exact requested JSON object there after the governed query and before the
+final response. The runner-owned source-evidence.json is a different artifact
+and cannot substitute for the contract path. Follow every entry in the
+contract's "conduct" list for the rest of the run; do not edit the contract or
+place credentials in the evidence object.
 
 For an authenticated mock source, the infra profile names the credential_env
 variable for the generated connector runtime; never print or echo its value.
@@ -225,7 +270,10 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "it with the returned session_decision action.",
     "An answer marked as approval is usable only after prepare_workflow has "
     "bound the complete written blueprint and returned its consent subject. "
-    "Never manufacture, summarize, or pre-fill approval evidence.",
+    "Never manufacture, summarize, or pre-fill approval evidence. When you "
+    "relay session_decision, copy the complete current operator message "
+    "byte-for-byte into quote; a shortened value such as 'Approved.' is not "
+    "the approval quote.",
     # This rule stops the agent stalling for a second approval after the
     # supervisor has bound the exact consent subject. A conduct rule may
     # constrain how the agent treats the operator; it must not countermand the
@@ -282,14 +330,29 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "nxd-conversation-review-ledger-v1 and the exact existing adversarial-review "
     "round shape from src/nxd-run-job-loop/reference/build-record.md: each "
     "round must use status, started_at_unix_ms, ended_at_unix_ms, budget_ms, "
-    "findings, adjudications, user_decision, and deferred_finding_ids. Keep "
+    "findings, adjudications, user_decision, and deferred_finding_ids. The "
+    "ledger status is exactly one of complete, needs_user, or timed_out; the "
+    "supervisor report verdict values findings and clear belong only inside "
+    "report_requirement and must never be copied into the ledger status. "
+    "user_decision is the declared object or null, never a prose status token. Keep "
     "the complete finding evidence and adjudication there; do not substitute "
     "a summary with review_round_index, generation, reviewer, verdict, claims, "
-    "or outcome fields, because that is not the declared ledger contract.",
+    "or outcome fields, because that is not the declared ledger contract. "
+    "Use actual current Unix epoch milliseconds for started_at_unix_ms and "
+    "ended_at_unix_ms; null timestamps are invalid. The minimal valid shape is "
+    "{schema: nxd-conversation-review-ledger-v1, workflow: <workflow>, "
+    "review_rounds: [{status: complete, started_at_unix_ms: <integer>, "
+    "ended_at_unix_ms: <integer>, budget_ms: 300000, findings: [], "
+    "adjudications: [], user_decision: null, deferred_finding_ids: []}]}; "
+    "keep every key and do not replace it with a claims-only summary.",
     "If prepare_workflow rejects a proposal and returns a prepare_recovery_id, "
     "call inspect_prepare_recovery immediately, verify it belongs to the "
     "unchanged final blueprint, regenerate the complete typed proposal from "
-    "its source_spans, and retry with a fresh request id. If it returns no "
+    "its source_spans. Preserve typed IDs and, for every parser-to-typed ID "
+    "difference, add exactly one anchors entry while using the typed target "
+    "in provenance, source_spans, and echo.coverage; apply this to every "
+    "populated .text path, not only the reported path. Then strictly validate "
+    "the complete replacement and retry with a fresh request id. If it returns no "
     "recovery id, discard the proposal, reread the final blueprint, obtain a "
     "fresh parser/source map through the installed authoring flow, regenerate "
     "the complete proposal, and retry with a fresh request id; do not call "
@@ -311,9 +374,18 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "credential value with a named placeholder; if complete sanitization "
     "cannot be established, do not delegate and stop. Refuse unsafe handling "
     "briefly and refer to the value generically.",
-    "Follow the required_fields contract literally: use the exact object keys "
-    "and scalar values it requests, do not add diagnostic convenience fields to "
-    "exact arrays, and do not rename promise keys into prose variants.",
+    "Read scenario-evidence-contract.json before the first workflow action. "
+    "After the governed query, write its exact required object at the "
+    "contract's artifact_path before the final response; source-evidence.json "
+    "is runner-owned and is not a substitute. Follow the required_fields "
+    "contract literally: use the exact object keys and scalar values it "
+    "requests, do not add diagnostic convenience fields to exact arrays, and "
+    "do not rename promise keys into prose variants.",
+    "The harness records credential-free source pages and response statuses in "
+    "its own source-evidence artifact. If the connector tools do not expose "
+    "page or transport detail to you, leave those evidence fields null rather "
+    "than fabricating them; populate the independently observed output rows, "
+    "contract, and product surfaces normally.",
 )
 
 
@@ -1171,6 +1243,8 @@ class ClaudeCodeAdapter:
         strict_mcp_config: bool = False,
         allowed_tools: str | None = None,
         supervisor_data_dir: Path | None = None,
+        native_continuation: bool = False,
+        resume_session_id: str | None = None,
     ) -> None:
         self.claude = claude
         self.model = model
@@ -1191,6 +1265,8 @@ class ClaudeCodeAdapter:
         self.mcp_config = mcp_config
         self.strict_mcp_config = strict_mcp_config
         self.allowed_tools = allowed_tools
+        self.native_continuation = bool(native_continuation)
+        self._resume_session_id = resume_session_id
         self._stdio: Any = None
         self._temp: tempfile.TemporaryDirectory[str] | None = None
         self._review_guard_temp: tempfile.TemporaryDirectory[str] | None = None
@@ -1207,6 +1283,17 @@ class ClaudeCodeAdapter:
         # identity lives in the harness manifest and report, so the Claude
         # transport only needs a fresh valid session identifier here.
         self._session_id = str(uuid.uuid4())
+        for candidate in (self._resume_session_id, self._session_id):
+            if candidate is None:
+                continue
+            try:
+                parsed = uuid.UUID(candidate)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ClaudeAdapterError("Claude session identity must be a UUID") from exc
+            if str(parsed) != candidate:
+                raise ClaudeAdapterError("Claude session identity must use canonical UUID spelling")
+        if self._resume_session_id is not None and not self.native_continuation:
+            raise ClaudeAdapterError("--resume-session-id requires native continuation mode")
         self._stdout_buffer = b""
         self._before: dict[str, bytes] = {}
         self._facts: dict[str, object] = {}
@@ -1258,6 +1345,7 @@ class ClaudeCodeAdapter:
         strict_mcp_config: bool,
         mcp_allowed_tools: str,
         settings_path: Path | str | None = None,
+        resume_session_id: str | None = None,
     ) -> list[str]:
         """Return the exact Claude Code argv this adapter would spawn.
 
@@ -1276,13 +1364,22 @@ class ClaudeCodeAdapter:
         ]
         if self.allow_bash:
             allowed_tools.insert(0, "Bash")
+        effective_resume_id = resume_session_id if resume_session_id is not None else self._resume_session_id
+        if effective_resume_id is not None:
+            if not self.native_continuation:
+                raise ClaudeAdapterError("Claude --resume requires native continuation mode")
+            try:
+                parsed = uuid.UUID(effective_resume_id)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ClaudeAdapterError("Claude --resume session id must be a UUID") from exc
+            if str(parsed) != effective_resume_id:
+                raise ClaudeAdapterError("Claude --resume session id must use canonical UUID spelling")
+
         command = [
             str(self.claude),
             "-p",
             "--input-format",
             "stream-json",
-            "--session-id",
-            self._session_id,
             "--output-format",
             "stream-json",
             # Forward child messages with parent_tool_use_id so the run-scoped
@@ -1306,10 +1403,24 @@ class ClaudeCodeAdapter:
             str(mcp_config),
             "--permission-mode",
             "acceptEdits",
-            "--no-session-persistence",
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        if effective_resume_id is not None:
+            # Native continuation is intentionally a different CLI mode:
+            # --resume must never be paired with either --session-id or the
+            # fresh-run --no-session-persistence switch.
+            command[command.index("--input-format") + 2:command.index("--output-format")] = [
+                "--resume",
+                effective_resume_id,
+            ]
+        else:
+            command[command.index("--input-format") + 2:command.index("--output-format")] = [
+                "--session-id",
+                self._session_id,
+            ]
+            if not self.native_continuation:
+                command.extend(("--no-session-persistence",))
         # The supervisor retains the fresh capture and approved blueprint
         # outside the agent workspace. Grant only those content roots to
         # Claude, not the whole supervisor data directory, which may contain
@@ -1424,6 +1535,7 @@ class ClaudeCodeAdapter:
             mcp_config=mcp_config,
             strict_mcp_config=strict_mcp_config,
             mcp_allowed_tools=mcp_allowed_tools,
+            resume_session_id=self._resume_session_id,
         )
         environment = dict(os.environ)
         # The operator driver's provider key belongs to the harness process
@@ -1725,7 +1837,7 @@ class ClaudeCodeAdapter:
             events,
             redact_json_rpc=self._redact_json_rpc,
             redact_text=self._redact_text,
-            session_id=self._session_id,
+            session_id=getattr(self, "_resume_session_id", None) or self._session_id,
         )
         if result.last_mcp_call is not None:
             self._last_mcp_call = result.last_mcp_call
@@ -1899,6 +2011,24 @@ class ClaudeCodeAdapter:
             return result
         return self._finish_turn(events)
 
+    def resume_session(self, session_id: str | None = None) -> str:
+        """Select a persisted Claude session for the next process start."""
+
+        if not self.native_continuation:
+            raise ClaudeAdapterError("native Claude continuation is not enabled")
+        if not isinstance(session_id, str) or not session_id:
+            raise ClaudeAdapterError("native continuation requires a session id")
+        try:
+            parsed = uuid.UUID(session_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ClaudeAdapterError("native continuation session id must be a UUID") from exc
+        if str(parsed) != session_id:
+            raise ClaudeAdapterError("native continuation session id must use canonical UUID spelling")
+        if self._process is not None:
+            raise ClaudeAdapterError("cannot resume while a Claude process is active")
+        self._resume_session_id = session_id
+        return session_id
+
     def _approval_artifact(self, snapshot: Mapping[str, bytes]) -> bytes | None:
         """Expose the actual blueprint bytes to the operator approval gate."""
 
@@ -1965,6 +2095,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--allowedTools")
     parser.add_argument(
+        "--native-continuation",
+        action="store_true",
+        help="opt into persisted Claude sessions and the explicit --resume continuation seam",
+    )
+    parser.add_argument(
+        "--resume-session-id",
+        help="resume this canonical Claude UUID; requires --native-continuation",
+    )
+    parser.add_argument(
         "--no-bash",
         action="store_true",
         help="do not grant the Claude subprocess Bash access",
@@ -2000,6 +2139,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.supervisor_data_dir is not None
             else None
         ),
+        native_continuation=args.native_continuation,
+        resume_session_id=args.resume_session_id,
     )
 
     def terminate_on_signal(signum: int, _frame: Any) -> None:

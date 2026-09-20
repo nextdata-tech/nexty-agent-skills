@@ -35,6 +35,8 @@ from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner import (
     CanaryResult,
+    CheckpointState,
+    CheckpointStore,
     PinnedVersions,
     ReplayRecording,
     RecordingSession,
@@ -168,6 +170,17 @@ def driver_pins() -> PinnedVersions:
     )
 
 
+def test_source_evidence_uses_the_final_complete_pagination_attempt() -> None:
+    pages = [
+        {"next_cursor": "present", "rows": [{"id": "old-1"}]},
+        {"next_cursor": None, "rows": [{"id": "old-2"}]},
+        {"next_cursor": "present", "rows": [{"id": "new-1"}]},
+        {"next_cursor": None, "rows": [{"id": "new-2"}]},
+    ]
+
+    assert tier_module._latest_paginated_pages(pages) == pages[2:]
+
+
 def clean_canary() -> CanaryResult:
     return CanaryResult(Verdict("clean", (), ()), claims_hash="claims-1")
 
@@ -298,6 +311,158 @@ def test_tier_runner_drives_the_same_operator_factory_on_replay_and_live_paths(t
         )
     ] == [0, 0, 0, 0]
     assert all(turn["driver_skip_reason"] is None for turn in scripted_observations["turns"])
+
+
+def test_live_tier_emits_secret_safe_chained_handoff_checkpoints(tmp_path: Path) -> None:
+    scenario = make_scenario("checkpoint-live", turns=3)
+    (tmp_path / "runs").mkdir()
+    responses = [
+        TurnResult(
+            agent_message=f"turn {index}",
+            files_touched=(TouchedFile("closure.csv", "PRIVATE-CONTENT"),),
+        )
+        for index in range(1, 4)
+    ]
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(responses),
+        environment_root=tmp_path / "runs",
+        checkpoint_root=tmp_path / "checkpoints",
+    ).run()
+
+    assert result.scenario_runs[0].transcript_turns == 3
+    store = CheckpointStore(tmp_path / "checkpoints" / scenario.id / "epoch-1")
+    identity = store.read_identity()
+    records = [
+        CheckpointState.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(store.records_dir.glob("turn-[0-9]*.json"))
+        if ".payload." not in path.name
+    ]
+    assert [state.checkpoint_id for state in records] == [
+        "turn-000001",
+        "turn-000002",
+        "turn-000003",
+    ]
+    assert [state.parent_id for state in records] == [None, "turn-000001", "turn-000002"]
+    assert [state.phase for state in records] == ["1", "2", "3"]
+    assert all(state.continuity_mode == "handoff" for state in records)
+    assert all(state.identity_digest == identity.digest for state in records)
+    payloads = [store.read_payload(state) for state in records]
+    assert all(payload is not None for payload in payloads)
+    assert all("PRIVATE-CONTENT" not in json.dumps(payload) for payload in payloads)
+    assert all(
+        isinstance(payload, dict)
+        and payload["metadata"]["touched_file_contents_redacted"] is True
+        for payload in payloads
+    )
+
+
+def test_native_continuation_persists_identity_and_resumes_only_the_next_turn(
+    tmp_path: Path,
+) -> None:
+    scenario = make_scenario("native-continuation", turns=2)
+    session_id = "00000000-0000-4000-8000-000000000001"
+    checkpoint_root = tmp_path / "checkpoints"
+    native_run_root = tmp_path / "native-runs"
+    (tmp_path / "first-environments").mkdir()
+    (tmp_path / "resumed-environments").mkdir()
+    def first_response(_message: object, index: int) -> TurnResult:
+        if index == 1:
+            return TurnResult(
+                agent_message="first",
+                session_id=session_id,
+                files_touched=(TouchedFile("closure/spec.py", b"checkpoint-prefix"),),
+            )
+        raise SessionError("bounded test interruption")
+
+    first_transport = InMemoryTransport(first_response)
+    with pytest.raises(SessionError, match="bounded test interruption"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=lambda *_args: first_transport,
+            environment_root=tmp_path / "first-environments",
+            checkpoint_root=checkpoint_root,
+            native_continuation=True,
+            native_run_root=native_run_root,
+        ).run()
+
+    checkpoint_store = CheckpointStore(checkpoint_root / scenario.id / "epoch-1")
+    checkpoint = checkpoint_store.latest()
+    assert checkpoint is not None
+    assert checkpoint.committed_turn == 1
+    assert checkpoint.continuity_mode == "native-resume"
+    assert checkpoint.native_session is not None
+    assert checkpoint.native_session.session_id == session_id
+    assert checkpoint.native_session.execution_identity_digest == checkpoint.identity_digest
+    assert checkpoint_store.read_source_snapshot("turn-000001") == {
+        (1, 0): ("closure/spec.py", b"checkpoint-prefix")
+    }
+    persisted_native_session = json.loads(
+        (checkpoint_store.records_dir / "turn-000001.json").read_text(encoding="utf-8")
+    )["native_session"]
+    assert set(persisted_native_session) == {"session_id", "execution_identity_digest"}
+
+    resumed_transport = InMemoryTransport(
+        [TurnResult(agent_message="second", session_id=session_id)]
+    )
+    resumed = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: resumed_transport,
+        environment_root=tmp_path / "resumed-environments",
+        checkpoint_root=checkpoint_root,
+        native_continuation=True,
+        native_resume_checkpoint=checkpoint_store.records_dir / "turn-000001.json",
+        native_run_root=native_run_root,
+    ).run()
+
+    assert resumed.scenario_runs[0].transcript_turns == 2
+    assert resumed_transport.resumed == [session_id]
+    assert resumed_transport.started_fresh == []
+    assert resumed_transport.message_texts == ("Please continue 1.",)
+    assert checkpoint_store.latest() is not None
+    assert checkpoint_store.latest().committed_turn == 2  # type: ignore[union-attr]
+
+
+def test_native_continuation_does_not_commit_an_interrupted_turn(tmp_path: Path) -> None:
+    scenario = make_scenario("native-interruption", turns=2)
+    session_id = "00000000-0000-4000-8000-000000000002"
+    checkpoint_root = tmp_path / "checkpoints"
+    (tmp_path / "runs").mkdir()
+
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="first", session_id=session_id),
+            TurnResult(
+                agent_message="partial",
+                session_id=session_id,
+                turn_timed_out=True,
+                failure_reason="child_no_terminal_result",
+            ),
+        ]
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: transport,
+        environment_root=tmp_path / "runs",
+        checkpoint_root=checkpoint_root,
+        native_continuation=True,
+        native_run_root=tmp_path / "native-runs",
+    ).run()
+
+    assert result.scenario_runs[0].terminal_state is EngineTerminalState.TURN_TIMEOUT
+    store = CheckpointStore(checkpoint_root / scenario.id / "epoch-1")
+    latest = store.latest()
+    assert latest is not None
+    assert latest.committed_turn == 1
+    assert not (store.records_dir / "turn-000002.json").exists()
 
 
 def recording_for(
@@ -548,6 +713,31 @@ def test_tier_rejects_invalid_max_workers(max_workers: object) -> None:
             pins=pins(),
             canary=clean_canary(),
             max_workers=max_workers,  # type: ignore[arg-type]
+        )
+
+
+def test_tier_rejects_native_continuation_without_its_persistent_contract() -> None:
+    with pytest.raises(TierError, match="persistent run root"):
+        TierRunner(
+            [],
+            pins=pins(),
+            canary=clean_canary(),
+            checkpoint_root=Path("checkpoints"),
+            native_continuation=True,
+        )
+
+
+def test_tier_rejects_native_resume_for_multiple_scenarios_or_epochs(tmp_path: Path) -> None:
+    scenarios = (make_scenario("native-one"), make_scenario("native-two"))
+    with pytest.raises(TierError, match="one explicitly selected scenario and epoch"):
+        TierRunner(
+            scenarios,
+            pins=pins(),
+            canary=clean_canary(),
+            checkpoint_root=tmp_path / "checkpoints",
+            native_continuation=True,
+            native_resume_checkpoint=tmp_path / "checkpoint",
+            native_run_root=tmp_path / "native-runs",
         )
 
 
@@ -1147,6 +1337,33 @@ def test_tier_rejects_existing_evidence_destination_before_running_a_session(tmp
             canary=clean_canary(),
             session_factory=forbidden_session,
             evidence_root=tmp_path / "evidence",
+        ).run()
+    assert called == []
+
+
+def test_native_resume_rejects_existing_evidence_destination_before_running_a_session(
+    tmp_path: Path,
+) -> None:
+    scenario = make_scenario("native-resume-evidence-collision")
+    evidence_root = tmp_path / "evidence"
+    destination = evidence_root / scenario.id / "epoch-1"
+    destination.mkdir(parents=True)
+    called: list[str] = []
+
+    def forbidden_session() -> object:
+        called.append("constructed")
+        raise AssertionError("session must not be constructed after a resume artifact collision")
+
+    with pytest.raises(TierError, match="evidence bundle destination already exists"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=forbidden_session,
+            evidence_root=evidence_root,
+            native_continuation=True,
+            native_resume_checkpoint=tmp_path / "checkpoint",
+            native_run_root=tmp_path / "native-run",
         ).run()
     assert called == []
 

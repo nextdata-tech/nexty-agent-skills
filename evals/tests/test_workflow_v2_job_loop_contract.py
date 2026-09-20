@@ -78,6 +78,7 @@ def _closed_v3_shapes() -> dict[str, object]:
         "contract_keys": frozenset(contract_schema["required"]),
         "decision_keys": frozenset(decision_schema["required"]),
         "decision_statuses": frozenset(module.DECISION_STATUS_VALUES),
+        "transform_operations": tuple(module.TRANSFORM_OPERATIONS),
         "delivery": dict(module.FIXED_DELIVERY),
     }
 
@@ -394,6 +395,25 @@ def test_workflow_v2_reference_matches_the_canonical_closed_v3_shapes() -> None:
         assert set(contract) == shapes["contract_keys"]
         expected = source_entries[contract["id"]]
         assert contract == expected
+
+
+def test_workflow_v2_reference_pins_empty_open_questions_and_transform_enum() -> None:
+    reference = WORKFLOW_V2.read_text(encoding="utf-8")
+    normalized = " ".join(reference.split())
+    assert "If the prose `## Open Questions` section is empty, produce `proposal.open_questions: []`." in normalized
+    assert "must not contain a prose placeholder such as `None`" in normalized
+    assert "omit `v3:open_questions.text` from `provenance`, `source_spans`, and `echo.coverage`" in normalized
+    assert "echo must also name the affected term and say that it uses the platform-default `P3` priority" in normalized
+
+    operations = _closed_v3_shapes()["transform_operations"]
+    expected = (
+        "The only allowed typed v3 transform operations are "
+        + ", ".join(f"`{operation}`" for operation in operations[:-1])
+        + f", and `{operations[-1]}`"
+        + "."
+    )
+    assert expected in normalized
+    assert "API fetch and pagination are connector behavior, not typed transform operations" in normalized
 
 
 def test_contract_inventory_mismatch_has_one_semantics_preserving_repair():

@@ -436,6 +436,51 @@ def test_session_digest_normalizes_only_mock_source_port(tmp_path: Path) -> None
     assert first != digest("different-host", "http://localhost:58902/source")
 
 
+def test_session_digest_ignores_run_local_tmpdir_and_source_secret(
+    tmp_path: Path,
+) -> None:
+    server = _script(tmp_path / "server.py", "for _line in __import__('sys').stdin: pass\n")
+
+    def digest(tmpdir: str, token: str) -> str:
+        adapter = DesktopStdioTransport.create(
+            _argv_builder,
+            environment={},
+            cwd=tmp_path,
+            server_command=[sys.executable, str(server)],
+            server_environment={
+                "TMPDIR": tmpdir,
+                "NXD_EVAL_SOURCE_TOKEN": token,
+                "MODE": "same",
+            },
+            root=tmp_path / token / "session",
+        ).start()
+        try:
+            return adapter.session_config_sha256
+        finally:
+            adapter.cleanup()
+
+    first = digest("/private/tmp/first", "token-one")
+    second = digest("/private/tmp/second", "token-two")
+    assert first == second
+
+    changed = DesktopStdioTransport.create(
+        _argv_builder,
+        environment={},
+        cwd=tmp_path,
+        server_command=[sys.executable, str(server)],
+        server_environment={
+            "TMPDIR": "/private/tmp/third",
+            "NXD_EVAL_SOURCE_TOKEN": "token-three",
+            "MODE": "different",
+        },
+        root=tmp_path / "changed" / "session",
+    ).start()
+    try:
+        assert changed.session_config_sha256 != first
+    finally:
+        changed.cleanup()
+
+
 def test_live_manifests_same_scenario_are_comparable(tmp_path: Path) -> None:
     server = _script(tmp_path / "server.py", "for _line in __import__('sys').stdin: pass\n")
     turn = _script(tmp_path / "turn.py", "for _line in __import__('sys').stdin: pass\n")
