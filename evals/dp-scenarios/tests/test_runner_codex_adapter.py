@@ -431,3 +431,6 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     assert result.session_id == "00000000-0000-4000-8000-000000000020"
     assert result.agent_message == "partial"
     assert result.last_mcp_call == "inspect_run:unanswered"
+    assert "event_tail=item/started[mcpToolCall]:nxd-desktop/inspect_run=inProgress" in (
+        result.environment_detail or ""
+    )

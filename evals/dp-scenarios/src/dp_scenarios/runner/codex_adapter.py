@@ -230,6 +230,39 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
     return event
 
 
+def _event_debug_tail(events: Sequence[Mapping[str, object]], *, limit: int = 12) -> str | None:
+    """Return a bounded, value-free event tail for timeout diagnostics."""
+
+    labels: list[str] = []
+    for event in events[-limit:]:
+        method = event.get("method")
+        if not isinstance(method, str):
+            event_type = event.get("type")
+            method = event_type if isinstance(event_type, str) else "event"
+        params = event.get("params")
+        if isinstance(params, Mapping):
+            item = params.get("item")
+            if isinstance(item, Mapping):
+                item_type = item.get("type")
+                if isinstance(item_type, str):
+                    method += f"[{item_type}]"
+                if item_type == "mcpToolCall":
+                    server = item.get("server")
+                    tool = item.get("tool")
+                    if isinstance(server, str) and isinstance(tool, str):
+                        method += f":{server}/{tool}"
+                status = item.get("status")
+                if isinstance(status, str):
+                    method += f"={status}"
+            turn = params.get("turn")
+            if isinstance(turn, Mapping):
+                status = turn.get("status")
+                if isinstance(status, str):
+                    method += f"={status}"
+        labels.append(method)
+    return ", ".join(labels) if labels else None
+
+
 def parse_codex_events(
     events: Sequence[Mapping[str, object]],
     *,
@@ -982,6 +1015,7 @@ class CodexAdapter:
             events = self._collect_turn(request_id, prompt, events)
         except TimeoutError as exc:
             detail = "\n".join(self._stderr_tail)[-2000:]
+            event_tail = _event_debug_tail(events)
             self._terminate(process)
             self._process = None
             return self._finish(
@@ -989,6 +1023,7 @@ class CodexAdapter:
                 environment_detail=(
                     f"Codex did not complete the turn within {self.timeout_s:.1f}s"
                     + (f"; stderr={detail}" if detail else "")
+                    + (f"; event_tail={event_tail}" if event_tail else "")
                 ),
                 turn_timed_out=True,
                 failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_NO_TERMINAL_RESULT,
