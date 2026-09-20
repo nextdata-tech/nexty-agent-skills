@@ -52,7 +52,12 @@ JSON-encoded string instead of the required object; the supervisor correctly
 rejected it as `workflow/review_incomplete`, and that run also ended
 `ungraded`/`turn_timeout`. Neither is a pass or a benchmark comparison. Full
 local validation after the latest runner changes is 3194 passed, 37 skipped,
-1 warning. A future measured entry still requires a complete authenticated
+1 warning. A subsequent run sent the report as an object and reached the
+reviewer finding path, but mutated/reset the captured workflow before returning
+the non-clear finding; the supervisor rejected the stale operation and the run
+ended `ungraded`/`turn_timeout`. The latest prompt fix makes captured inputs
+immutable until reporting and requires non-clear reports to stop for operator
+adjudication. A future measured entry still requires a complete authenticated
 scenario run with a terminal report.
 
 ## Evidence
