@@ -93,6 +93,12 @@ report, call the returned self-check/validation action and inspect its result
 before following the returned admission, start_run, and query actions. Only use
 inspect_prepare_recovery when the immediately preceding
 pre-admission prepare_workflow response returned a prepare_recovery_id.
+After capture, never edit the retained closure or blueprint before reporting
+the child review; the captured inputs are immutable. If the supervisor returns
+a report verdict of `findings`, `rejected`, or `indeterminate`, relay it to the
+operator and stop for adjudication. Do not reset, edit, recapture, validate,
+admit, or start a run for a non-clear report; only a clear report authorizes
+the returned next actions.
 When the supervisor returns report_requirement or workflow/review_pending after
 capture, the next supervisor action must be that report after the one child
 completes. Do not call reset_workflow, list_data_products, inspect_workflow,
