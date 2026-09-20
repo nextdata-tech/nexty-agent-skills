@@ -46,10 +46,14 @@ now reproduces that transition and proves the illegal operations are answered
 without reaching the supervisor, while the matching report reopens normal
 operation. The first run with explicit Codex collaboration and the child-wait
 parser still ended `ungraded` with `turn_timeout` during closure authoring,
-before the reviewer path; it is not a pass or a benchmark comparison. Full
-local validation after that fix is 3194 passed, 37 skipped, 1 warning. A future
-measured entry still requires a complete authenticated scenario run with a
-terminal report.
+before the reviewer path. The next run reached the reviewer and produced a
+completed child result, but Codex sent the bounded review report as a
+JSON-encoded string instead of the required object; the supervisor correctly
+rejected it as `workflow/review_incomplete`, and that run also ended
+`ungraded`/`turn_timeout`. Neither is a pass or a benchmark comparison. Full
+local validation after the latest runner changes is 3194 passed, 37 skipped,
+1 warning. A future measured entry still requires a complete authenticated
+scenario run with a terminal report.
 
 ## Evidence
 
