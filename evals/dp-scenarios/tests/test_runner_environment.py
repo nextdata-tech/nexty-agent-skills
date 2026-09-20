@@ -1116,6 +1116,9 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
         "Each finding's classification is exactly behavior_affecting or structural_note",
         "never put reviewer severity literals such as HIGH, MEDIUM, or LOW in classification",
         "Severity belongs only to the supervisor report projection",
+        "Every finding must keep the exact keys id, claim, evidence, classification, proposed_effect, applied_files, and state",
+        "evidence is a non-empty array of citation strings",
+        "Every adjudication must keep exactly finding_id, disposition, and citation",
         "accepted means verified, not authorized",
     ):
         assert phrase in rules
