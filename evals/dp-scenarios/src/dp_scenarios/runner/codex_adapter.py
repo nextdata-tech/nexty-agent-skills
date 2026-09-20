@@ -648,11 +648,11 @@ class CodexAdapter:
         if process is None or process.stdout is None or process.stderr is None:
             raise CodexAdapterError("Codex app-server streams are unavailable")
         while True:
-            if self._stdout_events:
-                return self._stdout_events.popleft()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Codex app-server response deadline expired")
+            if self._stdout_events:
+                return self._stdout_events.popleft()
             streams = [process.stdout]
             if self._stderr_open:
                 streams.append(process.stderr)

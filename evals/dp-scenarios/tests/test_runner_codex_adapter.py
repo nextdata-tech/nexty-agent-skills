@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import stat
+import time
+from collections import deque
+from types import SimpleNamespace
 
 import pytest
 
@@ -283,6 +286,15 @@ def test_codex_home_is_disposable_even_without_host_auth(tmp_path: Path) -> None
 def test_codex_adapter_rejects_non_object_app_server_events() -> None:
     with pytest.raises(CodexAdapterError, match="non-object JSON event"):
         CodexAdapter._decode_app_server_line(b"[]")
+
+
+def test_codex_adapter_checks_deadline_before_draining_queued_events() -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter._process = SimpleNamespace(stdout=object(), stderr=object())
+    adapter._stdout_events = deque([{"method": "notification"}])
+
+    with pytest.raises(TimeoutError, match="response deadline expired"):
+        adapter._read_streams(time.monotonic() - 1)
 
 
 def test_codex_adapter_keeps_one_app_server_and_mcp_observations_across_turns(
