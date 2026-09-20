@@ -220,6 +220,21 @@ def test_the_governed_query_timestamp_rendering_is_not_a_disagreement() -> None:
     assert "pipeline_output_disagrees_with_independent_gold" not in result["findings"]
 
 
+def test_an_offset_free_governed_query_timestamp_is_interpreted_as_utc() -> None:
+    """The supervisor's UTC database rendering may omit its offset."""
+
+    target = _good_target()
+    target["result_rows"] = [  # type: ignore[index]
+        {**row, "updated_at": row["updated_at"].removesuffix("+00:00")}
+        for row in target["result_rows"]  # type: ignore[index]
+    ]
+
+    result = SCENARIO.follow_up_check(target)
+
+    assert result["passed"], result["findings"]
+    assert "pipeline_output_disagrees_with_independent_gold" not in result["findings"]
+
+
 def test_a_different_instant_is_still_a_disagreement() -> None:
     """Normalizing the rendering must not stop the comparison comparing."""
 

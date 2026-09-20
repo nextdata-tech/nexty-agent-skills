@@ -1120,6 +1120,11 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
         "evidence is a non-empty array of citation strings",
         "Every adjudication must keep exactly finding_id, disposition, and citation",
         "accepted means verified, not authorized",
+        "any finding in needs_user state requires ledger status needs_user",
+        "never write status complete while a needs_user finding or deferred_finding_ids remains unresolved",
+        "A non-empty deferred_finding_ids list requires the same round's auditable user_decision",
+        "complete that pending round's user_decision before appending another round",
+        "Do not submit a clear review, call start_run, or publish until the current generation has a valid, resolved review",
     ):
         assert phrase in rules
 
