@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-20 | add a persistent Codex live-runner backend | NO_EVAL | — | [`2026-09-20-codex-live-runner`](entries/2026-09-20-codex-live-runner.md) |
 | 2026-09-19 | workflow-v2: pin empty open questions and typed transform operations | NO_EVAL | — | [`2026-09-19-workflow-v2-typed-authoring-guidance`](entries/2026-09-19-workflow-v2-typed-authoring-guidance.md) |
 | 2026-09-19 | add an explicit opt-in native Claude continuation seam | NO_EVAL | — | [`2026-09-19-native-claude-continuation-seam`](entries/2026-09-19-native-claude-continuation-seam.md) |
 | 2026-09-18 | add a durable checkpoint contract before live resumption | NO_EVAL | — | [`2026-09-18-resumable-run-checkpoints`](entries/2026-09-18-resumable-run-checkpoints.md) |

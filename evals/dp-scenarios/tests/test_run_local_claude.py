@@ -302,6 +302,33 @@ def test_local_runner_host_home_flag_and_bash_require_a_second_opt_in() -> None:
         module.main(["--allow-host-home-bash"])
 
 
+def test_local_runner_selects_codex_backend_without_claude_tool_grants() -> None:
+    module = _load_runner_module()
+
+    args = module.build_parser().parse_args(["--agent-backend", "codex"])
+
+    assert args.agent_backend == "codex"
+    assert module._tool_grant_arguments(args, oauth_token_present=True) == []
+
+
+def test_codex_home_is_validated_without_reading_auth_files(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+
+    assert module._resolve_codex_home(codex_home) == codex_home
+
+    with pytest.raises(TierError, match="Codex home is not a directory"):
+        module._resolve_codex_home(codex_home / "missing")
+
+
+def test_codex_backend_rejects_claude_only_budget_flag() -> None:
+    module = _load_runner_module()
+
+    with pytest.raises(TierError, match="only supported by the Claude backend"):
+        module.main(["--agent-backend", "codex", "--max-budget-usd", "1"])
+
+
 def test_local_runner_loads_only_supported_credentials_from_owner_only_env_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

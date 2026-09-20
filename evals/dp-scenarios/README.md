@@ -474,6 +474,37 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --scenario crm-pipeline
 ```
 
+The live runner also supports the host-authenticated Codex CLI as an alternate
+agent backend. This is a real provider run through the same supervisor and
+grading boundary; it is not a replay and it does not relax any gate. Codex
+uses its own workspace-write sandbox and the runner-owned `nxd-desktop` MCP
+server. Its default model is `gpt-5.6-luna`; pass `--model` to select another
+Codex model. The runner passes only the `CODEX_HOME` directory path to the
+child, never credential values or the host HOME:
+
+```bash
+uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_claude.py \
+  --agent-backend codex \
+  --scenario crm-pipeline \
+  --model gpt-5.6-luna \
+  --effort xhigh \
+  --codex-home "$HOME/.codex" \
+  --output-dir /tmp/dp-scenarios-codex-b1
+```
+
+Codex sessions use one long-lived `codex app-server --stdio` child per live
+run. This keeps the runner-owned MCP connection and opaque provider thread
+identity across operator turns; a fresh Codex process is not started for each
+turn. The adapter stages a disposable Codex home and symlinks only the
+host-owned auth handle, so host MCP configuration and plugin state do not
+enter the run. Native continuation across a process restart is not currently
+supported by this backend; use the ordinary credential-free handoff
+checkpoints, then start a new Codex run. Claude-only flags such as
+`--max-budget-usd` and Claude tool-grant flags are rejected or ignored for
+this backend. Codex's workspace sandbox is provider-owned, so tool-restricted
+scenarios are not directly comparable with Claude runs that enforce a
+per-tool allowlist.
+
 ### When a live run stops without being graded
 
 A live run can end for reasons that say nothing about the agent: the provider

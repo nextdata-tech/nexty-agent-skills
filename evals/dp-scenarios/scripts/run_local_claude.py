@@ -49,9 +49,11 @@ from dp_scenarios.scenario import SCENARIO_TIERS, Scenario, load_scenarios, sele
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCENARIO_ROOT = REPO_ROOT / "evals" / "dp-scenarios" / "scenarios"
 CANARY_ROOT = SCENARIO_ROOT / "drift-canary"
-ADAPTER_MODULE = "dp_scenarios.runner.claude_adapter"
+CLAUDE_ADAPTER_MODULE = "dp_scenarios.runner.claude_adapter"
+CODEX_ADAPTER_MODULE = "dp_scenarios.runner.codex_adapter"
 CLAUDE_OAUTH_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 OPENAI_API_KEY = "OPENAI_API_KEY"
+CODEX_HOME = "CODEX_HOME"
 
 
 def _sha256(path: Path) -> str:
@@ -89,6 +91,53 @@ def _resolve_executable(explicit: Path | None, name: str) -> Path:
     candidate = candidate.resolve()
     if not candidate.is_file() or not candidate.stat().st_mode & 0o111:
         raise TierError(f"{name} is not an executable file: {candidate}")
+    return candidate
+
+
+def _resolve_codex_executable(explicit: Path | None) -> Path:
+    """Resolve Codex away from an asdf shim that depends on the host HOME."""
+
+    if explicit is not None:
+        candidate = explicit.expanduser().absolute()
+    else:
+        discovered = shutil.which("codex")
+        if discovered is None:
+            raise TierError("codex was not found on PATH; pass an explicit executable path")
+        candidate = Path(discovered).absolute()
+    if explicit is None and candidate.parent.name == "shims":
+        asdf = shutil.which("asdf")
+        if asdf is not None:
+            try:
+                completed = subprocess.run(
+                    [asdf, "which", "codex"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            except OSError:
+                completed = None
+            resolved = Path(completed.stdout.strip()).expanduser().absolute() if completed is not None and completed.returncode == 0 else None
+            if resolved is not None and resolved.is_file() and resolved.stat().st_mode & 0o111:
+                candidate = resolved
+    if not candidate.is_file() or not candidate.stat().st_mode & 0o111:
+        raise TierError(f"codex is not an executable file: {candidate}")
+    return candidate
+
+
+def _resolve_codex_home(selected: Path | None) -> Path:
+    """Resolve the host Codex auth/config directory without reading it.
+
+    The live agent gets this path through ``CODEX_HOME`` so the Codex CLI can
+    use its host-authenticated session while the disposable run HOME remains
+    isolated.  The runner never reads, logs, or copies the credentials in the
+    directory.
+    """
+
+    configured = os.environ.get(CODEX_HOME)
+    candidate = (selected or (Path(configured) if configured else Path.home() / ".codex"))
+    candidate = candidate.expanduser().absolute()
+    if not candidate.is_dir():
+        raise TierError(f"Codex home is not a directory: {candidate}")
     return candidate
 
 
@@ -314,6 +363,10 @@ def _tool_grant_arguments(args: argparse.Namespace, *, oauth_token_present: bool
     operator need not have opted into anything to hit it.
     """
 
+    if getattr(args, "agent_backend", "claude") == "codex":
+        # Codex owns its own sandbox/tool policy.  Claude-specific tool-grant
+        # flags must not be smuggled into the Codex adapter.
+        return []
     if oauth_token_present and args.allow_host_home_bash:
         raise TierError(
             "--allow-host-home-bash cannot be combined with a Claude OAuth token: "
@@ -330,7 +383,13 @@ def _tool_grant_arguments(args: argparse.Namespace, *, oauth_token_present: bool
 def build_parser() -> argparse.ArgumentParser:
     """Build the local runner CLI parser."""
 
-    parser = argparse.ArgumentParser(description="Run local Claude Code DP-scenarios")
+    parser = argparse.ArgumentParser(description="Run local agent DP-scenarios")
+    parser.add_argument(
+        "--agent-backend",
+        choices=("claude", "codex"),
+        default="claude",
+        help="agent CLI used for the live session (default: claude)",
+    )
     parser.add_argument("--scenario", action="append", default=[], help="scenario id; repeat to select several (default: every scenario in --tier)")
     parser.add_argument(
         "--tier",
@@ -390,6 +449,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
+    parser.add_argument("--codex", type=Path, help="Codex executable (default: codex on PATH)")
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        help=(
+            "host Codex auth/config directory (default: CODEX_HOME or ~/.codex); "
+            "the runner passes only this path to the Codex child"
+        ),
+    )
     parser.add_argument(
         "--skill-pack-root",
         type=Path,
@@ -410,10 +478,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also grant Bash when --allow-host-home is set; shell access can reach the host HOME",
     )
-    parser.add_argument("--model", default="sonnet", help="Claude Code model alias")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="agent model id or provider alias (default: sonnet for Claude, gpt-5.6-luna for Codex)",
+    )
     parser.add_argument("--effort", default="medium", choices=("low", "medium", "high", "xhigh", "max"))
     parser.add_argument("--max-budget-usd", type=float, help="per-scenario Claude Code spend ceiling")
-    parser.add_argument("--turn-timeout", type=float, default=600.0, help="maximum seconds for each Claude turn")
+    parser.add_argument("--turn-timeout", type=float, default=600.0, help="maximum seconds for each agent turn")
     parser.add_argument("--supervisor", type=Path, help="nxd-desktop-supervisor executable")
     parser.add_argument(
         "--workflow-activation-bundle",
@@ -463,6 +535,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise TierError("--native-resume-checkpoint requires --native-run-root")
     if args.native_continuation and args.jobs != 1:
         raise TierError("--native-continuation requires --jobs 1")
+    if args.agent_backend == "codex" and args.max_budget_usd is not None:
+        raise TierError("--max-budget-usd is only supported by the Claude backend")
+    if args.agent_backend == "codex" and args.allow_host_home:
+        raise TierError(
+            "--allow-host-home is not supported by the Codex backend: "
+            "the live Codex session must retain the disposable run HOME"
+        )
+    if args.agent_backend == "codex" and args.native_continuation:
+        raise TierError(
+            "--native-continuation is not yet supported by the Codex backend; "
+            "Codex app-server continuity is kept within one live runner process"
+        )
+    agent_model = args.model or ("sonnet" if args.agent_backend == "claude" else "gpt-5.6-luna")
     repo_root = REPO_ROOT
     skill_pack_root = _validated_skill_pack_root(args.skill_pack_root)
     scenarios = _configure_scenarios(
@@ -472,7 +557,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     supervisor = resolve_supervisor(args.supervisor)
     desktop_python = resolve_desktop_python(args.desktop_python)
-    claude = _resolve_executable(args.claude, "claude")
+    claude: Path | None = None
+    codex: Path | None = None
+    codex_home: Path | None = None
+    if args.agent_backend == "claude":
+        claude = _resolve_executable(args.claude, "claude")
+    else:
+        codex = _resolve_codex_executable(args.codex)
+        codex_home = _resolve_codex_home(args.codex_home)
     credentials = _load_local_credentials(args.env_file)
     claude_oauth_token = credentials.get(CLAUDE_OAUTH_TOKEN)
     # Let Claude Code use its normal host-authenticated configuration unless
@@ -498,8 +590,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # the tier identity and smoke manifests do not permit a waiver here.
         mock_api_version="mock-1",
         canary_claims_hash=claims_hash,
-        agent_model_id=args.model,
-        agent_sampling_params={"temperature": "provider-default", "effort": args.effort},
+        agent_model_id=f"{args.agent_backend}:{agent_model}",
+        agent_sampling_params={
+            "backend": args.agent_backend,
+            "temperature": "provider-default",
+            "effort": args.effort,
+        },
     )
     pins, operator_factory = driver_configuration(
         args,
@@ -523,30 +619,53 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception:
         plugin_owner.cleanup()
         raise
-    adapter_kwargs = {
-        "claude": str(claude),
-        "model": args.model,
-        "effort": args.effort,
-        "plugin-dir": str(plugin_dir),
-        "repo-root": str(repo_root),
-        "desktop-supervisor": str(supervisor),
-        "desktop-python": str(desktop_python),
-        "timeout": str(_adapter_timeout(args.turn_timeout)),
-    }
-    if claude_config_dir is not None:
-        adapter_kwargs["claude-config-dir"] = str(claude_config_dir)
-    if args.max_budget_usd is not None:
-        adapter_kwargs["max-budget-usd"] = str(args.max_budget_usd)
+    if args.agent_backend == "claude":
+        assert claude is not None
+        adapter_module = CLAUDE_ADAPTER_MODULE
+        adapter_kwargs = {
+            "claude": str(claude),
+            "model": agent_model,
+            "effort": args.effort,
+            "plugin-dir": str(plugin_dir),
+            "repo-root": str(repo_root),
+            "desktop-supervisor": str(supervisor),
+            "desktop-python": str(desktop_python),
+            "timeout": str(_adapter_timeout(args.turn_timeout)),
+        }
+        if claude_config_dir is not None:
+            adapter_kwargs["claude-config-dir"] = str(claude_config_dir)
+        if args.max_budget_usd is not None:
+            adapter_kwargs["max-budget-usd"] = str(args.max_budget_usd)
+    else:
+        assert codex is not None
+        adapter_module = CODEX_ADAPTER_MODULE
+        adapter_kwargs = {
+            "codex": str(codex),
+            "model": agent_model,
+            "effort": args.effort,
+            # The agent may write within its sandbox. Give it the staged,
+            # disposable plugin rather than the caller's source checkout.
+            "skill-pack-root": str(plugin_dir),
+            "repo-root": str(repo_root),
+            "desktop-supervisor": str(supervisor),
+            "desktop-python": str(desktop_python),
+            "timeout": str(_adapter_timeout(args.turn_timeout)),
+        }
     if args.native_continuation:
         adapter_kwargs["native-continuation"] = ""
 
-    adapter_command = [sys.executable, "-m", ADAPTER_MODULE]
+    adapter_command = [sys.executable, "-m", adapter_module]
     for key, value in adapter_kwargs.items():
         if value:
             adapter_command.extend((f"--{key}", value))
         else:
             adapter_command.append(f"--{key}")
-    adapter_command.extend(_tool_grant_arguments(args, oauth_token_present=claude_oauth_token is not None))
+    adapter_command.extend(
+        _tool_grant_arguments(
+            args,
+            oauth_token_present=(claude_oauth_token is not None and args.agent_backend == "claude"),
+        )
+    )
     adapter_command.extend(("--fixture-dir", "../fixture", "--artifact-dir", "../artifacts"))
 
     def session_factory(scenario: Scenario, environment: Any, epoch: int) -> LiveSession:
@@ -579,9 +698,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             supervisor_reader=supervisor_reader,
             live_command=adapter_command,
             live_environment=(
-                {CLAUDE_OAUTH_TOKEN: claude_oauth_token}
-                if claude_oauth_token is not None
-                else None
+                ({CLAUDE_OAUTH_TOKEN: claude_oauth_token} if claude_oauth_token is not None else None)
+                if args.agent_backend == "claude"
+                else (
+                    {
+                        CODEX_HOME: str(codex_home),
+                        # A concrete Node-installed Codex binary has a
+                        # ``#!/usr/bin/env node`` shebang.  The disposable
+                        # HOME deliberately cannot resolve an asdf shim, so
+                        # expose only the binary's own directory plus the
+                        # inherited safe PATH.
+                        "PATH": f"{codex.parent}{os.pathsep}{os.environ.get('PATH', '')}",
+                    }
+                    if codex_home is not None and codex is not None
+                    else None
+                )
             ),
             supervisor_command=supervisor,
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
