@@ -76,10 +76,15 @@ an OS process. Relay the child's claims through report_requirement, and then
 follow the returned validation and start_run actions. Only use
 inspect_prepare_recovery when the immediately preceding
 pre-admission prepare_workflow response returned a prepare_recovery_id.
-"workflow already exists" and active-workflow errors are non-retryable; do not
-retry them or treat local closure files as admission evidence. If no legal
-current action remains, report an incomplete result rather than inventing a
-recovery path.
+When the supervisor returns report_requirement or workflow/review_pending after
+capture, the next supervisor action must be that report after the one child
+completes. Do not call reset_workflow, list_data_products, inspect_workflow,
+check_data_product, prepare_workflow, or get_workflow_capabilities in that
+state. Reset is for an explicitly requested blueprint replacement, not a way
+to avoid the pending review. "workflow already exists" and active-workflow
+errors are non-retryable; do not retry them or treat local closure files as
+admission evidence. If no legal current action remains, report an incomplete
+result rather than inventing a recovery path.
 """
 
 

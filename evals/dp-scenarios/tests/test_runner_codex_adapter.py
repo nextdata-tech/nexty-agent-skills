@@ -32,7 +32,10 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Dispatch exactly one provider-native" in CODEX_SYSTEM_PROMPT
     assert "built-in Codex collaboration child via spawnAgent" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
-    assert '"workflow already exists" and active-workflow errors are non-retryable' in CODEX_SYSTEM_PROMPT
+    assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
+    assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
+    assert '"workflow already exists" and active-workflow' in CODEX_SYSTEM_PROMPT
+    assert "errors are non-retryable" in CODEX_SYSTEM_PROMPT
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:

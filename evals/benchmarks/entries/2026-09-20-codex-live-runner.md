@@ -34,7 +34,10 @@ guard so an already-captured workflow is not re-entered through
 The available live Codex smoke is provider evidence only. The prior B1 Codex
 runs were `ungraded` because the agent re-entered an existing workflow after a
 valid capture and then timed out; the latest retained run had no source/build
-evidence and is not a pass or a benchmark comparison. A future measured entry
+evidence and is not a pass or a benchmark comparison. A follow-up run reached
+the valid `review_pending` state but repeatedly reset/listed/inspected the
+workflow instead of dispatching the required child; it was stopped after the
+trace established that second workflow-control defect. A future measured entry
 requires a complete authenticated scenario run with a terminal report.
 
 ## Evidence
