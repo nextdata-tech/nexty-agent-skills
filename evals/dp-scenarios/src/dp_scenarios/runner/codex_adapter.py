@@ -71,9 +71,14 @@ with review_input, do not call prepare_workflow, get_workflow_capabilities, or
 inspect_workflow as recovery. Dispatch exactly one provider-native,
 read-only reviewer using that matching review_input. In this backend, that
 means the built-in Codex collaboration child via spawnAgent, followed by
-waiting for the child to complete; do not substitute an inline self-review or
-an OS process. Relay the child's claims through report_requirement, and then
-follow the returned validation and start_run actions. Only use
+waiting for the child to complete; do not substitute an inline self-review,
+an authored review-record.json/agent-attestations.json, or an OS process. The
+required sequence is: call spawnAgent with the exact review_input and a
+read-only review request, wait for that child until its state is completed,
+then pass the child's returned claims and the exact review_input fields to
+report_requirement. If the child cannot be started or completed, report an
+incomplete result; never fabricate the review outcome yourself. Then follow
+the returned validation and start_run actions. Only use
 inspect_prepare_recovery when the immediately preceding
 pre-admission prepare_workflow response returned a prepare_recovery_id.
 When the supervisor returns report_requirement or workflow/review_pending after

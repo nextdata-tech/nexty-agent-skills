@@ -31,6 +31,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "do not call prepare_workflow, get_workflow_capabilities, or" in CODEX_SYSTEM_PROMPT
     assert "Dispatch exactly one provider-native" in CODEX_SYSTEM_PROMPT
     assert "built-in Codex collaboration child via spawnAgent" in CODEX_SYSTEM_PROMPT
+    assert "exact review_input" in CODEX_SYSTEM_PROMPT
+    assert "never fabricate the review outcome yourself" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
