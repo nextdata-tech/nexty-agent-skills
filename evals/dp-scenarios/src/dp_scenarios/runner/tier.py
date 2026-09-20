@@ -1669,6 +1669,7 @@ class TierRunner:
         operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
         allow_host_home: bool = False,
         staged_job_helper_dir: str | Path | None = None,
+        workflow_action_guard: bool = False,
         max_workers: int = 1,
     ) -> None:
         if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
@@ -1739,6 +1740,7 @@ class TierRunner:
             if staged_job_helper_dir is not None
             else None
         )
+        self.workflow_action_guard = bool(workflow_action_guard)
 
     @property
     def effective_max_workers(self) -> int:
@@ -2277,6 +2279,7 @@ class TierRunner:
                 supervisor_command=self.supervisor_command,
                 supervisor_environment=self.supervisor_environment,
                 workflow_activation_bundle=self.workflow_activation_bundle,
+                workflow_action_guard=self.workflow_action_guard,
                 allow_host_home=self.allow_host_home,
                 staged_job_helper_dir=self.staged_job_helper_dir,
                 knobs=knobs,

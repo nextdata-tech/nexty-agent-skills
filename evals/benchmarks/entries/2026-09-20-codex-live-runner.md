@@ -28,8 +28,12 @@ The Codex event bridge also records a completed provider-native `spawnAgent`
 review child as shared `Agent` evidence only when the child returns content;
 incomplete children, wait events, and background launches do not satisfy the
 construction gate. The Codex prompt carries the workflow-v2 action-discipline
-guard so an already-captured workflow is not re-entered through
-`prepare_workflow`.
+guard, and the Codex live transport now enforces the critical boundary in the
+persistent runner-owned Desktop session: a successful capture that returns a
+pending review arms a Codex-only guard, blocked reset/inspect/list/check/
+prepare operations receive a corrective `isError` MCP result, and the guard
+clears only after a successful review report. Claude and replay paths do not
+enable this guard.
 
 The available live Codex smoke is provider evidence only. The prior B1 Codex
 runs were `ungraded` because the agent re-entered an existing workflow after a
@@ -37,11 +41,15 @@ valid capture and then timed out; the latest retained run had no source/build
 evidence and is not a pass or a benchmark comparison. A follow-up run reached
 the valid `review_pending` state but repeatedly reset/listed/inspected the
 workflow instead of dispatching the required child; it was stopped after the
-trace established that second workflow-control defect. A future measured entry
-requires a complete authenticated scenario run with a terminal report.
+trace established that second workflow-control defect. The carrying proxy test
+now reproduces that transition and proves the illegal operations are answered
+without reaching the supervisor, while the matching report reopens normal
+operation. A future measured entry still requires a complete authenticated
+scenario run with a terminal report.
 
 ## Evidence
 
 The carrying tests are
-`evals/dp-scenarios/tests/test_runner_codex_adapter.py` and
-`evals/dp-scenarios/tests/test_run_local_claude.py`.
+`evals/dp-scenarios/tests/test_runner_codex_adapter.py`,
+`evals/dp-scenarios/tests/test_run_local_claude.py`, and
+`evals/tests/test_desktop_stdio.py`.

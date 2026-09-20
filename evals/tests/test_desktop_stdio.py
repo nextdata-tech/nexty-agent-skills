@@ -77,6 +77,46 @@ pathlib.Path(os.environ["PID_FILE"]).write_text(str(os.getpid()))
 time.sleep(60)
 """
 
+REVIEW_GUARD_SERVER = r"""
+import json, sys
+
+for raw in sys.stdin:
+    request = json.loads(raw)
+    operation = request.get("params", {}).get("name", request.get("method"))
+    arguments = request.get("params", {}).get("arguments", {})
+    action = arguments.get("action", {})
+    if operation == "advance_workflow" and action.get("type") == "capture":
+        result = {
+            "revision": 4,
+            "invalidation_epoch": 0,
+            "requirements": {
+                "review": {
+                    "status": "pending",
+                    "review_input": {"request_id": "review-1"},
+                }
+            },
+            "next_actions": [
+                {
+                    "type": "report_requirement",
+                    "code": "workflow/review_pending",
+                    "requirement_id": "review",
+                    "generation": 1,
+                    "subject_sha256": "subject-1",
+                    "dependency_evidence_sha256": "evidence-1",
+                }
+            ],
+        }
+    elif operation == "advance_workflow" and action.get("type") == "report_requirement":
+        result = {
+            "code": "workflow/requirement_satisfied",
+            "requirement_id": "review",
+            "requirements": {"review": {"status": "satisfied"}},
+        }
+    else:
+        result = {"forwarded_operation": operation}
+    print(json.dumps({"jsonrpc": "2.0", "id": request.get("id"), "result": result}), flush=True)
+"""
+
 
 def _script(path: Path, body: str) -> Path:
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
@@ -165,6 +205,140 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
             proxy.kill()
             proxy.wait()
         session.cleanup()
+
+
+def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
+    child = _script(tmp_path / "review-guard-server.py", REVIEW_GUARD_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        workflow_action_guard=True,
+    ).start()
+    proxy_env = dict(os.environ)
+    proxy_env["PYTHONUNBUFFERED"] = "1"
+    proxy = subprocess.Popen(
+        [
+            sys.executable,
+            str(ds.PROXY_MODULE),
+            "--proxy",
+            "--spec",
+            str(session.root / "server-spec.json"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        env=proxy_env,
+        start_new_session=True,
+    )
+
+    def call(request):
+        assert proxy.stdin is not None and proxy.stdout is not None
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        return json.loads(proxy.stdout.readline())
+
+    try:
+        capture = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "advance_workflow",
+                    "arguments": {
+                        "workflow": "crm-pipeline",
+                        "action": {"type": "capture"},
+                    },
+                },
+            }
+        )
+        assert capture["result"]["next_actions"][0]["code"] == "workflow/review_pending"
+
+        blocked = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "reset_workflow",
+                    "arguments": {"workflow": "crm-pipeline"},
+                },
+            }
+        )
+        blocked_result = blocked["result"]
+        assert blocked_result["isError"] is True
+        assert blocked_result["structuredContent"]["code"] == "runner/review_pending"
+        assert blocked_result["structuredContent"]["required_action"]["type"] == "report_requirement"
+
+        report = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "advance_workflow",
+                    "arguments": {
+                        "workflow": "crm-pipeline",
+                        "action": {
+                            "type": "report_requirement",
+                            "requirement_id": "review",
+                            "generation": 1,
+                            "subject_sha256": "subject-1",
+                            "dependency_evidence_sha256": "evidence-1",
+                        },
+                    },
+                },
+            }
+        )
+        assert report["result"]["code"] == "workflow/requirement_satisfied"
+
+        forwarded = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "reset_workflow",
+                    "arguments": {"workflow": "crm-pipeline"},
+                },
+            }
+        )
+        assert forwarded["result"]["forwarded_operation"] == "reset_workflow"
+        if proxy.stdin is not None:
+            proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_review_guard_recognizes_workflow_v2_action_shape():
+    capture = {
+        "result": {
+            "revision": 4,
+            "requirements": [
+                {"id": "review", "status": "pending", "review_input": {}}
+            ],
+            "next_actions": [
+                {
+                    "action": "report_requirement",
+                    "code": "workflow/review_pending",
+                    "requirement_id": "review",
+                }
+            ],
+        }
+    }
+    report = {
+        "result": {
+            "code": "workflow/requirement_satisfied",
+            "requirement_id": "review",
+            "requirements": [{"id": "review", "status": "complete"}],
+        }
+    }
+    assert ds._response_requires_review(capture)
+    assert ds._response_satisfies_review(report)
 
 
 def test_session_accepts_restarted_mcp_proxy_connections(tmp_path):

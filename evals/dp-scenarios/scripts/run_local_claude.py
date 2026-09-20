@@ -717,6 +717,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             supervisor_command=supervisor,
             supervisor_environment={"NXD_DESKTOP_PYTHON": str(desktop_python)},
             workflow_activation_bundle=args.workflow_activation_bundle,
+            workflow_action_guard=(args.agent_backend == "codex"),
             allow_host_home=args.allow_host_home,
             staged_job_helper_dir=exact_job_helper_dir,
             operator_factory=operator_factory,
