@@ -681,6 +681,8 @@ class CodexAdapter:
             str(self.codex),
             "app-server",
             "--stdio",
+            "--enable",
+            "multi_agent",
             "-c",
             'approval_policy="never"',
             "-c",
