@@ -14,6 +14,7 @@ import pytest
 from _repo_paths import REPO_ROOT
 
 from dp_scenarios.runner.codex_adapter import (
+    CODEX_SYSTEM_PROMPT,
     CodexAdapter,
     CodexAdapterError,
     _load_mcp_server,
@@ -23,6 +24,15 @@ from dp_scenarios.runner.codex_adapter import (
 
 def _identity(value):
     return value
+
+
+def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
+    assert "treat every supervisor response as authoritative" in CODEX_SYSTEM_PROMPT
+    assert "do not call prepare_workflow, get_workflow_capabilities, or" in CODEX_SYSTEM_PROMPT
+    assert "Dispatch exactly one provider-native" in CODEX_SYSTEM_PROMPT
+    assert "built-in Codex collaboration child via spawnAgent" in CODEX_SYSTEM_PROMPT
+    assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
+    assert '"workflow already exists" and active-workflow errors are non-retryable' in CODEX_SYSTEM_PROMPT
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
@@ -95,6 +105,55 @@ def test_parse_codex_events_marks_unanswered_mcp_call_as_wedged() -> None:
     assert result.last_mcp_call == "inspect_run:unanswered"
     assert observations[0]["answered"] is False
     assert result.terminal_result_count == 0
+
+
+def test_parse_codex_events_maps_completed_collaboration_reviewer() -> None:
+    events = [
+        {
+            "method": "item/started",
+            "params": {
+                "item": {
+                    "type": "collabAgentToolCall",
+                    "id": "agent-call-1",
+                    "tool": "spawnAgent",
+                    "prompt": "Load and follow nxd-review-closure.\nNXD_REVIEW_DISPATCH {}",
+                    "status": "inProgress",
+                }
+            },
+        },
+        {
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "collabAgentToolCall",
+                    "id": "agent-call-1",
+                    "tool": "spawnAgent",
+                    "status": "completed",
+                    "agentsStates": {
+                        "child-1": {"status": "completed", "message": "claims"}
+                    },
+                }
+            },
+        },
+        {
+            "method": "turn/completed",
+            "params": {"turn": {"id": "turn-1", "status": "completed"}},
+        },
+    ]
+
+    result, _ = parse_codex_events(
+        events,
+        redact_json_rpc=lambda value: value,
+        redact_text=lambda value: value,
+        session_id="thread-1",
+    )
+
+    assert len(result.tool_calls) == 1
+    call = result.tool_calls[0]
+    assert call.name == "Agent"
+    assert call.arguments["subagent_type"] == "general-purpose"
+    assert call.result == {"is_error": False, "content": ["claims"]}
+    assert result.terminal_result_subtype == "success"
 
 
 def test_parse_codex_events_keeps_completed_mcp_error_answered() -> None:

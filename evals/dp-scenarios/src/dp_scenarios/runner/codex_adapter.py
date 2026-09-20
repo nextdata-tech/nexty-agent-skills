@@ -63,6 +63,23 @@ your own prose. Keep the authored closure in closure/ and do not create or
 edit artifacts/ files. Follow every conduct rule in the evidence contract.
 Respond directly to each operator turn and continue the workflow until the
 operator's next message arrives.
+
+Workflow-v2 control: treat every supervisor response as authoritative. After
+each response, use only its current revision, invalidation_epoch, and
+next_actions. Once a successful capture returns a report_requirement action
+with review_input, do not call prepare_workflow, get_workflow_capabilities, or
+inspect_workflow as recovery. Dispatch exactly one provider-native,
+read-only reviewer using that matching review_input. In this backend, that
+means the built-in Codex collaboration child via spawnAgent, followed by
+waiting for the child to complete; do not substitute an inline self-review or
+an OS process. Relay the child's claims through report_requirement, and then
+follow the returned validation and start_run actions. Only use
+inspect_prepare_recovery when the immediately preceding
+pre-admission prepare_workflow response returned a prepare_recovery_id.
+"workflow already exists" and active-workflow errors are non-retryable; do not
+retry them or treat local closure files as admission evidence. If no legal
+current action remains, report an incomplete result rather than inventing a
+recovery path.
 """
 
 
@@ -166,6 +183,34 @@ def _item_result(item: Mapping[str, object]) -> object:
     return item.get("content")
 
 
+def _collab_agent_result(item: Mapping[str, object]) -> Mapping[str, object]:
+    """Project a completed Codex child state into the shared Agent shape."""
+
+    states = item.get("agentsStates")
+    messages: list[object] = []
+    child_statuses: list[str] = []
+    if isinstance(states, Mapping):
+        for state in states.values():
+            if not isinstance(state, Mapping):
+                continue
+            status = state.get("status")
+            if isinstance(status, str):
+                child_statuses.append(status)
+            if state.get("message") is not None:
+                messages.append(state.get("message"))
+    status = item.get("status")
+    return {
+        "is_error": (
+            status not in {"completed", "success", "succeeded"}
+            or any(
+                child_status not in {"completed", "success", "succeeded"}
+                for child_status in child_statuses
+            )
+        ),
+        "content": messages,
+    }
+
+
 def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, object]:
     """Map one app-server notification to the adapter's event vocabulary."""
 
@@ -226,6 +271,10 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             normalized = dict(item)
             normalized["type"] = "file_change"
             return {"type": method.replace("/", "."), "item": normalized}
+        if item_type == "collabAgentToolCall":
+            normalized = dict(item)
+            normalized["type"] = "collab_agent_tool_call"
+            return {"type": method.replace("/", "."), "item": normalized}
         return {"type": method.replace("/", "."), "item": dict(item)}
     return event
 
@@ -278,6 +327,7 @@ def parse_codex_events(
     flat_results: list[object] = []
     observations: list[dict[str, object]] = []
     pending: dict[str, tuple[str, object]] = {}
+    pending_collab: dict[str, Mapping[str, object]] = {}
     terminal_count = 0
     terminal_subtype: str | None = None
     terminal_is_error: bool | None = None
@@ -350,6 +400,35 @@ def parse_codex_events(
             calls.append(ToolCall("codex_file_change", redact_json_rpc(dict(item)), None))
             transcript.append("[tool_use:file_change] " + redact_text(json.dumps(dict(item), default=str)[:600]))
             continue
+        if item_type == "collab_agent_tool_call":
+            if item.get("tool") != "spawnAgent":
+                continue
+            key = str(item.get("id") or f"Agent:{len(calls)}")
+            if event_type == "item.started":
+                pending_collab[key] = item
+                continue
+            started = pending_collab.pop(key, item)
+            prompt = started.get("prompt", item.get("prompt", ""))
+            arguments = {
+                # Codex's built-in spawnAgent is the provider-native equivalent
+                # of the general-purpose Agent/Task child required by the
+                # workflow contract. The mapping is emitted only for an
+                # observed, completed spawnAgent item; it is not agent prose.
+                "subagent_type": "general-purpose",
+                "prompt": prompt,
+            }
+            result_value = _collab_agent_result(item)
+            calls.append(ToolCall("Agent", redact_json_rpc(arguments), result_value))
+            flat_results.append(redact_json_rpc(result_value))
+            transcript.append(
+                "[tool_use:Agent] "
+                + redact_text(json.dumps(arguments, default=str)[:600])
+            )
+            transcript.append(
+                "[tool_result] "
+                + redact_text(json.dumps(result_value, default=str)[:1500])
+            )
+            continue
         if item_type not in {"mcp_tool_call", "mcp_tool_result"}:
             continue
         name = _codex_mcp_name(item)
@@ -401,6 +480,20 @@ def parse_codex_events(
         if mcp_tool is not None:
             observations.append({"tool": mcp_tool, "arguments": arguments, "result": None, "is_error": True, "answered": False})
             environment_details.append(f"MCP tool use had no matching result: {mcp_tool}")
+
+    for item in pending_collab.values():
+        arguments = {
+            "subagent_type": "general-purpose",
+            "prompt": item.get("prompt", ""),
+        }
+        calls.append(
+            ToolCall(
+                "Agent",
+                redact_json_rpc(arguments),
+                {"is_error": True, "content": []},
+            )
+        )
+        environment_details.append("Codex reviewer child had no matching completion")
 
     if not final_answer and partial_answer:
         final_answer = "".join(partial_answer)

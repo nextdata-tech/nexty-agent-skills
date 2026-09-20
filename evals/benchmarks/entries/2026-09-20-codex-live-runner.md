@@ -24,10 +24,18 @@ state/config home with only a symlink to the host-owned auth file, retains
 partial MCP/message observations on timeout, and fails closed on malformed
 events, unsupported server requests, or unmatched turn completion.
 
+The Codex event bridge also records a completed provider-native `spawnAgent`
+review child as shared `Agent` evidence only when the child returns content;
+incomplete children, wait events, and background launches do not satisfy the
+construction gate. The Codex prompt carries the workflow-v2 action-discipline
+guard so an already-captured workflow is not re-entered through
+`prepare_workflow`.
+
 The available live Codex smoke is provider evidence only. The prior B1 Codex
-runs were `ungraded`/runner-limited because resumed `codex exec` processes lost
-the MCP catalog; none is a pass or a benchmark comparison. A future measured
-entry requires a complete authenticated scenario run with a terminal report.
+runs were `ungraded` because the agent re-entered an existing workflow after a
+valid capture and then timed out; the latest retained run had no source/build
+evidence and is not a pass or a benchmark comparison. A future measured entry
+requires a complete authenticated scenario run with a terminal report.
 
 ## Evidence
 
