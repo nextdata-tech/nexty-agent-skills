@@ -1113,6 +1113,9 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
         "adjudication disposition is accepted, rejected, or out_of_scope",
         "Never invent qualified variants such as accepted_blocking_pending_user_decision",
         "never use fixed as a finding state",
+        "Each finding's classification is exactly behavior_affecting or structural_note",
+        "never put reviewer severity literals such as HIGH, MEDIUM, or LOW in classification",
+        "Severity belongs only to the supervisor report projection",
         "accepted means verified, not authorized",
     ):
         assert phrase in rules
