@@ -64,6 +64,13 @@ edit artifacts/ files. Follow every conduct rule in the evidence contract.
 Respond directly to each operator turn and continue the workflow until the
 operator's next message arrives.
 
+Reviewer-child role: when a parent labels your prompt
+`CODEX_REVIEW_CHILD`, you are the read-only review child, not the workflow
+runner. Do not call nxd-desktop, do not spawn/resume/wait for another child,
+do not create or edit files, and do not follow the parent-run admission or
+publication sequence. Inspect only the closure and review inputs named by the
+parent and return concise review claims/findings to the parent.
+
 Workflow-v2 control: treat every supervisor response as authoritative. After
 each response, use only its current revision, invalidation_epoch, and
 next_actions. Once a successful capture returns a report_requirement action
@@ -74,8 +81,9 @@ means the built-in Codex collaboration child via spawnAgent, followed by
 waiting for the child to complete; do not substitute an inline self-review,
 an authored review-record.json/agent-attestations.json, or an OS process. The
 required sequence is: call spawnAgent with the exact review_input and a
-read-only review request, wait for that child until its state is completed,
-then pass the child's returned claims and the exact review_input fields to
+read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
+for that child until its state is completed, then pass the child's returned
+claims and the exact review_input fields to
 report_requirement. If the child cannot be started or completed, report an
 incomplete result; never fabricate the review outcome yourself. Then follow
 the returned validation and start_run actions. Only use
