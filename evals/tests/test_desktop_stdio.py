@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import stat
 import subprocess
 import sys
@@ -163,6 +164,64 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
         if proxy.poll() is None:
             proxy.kill()
             proxy.wait()
+        session.cleanup()
+
+
+def test_session_accepts_restarted_mcp_proxy_connections(tmp_path):
+    """Codex clients may overlap while refreshing MCP tools."""
+
+    child = _script(tmp_path / "server.py", FAKE_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+    ).start()
+    proxies = []
+    try:
+        for request_id in (1, 2):
+            proxy = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(ds.PROXY_MODULE),
+                    "--proxy",
+                    "--spec",
+                    str(session.root / "server-spec.json"),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            proxies.append(proxy)
+            assert proxy.stdin is not None and proxy.stdout is not None
+            proxy.stdin.write(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "initialize",
+                        "params": {},
+                    }
+                )
+                + "\n"
+            )
+            proxy.stdin.flush()
+
+        for request_id, proxy in zip((1, 2), proxies):
+            assert proxy.stdout is not None
+            ready, _, _ = select.select([proxy.stdout], [], [], 5)
+            assert ready, f"proxy {request_id} did not receive a response"
+            response = json.loads(proxy.stdout.readline())
+            assert response["id"] == request_id
+
+        for proxy in proxies:
+            assert proxy.stdin is not None
+            proxy.stdin.close()
+            assert proxy.wait(timeout=10) == 0
+    finally:
+        for proxy in proxies:
+            if proxy.poll() is None:
+                proxy.kill()
+                proxy.wait()
         session.cleanup()
 
 

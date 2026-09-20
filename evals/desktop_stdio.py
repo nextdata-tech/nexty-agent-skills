@@ -347,9 +347,13 @@ class DesktopStdioSession:
         self._bridge_listener: socket.socket | None = None
         self._bridge_connection: socket.socket | None = None
         self._bridge_thread: threading.Thread | None = None
+        self._bridge_connections: set[socket.socket] = set()
+        self._bridge_workers: set[threading.Thread] = set()
+        self._bridge_state_lock = threading.Lock()
         self._bridge_stop = threading.Event()
         self._bridge_path: Path | None = None
         self._server_process: subprocess.Popen[bytes] | None = None
+        self._server_processes: set[subprocess.Popen[bytes]] = set()
         self._started = False
         self._closed = False
         self.setup_result = StdioOutcome("not_started")
@@ -480,24 +484,47 @@ class DesktopStdioSession:
         )
 
     def _serve_bridge(self) -> None:
-        """Start the supervisor only after the credential-free proxy connects."""
+        """Accept and serve trusted supervisors for proxy connections.
+
+        Codex app-server may restart its stdio MCP client while refreshing the
+        tool catalog. The proxy command is then launched again with the same
+        private spec. A single accepted socket could serve the first client
+        forever while leaving the replacement client connected to the listen
+        backlog with no supervisor behind it. Start a fresh trusted child for
+        each accepted connection; the supervisor data directory remains the
+        durable boundary shared by the sessions, while credentials stay in
+        this runner-owned environment.
+        """
 
         listener = self._bridge_listener
         if listener is None:
             return
-        connection: socket.socket | None = None
+        while not self._bridge_stop.is_set():
+            try:
+                connection, _ = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            if self._bridge_stop.is_set():
+                self._close_socket(connection)
+                return
+            worker = threading.Thread(
+                target=self._serve_connection,
+                args=(connection,),
+                name="dp-scenarios-desktop-proxy",
+                daemon=True,
+            )
+            with self._bridge_state_lock:
+                self._bridge_connections.add(connection)
+                self._bridge_workers.add(worker)
+            worker.start()
+
+    def _serve_connection(self, connection: socket.socket) -> None:
+        """Run one supervisor child for one Codex stdio client connection."""
+
         child: subprocess.Popen[bytes] | None = None
         try:
-            while not self._bridge_stop.is_set():
-                try:
-                    connection, _ = listener.accept()
-                    break
-                except socket.timeout:
-                    continue
-                except OSError:
-                    return
-            if connection is None or self._bridge_stop.is_set():
-                return
             self._bridge_connection = connection
             child = subprocess.Popen(
                 list(self.server_command),
@@ -508,6 +535,8 @@ class DesktopStdioSession:
                 start_new_session=True,
             )
             self._server_process = child
+            with self._bridge_state_lock:
+                self._server_processes.add(child)
             assert child.stdin is not None
             assert child.stdout is not None
             assert child.stderr is not None
@@ -576,11 +605,16 @@ class DesktopStdioSession:
             if child is not None:
                 self._kill_process(child)
         finally:
-            if connection is not None:
-                with contextlib.suppress(OSError):
-                    connection.close()
-            self._bridge_connection = None
-            if child is not None:
+            with contextlib.suppress(OSError):
+                connection.close()
+            with self._bridge_state_lock:
+                self._bridge_connections.discard(connection)
+                if child is not None:
+                    self._server_processes.discard(child)
+                self._bridge_workers.discard(threading.current_thread())
+            if self._bridge_connection is connection:
+                self._bridge_connection = None
+            if child is not None and self._server_process is child:
                 self._server_process = None
 
     @staticmethod
@@ -645,16 +679,27 @@ class DesktopStdioSession:
             self._kill_process(proc)
         self._attached.clear()
         self._bridge_stop.set()
-        self._close_socket(self._bridge_connection)
         self._close_socket(self._bridge_listener)
         if self._bridge_thread is not None:
             self._bridge_thread.join(timeout=5)
             self._bridge_thread = None
+        with self._bridge_state_lock:
+            connections = list(self._bridge_connections)
+            processes = list(self._server_processes)
+            workers = list(self._bridge_workers)
+        for connection in connections:
+            self._close_socket(connection)
         self._bridge_connection = None
         self._bridge_listener = None
-        if self._server_process is not None:
-            self._kill_process(self._server_process)
-            self._server_process = None
+        for proc in processes:
+            self._kill_process(proc)
+        for worker in workers:
+            worker.join(timeout=5)
+        with self._bridge_state_lock:
+            self._bridge_connections.clear()
+            self._bridge_workers.clear()
+            self._server_processes.clear()
+        self._server_process = None
         if self._root is not None:
             try:
                 result = json.loads(

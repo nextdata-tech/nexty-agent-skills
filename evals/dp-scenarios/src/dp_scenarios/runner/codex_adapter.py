@@ -1,9 +1,9 @@
-"""Bridge the dp-scenarios transport to the Codex CLI.
+"""Bridge the dp-scenarios transport to the Codex app server.
 
-The local live runner has a provider-neutral turn boundary.  This adapter
-keeps that boundary intact while using ``codex exec --json`` for each turn,
-with the runner-owned Desktop MCP server configured through Codex TOML
-overrides.  Supervisor facts continue to come from structured MCP results and
+The local live runner has a provider-neutral turn boundary. This adapter keeps
+that boundary intact while using one persistent ``codex app-server --stdio``
+child, with the runner-owned Desktop MCP server configured through Codex TOML
+overrides. Supervisor facts continue to come from structured MCP results and
 the runner-owned release directory; no agent prose is used as oracle data.
 """
 
@@ -398,6 +398,8 @@ def parse_codex_events(
 class CodexAdapter:
     """One Codex thread resumed across the scripted operator turns."""
 
+    MCP_STARTUP_TIMEOUT_S = 30.0
+
     def __init__(
         self,
         *,
@@ -452,6 +454,7 @@ class CodexAdapter:
         self._stderr_tail: deque[str] = deque(maxlen=80)
         self._stderr_open = True
         self._startup_events: list[Mapping[str, object]] = []
+        self._mcp_status: tuple[Mapping[str, object], ...] = ()
         self._codex_home_temp: tempfile.TemporaryDirectory[str] | None = None
         if resume_session_id is not None and not native_continuation:
             raise CodexAdapterError("--resume-session-id requires native continuation mode")
@@ -560,6 +563,10 @@ class CodexAdapter:
                 f"mcp_servers.nxd-desktop.args={_toml_array(tuple(server['args']))}",
                 "-c",
                 f"mcp_servers.nxd-desktop.default_tools_approval_mode={_toml_string('approve')}",
+                "-c",
+                "mcp_servers.nxd-desktop.required=true",
+                "-c",
+                "mcp_servers.nxd-desktop.startup_timeout_sec=30",
             )
         )
         if server["env"]:
@@ -574,6 +581,8 @@ class CodexAdapter:
             "args": list(args),
             "env": environment,
             "default_tools_approval_mode": "approve",
+            "required": True,
+            "startup_timeout_sec": 30,
         }
 
     def _thread_config(self) -> dict[str, object]:
@@ -762,6 +771,49 @@ class CodexAdapter:
         if not isinstance(thread_id, str) or not thread_id:
             raise CodexAdapterError(f"Codex app-server {request_method} returned no thread identity")
         self._thread_id = thread_id
+
+        # A thread can start successfully while an MCP server is still absent
+        # from the model's tool catalog. Query the app-server's authoritative
+        # inventory before spending a turn on a run that cannot exercise the
+        # supervisor. Keep only the non-sensitive status projection in the
+        # adapter so diagnostics never include server configuration or auth.
+        status_deadline = time.monotonic() + min(
+            self.timeout_s, self.MCP_STARTUP_TIMEOUT_S
+        )
+        last_status = "no server status"
+        while True:
+            status_id = self._next_rpc_id()
+            self._write_rpc(
+                "mcpServerStatus/list",
+                {"threadId": self._thread_id, "detail": "toolsAndAuthOnly"},
+                request_id=status_id,
+            )
+            response, events = self._read_until_response(
+                status_id, min(status_deadline, time.monotonic() + self.timeout_s)
+            )
+            self._startup_events.extend(events)
+            if "error" in response:
+                raise CodexAdapterError(f"Codex app-server MCP status failed: {response['error']}")
+            result = response.get("result")
+            data = result.get("data") if isinstance(result, Mapping) else None
+            if not isinstance(data, list):
+                raise CodexAdapterError("Codex app-server MCP status returned no server list")
+            statuses = tuple(item for item in data if isinstance(item, Mapping))
+            self._mcp_status = statuses
+            server = next((item for item in statuses if item.get("name") == "nxd-desktop"), None)
+            tools = server.get("tools") if server is not None else None
+            runtime_status = server.get("runtimeStatus") if server is not None else None
+            tool_count = len(tools) if isinstance(tools, Mapping) else 0
+            if runtime_status == "connected" and tool_count > 0:
+                return
+            last_status = (
+                f"runtime_status={runtime_status!r}, tools={tool_count}"
+            )
+            if time.monotonic() >= status_deadline:
+                raise CodexAdapterError(
+                    "Codex app-server nxd-desktop MCP is not ready: " + last_status
+                )
+            time.sleep(min(0.1, max(0.0, status_deadline - time.monotonic())))
 
     def _collect_turn(
         self,

@@ -167,12 +167,16 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
     assert params["runtimeWorkspaceRoots"] == [str(Path.cwd()), str(REPO_ROOT)]
     assert params["baseInstructions"].startswith("test")
     assert params["config"]["mcp_servers"]["nxd-desktop"]["command"] == "/bin/echo"
+    assert params["config"]["mcp_servers"]["nxd-desktop"]["required"] is True
+    assert params["config"]["mcp_servers"]["nxd-desktop"]["startup_timeout_sec"] == 30
 
     app_command = adapter._app_server_command()
     assert app_command[:3] == ["/bin/true", "app-server", "--stdio"]
     assert 'mcp_servers.nxd-desktop.command="/bin/echo"' in app_command
     assert 'mcp_servers.nxd-desktop.args=["--proxy", "server-spec.json"]' in app_command
     assert 'mcp_servers.nxd-desktop.default_tools_approval_mode="approve"' in app_command
+    assert "mcp_servers.nxd-desktop.required=true" in app_command
+    assert "mcp_servers.nxd-desktop.startup_timeout_sec=30" in app_command
 
 
 def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
@@ -187,6 +191,7 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
         "from pathlib import Path\n"
         f"request_log = {str(request_log)!r}\n"
         "requests = []\n"
+        "status_calls = 0\n"
         "thread_id = '00000000-0000-4000-8000-000000000002'\n"
         "turn_id = '00000000-0000-4000-8000-000000000003'\n"
         "for line in sys.stdin:\n"
@@ -200,6 +205,10 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
         "        thread = {'id': thread_id}\n"
         "        print(json.dumps({'id': request['id'], 'result': {'thread': thread}}), flush=True)\n"
         "        print(json.dumps({'method': 'thread/started', 'params': {'thread': thread}}), flush=True)\n"
+        "    elif method == 'mcpServerStatus/list':\n"
+        "        status_calls += 1\n"
+        "        data = [] if status_calls == 1 else [{'name': 'nxd-desktop', 'runtimeStatus': 'connected', 'tools': {'list_data_products': {}}}]\n"
+        "        print(json.dumps({'id': request['id'], 'result': {'data': data}}), flush=True)\n"
         "    elif method == 'turn/start':\n"
         "        print(json.dumps({'id': request['id'], 'result': {'turn': {'id': turn_id}}}), flush=True)\n"
         "        item = {'type': 'agentMessage', 'id': 'msg-1', 'text': 'done'}\n"
@@ -239,16 +248,18 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
     assert result.agent_message == "done"
     assert result.terminal_result_count == 1
     requests = json.loads(request_log.read_text(encoding="utf-8"))
-    assert [request["method"] for request in requests[:4]] == [
+    assert [request["method"] for request in requests[:6]] == [
         "initialize",
         "initialized",
         "thread/start",
+        "mcpServerStatus/list",
+        "mcpServerStatus/list",
         "turn/start",
     ]
     thread_params = requests[2]["params"]
     assert thread_params["baseInstructions"].startswith("test")
     assert thread_params["runtimeWorkspaceRoots"] == [str(tmp_path), str(REPO_ROOT)]
-    turn_params = requests[3]["params"]
+    turn_params = requests[5]["params"]
     assert turn_params["input"] == [{"type": "text", "text": "hello"}]
     assert turn_params["sandboxPolicy"] == {
         "type": "workspaceWrite",
@@ -315,6 +326,8 @@ def test_codex_adapter_keeps_one_app_server_and_mcp_observations_across_turns(
         "    elif method == 'thread/start':\n"
         "        thread = {'id': thread_id}\n"
         "        print(json.dumps({'id': request['id'], 'result': {'thread': thread}}), flush=True)\n"
+        "    elif method == 'mcpServerStatus/list':\n"
+        "        print(json.dumps({'id': request['id'], 'result': {'data': [{'name': 'nxd-desktop', 'runtimeStatus': 'connected', 'tools': {'list_data_products': {}}}]}}), flush=True)\n"
         "    elif method == 'turn/start':\n"
         "        turn_number += 1\n"
         "        turn_id = f'00000000-0000-4000-8000-00000000001{turn_number}'\n"
@@ -378,6 +391,8 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         "        print(json.dumps({'id': request['id'], 'result': {}}), flush=True)\n"
         "    elif method == 'thread/start':\n"
         "        print(json.dumps({'id': request['id'], 'result': {'thread': {'id': thread_id}}}), flush=True)\n"
+        "    elif method == 'mcpServerStatus/list':\n"
+        "        print(json.dumps({'id': request['id'], 'result': {'data': [{'name': 'nxd-desktop', 'runtimeStatus': 'connected', 'tools': {'inspect_run': {}}}]}}), flush=True)\n"
         "    elif method == 'turn/start':\n"
         "        print(json.dumps({'id': request['id'], 'result': {'turn': {'id': '00000000-0000-4000-8000-000000000021'}}}), flush=True)\n"
         "        call = {'type': 'mcpToolCall', 'id': 'call-1', 'server': 'nxd-desktop', 'tool': 'inspect_run', 'arguments': {'run_id': 'run-1'}, 'status': 'inProgress'}\n"
