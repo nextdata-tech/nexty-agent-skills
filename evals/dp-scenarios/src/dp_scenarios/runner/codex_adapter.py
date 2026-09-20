@@ -84,9 +84,13 @@ required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child until its state is completed, then pass the child's returned
 claims and the exact review_input fields to
-report_requirement. If the child cannot be started or completed, report an
-incomplete result; never fabricate the review outcome yourself. Then follow
-the returned validation and start_run actions. Only use
+report_requirement. The `parameters.report` value must be the JSON object
+`{"schema":"nxd-conversation-review-v1","verdict":"clear","findings":[],"rejection_code":null}`
+or the corresponding exact findings/rejection object, never a JSON-encoded
+string or Markdown. If the child cannot be started or completed, report an
+incomplete result; never fabricate the review outcome yourself. After a clear
+report, call the returned self-check/validation action and inspect its result
+before following the returned admission, start_run, and query actions. Only use
 inspect_prepare_recovery when the immediately preceding
 pre-admission prepare_workflow response returned a prepare_recovery_id.
 When the supervisor returns report_requirement or workflow/review_pending after
