@@ -477,6 +477,10 @@ def test_native_resume_accepts_a_pre_normalization_session_digest(
         native_continuation=True,
         live_command=(sys.executable, "-c", "pass"),
         supervisor_command=(sys.executable,),
+        supervisor_environment={
+            "TMPDIR": str(tmp_path / "host-temp"),
+            "NXD_EVAL_SOURCE_TOKEN": "legacy-test-token",
+        },
     ) as fresh:
         current_digest = fresh.manifest.session_config_sha256
         legacy_digest = fresh.live_transport.legacy_session_config_sha256
@@ -507,6 +511,10 @@ def test_native_resume_accepts_a_pre_normalization_session_digest(
         native_resume=True,
         live_command=(sys.executable, "-c", "pass"),
         supervisor_command=(sys.executable,),
+        supervisor_environment={
+            "TMPDIR": str(tmp_path / "host-temp"),
+            "NXD_EVAL_SOURCE_TOKEN": "legacy-test-token",
+        },
     ) as resumed:
         assert resumed.manifest.session_config_sha256 == legacy_digest
 
