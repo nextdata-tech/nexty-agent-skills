@@ -1107,6 +1107,39 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
         "uses only its read-only tools",
     ):
         assert phrase in rules
+    for phrase in (
+        "status is complete, needs_user, or timed_out",
+        "finding state is not_applied, needs_user, or applied",
+        "adjudication disposition is accepted, rejected, or out_of_scope",
+        "Never invent qualified variants such as accepted_blocking_pending_user_decision",
+        "never use fixed as a finding state",
+        "Each finding's classification is exactly behavior_affecting or structural_note",
+        "never put reviewer severity literals such as HIGH, MEDIUM, or LOW in classification",
+        "Severity belongs only to the supervisor report projection",
+        "Every finding must keep the exact keys id, claim, evidence, classification, proposed_effect, applied_files, and state",
+        "evidence is a non-empty array of citation strings",
+        "Every adjudication must keep exactly finding_id, disposition, and citation",
+        "accepted means verified, not authorized",
+        "any finding in needs_user state requires ledger status needs_user",
+        "never write status complete while a needs_user finding or deferred_finding_ids remains unresolved",
+        "A non-empty deferred_finding_ids list requires the same round's auditable user_decision",
+        "complete that pending round's user_decision before appending another round",
+        "Do not submit a clear review, call start_run, or publish until the current generation has a valid, resolved review",
+    ):
+        assert phrase in rules
+
+
+def test_workflow_v2_prepare_rule_reuses_the_exact_proposal_file_object() -> None:
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    rules = " ".join(SCENARIO_CONDUCT_RULES)
+    for phrase in (
+        "Immediately before every prepare_workflow call",
+        "reread and parse the current dp-blueprint.proposal.json",
+        "pass that exact parsed object",
+        "never reconstruct, abbreviate, or reuse an older inline object",
+    ):
+        assert phrase in rules
 
 
 def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> None:

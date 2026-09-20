@@ -8,7 +8,7 @@ redacted output contract. Missing evidence is never treated as a pass.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..support import ScenarioError, _string
 from . import FollowUpContext, FollowUpKind, _ungraded, register
@@ -31,13 +31,14 @@ _INSTANT_FIELDS = ("updated_at",)
 def _instant(value: object) -> object:
     """Return a timestamp's instant, or the value unchanged if it is not one.
 
-    A governed ``run_semantic_query`` renders a timestamp as
-    ``2024-01-05 10:00:00+00``; the committed gold spells the same instant
-    ``2024-01-05T10:00:00+00:00``. Comparing the rendered strings failed a
-    pipeline whose rows were correct -- and passed only the agent that
-    hand-authored its evidence into the gold's spelling instead of copying
-    what the product returned, which is the opposite of the behaviour graded
-    here.
+    A governed ``run_semantic_query`` may render a UTC timestamp as
+    ``2024-01-05 10:00:00+00`` or ``2024-01-05T10:00:00``; the committed gold
+    spells the same instant ``2024-01-05T10:00:00+00:00``. Comparing rendered
+    strings failed a pipeline whose rows were correct -- and passed only the
+    agent that hand-authored its evidence into the gold's spelling instead of
+    copying what the product returned, which is the opposite of the behaviour
+    graded here. The supervisor's offset-free database rendering is interpreted
+    as UTC because this scenario's source instants are UTC.
 
     An unparseable value is returned unchanged, so it still compares
     unequal rather than quietly matching.
@@ -46,7 +47,10 @@ def _instant(value: object) -> object:
     if not isinstance(value, str):
         return value
     try:
-        return datetime.fromisoformat(value.strip().replace(" ", "T"))
+        parsed = datetime.fromisoformat(value.strip().replace(" ", "T"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
     except ValueError:
         return value
 
