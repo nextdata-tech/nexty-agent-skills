@@ -1107,6 +1107,28 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
         "uses only its read-only tools",
     ):
         assert phrase in rules
+    for phrase in (
+        "status is complete, needs_user, or timed_out",
+        "finding state is not_applied, needs_user, or applied",
+        "adjudication disposition is accepted, rejected, or out_of_scope",
+        "Never invent qualified variants such as accepted_blocking_pending_user_decision",
+        "never use fixed as a finding state",
+        "accepted means verified, not authorized",
+    ):
+        assert phrase in rules
+
+
+def test_workflow_v2_prepare_rule_reuses_the_exact_proposal_file_object() -> None:
+    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+
+    rules = " ".join(SCENARIO_CONDUCT_RULES)
+    for phrase in (
+        "Immediately before every prepare_workflow call",
+        "reread and parse the current dp-blueprint.proposal.json",
+        "pass that exact parsed object",
+        "never reconstruct, abbreviate, or reuse an older inline object",
+    ):
+        assert phrase in rules
 
 
 def test_the_no_bash_guidance_does_not_divert_the_agent_off_the_skill_flow() -> None:
