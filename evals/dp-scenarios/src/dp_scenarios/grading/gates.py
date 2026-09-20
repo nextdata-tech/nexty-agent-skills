@@ -1817,6 +1817,23 @@ def _normalized_definition_for_build(
     return relative.as_posix()
 
 
+def _provenance_closure_matches_build(
+    value: object, build: PublishedBuild
+) -> bool:
+    """Match self-check provenance to the already-bound definition.
+
+    The supervisor redacts absolute paths in the structured self-check result
+    as the exact sentinel ``<path>/closure``. The check remains bound by the
+    observed definition argument and definition ID before this helper is
+    called; accept only that one redaction form, or the full path when it is
+    available.
+    """
+
+    if _normalized_definition_for_build(value, build) == build.closure_path:
+        return True
+    return value == f"<path>/{CLOSURE_DIR}"
+
+
 def _successful_check_positions(
     observations: object,
     build: PublishedBuild,
@@ -1864,10 +1881,9 @@ def _successful_check_positions(
                 or not isinstance(stages, Sequence)
                 or isinstance(stages, (str, bytes, bytearray))
                 or provenance.get("definition_id") != build.definition_id
-                or _normalized_definition_for_build(
+                or not _provenance_closure_matches_build(
                     provenance.get("closure_path"), build
                 )
-                != build.closure_path
                 or [
                     stage.get("stage")
                     for stage in stages

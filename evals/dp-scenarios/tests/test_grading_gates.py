@@ -1941,7 +1941,10 @@ def test_construction_accepts_trusted_v2_validation_before_admission() -> None:
     assert result.codes == ()
 
 
-def test_construction_accepts_a_successful_supervisor_check_as_self_check_evidence() -> None:
+@pytest.mark.parametrize("provenance_path", ["/workspace/closure", "<path>/closure"])
+def test_construction_accepts_a_successful_supervisor_check_as_self_check_evidence(
+    provenance_path: str,
+) -> None:
     observations = {
         "turns": [
             {
@@ -1961,7 +1964,7 @@ def test_construction_accepts_a_successful_supervisor_check_as_self_check_eviden
                                 "workflow": "workflow",
                                 "provenance": {
                                     "definition_id": "sha256-v1:definition",
-                                    "closure_path": "/workspace/closure",
+                                    "closure_path": provenance_path,
                                 },
                                 "stages": [
                                     {"stage": stage, "status": "pass", "checks": []}
@@ -1998,6 +2001,7 @@ def test_construction_accepts_a_successful_supervisor_check_as_self_check_eviden
     [
         "wrong_definition_id",
         "wrong_provenance_closure",
+        "wrong_redacted_provenance_closure",
         "wrong_closure",
         "wrong_workflow",
         "missing_stage",
@@ -2052,6 +2056,10 @@ def test_construction_rejects_an_unbound_or_incomplete_supervisor_check(
     elif mutation == "wrong_provenance_closure":
         check["result"]["content"]["provenance"]["closure_path"] = (
             "/workspace/other-closure"
+        )
+    elif mutation == "wrong_redacted_provenance_closure":
+        check["result"]["content"]["provenance"]["closure_path"] = (
+            "<path>/other-closure"
         )
     elif mutation == "wrong_closure":
         check["arguments"]["definition"] = "/workspace/other-closure"

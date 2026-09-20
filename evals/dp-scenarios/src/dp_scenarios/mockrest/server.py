@@ -443,41 +443,58 @@ class MockRestServer:
     async def _data_handler(self, request: web.Request) -> web.StreamResponse:
         path = request.path
         if self.config.auth is not None and path == self.config.auth.refresh_path:
-            self.counters.record(path, request.method, request.headers)
+            request_number = self.counters.record(path, request.method, request.headers)
             if request.method not in {"GET", "POST"}:
-                return _error(405, "method not allowed")
+                response = _error(405, "method not allowed")
+                self.counters.record_response(path, request_number, response.status)
+                return response
             async with self._state_lock:
                 self._remaining_requests = self.config.auth.initial_requests
-            return web.json_response({"status": "refreshed"})
+            response = web.json_response({"status": "refreshed"})
+            self.counters.record_response(path, request_number, response.status)
+            return response
         if path in self.config.docs and request.method == "GET":
             page = self.config.docs[path]
             return web.Response(text=page.body, content_type=page.content_type)
 
         match = self._find_route(request.method, path)
         if match is None:
-            self.counters.record(UNMATCHED_ROUTE, request.method, request.headers)
-            return _error(404, "not found")
+            request_number = self.counters.record(UNMATCHED_ROUTE, request.method, request.headers)
+            response = _error(404, "not found")
+            self.counters.record_response(UNMATCHED_ROUTE, request_number, response.status)
+            return response
         route, path_parameters = match
         request_number = self.counters.record(
             route.path,
             request.method,
             request.headers,
         )
+
+        def finish(response: web.StreamResponse, *, page: Any = None) -> web.StreamResponse:
+            self.counters.record_response(route.path, request_number, response.status)
+            if page is not None:
+                self.counters.record_page_observation(
+                    rows=page.records,
+                    next_cursor=page.next_cursor,
+                    status=response.status,
+                )
+            return response
+
         state_snapshot = dict(self._current_states)
         if route.latency_ms:
             await asyncio.sleep(route.latency_ms / 1000.0)
         if route.status != 200:
-            return _error(route.status, _status_message(route.status))
+            return finish(_error(route.status, _status_message(route.status)))
         if route.write_forbidden:
-            return _error(403, "write forbidden")
+            return finish(_error(403, "write forbidden"))
         if route.require_user_agent and not has_nonblank_user_agent(request.headers):
-            return _error(403, "forbidden")
+            return finish(_error(403, "forbidden"))
         if route.required_header is not None and not satisfy_header(request.headers, route.required_header):
-            return _error(403, "forbidden")
+            return finish(_error(403, "forbidden"))
         if is_rate_limited(request_number, route.rate_limit_every):
-            return _error(429, "rate limited")
+            return finish(_error(429, "rate limited"))
         if route.auth_required and not await self._authenticate(request):
-            return _error(401, "unauthorized")
+            return finish(_error(401, "unauthorized"))
 
         try:
             payload, spec = self._route_payload(route, state_snapshot)
@@ -490,11 +507,11 @@ class MockRestServer:
             if item_parameter is not None:
                 item = select_item(payload, item_key=spec.item_key, item_value=item_parameter)
                 if item is None:
-                    return _error(404, "not found")
+                    return finish(_error(404, "not found"))
                 payload = item
             if route.pagination is not None:
                 if not isinstance(payload, list):
-                    return _error(500, "configured pagination response is not a collection")
+                    return finish(_error(500, "configured pagination response is not a collection"))
                 cursor = request.query.get(route.pagination.cursor_param)
                 state_key = _state_key(route, state_snapshot)
                 map_key = (route.path, state_key)
@@ -520,19 +537,18 @@ class MockRestServer:
                     route.pagination.cursor_field: page.next_cursor,
                 }
                 response = web.json_response(payload)
-                self.counters.record_page()
-                return response
+                return finish(response, page=page)
             if spec.format == "csv":
-                return _csv_response(payload)
+                return finish(_csv_response(payload))
             if (
                 item_parameter is None
                 and route.fanout is None
                 and spec.serialized_json is not None
             ):
-                return web.Response(body=spec.serialized_json, content_type="application/json")
-            return web.json_response(payload)
+                return finish(web.Response(body=spec.serialized_json, content_type="application/json"))
+            return finish(web.json_response(payload))
         except BehaviorError as exc:
-            return _error(400, str(exc))
+            return finish(_error(400, str(exc)))
 
     async def _authenticate(self, request: web.Request) -> bool:
         auth = self.config.auth

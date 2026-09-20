@@ -265,6 +265,21 @@ def test_not_examined_when_transport_evidence_is_absent() -> None:
     assert result["findings"] == ["transport_retry_not_examined"]
 
 
+def test_harness_owned_source_evidence_supplies_transport_when_agent_cannot_observe_it() -> None:
+    target = _good_target()
+    source_evidence = {
+        "schema": "dp-scenario-source-evidence-v1",
+        "pages": target["pages"],
+        "transport_trace": target["transport_trace"],
+    }
+    target["pages"] = None
+    target["transport_trace"] = None
+
+    result = SCENARIO.follow_up_check(target, source_evidence=source_evidence)
+
+    assert result["passed"], result["findings"]
+
+
 def test_declared_route_really_exercises_expiry_rate_limit_and_pagination() -> None:
     async def exercise() -> None:
         assert SCENARIO.route_table is not None

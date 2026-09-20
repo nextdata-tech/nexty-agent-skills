@@ -36,6 +36,7 @@ class FollowUpContext:
 
     fixture_dir: str | Path | None = None
     row_count_oracle: object = _MISSING
+    source_evidence: object = _MISSING
 
 
 Handler = Callable[["object", object, Mapping[str, object], FollowUpContext], Mapping[str, object]]

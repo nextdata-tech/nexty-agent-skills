@@ -48,6 +48,8 @@ class RequestCounters:
         self._method_counts: Counter[tuple[str, str]] = Counter()
         self._buckets: dict[str, dict[str, Any]] = {}
         self._pages = 0
+        self._response_statuses: dict[int, int] = {}
+        self._page_observations: list[dict[str, Any]] = []
 
     def record(
         self,
@@ -79,10 +81,56 @@ class RequestCounters:
             return int(bucket["count"])
 
     def record_page(self) -> None:
-        """Record one successfully rendered paginated response."""
+        """Record one successful page count without retaining its contents."""
 
         with self._lock:
             self._pages += 1
+
+    def record_response(self, route: str, request_number: int, status: int) -> None:
+        """Attach the observed HTTP status to one previously recorded request."""
+
+        if not route or request_number < 1 or status < 100 or status > 599:
+            raise ValueError("route, request number, and HTTP status are required")
+        with self._lock:
+            matching = [
+                event.sequence
+                for event in self._events
+                if event.route == route
+            ]
+            if request_number > len(matching):
+                raise ValueError("request number is not present for route")
+            self._response_statuses[matching[request_number - 1]] = int(status)
+
+    def record_page_observation(
+        self,
+        *,
+        rows: Any = None,
+        next_cursor: str | None = None,
+        status: int = 200,
+    ) -> None:
+        """Record one safe, successful page returned by a paginated route."""
+
+        with self._lock:
+            self._pages += 1
+            safe_rows: list[dict[str, Any]] = []
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, Mapping):
+                        continue
+                    safe_rows.append(
+                        {
+                            field: row[field]
+                            for field in ("id", "stage", "amount", "status", "updatedAt")
+                            if field in row
+                        }
+                    )
+            self._page_observations.append(
+                {
+                    "status": int(status),
+                    "rows": safe_rows,
+                    "next_cursor": "present" if next_cursor is not None else None,
+                }
+            )
 
     def reset(self) -> None:
         """Clear all events; only the control port calls this between runs."""
@@ -93,6 +141,8 @@ class RequestCounters:
             self._method_counts.clear()
             self._buckets.clear()
             self._pages = 0
+            self._response_statuses.clear()
+            self._page_observations.clear()
 
     def snapshot(self) -> dict[str, Any]:
         """Return a JSON-serializable point-in-time oracle snapshot."""
@@ -109,7 +159,19 @@ class RequestCounters:
             events = list(self._events)
             total = len(events)
             pages = self._pages
-        return {"total": total, "pages": pages, "routes": grouped, "events": [asdict(event) for event in events]}
+            response_statuses = [
+                {"sequence": sequence, "status": status}
+                for sequence, status in sorted(self._response_statuses.items())
+            ]
+            page_observations = list(self._page_observations)
+        return {
+            "total": total,
+            "pages": pages,
+            "routes": grouped,
+            "events": [asdict(event) for event in events],
+            "response_statuses": response_statuses,
+            "page_observations": page_observations,
+        }
 
     as_dict = snapshot
 
@@ -119,7 +181,10 @@ class RequestCounters:
     ) -> tuple[list[RequestEvent], Counter[str], Counter[tuple[str, str]], dict[str, dict[str, Any]], int]:
         """Validate and decode a persisted counter snapshot without mutating state."""
 
-        if not isinstance(snapshot, Mapping) or set(snapshot) != {"total", "pages", "routes", "events"}:
+        if not isinstance(snapshot, Mapping) or set(snapshot) not in (
+            {"total", "pages", "routes", "events"},
+            {"total", "pages", "routes", "events", "response_statuses", "page_observations"},
+        ):
             raise ValueError("counter snapshot has an invalid shape")
         total = snapshot["total"]
         pages = snapshot["pages"]
@@ -186,7 +251,39 @@ class RequestCounters:
         }
         if dict(raw_routes) != expected_routes:
             raise ValueError("counter snapshot route aggregates do not match events")
-        return events, route_counts, method_counts, buckets, pages
+        response_statuses = snapshot.get("response_statuses", [])
+        page_observations = snapshot.get("page_observations", [])
+        if not isinstance(response_statuses, list) or not isinstance(page_observations, list):
+            raise ValueError("counter snapshot has invalid response observations")
+        decoded_statuses: dict[int, int] = {}
+        for raw_status in response_statuses:
+            if (
+                not isinstance(raw_status, Mapping)
+                or set(raw_status) != {"sequence", "status"}
+                or not isinstance(raw_status["sequence"], int)
+                or isinstance(raw_status["sequence"], bool)
+                or raw_status["sequence"] < 1
+                or raw_status["sequence"] > total
+                or not isinstance(raw_status["status"], int)
+                or isinstance(raw_status["status"], bool)
+                or not 100 <= raw_status["status"] <= 599
+                or raw_status["sequence"] in decoded_statuses
+            ):
+                raise ValueError("counter snapshot has invalid response status")
+            decoded_statuses[raw_status["sequence"]] = raw_status["status"]
+        if len(page_observations) != pages:
+            raise ValueError("counter snapshot pages do not match observations")
+        for page in page_observations:
+            if (
+                not isinstance(page, Mapping)
+                or set(page) != {"status", "rows", "next_cursor"}
+                or page["status"] != 200
+                or not isinstance(page["rows"], list)
+                or page["next_cursor"] is not None
+                and not isinstance(page["next_cursor"], str)
+            ):
+                raise ValueError("counter snapshot has malformed page observation")
+        return events, route_counts, method_counts, buckets, pages, decoded_statuses, page_observations
 
     @classmethod
     def validate_snapshot(cls, snapshot: Mapping[str, Any]) -> None:
@@ -198,7 +295,7 @@ class RequestCounters:
         """Restore a previously captured snapshot after strict validation."""
 
         decoded = self._decode_snapshot(snapshot)
-        events, route_counts, method_counts, buckets, _pages = decoded
+        events, route_counts, method_counts, buckets, _pages, response_statuses, page_observations = decoded
         pages = snapshot["pages"]
         with self._lock:
             self._events = events
@@ -206,6 +303,8 @@ class RequestCounters:
             self._method_counts = method_counts
             self._buckets = buckets
             self._pages = int(pages)
+            self._response_statuses = response_statuses
+            self._page_observations = page_observations
 
     def count(self, route: str | None = None, method: str | None = None) -> int:
         """Count events optionally restricted to a route and method."""

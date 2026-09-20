@@ -844,7 +844,48 @@ def _snapshot_source_artifacts(environment: RunEnvironment, artifact_root: Path)
     if source is None:
         return
     _write_json(artifact_root / "capability.json", source.server.capability.as_dict())
-    _write_json(artifact_root / "server-counters.json", source.server.counters.snapshot())
+    counters = source.server.counters.snapshot()
+    _write_json(artifact_root / "server-counters.json", counters)
+    events = counters.get("events")
+    statuses = counters.get("response_statuses")
+    pages = counters.get("page_observations")
+    if not isinstance(events, list) or not isinstance(statuses, list) or not isinstance(pages, list):
+        return
+    status_by_sequence = {
+        item.get("sequence"): item.get("status")
+        for item in statuses
+        if isinstance(item, Mapping)
+    }
+    paginated_paths = {
+        route.path
+        for route in source.server.config.routes
+        if route.pagination is not None
+    }
+    refresh_path = (
+        source.server.config.auth.refresh_path
+        if source.server.config.auth is not None
+        else None
+    )
+    transport_trace = [
+        {
+            "sequence": event.get("sequence"),
+            "route": event.get("route"),
+            "method": event.get("method"),
+            "status": status_by_sequence.get(event.get("sequence")),
+        }
+        for event in events
+        if isinstance(event, Mapping)
+        and event.get("route") in paginated_paths | ({refresh_path} if refresh_path else set())
+        and isinstance(status_by_sequence.get(event.get("sequence")), int)
+    ]
+    _write_json(
+        artifact_root / "source-evidence.json",
+        {
+            "schema": "dp-scenario-source-evidence-v1",
+            "pages": pages,
+            "transport_trace": transport_trace,
+        },
+    )
 
 
 def _append_artifact_rows(artifact_root: Path) -> None:
@@ -2496,6 +2537,7 @@ class TierRunner:
             else None
         )
         query = _query_artifact(artifact_root)
+        source_evidence = _first_json(artifact_root, ("source-evidence.json",))
         facts = supervisor_facts
         observations = _load_json(artifact_root / "operator-observations.json")
         if not isinstance(observations, Mapping):
@@ -2605,6 +2647,8 @@ class TierRunner:
             follow_up_kwargs: dict[str, object] = {"fired_plants": fired_plants}
             if "row_count_oracle" in follow_up_parameters:
                 follow_up_kwargs["row_count_oracle"] = row_counts
+            if "source_evidence" in follow_up_parameters:
+                follow_up_kwargs["source_evidence"] = source_evidence
             follow_up = follow_up_method(
                 follow_up_target,
                 environment.oracle_dir,
@@ -2613,6 +2657,11 @@ class TierRunner:
             )
         elif "query_rows" in follow_up_parameters:
             follow_up = follow_up_method(follow_up_target, query_rows)
+        elif "source_evidence" in follow_up_parameters:
+            follow_up = follow_up_method(
+                follow_up_target,
+                source_evidence=source_evidence,
+            )
         else:
             follow_up = follow_up_method(follow_up_target)
         ungraded = observations.get("ungraded_criteria", ())

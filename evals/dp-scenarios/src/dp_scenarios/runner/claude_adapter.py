@@ -282,7 +282,11 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "nxd-conversation-review-ledger-v1 and the exact existing adversarial-review "
     "round shape from src/nxd-run-job-loop/reference/build-record.md: each "
     "round must use status, started_at_unix_ms, ended_at_unix_ms, budget_ms, "
-    "findings, adjudications, user_decision, and deferred_finding_ids. Keep "
+    "findings, adjudications, user_decision, and deferred_finding_ids. The "
+    "ledger status is exactly one of complete, needs_user, or timed_out; the "
+    "supervisor report verdict values findings and clear belong only inside "
+    "report_requirement and must never be copied into the ledger status. "
+    "user_decision is the declared object or null, never a prose status token. Keep "
     "the complete finding evidence and adjudication there; do not substitute "
     "a summary with review_round_index, generation, reviewer, verdict, claims, "
     "or outcome fields, because that is not the declared ledger contract.",
@@ -314,6 +318,11 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "Follow the required_fields contract literally: use the exact object keys "
     "and scalar values it requests, do not add diagnostic convenience fields to "
     "exact arrays, and do not rename promise keys into prose variants.",
+    "The harness records credential-free source pages and response statuses in "
+    "its own source-evidence artifact. If the connector tools do not expose "
+    "page or transport detail to you, leave those evidence fields null rather "
+    "than fabricating them; populate the independently observed output rows, "
+    "contract, and product surfaces normally.",
 )
 
 

@@ -483,6 +483,14 @@ with the existing adversarial-review round shape. Never write a review result
 into the captured closure. The ledger is the user-facing record; the supervisor
 receives only this bounded summary through `report_requirement`:
 
+The ledger round's `status` is the ledger-completeness vocabulary
+(`complete`, `needs_user`, or `timed_out`). The supervisor projection has a
+different `report.verdict` vocabulary (`clear`, `findings`, `rejected`, or
+`indeterminate`); never copy that verdict into the ledger `status` field.
+`findings` is a supervisor report verdict, not a ledger round status, and a
+round with findings is still recorded as `complete` only when its rich claims,
+adjudications, and any required user decision are complete.
+
 ```json
 {
   "schema": "nxd-conversation-review-v1",
