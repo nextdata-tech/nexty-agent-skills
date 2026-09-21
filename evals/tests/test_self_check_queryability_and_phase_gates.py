@@ -283,6 +283,65 @@ REQUIRED_MISSING_TRANSFORM = CSV_TRANSFORM.replace(
 
 # --- struct.model_not_queryable ---------------------------------------------
 
+_FIELD_DESCRIPTION = (
+    '            "region": field(string(), dimension(name="region"),\n'
+    '                description="Sales region the order was booked in."),\n'
+)
+_ROLE_DESCRIPTION = (
+    '            "region": field(string(),\n'
+    '                dimension(name="region", description="Sales region.")),\n'
+)
+_NO_DESCRIPTION = (
+    '            "region": field(string(), dimension(name="region")),\n'
+)
+_TUPLE_DESCRIPTION = (
+    '            "region": (string(), "Sales region.", dimension(name="region")),\n'
+)
+
+
+def test_a_description_on_the_field_documents_the_dimension(tmp_path):
+    # The compiler gives a role with no description of its own the attribute's,
+    # so this is the placement the guidance now asks for.
+    models = MODELS_HEAD + _model("orders", extra_fields=_FIELD_DESCRIPTION)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  CSV_TRANSFORM, ("orders",))
+    assert "struct.role_no_description" not in _codes(report)
+
+
+def test_a_description_on_the_role_still_documents_the_dimension(tmp_path):
+    # Deprecated upstream, still honoured and still first — it must not be flagged.
+    models = MODELS_HEAD + _model("orders", extra_fields=_ROLE_DESCRIPTION)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  CSV_TRANSFORM, ("orders",))
+    assert "struct.role_no_description" not in _codes(report)
+
+
+def test_a_tuple_entrys_string_documents_the_dimension(tmp_path):
+    models = MODELS_HEAD + _model("orders", extra_fields=_TUPLE_DESCRIPTION)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  CSV_TRANSFORM, ("orders",))
+    assert "struct.role_no_description" not in _codes(report)
+
+
+def test_a_dimension_documented_nowhere_is_flagged(tmp_path):
+    models = MODELS_HEAD + _model("orders", extra_fields=_NO_DESCRIPTION)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  CSV_TRANSFORM, ("orders",))
+    assert "struct.role_no_description" in _codes(report), (
+        "a dimension with no description on its field or its role reaches "
+        "describe_models as a bare name"
+    )
+
+
+def test_the_unreachable_description_code_is_never_emitted(tmp_path):
+    # Retired: a field description now reaches describe_models. The code stays
+    # registered because the diagnostic registry is frozen.
+    models = MODELS_HEAD + _model("orders", extra_fields=_FIELD_DESCRIPTION)
+    report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+                  CSV_TRANSFORM, ("orders",))
+    assert "struct.description_unreachable" not in _codes(report)
+
+
 def test_promised_model_backing_no_view_is_flagged(tmp_path):
     models = MODELS_HEAD + _model("orders", view=False)
     report = _run(tmp_path, models, _spec(["orders"], [], CSV_SERVICE),
