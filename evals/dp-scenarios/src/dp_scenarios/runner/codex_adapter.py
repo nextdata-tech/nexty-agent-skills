@@ -96,6 +96,20 @@ publication sequence. Inspect only the closure and review inputs named by the
 parent, complete within the retained review deadline, and return concise
 review claims/findings to the parent.
 
+Collaboration tool argument discipline: for `spawnAgent`, send the complete
+review request in exactly one `message` string; do not also send `items`.
+Never send both `message` and `items` in one collaboration call. For the
+one-shot reviewer, use only `spawnAgent`, `wait`, and `closeAgent`; pass the
+returned receiver thread id as `target` to `closeAgent`, and never use
+`sendInput` or `resumeAgent`. If a collaboration call is rejected, do not
+repeat the rejected argument shape; report an incomplete handoff.
+
+File-edit discipline: use the file-change tool for edits. If an apply-patch
+operation is used, every patch must have the exact `*** Begin Patch`, file
+operation, hunk, and `*** End Patch` structure; never combine JSON, prose, or
+another patch format inside it. If the patch is rejected, do not retry the
+same malformed patch; use the file-change tool or report the blocker.
+
 Workflow-v2 control: treat every supervisor response as authoritative. After
 each response, use only its current revision, invalidation_epoch, and
 next_actions. Once a successful capture returns a report_requirement action
@@ -404,6 +418,32 @@ def _update_reviewer_deadline(
     # it does not prove that the child returned terminal claims. Keep the
     # absolute per-turn deadline armed until the parent turn terminates. The
     # state is recreated for every turn, so no explicit cleanup is needed.
+    return receiver_ids, deadline_at
+
+
+def _update_reviewer_deadline_from_events(
+    events: Sequence[Mapping[str, object]],
+    receiver_ids: set[str],
+    deadline_at: float | None,
+    *,
+    now: float,
+) -> tuple[set[str], float | None]:
+    """Apply reviewer-deadline detection to already-buffered app-server events.
+
+    ``turn/start`` can return notifications alongside its response.  Those
+    notifications are handed to ``_collect_turn`` as ``before_turn`` events;
+    ignoring them leaves a retained reviewer without its 300-second deadline
+    and lets the outer turn timeout wait the full 90% budget instead.
+    """
+
+    for event in events:
+        normalized = _normalise_app_server_event(event)
+        receiver_ids, deadline_at = _update_reviewer_deadline(
+            normalized,
+            receiver_ids,
+            deadline_at,
+            now=now,
+        )
     return receiver_ids, deadline_at
 
 
@@ -1213,6 +1253,13 @@ class CodexAdapter:
         deadline = time.monotonic() + self.timeout_s
         reviewer_receiver_ids: set[str] = set()
         reviewer_deadline_at: float | None = None
+        if before_turn:
+            reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline_from_events(
+                before_turn,
+                reviewer_receiver_ids,
+                reviewer_deadline_at,
+                now=time.monotonic(),
+            )
         while True:
             read_deadline = deadline
             if reviewer_deadline_at is not None:

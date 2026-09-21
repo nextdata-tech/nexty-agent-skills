@@ -19,6 +19,7 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
     _update_reviewer_deadline,
+    _update_reviewer_deadline_from_events,
     _load_mcp_server,
     parse_codex_events,
 )
@@ -62,6 +63,9 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "same turn" in CODEX_SYSTEM_PROMPT
     assert "immediately using the returned receiver thread id" in CODEX_SYSTEM_PROMPT
     assert "Do not call `sendInput` or `resumeAgent`" in CODEX_SYSTEM_PROMPT
+    assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
+    assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
+    assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
@@ -122,6 +126,31 @@ def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> 
     )
     assert receiver_ids == {"child-1"}
     assert completed_deadline == deadline
+
+
+def test_codex_reviewer_deadline_processes_events_buffered_with_turn_start() -> None:
+    events = [
+        {
+            "method": "item/started",
+            "params": {
+                "item": {
+                    "type": "collabAgentToolCall",
+                    "tool": "spawnAgent",
+                    "receiverThreadIds": ["child-1"],
+                }
+            },
+        }
+    ]
+
+    receiver_ids, deadline = _update_reviewer_deadline_from_events(
+        events,
+        set(),
+        None,
+        now=10.0,
+    )
+
+    assert receiver_ids == {"child-1"}
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
 
 
 def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> None:
