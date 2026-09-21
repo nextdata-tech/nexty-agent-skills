@@ -1668,6 +1668,7 @@ class TierRunner:
         workflow_observer: WorkflowObserver | None = None,
         operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
         allow_host_home: bool = False,
+        review_timeout_seconds: float | None = None,
         staged_job_helper_dir: str | Path | None = None,
         workflow_action_guard: bool = False,
         max_workers: int = 1,
@@ -1735,6 +1736,7 @@ class TierRunner:
         self.workflow_observer = workflow_observer
         self.operator_factory = operator_factory
         self.allow_host_home = allow_host_home
+        self.review_timeout_seconds = review_timeout_seconds
         self.staged_job_helper_dir = (
             Path(staged_job_helper_dir).expanduser().resolve()
             if staged_job_helper_dir is not None
@@ -2281,6 +2283,7 @@ class TierRunner:
                 workflow_activation_bundle=self.workflow_activation_bundle,
                 workflow_action_guard=self.workflow_action_guard,
                 allow_host_home=self.allow_host_home,
+                review_timeout_seconds=self.review_timeout_seconds,
                 staged_job_helper_dir=self.staged_job_helper_dir,
                 knobs=knobs,
                 attempt=epoch,

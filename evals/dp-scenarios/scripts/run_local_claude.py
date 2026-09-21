@@ -41,6 +41,10 @@ from dp_scenarios.runner.local import (
     temporary_plugin,
 )
 from dp_scenarios.runner.report import write_report
+from dp_scenarios.runner.review_guard import (
+    DEFAULT_REVIEW_TIMEOUT_SECONDS,
+    validate_review_timeout_seconds,
+)
 from dp_scenarios.runner.session import LiveSession
 from dp_scenarios.runner.tier import RunBudgets, TierError, TierRunner, run_drift_canary
 from dp_scenarios.scenario import SCENARIO_TIERS, Scenario, load_scenarios, select_tier
@@ -486,6 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--effort", default="medium", choices=("low", "medium", "high", "xhigh", "max"))
     parser.add_argument("--max-budget-usd", type=float, help="per-scenario Claude Code spend ceiling")
     parser.add_argument("--turn-timeout", type=float, default=600.0, help="maximum seconds for each agent turn")
+    parser.add_argument(
+        "--review-timeout",
+        type=float,
+        default=DEFAULT_REVIEW_TIMEOUT_SECONDS,
+        help="maximum seconds for the retained-capture reviewer (default: 300)",
+    )
     parser.add_argument("--supervisor", type=Path, help="nxd-desktop-supervisor executable")
     parser.add_argument(
         "--workflow-activation-bundle",
@@ -523,6 +533,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.turn_timeout <= 0:
         raise TierError("--turn-timeout must be positive")
+    try:
+        review_timeout_seconds = validate_review_timeout_seconds(args.review_timeout)
+    except ValueError as exc:
+        raise TierError("--review-timeout must be a positive finite number") from exc
     if args.jobs < 1:
         raise TierError("--jobs must be a positive integer")
     if args.allow_host_home_bash and not args.allow_host_home:
@@ -631,6 +645,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "desktop-supervisor": str(supervisor),
             "desktop-python": str(desktop_python),
             "timeout": str(_adapter_timeout(args.turn_timeout)),
+            "review-timeout": f"{review_timeout_seconds:.15g}",
         }
         if claude_config_dir is not None:
             adapter_kwargs["claude-config-dir"] = str(claude_config_dir)
@@ -721,6 +736,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_host_home=args.allow_host_home,
             staged_job_helper_dir=exact_job_helper_dir,
             operator_factory=operator_factory,
+            review_timeout_seconds=review_timeout_seconds,
             max_workers=args.jobs,
         ).run()
         _, _, conversations = write_report(

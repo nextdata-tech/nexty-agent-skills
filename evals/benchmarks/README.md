@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-21 | nxd-generate-data-product: harden copied source and ratio contracts | NO_EVAL | — | [`2026-09-21-source-contract-hardening`](entries/2026-09-21-source-contract-hardening.md) |
 | 2026-09-20 | add a persistent Codex live-runner backend | NO_EVAL | — | [`2026-09-20-codex-live-runner`](entries/2026-09-20-codex-live-runner.md) |
 | 2026-09-19 | workflow-v2: pin empty open questions and typed transform operations | NO_EVAL | — | [`2026-09-19-workflow-v2-typed-authoring-guidance`](entries/2026-09-19-workflow-v2-typed-authoring-guidance.md) |
 | 2026-09-19 | add an explicit opt-in native Claude continuation seam | NO_EVAL | — | [`2026-09-19-native-claude-continuation-seam`](entries/2026-09-19-native-claude-continuation-seam.md) |
@@ -26,6 +27,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | 2026-09-09 | supervisor v2 admission path in the job loop and generator | NO_EVAL | — | [`2026-09-09-workflow-v2-construction-contract`](entries/2026-09-09-workflow-v2-construction-contract.md) |
 | 2026-09-09 | b-series: genuine completion workflow | FAIL | crm-pipeline, finance-close, inventory-position | [`2026-09-09-b-series-genuine-completion`](entries/2026-09-09-b-series-genuine-completion.md) |
 | 2026-09-09 | nxd-generate-data-product: authenticated probe and labeled-root checker follow-up | MIXED | authenticated-api-source-build, multi-source-labeled-roots | [`2026-09-09-api-probe-and-labeled-root-follow-up`](entries/2026-09-09-api-probe-and-labeled-root-follow-up.md) |
+| 2026-09-08 | B3 safe marketing-attribution scenario | NO_EVAL | — | [`2026-09-08-b3-marketing-attribution`](entries/2026-09-08-b3-marketing-attribution.md) |
 | 2026-09-07 | clarify generator review guidance and preserve gold-failure triage | NO_EVAL | — | [`2026-09-07-skill-guidance-and-gold-triage`](entries/2026-09-07-skill-guidance-and-gold-triage.md) |
 | 2026-09-07 | run subagents inline, deny the session tools, and fail a run that built nothing | NO_EVAL | — | [`2026-09-07-background-subagents-void-the-run`](entries/2026-09-07-background-subagents-void-the-run.md) |
 | 2026-09-06 | own the build evidence, and stop comparing source tables with built models | NO_EVAL | — | [`2026-09-06-harness-owned-build-evidence`](entries/2026-09-06-harness-owned-build-evidence.md) |

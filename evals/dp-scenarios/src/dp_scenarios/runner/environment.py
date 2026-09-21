@@ -211,14 +211,16 @@ def _agent_fixture_manifest(manifest: Mapping[str, object], oracle_path: Path) -
     return safe
 
 
-def _evidence_contract(scenario: Scenario) -> dict[str, object] | None:
+def _evidence_contract(
+    scenario: Scenario, *, review_timeout_seconds: float | None = None
+) -> dict[str, object] | None:
     """Describe agent evidence without exposing hidden reference values."""
 
     path = getattr(scenario, "follow_up_artifact", None)
     if path is None:
         return None
     kind = followups.get(scenario.gates["follow-up"].kind)
-    from dp_scenarios.runner.claude_adapter import SCENARIO_CONDUCT_RULES
+    from dp_scenarios.runner.claude_adapter import scenario_conduct_rules
 
     return {
         "format_version": 1,
@@ -231,7 +233,7 @@ def _evidence_contract(scenario: Scenario) -> dict[str, object] | None:
         # Conduct rules ride with the scenario that asked for them rather than
         # with the harness, so a package that does not declare an evidence
         # artifact keeps the prompt -- and the baseline -- it was measured on.
-        "conduct": list(SCENARIO_CONDUCT_RULES),
+        "conduct": list(scenario_conduct_rules(review_timeout_seconds)),
     }
 
 
@@ -1094,6 +1096,7 @@ class RunEnvironment:
     desktop_session_root: Path | None = None
     live_cwd: Path | None = None
     allow_host_home: bool = False
+    review_timeout_seconds: float | None = None
     staged_job_helper_dir: Path | None = None
     knobs: SupervisorKnobs = field(default_factory=SupervisorKnobs.off)
     attempt: int = 1
@@ -1224,7 +1227,10 @@ class RunEnvironment:
                     json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
-                contract = _evidence_contract(self.scenario)
+                contract = _evidence_contract(
+                    self.scenario,
+                    review_timeout_seconds=self.review_timeout_seconds,
+                )
                 if contract is not None:
                     workspace = self.workspace_dir
                     workspace.mkdir(parents=True, exist_ok=True)

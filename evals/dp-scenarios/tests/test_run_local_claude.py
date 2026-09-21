@@ -81,6 +81,14 @@ def test_local_runner_leaves_timeout_budget_for_the_adapter() -> None:
     assert module._adapter_timeout(0.1) < 0.1
 
 
+def test_local_runner_defaults_and_validates_the_review_timeout() -> None:
+    module = _load_runner_module()
+
+    assert module.build_parser().parse_args([]).review_timeout == 300.0
+    with pytest.raises(TierError, match="--review-timeout must be a positive finite number"):
+        module.main(["--review-timeout", "nan"])
+
+
 def test_skill_pack_root_defaults_to_and_validates_the_current_checkout(tmp_path: Path) -> None:
     module = _load_runner_module()
 

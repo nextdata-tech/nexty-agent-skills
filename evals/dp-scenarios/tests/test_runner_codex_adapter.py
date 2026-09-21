@@ -34,6 +34,11 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not use Bash, curl, WebFetch" in CODEX_SYSTEM_PROMPT
     assert "source observations must come from the" in CODEX_SYSTEM_PROMPT
     assert "If a shell command" in CODEX_SYSTEM_PROMPT and "rejected" in CODEX_SYSTEM_PROMPT
+    assert "Complete closure authoring in this parent" in CODEX_SYSTEM_PROMPT
+    assert "do not use destructive" in CODEX_SYSTEM_PROMPT
+    assert "Do not use `spawnAgent` for closure authoring" in CODEX_SYSTEM_PROMPT
+    assert "bounded per retained capture" in CODEX_SYSTEM_PROMPT
+    assert "the per-capture limit resets" in CODEX_SYSTEM_PROMPT
     assert "do not call prepare_workflow, get_workflow_capabilities, or" in CODEX_SYSTEM_PROMPT
     assert "Dispatch exactly one provider-native" in CODEX_SYSTEM_PROMPT
     assert "built-in Codex collaboration child via spawnAgent" in CODEX_SYSTEM_PROMPT

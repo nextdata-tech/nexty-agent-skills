@@ -1226,7 +1226,13 @@ def test_oauth_token_reaches_claude_and_withholds_bash(
     assert not ({"Task", "Agent"} & denied)
 
 
-def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> ClaudeCodeAdapter:
+def _adapter_against(
+    fake_claude: Path,
+    tmp_path: Path,
+    *,
+    timeout_s: float,
+    review_timeout_seconds: float | None = None,
+) -> ClaudeCodeAdapter:
     """Build an adapter whose only real child is ``fake_claude``."""
 
     fake_claude.chmod(0o700)
@@ -1252,6 +1258,7 @@ def _adapter_against(fake_claude: Path, tmp_path: Path, *, timeout_s: float) -> 
         timeout_s=timeout_s,
         max_budget_usd=None,
         append_system_prompt="test",
+        review_timeout_seconds=review_timeout_seconds,
         mcp_config=tmp_path / "mcp.json",
         supervisor_data_dir=supervisor_data_dir,
     )
@@ -1332,6 +1339,7 @@ def _run_review_deadline_fake(
     mode: str,
     stderr: str | None = None,
     timeout_s: float = 2.0,
+    review_timeout_seconds: float | None = None,
 ) -> tuple[ClaudeCodeAdapter, TurnResult]:
     fake_claude = tmp_path / f"review-{mode}-fake-claude.py"
     _write_review_deadline_fake(fake_claude, mode=mode)
@@ -1349,7 +1357,12 @@ def _run_review_deadline_fake(
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=timeout_s)
+    adapter = _adapter_against(
+        fake_claude,
+        tmp_path,
+        timeout_s=timeout_s,
+        review_timeout_seconds=review_timeout_seconds,
+    )
     result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     return adapter, result
 
@@ -1404,6 +1417,25 @@ def test_accepted_review_dispatch_uses_a_silent_child_deadline_and_reaps_the_gro
     assert "reviewer activity" in result.transcript_delta
     assert adapter._process is None
     adapter.close()
+
+
+def test_configured_review_timeout_is_propagated_and_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, result = _run_review_deadline_fake(
+        tmp_path,
+        monkeypatch,
+        mode="silent",
+        review_timeout_seconds=0.2,
+    )
+    try:
+        assert result.turn_timed_out is True
+        assert "retained-capture reviewer did not complete within 0.2s" in (
+            result.environment_detail or ""
+        )
+        assert adapter.review_timeout_seconds == 0.2
+    finally:
+        adapter.close()
 
 
 def test_outer_deadline_beats_a_still_pending_reviewer_deadline(

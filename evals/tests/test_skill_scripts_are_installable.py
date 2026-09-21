@@ -47,6 +47,7 @@ HELPERS = (
     "self_check.py",
 )
 API_REFRESH_SCRIPT = "api_source_refresh_session.py"
+SOURCE_CONTRACT_SCRIPT = "source_contract.py"
 VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
@@ -104,6 +105,31 @@ def test_api_refresh_script_is_installable_in_the_generator_skill(tmp_path: Path
     assert installed.is_file()
     assert installed.read_bytes() == (
         SRC / "nxd-generate-data-product" / "scripts" / API_REFRESH_SCRIPT
+    ).read_bytes()
+
+
+def test_source_contract_script_is_installable_in_the_generator_skill(tmp_path: Path):
+    """The source/ratio recipe must reach a direct skill installation."""
+    _run_installer(
+        tmp_path,
+        "--code",
+        "--skills",
+        "nxd-generate-data-product",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    installed = (
+        tmp_path
+        / ".claude"
+        / "skills"
+        / "nxd-generate-data-product"
+        / "scripts"
+        / SOURCE_CONTRACT_SCRIPT
+    )
+    assert installed.is_file()
+    assert installed.read_bytes() == (
+        SRC / "nxd-generate-data-product" / "scripts" / SOURCE_CONTRACT_SCRIPT
     ).read_bytes()
 
 
@@ -1001,13 +1027,19 @@ def test_standalone_query_adapter_zip_carries_shared_intent_reference(
             ), f"{name} retains a sibling-skill link in the standalone archive"
 
 
-def _assert_api_refresh_script_in_archive(archive: Path, member: str) -> None:
+def _assert_generator_script_in_archive(
+    archive: Path, member: str, script_name: str
+) -> None:
     assert archive.is_file(), archive
     with zipfile.ZipFile(archive) as zf:
         assert member in zf.namelist(), f"{member} missing from {archive}"
         assert zf.read(member) == (
-            SRC / "nxd-generate-data-product" / "scripts" / API_REFRESH_SCRIPT
+            SRC / "nxd-generate-data-product" / "scripts" / script_name
         ).read_bytes()
+
+
+def _assert_api_refresh_script_in_archive(archive: Path, member: str) -> None:
+    _assert_generator_script_in_archive(archive, member, API_REFRESH_SCRIPT)
 
 
 def test_api_refresh_script_is_in_every_distributed_generator_package(tmp_path: Path):
@@ -1024,13 +1056,28 @@ def test_api_refresh_script_is_in_every_distributed_generator_package(tmp_path: 
         REPO / "build" / "nxd-generate-data-product.zip",
         f"scripts/{API_REFRESH_SCRIPT}",
     )
+    _assert_generator_script_in_archive(
+        REPO / "build" / "nxd-generate-data-product.zip",
+        f"scripts/{SOURCE_CONTRACT_SCRIPT}",
+        SOURCE_CONTRACT_SCRIPT,
+    )
     _assert_api_refresh_script_in_archive(
         REPO / "build" / f"nexty-desktop-v{version}.zip",
         f"skills/nxd-generate-data-product/scripts/{API_REFRESH_SCRIPT}",
     )
+    _assert_generator_script_in_archive(
+        REPO / "build" / f"nexty-desktop-v{version}.zip",
+        f"skills/nxd-generate-data-product/scripts/{SOURCE_CONTRACT_SCRIPT}",
+        SOURCE_CONTRACT_SCRIPT,
+    )
     _assert_api_refresh_script_in_archive(
         REPO / "build" / f"nexty-agent-skills-v{version}.zip",
         f"skills/nxd-generate-data-product/scripts/{API_REFRESH_SCRIPT}",
+    )
+    _assert_generator_script_in_archive(
+        REPO / "build" / f"nexty-agent-skills-v{version}.zip",
+        f"skills/nxd-generate-data-product/scripts/{SOURCE_CONTRACT_SCRIPT}",
+        SOURCE_CONTRACT_SCRIPT,
     )
 
     subprocess.run(
@@ -1043,6 +1090,11 @@ def test_api_refresh_script_is_in_every_distributed_generator_package(tmp_path: 
     _assert_api_refresh_script_in_archive(
         REPO / "build" / "plugin" / f"nexty-agent-skills-plugin-v{version}.zip",
         f"src/nxd-generate-data-product/scripts/{API_REFRESH_SCRIPT}",
+    )
+    _assert_generator_script_in_archive(
+        REPO / "build" / "plugin" / f"nexty-agent-skills-plugin-v{version}.zip",
+        f"src/nxd-generate-data-product/scripts/{SOURCE_CONTRACT_SCRIPT}",
+        SOURCE_CONTRACT_SCRIPT,
     )
 
 
