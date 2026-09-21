@@ -106,6 +106,19 @@ def test_semantic_views_use_the_output_model_chain_and_count_is_documented():
     )
 
 
+def test_models_only_declares_landed_outputs_and_query_surfaces():
+    skill = SKILL.read_text(encoding="utf-8")
+    assert "Declare only physical output models in `models.py`." in skill, (
+        "source-only semantic models violate the models/spec/PHYSICAL_MODELS "
+        "naming invariant and fail the trusted self-check"
+    )
+    assert "source-only/staging-only" in skill
+    assert "Every query-facing promised model needs a semantic view." in skill, (
+        "a physical output without a registered semantic view cannot be selected "
+        "by run_semantic_query"
+    )
+
+
 def test_the_note_does_not_break_the_role_builder_list():
     """A blank line plus an unindented paragraph ends a CommonMark list.
 
