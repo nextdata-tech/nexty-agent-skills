@@ -77,6 +77,20 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
     assert '"workflow already exists" and active-workflow' in CODEX_SYSTEM_PROMPT
     assert "errors are non-retryable" in CODEX_SYSTEM_PROMPT
+    assert "supplied source export for a\nfile-backed scenario" in CODEX_SYSTEM_PROMPT
+    assert "NXD_EVAL_FIXTURE_DIR" in CODEX_SYSTEM_PROMPT
+    assert "file-backed scenario is not expected to have an `infra-profile.yaml`" in CODEX_SYSTEM_PROMPT
+
+
+def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.fixture_dir = tmp_path / "fixture"
+
+    prompt = adapter._prompt("Inspect the supplied source.", ())
+
+    assert f"NXD_EVAL_FIXTURE_DIR={adapter.fixture_dir}" in prompt
+    assert "read only the supplied input files" in prompt
+    assert "do not use oracle or gold files" in prompt
 
 
 def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> None:
@@ -132,6 +146,28 @@ def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> 
     )
     assert receiver_ids == {"child-1"}
     assert completed_deadline == deadline
+
+
+def test_codex_reviewer_deadline_uses_configured_timeout() -> None:
+    spawn = {
+        "type": "item.started",
+        "item": {
+            "type": "collabAgentToolCall",
+            "tool": "spawnAgent",
+            "receiverThreadIds": ["child-1"],
+        },
+    }
+
+    receiver_ids, deadline = _update_reviewer_deadline(
+        spawn,
+        set(),
+        None,
+        now=10.0,
+        review_deadline_ms=2_500.0,
+    )
+
+    assert receiver_ids == {"child-1"}
+    assert deadline == pytest.approx(12.5)
 
 
 def test_codex_reviewer_deadline_arms_on_pending_init_without_receiver_id() -> None:
@@ -611,6 +647,7 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
     assert params["config"]["mcp_servers"]["nxd-desktop"]["command"] == "/bin/echo"
     assert params["config"]["mcp_servers"]["nxd-desktop"]["required"] is True
     assert params["config"]["mcp_servers"]["nxd-desktop"]["startup_timeout_sec"] == 30
+    assert adapter.review_timeout_seconds == pytest.approx(REVIEW_DEADLINE_MS / 1000.0)
 
     app_command = adapter._app_server_command()
     assert app_command[:3] == ["/bin/true", "app-server", "--stdio"]
@@ -703,7 +740,8 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
     assert thread_params["baseInstructions"].startswith("test")
     assert thread_params["runtimeWorkspaceRoots"] == [str(tmp_path), str(REPO_ROOT)]
     turn_params = requests[5]["params"]
-    assert turn_params["input"] == [{"type": "text", "text": "hello"}]
+    assert turn_params["input"][0]["type"] == "text"
+    assert turn_params["input"][0]["text"].startswith("hello\n\nRun-local source handoff:")
     assert turn_params["sandboxPolicy"] == {
         "type": "workspaceWrite",
         "writableRoots": [str(tmp_path), str(REPO_ROOT)],

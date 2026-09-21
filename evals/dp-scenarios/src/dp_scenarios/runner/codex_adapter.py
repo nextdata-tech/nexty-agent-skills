@@ -43,7 +43,10 @@ from dp_scenarios.runner.claude_adapter import (
     _update_machine_artifacts,
     _write_supervisor_facts,
 )
-from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
+from dp_scenarios.runner.review_guard import (
+    REVIEW_DEADLINE_MS,
+    validate_review_timeout_seconds,
+)
 
 
 class CodexAdapterError(RuntimeError):
@@ -60,13 +63,23 @@ Work only in the current workspace. Read scenario-evidence-contract.json,
 infra-profile.yaml when present, and the relevant skill files under the
 provided skill-pack directory before acting. Use the runner-owned nxd-desktop
 MCP server for supervisor operations; do not invent supervisor results from
-your own prose. Keep the authored closure in closure/ and do not create or
-edit artifacts/ files. Follow every conduct rule in the evidence contract.
+your own prose. The generated fixture is the supplied source export for a
+file-backed scenario and is available at the path in `NXD_EVAL_FIXTURE_DIR`;
+read those source files only to wire the closure's file connector or derived
+transform, then use the governed workflow/query for user-facing results. A
+file-backed scenario is not expected to have an `infra-profile.yaml` before
+the closure authors one. For an API-backed scenario, use the supplied
+infra-profile and generated connector runtime instead. Keep the authored
+closure in closure/ and do not create or edit artifacts/ files. Follow every
+conduct rule in the evidence contract.
 Do not use Bash, curl, WebFetch, or another direct HTTP/client probe to inspect
-the scenario source or its credentials; source observations must come from the
-generated connector runtime and the supervisor MCP workflow. Bash is for local
-closure authoring or reading the supplied skill files only, and must never
-print credential values or environment-file contents. If a shell command is
+an API scenario or its credentials; API source observations must come from the
+generated connector runtime and the supervisor MCP workflow. For a
+file-backed scenario, read only the exact supplied CSV/file inputs under
+`NXD_EVAL_FIXTURE_DIR`; never read oracle/gold files or use a raw fixture row
+as a substitute for the governed query. Bash is for local closure authoring,
+reading the exact fixture path, or reading the supplied skill files only, and
+must never print credential values or environment-file contents. If a shell command is
 rejected, do not retry the same command shape; return to the declared MCP and
 skill flow or report the blocker.
 Complete closure authoring in this parent turn. Prefer the file-edit/apply-patch
@@ -417,6 +430,7 @@ def _update_reviewer_deadline(
     deadline_at: float | None,
     *,
     now: float,
+    review_deadline_ms: float = REVIEW_DEADLINE_MS,
 ) -> tuple[set[str], float | None]:
     """Arm the bounded reviewer clock for the current parent turn."""
 
@@ -437,7 +451,7 @@ def _update_reviewer_deadline(
         # ids that arrive later without extending the deadline.
         receiver_ids |= ids
         if deadline_at is None:
-            deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
+            deadline_at = now + review_deadline_ms / 1000.0
         return receiver_ids, deadline_at
     # ``closeAgent`` only reports that the collaboration handle was closed;
     # it does not prove that the child returned terminal claims. Keep the
@@ -452,6 +466,7 @@ def _update_reviewer_deadline_from_events(
     deadline_at: float | None,
     *,
     now: float,
+    review_deadline_ms: float = REVIEW_DEADLINE_MS,
 ) -> tuple[set[str], float | None]:
     """Apply reviewer-deadline detection to already-buffered app-server events.
 
@@ -468,6 +483,7 @@ def _update_reviewer_deadline_from_events(
             receiver_ids,
             deadline_at,
             now=now,
+            review_deadline_ms=review_deadline_ms,
         )
     return receiver_ids, deadline_at
 
@@ -872,6 +888,7 @@ class CodexAdapter:
         strict_mcp_config: bool = False,
         allowed_tools: str | None = None,
         supervisor_data_dir: Path | None = None,
+        review_timeout_seconds: float | None = None,
         native_continuation: bool = False,
         resume_session_id: str | None = None,
     ) -> None:
@@ -890,6 +907,12 @@ class CodexAdapter:
         self.strict_mcp_config = strict_mcp_config
         self.allowed_tools = allowed_tools
         self.supervisor_data_dir = supervisor_data_dir
+        self.review_timeout_seconds = validate_review_timeout_seconds(
+            REVIEW_DEADLINE_MS / 1000.0
+            if review_timeout_seconds is None
+            else review_timeout_seconds
+        )
+        self._review_deadline_ms = self.review_timeout_seconds * 1000.0
         self.native_continuation = bool(native_continuation)
         self._thread_id = resume_session_id
         self._active_turn_id: str | None = None
@@ -1292,6 +1315,10 @@ class CodexAdapter:
             raise CodexAdapterError("Codex app-server turn/start returned no turn identity")
         self._active_turn_id = turn_id
         deadline = time.monotonic() + self.timeout_s
+        review_deadline_ms = getattr(self, "_review_deadline_ms", float(REVIEW_DEADLINE_MS))
+        review_timeout_seconds = getattr(
+            self, "review_timeout_seconds", review_deadline_ms / 1000.0
+        )
         reviewer_receiver_ids: set[str] = set()
         reviewer_deadline_at: float | None = None
         if before_turn:
@@ -1300,6 +1327,7 @@ class CodexAdapter:
                 reviewer_receiver_ids,
                 reviewer_deadline_at,
                 now=time.monotonic(),
+                review_deadline_ms=review_deadline_ms,
             )
         while True:
             read_deadline = deadline
@@ -1314,7 +1342,7 @@ class CodexAdapter:
                 ):
                     raise TimeoutError(
                         "Codex reviewer child did not complete before the "
-                        f"{REVIEW_DEADLINE_MS / 1000:.1f}-second reviewer deadline"
+                        f"{review_timeout_seconds:.1f}-second reviewer deadline"
                     ) from exc
                 raise
             if self._is_server_request(event):
@@ -1327,11 +1355,12 @@ class CodexAdapter:
                 reviewer_receiver_ids,
                 reviewer_deadline_at,
                 now=time.monotonic(),
+                review_deadline_ms=review_deadline_ms,
             )
             if reviewer_deadline_at is not None and time.monotonic() >= reviewer_deadline_at:
                 raise TimeoutError(
                     "Codex reviewer child did not complete before the "
-                    f"{REVIEW_DEADLINE_MS / 1000:.1f}-second reviewer deadline"
+                    f"{review_timeout_seconds:.1f}-second reviewer deadline"
                 )
             if normalized.get("type") in {"turn.completed", "turn.interrupted", "turn.failed"}:
                 params = event.get("params")
@@ -1343,6 +1372,15 @@ class CodexAdapter:
         return events
 
     def _prompt(self, text: str, attachment_paths: Sequence[str]) -> str:
+        text += (
+            "\n\nRun-local source handoff:\n"
+            f"- NXD_EVAL_FIXTURE_DIR={self.fixture_dir}\n"
+            "- For a file-backed source, read only the supplied input files under "
+            "that directory and wire them into the closure; do not use oracle or "
+            "gold files as source data.\n"
+            "- For an API-backed source, use the workspace infra-profile.yaml and "
+            "the generated connector runtime.\n"
+        )
         if attachment_paths:
             text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
         return text
@@ -1537,6 +1575,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--desktop-supervisor", type=Path, required=True)
     parser.add_argument("--desktop-python", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--review-timeout",
+        type=float,
+        default=None,
+        help="maximum seconds for the retained-capture reviewer",
+    )
     parser.add_argument("--mcp-config", type=Path, required=True)
     parser.add_argument("--strict-mcp-config", action="store_true")
     parser.add_argument("--supervisor-data-dir", type=Path, required=True)
@@ -1565,6 +1609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         strict_mcp_config=args.strict_mcp_config,
         allowed_tools=args.allowedTools,
         supervisor_data_dir=args.supervisor_data_dir.expanduser().resolve(),
+        review_timeout_seconds=args.review_timeout,
         native_continuation=args.native_continuation,
         resume_session_id=args.resume_session_id,
     )

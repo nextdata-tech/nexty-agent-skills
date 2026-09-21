@@ -665,6 +665,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "desktop-supervisor": str(supervisor),
             "desktop-python": str(desktop_python),
             "timeout": str(_adapter_timeout(args.turn_timeout)),
+            "review-timeout": f"{review_timeout_seconds:.15g}",
         }
     if args.native_continuation:
         adapter_kwargs["native-continuation"] = ""
