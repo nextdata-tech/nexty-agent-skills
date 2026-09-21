@@ -18,6 +18,7 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAdapter,
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
+    _event_debug_tail,
     _update_reviewer_deadline,
     _update_reviewer_deadline_from_events,
     _load_mcp_server,
@@ -66,6 +67,7 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
     assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
     assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
+    assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
@@ -450,6 +452,36 @@ def test_parse_codex_events_does_not_credit_spawn_without_child_completion() -> 
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].name == "Agent"
     assert result.tool_calls[0].result == {"is_error": True, "content": []}
+    assert "status=completed" in (result.environment_detail or "")
+    assert "child_status=running" in (result.environment_detail or "")
+
+
+def test_event_debug_tail_keeps_reviewer_lifecycle_when_tail_has_later_events() -> None:
+    detail = _event_debug_tail(
+        [
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "collabAgentToolCall",
+                        "tool": "spawnAgent",
+                        "status": "completed",
+                        "agentsStates": {
+                            "child-1": {"status": "running", "message": None}
+                        },
+                    }
+                },
+            },
+            *[
+                {"method": "thread/tokenUsage/updated", "params": {}}
+                for _ in range(12)
+            ],
+        ],
+        limit=3,
+    )
+
+    assert detail is not None
+    assert "reviewer=tool=spawnAgent,status=completed,child_status=running" in detail
 
 
 def test_parse_codex_events_keeps_completed_mcp_error_answered() -> None:

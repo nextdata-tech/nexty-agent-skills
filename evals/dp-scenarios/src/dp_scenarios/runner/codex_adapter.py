@@ -96,6 +96,10 @@ publication sequence. Inspect only the closure and review inputs named by the
 parent, complete within the retained review deadline, and return concise
 review claims/findings to the parent.
 
+If the inspection is incomplete at the review cutoff, stop reading and return
+the partial evidenced claims plus a concise blocker immediately; never wait
+for more context or leave the child running past the deadline.
+
 Collaboration tool argument discipline: for `spawnAgent`, send the complete
 review request in exactly one `message` string; do not also send `items`.
 Never send both `message` and `items` in one collaboration call. For the
@@ -358,6 +362,22 @@ def _collab_result_ready(item: Mapping[str, object]) -> bool:
     return bool(child_statuses) and all(value in _COLLAB_SUCCESS_STATUSES for value in child_statuses) and bool(messages)
 
 
+def _collab_debug_label(item: Mapping[str, object]) -> str:
+    """Return value-free lifecycle state for interruption diagnostics."""
+
+    parts: list[str] = []
+    tool = item.get("tool")
+    if isinstance(tool, str) and tool:
+        parts.append(f"tool={tool}")
+    status = item.get("status")
+    if isinstance(status, str) and status:
+        parts.append(f"status={status}")
+    child_statuses, _ = _collab_states(item)
+    if child_statuses:
+        parts.append("child_status=" + ",".join(child_statuses))
+    return ",".join(parts) if parts else "state=unknown"
+
+
 def _merge_collab_item(
     base: Mapping[str, object], update: Mapping[str, object]
 ) -> dict[str, object]:
@@ -531,6 +551,17 @@ def _event_debug_tail(events: Sequence[Mapping[str, object]], *, limit: int = 12
     """Return a bounded, value-free event tail for timeout diagnostics."""
 
     labels: list[str] = []
+    reviewer_labels: list[str] = []
+    for event in events:
+        normalized = _normalise_app_server_event(event)
+        if normalized.get("type") not in {"item.started", "item.completed"}:
+            continue
+        item = normalized.get("item")
+        if isinstance(item, Mapping) and item.get("type") in {
+            "collabAgentToolCall",
+            "collab_agent_tool_call",
+        }:
+            reviewer_labels.append(_collab_debug_label(item))
     for event in events[-limit:]:
         method = event.get("method")
         if not isinstance(method, str):
@@ -557,6 +588,8 @@ def _event_debug_tail(events: Sequence[Mapping[str, object]], *, limit: int = 12
                 if isinstance(status, str):
                     method += f"={status}"
         labels.append(method)
+    if reviewer_labels:
+        labels.append("reviewer=" + ";".join(reviewer_labels[-3:]))
     return ", ".join(labels) if labels else None
 
 
@@ -779,7 +812,11 @@ def parse_codex_events(
                 {"is_error": True, "content": []},
             )
         )
-        environment_details.append("Codex reviewer child had no matching completion")
+        environment_details.append(
+            "Codex reviewer child had no matching completion ("
+            + _collab_debug_label(item)
+            + ")"
+        )
 
     if not final_answer and partial_answer:
         final_answer = "".join(partial_answer)
