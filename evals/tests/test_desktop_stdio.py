@@ -108,9 +108,9 @@ for raw in sys.stdin:
         }
     elif operation == "advance_workflow" and action.get("type") == "report_requirement":
         result = {
-            "code": "workflow/requirement_satisfied",
-            "requirement_id": "review",
-            "requirements": {"review": {"status": "satisfied"}},
+            "code": "workflow/review_findings",
+            "events": [{"code": "workflow/review_findings"}],
+            "requirements": {"review": {"status": "rejected"}},
         }
     else:
         result = {"forwarded_operation": operation}
@@ -290,7 +290,7 @@ def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
                 },
             }
         )
-        assert report["result"]["code"] == "workflow/requirement_satisfied"
+        assert report["result"]["code"] == "workflow/review_findings"
 
         forwarded = call(
             {
@@ -338,6 +338,17 @@ def test_review_guard_recognizes_workflow_v2_action_shape():
         }
     }
     assert ds._response_requires_review(capture)
+    assert ds._response_satisfies_review(report)
+
+
+def test_review_guard_allows_reset_after_findings_report():
+    report = {
+        "result": {
+            "code": "workflow/review_findings",
+            "events": [{"code": "workflow/review_findings"}],
+            "requirements": {"review": {"status": "rejected"}},
+        }
+    }
     assert ds._response_satisfies_review(report)
 
 

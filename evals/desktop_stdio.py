@@ -381,11 +381,20 @@ def _response_requires_review(response: Mapping[str, Any]) -> bool:
 
 
 def _response_satisfies_review(response: Mapping[str, Any]) -> bool:
-    """Return whether a successful report satisfied the review requirement."""
+    """Return whether the supervisor completed the review-report relay.
+
+    ``workflow/review_findings`` is a completed report relay even though the
+    review requirement remains unsatisfied.  The owning conversation must be
+    able to adjudicate those findings and reset the mutable capture for a
+    fresh generation; keeping the proxy guard in its pre-report state would
+    reject that required reset before the supervisor can validate it.
+    """
 
     for value in _walk_json_values(response):
         if not isinstance(value, Mapping):
             continue
+        if value.get("code") == "workflow/review_findings":
+            return True
         if (
             value.get("code") == "workflow/requirement_satisfied"
             and value.get("requirement_id") == "review"
