@@ -108,7 +108,10 @@ and `closeAgent`; pass the returned receiver thread id as `target` to
 `closeAgent`, and never use `sendInput` or `resumeAgent`. The reviewer child
 may use only its allowed read-only inspection tools, but may not call another
 collaboration or supervisor tool. If a collaboration call is rejected, do
-not repeat the rejected argument shape; report an incomplete handoff.
+not repeat the rejected argument shape; report an incomplete handoff. If
+`spawnAgent` returns no receiver thread id or leaves the child in
+`pendingInit`, do not call `wait` with an empty id set; report an incomplete
+handoff immediately.
 
 File-edit discipline: use the file-change tool for edits. If an apply-patch
 operation is used, every patch must have the exact `*** Begin Patch`, file
@@ -381,6 +384,7 @@ def _collab_debug_label(item: Mapping[str, object]) -> str:
     child_statuses, _ = _collab_states(item)
     if child_statuses:
         parts.append("child_status=" + ",".join(child_statuses))
+    parts.append(f"receiver_count={len(_collab_receiver_ids(item))}")
     return ",".join(parts) if parts else "state=unknown"
 
 
@@ -426,18 +430,13 @@ def _update_reviewer_deadline(
         return receiver_ids, deadline_at
     tool = item.get("tool")
     ids = _collab_receiver_ids(item)
-    if tool == "spawnAgent" and event.get("type") == "item.started":
-        # App-server runs can report the spawn as started before they know the
-        # receiver thread id. Arm the absolute deadline at that point, then
-        # merge any ids that arrive with the later completion event without
-        # extending the deadline.
+    if tool == "spawnAgent":
+        # App-server runs can report the spawn as started or completed before
+        # they know the receiver thread id (for example, child_status=pendingInit).
+        # Arm the absolute deadline for either lifecycle event, then merge any
+        # ids that arrive later without extending the deadline.
         receiver_ids |= ids
         if deadline_at is None:
-            deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
-        return receiver_ids, deadline_at
-    if tool == "spawnAgent" and event.get("type") == "item.completed":
-        receiver_ids |= ids
-        if ids and deadline_at is None:
             deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         return receiver_ids, deadline_at
     # ``closeAgent`` only reports that the collaboration handle was closed;

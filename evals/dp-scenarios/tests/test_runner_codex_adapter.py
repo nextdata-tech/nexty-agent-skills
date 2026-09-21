@@ -134,6 +134,25 @@ def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> 
     assert completed_deadline == deadline
 
 
+def test_codex_reviewer_deadline_arms_on_pending_init_without_receiver_id() -> None:
+    completed = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "status": "completed",
+            "agentsStates": {"pending": {"status": "pendingInit"}},
+        },
+    }
+
+    receiver_ids, deadline = _update_reviewer_deadline(
+        completed, set(), None, now=10.0
+    )
+
+    assert receiver_ids == set()
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
+
+
 def test_codex_reviewer_deadline_processes_events_buffered_with_turn_start() -> None:
     events = [
         {
