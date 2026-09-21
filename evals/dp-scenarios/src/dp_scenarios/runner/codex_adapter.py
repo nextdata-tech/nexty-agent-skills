@@ -43,6 +43,7 @@ from dp_scenarios.runner.claude_adapter import (
     _update_machine_artifacts,
     _write_supervisor_facts,
 )
+from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
 
 
 class CodexAdapterError(RuntimeError):
@@ -85,7 +86,10 @@ required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id; do not make
 another Bash/MCP call or produce a final answer before that wait completes.
-Then pass the child's returned claims and the exact review_input fields to
+After the wait returns terminal claims, close that same child with
+`closeAgent` using its receiver thread id before reporting; completed child
+threads remain allocated to the app-server until explicitly closed. Then pass
+the child's returned claims and the exact review_input fields to
 report_requirement. The `parameters.report` value must be the JSON object
 `{"schema":"nxd-conversation-review-v1","verdict":"clear","findings":[],"rejection_code":null}`
 or the corresponding exact findings/rejection object, never a JSON-encoded
@@ -101,6 +105,9 @@ a report verdict of `findings`, `rejected`, or `indeterminate`, relay it to the
 operator and stop for adjudication. Do not reset, edit, recapture, validate,
 admit, or start a run for a non-clear report; only a clear report authorizes
 the returned next actions.
+After a non-clear or indeterminate `report_requirement` result, end the
+current turn immediately and wait for the next operator message; do not reset
+or make another supervisor call in that same turn.
 When the supervisor returns report_requirement or workflow/review_pending after
 capture, the next supervisor action must be that report after the one child
 completes. Do not call reset_workflow, list_data_products, inspect_workflow,
@@ -242,7 +249,18 @@ def _collab_agent_result(item: Mapping[str, object]) -> Mapping[str, object]:
 
 
 _COLLAB_SUCCESS_STATUSES = {"completed", "success", "succeeded"}
-_COLLAB_FAILURE_STATUSES = {"failed", "errored", "interrupted", "shutdown", "notFound"}
+_COLLAB_FAILURE_STATUSES = {
+    "failed",
+    "errored",
+    "interrupted",
+    "shutdown",
+    "notFound",
+    "timedOut",
+    "timed_out",
+    "timeout",
+    "cancelled",
+    "canceled",
+}
 
 
 def _collab_states(item: Mapping[str, object]) -> tuple[tuple[str, ...], list[object]]:
@@ -297,9 +315,45 @@ def _merge_collab_item(
 
 def _collab_receiver_ids(item: Mapping[str, object]) -> set[str]:
     values = item.get("receiverThreadIds")
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-        return set()
-    return {value for value in values if isinstance(value, str) and value}
+    result: set[str] = set()
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        result.update(value for value in values if isinstance(value, str) and value)
+    singular = item.get("receiverThreadId")
+    if isinstance(singular, str) and singular:
+        result.add(singular)
+    return result
+
+
+def _update_reviewer_deadline(
+    event: Mapping[str, object],
+    receiver_ids: set[str],
+    deadline_at: float | None,
+    *,
+    now: float,
+) -> tuple[set[str], float | None]:
+    """Arm the bounded reviewer clock and clear it after ``closeAgent``."""
+
+    if event.get("type") not in {"item.started", "item.completed"}:
+        return receiver_ids, deadline_at
+    item = event.get("item")
+    if not isinstance(item, Mapping) or item.get("type") not in {
+        "collabAgentToolCall",
+        "collab_agent_tool_call",
+    }:
+        return receiver_ids, deadline_at
+    tool = item.get("tool")
+    ids = _collab_receiver_ids(item)
+    if tool == "spawnAgent" and event.get("type") == "item.completed" and ids:
+        if deadline_at is None:
+            return ids, now + REVIEW_DEADLINE_MS / 1000.0
+        return receiver_ids, deadline_at
+    if (
+        tool == "closeAgent"
+        and event.get("type") == "item.completed"
+        and receiver_ids & ids
+    ):
+        return set(), None
+    return receiver_ids, deadline_at
 
 
 def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, object]:
@@ -1095,13 +1149,29 @@ class CodexAdapter:
         if not isinstance(turn_id, str) or not turn_id:
             raise CodexAdapterError("Codex app-server turn/start returned no turn identity")
         deadline = time.monotonic() + self.timeout_s
+        reviewer_receiver_ids: set[str] = set()
+        reviewer_deadline_at: float | None = None
         while True:
-            event = self._read_streams(deadline)
+            read_deadline = deadline
+            if reviewer_deadline_at is not None:
+                read_deadline = min(read_deadline, reviewer_deadline_at)
+            event = self._read_streams(read_deadline)
             if self._is_server_request(event):
                 self._reject_server_request(event)
                 continue
             events.append(event)
             normalized = _normalise_app_server_event(event)
+            reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline(
+                normalized,
+                reviewer_receiver_ids,
+                reviewer_deadline_at,
+                now=time.monotonic(),
+            )
+            if reviewer_deadline_at is not None and time.monotonic() >= reviewer_deadline_at:
+                raise TimeoutError(
+                    "Codex reviewer child did not complete before the "
+                    f"{REVIEW_DEADLINE_MS / 1000:.1f}-second reviewer deadline"
+                )
             if normalized.get("type") in {"turn.completed", "turn.interrupted", "turn.failed"}:
                 params = event.get("params")
                 completed_turn = params.get("turn") if isinstance(params, Mapping) else None
@@ -1249,6 +1319,7 @@ class CodexAdapter:
                 events,
                 environment_detail=(
                     f"Codex did not complete the turn within {self.timeout_s:.1f}s"
+                    + (f" ({exc})" if str(exc) else "")
                     + (f"; stderr={detail}" if detail else "")
                     + (f"; event_tail={event_tail}" if event_tail else "")
                 ),

@@ -17,9 +17,12 @@ from dp_scenarios.runner.codex_adapter import (
     CODEX_SYSTEM_PROMPT,
     CodexAdapter,
     CodexAdapterError,
+    _COLLAB_FAILURE_STATUSES,
+    _update_reviewer_deadline,
     _load_mcp_server,
     parse_codex_events,
 )
+from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
 
 
 def _identity(value):
@@ -35,14 +38,56 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "never fabricate the review outcome yourself" in CODEX_SYSTEM_PROMPT
     assert "CODEX_REVIEW_CHILD" in CODEX_SYSTEM_PROMPT
     assert "never a JSON-encoded" in CODEX_SYSTEM_PROMPT
+    assert "close that same child with" in CODEX_SYSTEM_PROMPT
+    assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
+    assert "end the" in CODEX_SYSTEM_PROMPT
+    assert "same turn" in CODEX_SYSTEM_PROMPT
     assert "immediately using the returned receiver thread id" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
     assert '"workflow already exists" and active-workflow' in CODEX_SYSTEM_PROMPT
     assert "errors are non-retryable" in CODEX_SYSTEM_PROMPT
+
+
+def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> None:
+    assert {
+        "timedOut",
+        "timed_out",
+        "timeout",
+        "cancelled",
+        "canceled",
+    } <= _COLLAB_FAILURE_STATUSES
+
+
+def test_codex_reviewer_deadline_is_armed_and_cleared_by_close() -> None:
+    spawn = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "receiverThreadIds": ["child-1"],
+        },
+    }
+    receiver_ids, deadline = _update_reviewer_deadline(
+        spawn, set(), None, now=10.0
+    )
+    assert receiver_ids == {"child-1"}
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
+
+    close = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "closeAgent",
+            "receiverThreadId": "child-1",
+        },
+    }
+    assert _update_reviewer_deadline(
+        close, receiver_ids, deadline, now=20.0
+    ) == (set(), None)
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
