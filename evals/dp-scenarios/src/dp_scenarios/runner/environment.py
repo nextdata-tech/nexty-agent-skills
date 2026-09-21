@@ -1090,6 +1090,7 @@ class RunEnvironment:
     workflow_activation_bundle: Path | None = None
     desktop_server_name: str = "nxd-desktop"
     desktop_allowed_tools: Sequence[str] | None = None
+    workflow_action_guard: bool = False
     desktop_session_root: Path | None = None
     live_cwd: Path | None = None
     allow_host_home: bool = False
@@ -1405,6 +1406,7 @@ class RunEnvironment:
                     root=self.desktop_session_root or (base / "desktop-session"),
                     server_name=self.desktop_server_name,
                     allowed_tools=self.desktop_allowed_tools,
+                    workflow_action_guard=self.workflow_action_guard,
                 )
                 (self.live_cwd or (base / "agent")).mkdir(parents=True, exist_ok=True)
                 self._live_transport = transport

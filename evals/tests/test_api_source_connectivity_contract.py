@@ -76,7 +76,7 @@ def test_authenticated_probe_is_named_local_and_dependency_light():
 
 def test_payload_inspection_covers_every_resource_before_authoring():
     contract = _payload_gate_contract()
-    assert "first and only closure artifact initially allowed" in contract
+    assert "first closure artifact after" in contract
     assert "closure-local `connectivity_check.py`" in contract
     assert "non-secret resource list, endpoint paths, expected row-array selectors" in contract
     assert "independent of nxd, dlt, duckdb, and the generated transform" in contract
@@ -135,8 +135,9 @@ def test_missing_credentials_allow_structural_authoring_without_validation_claim
 
 def test_api_closure_requires_dependency_light_probe_success():
     skill = _normalized(SKILL_SOURCE.read_text(encoding="utf-8"))
-    assert "sole initial-write exception is the closure-local `connectivity_check.py`" in skill
-    assert "author it first from the settled plan" in skill
+    assert "write the closure-local `connectivity_check.py` first **after**" in skill
+    assert "the operator's explicit approval has been relayed through `session_decision`" in skill
+    assert "first post-consent closure artifact, not a pre-consent exception" in skill
     assert "payload-inspection gate described in" in skill
     assert "payload inspection and connectivity are then **not run** and **unverified**" in skill
     assert "source validation and the complete happy path must not be claimed" in skill

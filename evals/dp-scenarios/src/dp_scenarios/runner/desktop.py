@@ -194,6 +194,7 @@ def _session_config_digest(
         "shutdown_timeout_s": session.shutdown_timeout_s,
         "startup_timeout_s": session.startup_timeout_s,
         "allowed_tools": list(session.allowed_tools),
+        "workflow_action_guard": session.workflow_action_guard,
         "strict_mcp_config": session.strict_mcp_config,
         "server_name": session.server_name,
     }
@@ -246,6 +247,7 @@ class DesktopStdioTransport:
         root: str | Path,
         server_name: str = DesktopStdioSession.SERVER_NAME,
         allowed_tools: Sequence[str] | None = None,
+        workflow_action_guard: bool = False,
         startup_timeout_s: float = 15.0,
         shutdown_timeout_s: float = 5.0,
     ) -> "DesktopStdioTransport":
@@ -258,6 +260,7 @@ class DesktopStdioTransport:
             root=Path(root),
             server_name=server_name,
             allowed_tools=allowed_tools,
+            workflow_action_guard=workflow_action_guard,
             startup_timeout_s=startup_timeout_s,
             shutdown_timeout_s=shutdown_timeout_s,
         )

@@ -519,6 +519,12 @@ def test_intake_codegen_inference_ignores_non_authoring_observations() -> None:
     assert "intake_codegen_missing" in codes(
         {"turn": 3, "files_touched": "closure/spec.py"}
     )
+    # The API probe is still a closure artifact. If it is written before
+    # consent, it must trip the same approval-ordering check as any other
+    # closure file.
+    assert "intake_codegen_missing" not in codes(
+        {"turn": 1, "files_touched": [{"path": "closure/connectivity_check.py"}]}
+    )
 
     # A nested closure write is authoring, wherever it sits in the tree.
     assert "intake_codegen_missing" not in codes(

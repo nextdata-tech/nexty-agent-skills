@@ -67,6 +67,16 @@ _SOURCE_SERVICE_NAME = "api-source"
 _SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
 _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
 _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
+_REVIEW_PENDING_BLOCKED_OPERATIONS = frozenset(
+    {
+        "reset_workflow",
+        "list_data_products",
+        "inspect_workflow",
+        "check_data_product",
+        "prepare_workflow",
+        "get_workflow_capabilities",
+    }
+)
 
 
 def _safe_trusted_credential_mappings(
@@ -297,6 +307,140 @@ def _request_workflow(request: Mapping[str, Any]) -> str | None:
     return workflow if isinstance(workflow, str) else None
 
 
+def _request_action(request: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return an ``advance_workflow`` action from an MCP request."""
+
+    params = request.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    arguments = params.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return None
+    action = arguments.get("action")
+    return action if isinstance(action, Mapping) else None
+
+
+def _walk_json_values(value: Any) -> list[Any]:
+    """Flatten structured MCP values, decoding embedded JSON text once."""
+
+    values = [value]
+    if isinstance(value, Mapping):
+        for child in value.values():
+            values.extend(_walk_json_values(child))
+    elif isinstance(value, list):
+        for child in value:
+            values.extend(_walk_json_values(child))
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            with contextlib.suppress(json.JSONDecodeError):
+                decoded = json.loads(stripped)
+                if decoded != value:
+                    values.extend(_walk_json_values(decoded))
+    return values
+
+
+def _response_is_error(response: Mapping[str, Any]) -> bool:
+    """Return whether an MCP/JSON-RPC response reports a failed operation."""
+
+    if "error" in response:
+        return True
+    for value in _walk_json_values(response.get("result")):
+        if isinstance(value, Mapping) and value.get("isError") is True:
+            return True
+    return False
+
+
+def _response_requires_review(response: Mapping[str, Any]) -> bool:
+    """Return whether a successful capture requires a review report."""
+
+    for value in _walk_json_values(response):
+        if not isinstance(value, Mapping):
+            continue
+        if value.get("code") == "workflow/review_pending":
+            return True
+        if (
+            value.get("type", value.get("action")) == "report_requirement"
+            and value.get("requirement_id") == "review"
+        ):
+            return True
+        requirements = value.get("requirements")
+        if isinstance(requirements, Mapping):
+            review = requirements.get("review")
+            if isinstance(review, Mapping) and review.get("status") == "pending":
+                return True
+        elif isinstance(requirements, list):
+            if any(
+                isinstance(review, Mapping)
+                and review.get("id") == "review"
+                and review.get("status") == "pending"
+                for review in requirements
+            ):
+                return True
+    return False
+
+
+def _response_satisfies_review(response: Mapping[str, Any]) -> bool:
+    """Return whether the supervisor completed the review-report relay.
+
+    ``workflow/review_findings`` is a completed report relay even though the
+    review requirement remains unsatisfied.  The owning conversation must be
+    able to adjudicate those findings and reset the mutable capture for a
+    fresh generation; keeping the proxy guard in its pre-report state would
+    reject that required reset before the supervisor can validate it.
+    """
+
+    for value in _walk_json_values(response):
+        if not isinstance(value, Mapping):
+            continue
+        if value.get("code") == "workflow/review_findings":
+            return True
+        if (
+            value.get("code") == "workflow/requirement_satisfied"
+            and value.get("requirement_id") == "review"
+        ):
+            return True
+        requirements = value.get("requirements")
+        if isinstance(requirements, Mapping):
+            review = requirements.get("review")
+            if isinstance(review, Mapping) and review.get("status") in {
+                "satisfied",
+                "complete",
+                "completed",
+            }:
+                return True
+        elif isinstance(requirements, list):
+            if any(
+                isinstance(review, Mapping)
+                and review.get("id") == "review"
+                and review.get("status") in {"satisfied", "complete", "completed"}
+                for review in requirements
+            ):
+                return True
+    return False
+
+
+def _review_guard_snapshot(response: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain only the bounded workflow facts needed for a corrective error."""
+
+    snapshot: dict[str, Any] = {}
+    for value in _walk_json_values(response):
+        if not isinstance(value, Mapping):
+            continue
+        for key in (
+            "workflow",
+            "revision",
+            "invalidation_epoch",
+            "generation",
+            "subject_sha256",
+            "dependency_evidence_sha256",
+            "review_input",
+        ):
+            if key in value and key not in snapshot:
+                snapshot[key] = value[key]
+    return snapshot
+
+
 class DesktopStdioSession:
     """Own one isolated Desktop MCP config, proxy, trace, and cleanup scope.
 
@@ -317,6 +461,7 @@ class DesktopStdioSession:
         root: Path | None = None,
         server_name: str = SERVER_NAME,
         allowed_tools: Sequence[str] | None = None,
+        workflow_action_guard: bool = False,
         request_timeout_faults: Mapping[str, Any] | None = None,
         startup_timeout_s: float = 15.0,
         shutdown_timeout_s: float = 5.0,
@@ -337,6 +482,7 @@ class DesktopStdioSession:
             if allowed_tools is not None
             else (f"mcp__{server_name}__*",)
         )
+        self.workflow_action_guard = bool(workflow_action_guard)
         self.request_timeout_faults = dict(request_timeout_faults or {})
         self.startup_timeout_s = startup_timeout_s
         self.shutdown_timeout_s = shutdown_timeout_s
@@ -347,9 +493,14 @@ class DesktopStdioSession:
         self._bridge_listener: socket.socket | None = None
         self._bridge_connection: socket.socket | None = None
         self._bridge_thread: threading.Thread | None = None
+        self._bridge_connections: set[socket.socket] = set()
+        self._bridge_workers: set[threading.Thread] = set()
+        self._bridge_state_lock = threading.Lock()
+        self._review_guard_state: dict[str, Any] | None = None
         self._bridge_stop = threading.Event()
         self._bridge_path: Path | None = None
         self._server_process: subprocess.Popen[bytes] | None = None
+        self._server_processes: set[subprocess.Popen[bytes]] = set()
         self._started = False
         self._closed = False
         self.setup_result = StdioOutcome("not_started")
@@ -480,24 +631,136 @@ class DesktopStdioSession:
         )
 
     def _serve_bridge(self) -> None:
-        """Start the supervisor only after the credential-free proxy connects."""
+        """Accept and serve trusted supervisors for proxy connections.
+
+        Codex app-server may restart its stdio MCP client while refreshing the
+        tool catalog. The proxy command is then launched again with the same
+        private spec. A single accepted socket could serve the first client
+        forever while leaving the replacement client connected to the listen
+        backlog with no supervisor behind it. Start a fresh trusted child for
+        each accepted connection; the supervisor data directory remains the
+        durable boundary shared by the sessions, while credentials stay in
+        this runner-owned environment.
+        """
 
         listener = self._bridge_listener
         if listener is None:
             return
-        connection: socket.socket | None = None
-        child: subprocess.Popen[bytes] | None = None
-        try:
-            while not self._bridge_stop.is_set():
-                try:
-                    connection, _ = listener.accept()
-                    break
-                except socket.timeout:
-                    continue
-                except OSError:
-                    return
-            if connection is None or self._bridge_stop.is_set():
+        while not self._bridge_stop.is_set():
+            try:
+                connection, _ = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
                 return
+            if self._bridge_stop.is_set():
+                self._close_socket(connection)
+                return
+            worker = threading.Thread(
+                target=self._serve_connection,
+                args=(connection,),
+                name="dp-scenarios-desktop-proxy",
+                daemon=True,
+            )
+            with self._bridge_state_lock:
+                self._bridge_connections.add(connection)
+                self._bridge_workers.add(worker)
+            worker.start()
+
+    def _serve_connection(self, connection: socket.socket) -> None:
+        """Run one supervisor child for one Codex stdio client connection."""
+
+        child: subprocess.Popen[bytes] | None = None
+        send_lock = threading.Lock()
+        request_context: dict[str, Mapping[str, Any]] = {}
+
+        def send_to_proxy(line: bytes) -> None:
+            with send_lock:
+                connection.sendall(line)
+
+        def blocked_review_response(request: Mapping[str, Any], operation: str) -> bytes:
+            with self._bridge_state_lock:
+                state = dict(self._review_guard_state or {})
+            payload = {
+                "code": "runner/review_pending",
+                "operation": operation,
+                "required_action": {
+                    "type": "report_requirement",
+                    "requirement_id": "review",
+                },
+                "message": (
+                    "workflow review is pending; dispatch one provider-native "
+                    "read-only reviewer with the captured review_input, then "
+                    "submit advance_workflow/report_requirement"
+                ),
+            }
+            for key in (
+                "workflow",
+                "revision",
+                "invalidation_epoch",
+                "generation",
+                "subject_sha256",
+                "dependency_evidence_sha256",
+                "review_input",
+            ):
+                if key in state:
+                    payload[key] = state[key]
+            return (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "result": {
+                            "isError": True,
+                            "structuredContent": payload,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(payload, sort_keys=True),
+                                }
+                            ],
+                        },
+                    },
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
+
+        def should_block(request: Mapping[str, Any]) -> bool:
+            if not self.workflow_action_guard:
+                return False
+            operation = _request_operation(request)
+            if operation not in _REVIEW_PENDING_BLOCKED_OPERATIONS:
+                return False
+            with self._bridge_state_lock:
+                return self._review_guard_state is not None
+
+        def update_review_guard(
+            request: Mapping[str, Any] | None, response: Mapping[str, Any]
+        ) -> None:
+            if not self.workflow_action_guard or request is None:
+                return
+            if _response_is_error(response):
+                return
+            operation = _request_operation(request)
+            action = _request_action(request)
+            if operation == "advance_workflow" and isinstance(action, Mapping):
+                action_type = action.get("type")
+                if action_type == "capture" and _response_requires_review(response):
+                    state = _review_guard_snapshot(response)
+                    workflow = _request_workflow(request)
+                    if workflow is not None:
+                        state["workflow"] = workflow
+                    with self._bridge_state_lock:
+                        self._review_guard_state = state
+                elif (
+                    action_type == "report_requirement"
+                    and _response_satisfies_review(response)
+                ):
+                    with self._bridge_state_lock:
+                        self._review_guard_state = None
+
+        try:
             self._bridge_connection = connection
             child = subprocess.Popen(
                 list(self.server_command),
@@ -508,17 +771,38 @@ class DesktopStdioSession:
                 start_new_session=True,
             )
             self._server_process = child
+            with self._bridge_state_lock:
+                self._server_processes.add(child)
             assert child.stdin is not None
             assert child.stdout is not None
             assert child.stderr is not None
 
             def forward_to_server() -> None:
+                buffer = b""
                 try:
                     while True:
                         chunk = connection.recv(65536)
                         if not chunk:
                             break
-                        child.stdin.write(chunk)
+                        buffer += chunk
+                        while b"\n" in buffer:
+                            line, buffer = buffer.split(b"\n", 1)
+                            line += b"\n"
+                            request: Any = None
+                            with contextlib.suppress(UnicodeDecodeError, json.JSONDecodeError):
+                                request = json.loads(line.decode("utf-8"))
+                            if isinstance(request, Mapping):
+                                request_id = _rpc_id_key(request.get("id"))
+                                if request_id is not None:
+                                    request_context[request_id] = request
+                                operation = _request_operation(request)
+                                if should_block(request) and operation is not None:
+                                    send_to_proxy(blocked_review_response(request, operation))
+                                    continue
+                            child.stdin.write(line)
+                            child.stdin.flush()
+                    if buffer:
+                        child.stdin.write(buffer)
                         child.stdin.flush()
                 except (BrokenPipeError, OSError):
                     pass
@@ -529,7 +813,17 @@ class DesktopStdioSession:
             def forward_from_server() -> None:
                 try:
                     for line in child.stdout:
-                        connection.sendall(line)
+                        response: Any = None
+                        with contextlib.suppress(UnicodeDecodeError, json.JSONDecodeError):
+                            response = json.loads(line.decode("utf-8"))
+                        request = None
+                        if isinstance(response, Mapping) and "id" in response:
+                            request_id = _rpc_id_key(response.get("id"))
+                            if request_id is not None:
+                                request = request_context.pop(request_id, None)
+                        if isinstance(response, Mapping):
+                            update_review_guard(request, response)
+                        send_to_proxy(line)
                 except (BrokenPipeError, OSError):
                     pass
 
@@ -576,11 +870,16 @@ class DesktopStdioSession:
             if child is not None:
                 self._kill_process(child)
         finally:
-            if connection is not None:
-                with contextlib.suppress(OSError):
-                    connection.close()
-            self._bridge_connection = None
-            if child is not None:
+            with contextlib.suppress(OSError):
+                connection.close()
+            with self._bridge_state_lock:
+                self._bridge_connections.discard(connection)
+                if child is not None:
+                    self._server_processes.discard(child)
+                self._bridge_workers.discard(threading.current_thread())
+            if self._bridge_connection is connection:
+                self._bridge_connection = None
+            if child is not None and self._server_process is child:
                 self._server_process = None
 
     @staticmethod
@@ -645,16 +944,27 @@ class DesktopStdioSession:
             self._kill_process(proc)
         self._attached.clear()
         self._bridge_stop.set()
-        self._close_socket(self._bridge_connection)
         self._close_socket(self._bridge_listener)
         if self._bridge_thread is not None:
             self._bridge_thread.join(timeout=5)
             self._bridge_thread = None
+        with self._bridge_state_lock:
+            connections = list(self._bridge_connections)
+            processes = list(self._server_processes)
+            workers = list(self._bridge_workers)
+        for connection in connections:
+            self._close_socket(connection)
         self._bridge_connection = None
         self._bridge_listener = None
-        if self._server_process is not None:
-            self._kill_process(self._server_process)
-            self._server_process = None
+        for proc in processes:
+            self._kill_process(proc)
+        for worker in workers:
+            worker.join(timeout=5)
+        with self._bridge_state_lock:
+            self._bridge_connections.clear()
+            self._bridge_workers.clear()
+            self._server_processes.clear()
+        self._server_process = None
         if self._root is not None:
             try:
                 result = json.loads(
