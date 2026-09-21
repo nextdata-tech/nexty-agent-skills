@@ -199,21 +199,25 @@ def test_b1_answers_amount_precision_as_an_explicit_data_contract() -> None:
     """A review finding about numeric precision gets a concrete ruling."""
 
     answer = SCENARIO.answer_sheet.decision_answers["amount_precision"]
-    assert answer.terms == ("non-integral", "amount")
+    assert answer.terms == ("amount", "truncat")
     assert answer.answer.startswith("Choose exact-decimal semantics for amount.")
     matcher = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
-    result = matcher.reply_for(
+    for question in (
         "The independent review found that non-integral source amounts are silently "
-        "truncated. Please adjudicate this finding before further workflow actions."
-    )
-    assert result.rule_id == "decision.answer.amount_precision"
-    assert result.reply == answer.answer
+        "truncated. Please adjudicate this finding before further workflow actions.",
+        "Blocking review finding: fractional deal amounts are converted with "
+        "int(amount), silently truncating values such as 125.75 to 125. Please "
+        "adjudicate this finding.",
+    ):
+        result = matcher.reply_for(question)
+        assert result.rule_id == "decision.answer.amount_precision"
+        assert result.reply == answer.answer
 
     # The report itself is not an operator question and must not consume the
     # ruling before the agent asks for adjudication.
     report = matcher.reply_for(
-        "Blocking review finding: fractional deal amounts are converted with "
-        "int(amount), silently truncating values such as 125.75 to 125."
+        "Blocking review finding about an unrelated source contract. Please "
+        "adjudicate this finding."
     )
     assert report.rule_id != "decision.answer.amount_precision"
 

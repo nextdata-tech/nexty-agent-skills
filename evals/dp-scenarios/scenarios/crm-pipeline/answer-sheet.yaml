@@ -64,7 +64,7 @@ decision_answers:
     terms: [retries, consecutive, "429"]
     answer: "I authorize only the specific repeated-429 retry correction: ensure a repeated 429 can never be treated as a successful page, using bounded retry/backoff or fail-loud exhaustion. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, publish, or make unrelated behavior changes until that review is clear."
   amount_precision:
-    terms: [non-integral, amount]
+    terms: [amount, truncat]
     answer: "Choose exact-decimal semantics for amount. Amend the blueprint to state that amount preserves the source value without floating-point truncation or silent rounding, use an exact decimal representation in the landed model and governed totals, validate that the transform preserves the source precision, then re-approve the amended plan, recapture, and run a fresh independent review before validation or publication."
   workflow_revision:
     terms: [new, workflow]
