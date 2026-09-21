@@ -1,0 +1,37 @@
+provider: google_drive
+source_kind: google_drive_files
+base_url: https://www.googleapis.com/drive/v3
+auth:
+  type: bearer
+  token: gdrive_eval_token_2b8a5f0d91c4
+  access: read-only
+drive:
+  folder_id: folder_eval_42
+  query: "'folder_eval_42' in parents and trashed = false"
+  file_mime_type: text/csv
+  fields: "nextPageToken, files(id,name,mimeType,modifiedTime,size)"
+files:
+  page_one:
+    nextPageToken: drive-page-2
+    files:
+      - id: file-orders-1
+        name: orders-2026-01.csv
+        mimeType: text/csv
+        modifiedTime: "2026-09-18T10:00:00Z"
+      - id: file-notes-1
+        name: notes.txt
+        mimeType: text/plain
+        modifiedTime: "2026-09-18T11:00:00Z"
+  page_two:
+    files:
+      - id: file-orders-2
+        name: orders-2026-02.csv
+        mimeType: text/csv
+        modifiedTime: "2026-09-19T10:00:00Z"
+downloads:
+  file-orders-1:
+    content_type: text/csv
+    body: "order_id,amount\nO-1,10.50\n"
+  file-orders-2:
+    content_type: text/csv
+    body: "order_id,amount\nO-2,20.00\n"

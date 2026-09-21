@@ -255,6 +255,11 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     # a correct product must reproduce, which is the answer key to the brief's
     # question 1, and it imports runner-side modules the workspace does not have.
     "authenticated-api-source-supervisor": frozenset({"check_api_source_e2e.py"}),
+    # Source-codegen checkers are runner-side oracle material. The agent gets
+    # the pinned source contract, but not the exact static gate it is being
+    # measured against.
+    "hubspot-api-source-codegen": frozenset({"check_hubspot_api_source.py"}),
+    "google-drive-source-codegen": frozenset({"check_google_drive_source.py"}),
     # The optional-output desktop verifier is runner-side ground truth: it
     # re-serves the landed closure and checks the catalog/query contract.
     "optional-empty-output-aggregate-desktop": frozenset({
@@ -1627,15 +1632,51 @@ def _redact_runtime_secrets(value: Any, secrets_to_redact: tuple[str, ...]) -> A
     return value
 
 
+def _redaction_scan_trace(
+    trace: str,
+    secrets_to_redact: tuple[str, ...],
+    allowed_input_files: tuple[str, ...],
+) -> str:
+    """Exclude only staged-input tool results from the leak classification.
+
+    A public eval contract may intentionally contain a synthetic credential so
+    the agent can reproduce the requested profile shape. The credential still
+    gets redacted from the persisted trace; reading that staged input is the
+    only occurrence that is exempt from the agent-leak verdict. Any occurrence
+    in an assistant message, another tool call, or another tool result remains
+    a leak.
+    """
+    if not allowed_input_files:
+        return trace
+    chunks = re.split(r"(?=^\[[^\]]+\])", trace, flags=re.MULTILINE)
+    allow_next_result = False
+    scanned: list[str] = []
+    for chunk in chunks:
+        if re.match(r"^\[tool_use(?::[^\]]+)?\]", chunk):
+            allow_next_result = any(name in chunk for name in allowed_input_files)
+        elif re.match(r"^\[tool_result(?::[^\]]+)?\]", chunk):
+            if allow_next_result:
+                for secret in sorted(set(secrets_to_redact), key=len, reverse=True):
+                    if secret:
+                        chunk = chunk.replace(secret, "<staged-input-secret>")
+            allow_next_result = False
+        scanned.append(chunk)
+    return "".join(scanned)
+
+
 def _redact_agent_artifacts(
-    trace: str, metrics: dict, secrets_to_redact: tuple[str, ...]
+    trace: str,
+    metrics: dict,
+    secrets_to_redact: tuple[str, ...],
+    allowed_input_files: tuple[str, ...] = (),
 ) -> tuple[str, dict, bool]:
     """Redact agent artifacts and report whether a literal was observed."""
     if not secrets_to_redact:
         return trace, metrics, False
     raw_metrics = json.dumps(metrics, ensure_ascii=False, default=str)
+    scan_trace = _redaction_scan_trace(trace, secrets_to_redact, allowed_input_files)
     leaked = any(
-        secret and (secret in trace or secret in raw_metrics)
+        secret and (secret in scan_trace or secret in raw_metrics)
         for secret in secrets_to_redact
     )
     return (
@@ -2759,6 +2800,11 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             return res
     deterministic_cfg = checks.get("deterministic_check") or {}
     configured_redaction_markers = deterministic_cfg.get("redaction_markers", [])
+    redaction_input_files = tuple(
+        str(path)
+        for path in deterministic_cfg.get("redaction_input_files", [])
+        if str(path)
+    )
     redaction_values = tuple(
         dict.fromkeys(
             [*fixture_runtime_secrets]
@@ -2886,7 +2932,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         trace = cached["trace"]
         metrics = {**cached["metrics"], **preflight_metrics, "cached": True}
         trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
-            trace, metrics, redaction_values
+            trace, metrics, redaction_values, redaction_input_files
         )
         if agent_runtime_secret_leak and cache_file:
             # Do not leave a previously cached raw credential on disk after it
@@ -3132,7 +3178,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             # cache replays. This must sit outside the runtime-specific branches:
             # deterministic-check markers are valid for non-stdio scenarios too.
             trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
-                trace, metrics, runtime_secrets
+                trace, metrics, runtime_secrets, redaction_input_files
             )
 
             if ok and name == "incremental-transform-state":

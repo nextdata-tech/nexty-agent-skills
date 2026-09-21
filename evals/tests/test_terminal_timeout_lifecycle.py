@@ -412,6 +412,24 @@ def test_runner_redacts_injected_secret_from_agent_artifacts() -> None:
     assert "<redacted>" in trace
 
 
+def test_runner_allows_secret_in_staged_input_result_but_redacts_it() -> None:
+    token = "nex888-opaque-synthetic-secret-2d4c"
+    trace = (
+        '[tool_use:Read] {"file_path": "/workspace/source-contract.yaml"}\n'
+        f"[tool_result] token: {token}\n"
+        "[assistant] The token is not repeated."
+    )
+    cleaned, _metrics, leaked = eval_run._redact_agent_artifacts(
+        trace,
+        {},
+        (token,),
+        ("source-contract.yaml",),
+    )
+    assert leaked is False
+    assert token not in cleaned
+    assert "<redacted>" in cleaned
+
+
 def test_checker_never_echoes_a_secret_marker(tmp_path: Path) -> None:
     (tmp_path / "leak.txt").write_text(
         "nex888-opaque-synthetic-secret-2d4c\n", encoding="utf-8"

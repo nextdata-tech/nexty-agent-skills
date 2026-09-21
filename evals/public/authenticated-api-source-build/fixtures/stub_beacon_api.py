@@ -17,7 +17,8 @@ succeed.
 Client header: every request must ALSO carry ``User-Agent:
 nexty-test-client/1.0`` (``REQUIRED_USER_AGENT``). A request without it gets
 **403** and a non-secret error body — *before* the token is looked at, so a
-correctly-credentialed client still fails. This reproduces NEX-873: dlt sends
+correctly-credentialed client still fails. This reproduces an upstream
+client-filtering failure: dlt sends
 ``User-Agent: dlt/1.28.2`` by default, and an upstream that filters unknown
 clients rejects it while the same credentials succeed under curl. The gate is
 what makes the header requirement decidable rather than advisory — a closure
@@ -242,7 +243,7 @@ def _build_checks() -> list[dict]:
             "check_id": check_id,
             "monitor_id": orphan_mid,
             "checked_at": "2026-06-01T00:00:00Z",
-            "result": {"status": "down", "latency_ms": None},
+            "result": {"status": "down", "latency_ms": 100 + (check_id * 7) % 900},
         })
         check_id += 1
     assert len(rows) == 37, len(rows)

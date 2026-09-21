@@ -136,7 +136,7 @@ async def wait_until_ready(
                     data_url.rstrip("/") + data_probe_path,
                     headers=data_headers,
                 ) as data_response:
-                    if data_response.status != 200:
+                    if not 200 <= data_response.status < 300:
                         raise RuntimeError(f"data probe returned HTTP {data_response.status}")
                     await data_response.read()
                 async with session.get(
@@ -268,16 +268,18 @@ class MockRestServer:
             route
             for route in self.config.routes
             if route.method == "GET"
-            and route.status == 200
+            and 200 <= route.status < 300
             and not route.write_forbidden
+            and (not route.required_scopes or self._authorized(route))
             and re.search(r"\{[A-Za-z_][A-Za-z0-9_]*\}", route.path) is None
         ]
         candidates.extend(
             route
             for route in self.config.routes
             if route.method == "GET"
-            and route.status == 200
+            and 200 <= route.status < 300
             and not route.write_forbidden
+            and (not route.required_scopes or self._authorized(route))
             and re.search(r"\{[A-Za-z_][A-Za-z0-9_]*\}", route.path) is not None
         )
         for route in candidates:
@@ -300,7 +302,7 @@ class MockRestServer:
                 auth = self.config.auth
                 headers[auth.header] = f"{auth.scheme} {auth.token}"
             return path, headers
-        raise ConfigError("scenario needs a GET route with status 200 for readiness")
+        raise ConfigError("scenario needs a GET route with a successful 2xx status for readiness")
 
     async def start(self, *, wait_for_ready: bool = True) -> "MockRestServer":
         """Bind both ports and optionally wait until both configured probes answer."""
@@ -483,7 +485,7 @@ class MockRestServer:
         state_snapshot = dict(self._current_states)
         if route.latency_ms:
             await asyncio.sleep(route.latency_ms / 1000.0)
-        if route.status != 200:
+        if not 200 <= route.status < 300:
             return finish(_error(route.status, _status_message(route.status)))
         if route.write_forbidden:
             return finish(_error(403, "write forbidden"))
@@ -495,6 +497,8 @@ class MockRestServer:
             return finish(_error(429, "rate limited"))
         if route.auth_required and not await self._authenticate(request):
             return finish(_error(401, "unauthorized"))
+        if route.required_scopes and not self._authorized(route):
+            return finish(_error(403, "forbidden"))
 
         try:
             payload, spec = self._route_payload(route, state_snapshot)
@@ -536,17 +540,23 @@ class MockRestServer:
                     route.pagination.items_field: page.records,
                     route.pagination.cursor_field: page.next_cursor,
                 }
-                response = web.json_response(payload)
+                response = web.json_response(payload, status=route.status)
                 return finish(response, page=page)
             if spec.format == "csv":
-                return finish(_csv_response(payload))
+                return finish(_csv_response(payload, status=route.status))
             if (
                 item_parameter is None
                 and route.fanout is None
                 and spec.serialized_json is not None
             ):
-                return finish(web.Response(body=spec.serialized_json, content_type="application/json"))
-            return finish(web.json_response(payload))
+                return finish(
+                    web.Response(
+                        body=spec.serialized_json,
+                        status=route.status,
+                        content_type="application/json",
+                    )
+                )
+            return finish(web.json_response(payload, status=route.status))
         except BehaviorError as exc:
             return finish(_error(400, str(exc)))
 
@@ -563,6 +573,14 @@ class MockRestServer:
                 return False
             self._remaining_requests -= 1
             return True
+
+    def _authorized(self, route: RouteConfig) -> bool:
+        """Return whether the synthetic authenticated identity has each scope."""
+
+        auth = self.config.auth
+        if auth is None:
+            return False
+        return set(route.required_scopes).issubset(auth.scopes)
 
     def _route_payload(
         self, route: RouteConfig, states: Mapping[str, str] | None = None

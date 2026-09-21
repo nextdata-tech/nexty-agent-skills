@@ -1,0 +1,38 @@
+{
+  "name": "Generate a HubSpot-style API data-product source",
+  "skills": [
+    "nxd-generate-data-product"
+  ],
+  "deterministic_check": {
+    "script": "check_hubspot_api_source.py",
+    "deps": [],
+    "redaction_markers": ["hs_eval_token_7c2e8f1d4a9b"],
+    "redaction_input_files": ["source-contract.yaml"]
+  },
+  "checks": [
+    {
+      "id": "contract-read-before-authoring",
+      "check": "The generated closure reflects the supplied pinned HubSpot-style source contract rather than inventing a different CRM API."
+    },
+    {
+      "id": "dlt-rest-connector",
+      "check": "Ingestion uses dlt RESTAPIConfig/rest_api_resources and does not hand-roll HTTP beside or instead of the connector."
+    },
+    {
+      "id": "cursor-and-envelope",
+      "check": "The contacts list handles the results envelope and paging.next.after cursor, and the search POST carries its read-only request body."
+    },
+    {
+      "id": "auth-and-scope-boundary",
+      "check": "Bearer auth and required scopes are declared in flat profile attributes, auth is dispatched from secrets['auth_type'], and the synthetic token is absent from source code."
+    },
+    {
+      "id": "read-only-operation-selection",
+      "check": "The generated source does not add CRM create or update operations; POST search is treated as a read operation."
+    },
+    {
+      "id": "no-provider-network",
+      "check": "The closure includes a connectivity-check artifact but the generated code does not claim a live provider run."
+    }
+  ]
+}

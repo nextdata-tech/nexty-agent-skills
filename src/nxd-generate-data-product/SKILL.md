@@ -43,6 +43,9 @@ this skill treats as unrecoverable.
 | Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
 | Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |
 | REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |
+| Google Drive files — `reference/google-drive-source.md` | `api-source` with `source_kind: google_drive_files` | flat Drive API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform lists and downloads selected files |
+| Google Sheets — `reference/google-sheets-source.md` | `api-source` with `source_kind: google_sheets` | flat Sheets API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform reads selected spreadsheet ranges |
+Specialized Drive/Sheets profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape.
 
 The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
 It runs the transform, verifies staging, and stands up the semantic MCP endpoint.

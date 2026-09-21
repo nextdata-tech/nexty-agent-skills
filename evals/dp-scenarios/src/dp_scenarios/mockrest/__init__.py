@@ -9,6 +9,7 @@ from accidentally using the oracle that is meant to evaluate it.
 from .capability import CapabilityManifest, CapabilityError, load_capability_manifest
 from .config import ConfigError, ScenarioConfig, load_config
 from .counters import RequestCounters
+from .openapi import OpenAPIError, openapi_to_scenario
 from .server import MockRestServer, start_server, wait_until_ready
 
 __all__ = [
@@ -16,10 +17,12 @@ __all__ = [
     "CapabilityManifest",
     "ConfigError",
     "MockRestServer",
+    "OpenAPIError",
     "RequestCounters",
     "ScenarioConfig",
     "load_capability_manifest",
     "load_config",
+    "openapi_to_scenario",
     "start_server",
     "wait_until_ready",
 ]

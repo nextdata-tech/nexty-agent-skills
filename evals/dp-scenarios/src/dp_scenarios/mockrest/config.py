@@ -226,6 +226,7 @@ class RouteConfig:
     require_user_agent: bool = False
     required_header: HeaderRequirement | None = None
     auth_required: bool = False
+    required_scopes: tuple[str, ...] = ()
     rate_limit_every: int | None = None
     latency_ms: int = 0
     status: int = 200
@@ -256,6 +257,7 @@ class RouteConfig:
             "require_user_agent",
             "required_header",
             "auth_required",
+            "required_scopes",
             "rate_limit_every",
             "rate_limit",
             "latency_ms",
@@ -289,7 +291,12 @@ class RouteConfig:
                 states[state_name] = ResponseSpec.from_value(
                     spec, base_dir=base_dir, location=f"{location}.states.{state_name}"
                 )
-        if response is None and not states and raw.get("status", 200) == 200 and not raw.get("write_forbidden", False):
+        if (
+            response is None
+            and not states
+            and 200 <= status < 300
+            and not raw.get("write_forbidden", False)
+        ):
             raise ConfigError(f"{location} needs response or states for a successful route")
         if response is not None and states:
             raise ConfigError(f"{location} cannot define both response and states")
@@ -318,6 +325,17 @@ class RouteConfig:
         for boolean_key in {"require_user_agent", "auth_required", "write_forbidden"}:
             if boolean_key in raw and not isinstance(raw[boolean_key], bool):
                 raise ConfigError(f"{location}.{boolean_key} must be boolean")
+        raw_scopes = raw.get("required_scopes", [])
+        if isinstance(raw_scopes, str) or not isinstance(raw_scopes, list):
+            raise ConfigError(f"{location}.required_scopes must be a list")
+        required_scopes: list[str] = []
+        for scope in raw_scopes:
+            scope = _nonempty_string(scope, f"{location}.required_scopes")
+            if scope in required_scopes:
+                raise ConfigError(f"{location}.required_scopes contains duplicate: {scope}")
+            required_scopes.append(scope)
+        if required_scopes and not raw.get("auth_required", False):
+            raise ConfigError(f"{location}.required_scopes requires auth_required")
 
         rate_limit_every = raw.get("rate_limit_every")
         if "rate_limit" in raw:
@@ -334,7 +352,7 @@ class RouteConfig:
         write_forbidden = raw.get("write_forbidden", False)
         if write_forbidden and method == "GET":
             raise ConfigError(f"{location}.write_forbidden requires a write method")
-        if status != 200 or write_forbidden:
+        if not 200 <= status < 300 or write_forbidden:
             inert_keys = {
                 "response",
                 "states",
@@ -370,6 +388,7 @@ class RouteConfig:
                 else None
             ),
             auth_required=bool(raw.get("auth_required", False)),
+            required_scopes=tuple(required_scopes),
             rate_limit_every=rate_limit_every,
             latency_ms=latency_ms,
             status=status,
@@ -407,11 +426,12 @@ class AuthConfig:
     header: str = "Authorization"
     scheme: str = "Bearer"
     refresh_path: str = "/refresh"
+    scopes: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, value: Any, location: str) -> "AuthConfig":
         raw = _mapping(value, location)
-        _keys(raw, {"token", "initial_requests", "header", "scheme", "refresh_path"}, location)
+        _keys(raw, {"token", "initial_requests", "header", "scheme", "refresh_path", "scopes"}, location)
         token = _nonempty_string(raw.get("token"), f"{location}.token")
         initial = _integer(raw.get("initial_requests"), f"{location}.initial_requests", minimum=1)
         header = _nonempty_string(raw.get("header", "Authorization"), f"{location}.header")
@@ -419,7 +439,16 @@ class AuthConfig:
         refresh_path = _nonempty_string(raw.get("refresh_path", "/refresh"), f"{location}.refresh_path")
         if not refresh_path.startswith("/"):
             raise ConfigError(f"{location}.refresh_path must be an absolute path")
-        return cls(token, initial, header, scheme, refresh_path)
+        raw_scopes = raw.get("scopes", [])
+        if isinstance(raw_scopes, str) or not isinstance(raw_scopes, list):
+            raise ConfigError(f"{location}.scopes must be a list")
+        scopes: list[str] = []
+        for scope in raw_scopes:
+            scope = _nonempty_string(scope, f"{location}.scopes")
+            if scope in scopes:
+                raise ConfigError(f"{location}.scopes contains duplicate: {scope}")
+            scopes.append(scope)
+        return cls(token, initial, header, scheme, refresh_path, tuple(scopes))
 
 
 @dataclass(frozen=True)
