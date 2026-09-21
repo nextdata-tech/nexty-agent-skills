@@ -90,11 +90,28 @@ After the wait returns terminal claims, close that same child with
 `closeAgent` using its receiver thread id before reporting; completed child
 threads remain allocated to the app-server until explicitly closed. Then pass
 the child's returned claims and the exact review_input fields to
-report_requirement. The `parameters.report` value must be the JSON object
+report_requirement. Copy every field from the current review_input as a
+sibling of `report` in the action parameters: `requirement_id`, `generation`,
+`subject_sha256`, `dependency_evidence_sha256`, `session_ref`, and
+`message_ref` (use the exact current value, including `null`; never omit
+`session_ref`). The `parameters.report` value must be the JSON object
 `{"schema":"nxd-conversation-review-v1","verdict":"clear","findings":[],"rejection_code":null}`
 or the corresponding exact findings/rejection object, never a JSON-encoded
-string or Markdown. If the child cannot be started or completed, report an
-incomplete result; never fabricate the review outcome yourself. After a clear
+string or Markdown. Its `findings` entries have exactly the keys `id`,
+`severity`, and `description`; use lower-case `blocking` or `advisory` for
+severity and do not forward reviewer-only fields such as `claim`, `evidence`,
+or `why_it_matters`. Use `rejection_code: null` for a clear or findings
+report; use the documented rejection code only for a rejected or indeterminate
+report. Before the first report, finish any required review-record update for
+the current captured inputs. If the supervisor rejects a report for malformed
+parameters or deserialization, retry with the exact same current binding
+fields and captured revision; change only the in-memory report projection.
+Do not edit the closure, blueprint, or review record, and do not make another
+supervisor call between those report retries. If the supervisor reports a
+stale subject or dependency, stop and relay that authoritative result rather
+than attempting to repair it locally. If the child cannot be started or
+completed, report an incomplete result; never fabricate the review outcome yourself.
+After a clear
 report, call the returned self-check/validation action and inspect its result
 before following the returned admission, start_run, and query actions. Only use
 inspect_prepare_recovery when the immediately preceding

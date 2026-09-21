@@ -38,6 +38,13 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "never fabricate the review outcome yourself" in CODEX_SYSTEM_PROMPT
     assert "CODEX_REVIEW_CHILD" in CODEX_SYSTEM_PROMPT
     assert "never a JSON-encoded" in CODEX_SYSTEM_PROMPT
+    assert "never omit" in CODEX_SYSTEM_PROMPT and "`session_ref`" in CODEX_SYSTEM_PROMPT
+    assert "findings" in CODEX_SYSTEM_PROMPT and "entries have exactly the keys" in CODEX_SYSTEM_PROMPT
+    assert "`id`," in CODEX_SYSTEM_PROMPT and "`severity`," in CODEX_SYSTEM_PROMPT
+    assert "do not forward reviewer-only fields" in CODEX_SYSTEM_PROMPT
+    assert "retry with the exact same current binding" in CODEX_SYSTEM_PROMPT
+    assert "Do not edit the closure, blueprint, or review record" in CODEX_SYSTEM_PROMPT
+    assert "stale subject or dependency" in CODEX_SYSTEM_PROMPT
     assert "close that same child with" in CODEX_SYSTEM_PROMPT
     assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
