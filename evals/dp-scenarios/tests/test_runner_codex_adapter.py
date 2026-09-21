@@ -54,6 +54,7 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not edit the closure, blueprint, or review record" in CODEX_SYSTEM_PROMPT
     assert "stale subject or dependency" in CODEX_SYSTEM_PROMPT
     assert "close that same child with" in CODEX_SYSTEM_PROMPT
+    assert "exact receiver thread id in its `target` argument" in CODEX_SYSTEM_PROMPT
     assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
