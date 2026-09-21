@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -151,6 +151,20 @@ def _adapter_timeout(turn_timeout: float) -> float:
     if turn_timeout <= 0:
         raise TierError("turn timeout must be positive")
     return turn_timeout * 0.9
+
+
+def _adapter_command(
+    adapter_module: str, adapter_kwargs: Mapping[str, str | None]
+) -> list[str]:
+    command = [sys.executable, "-m", adapter_module]
+    for key, value in adapter_kwargs.items():
+        if value is None:
+            continue
+        if value:
+            command.extend((f"--{key}", value))
+        else:
+            command.append(f"--{key}")
+    return command
 
 
 def _load_local_credentials(env_file: Path | None) -> dict[str, str]:
@@ -678,12 +692,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.native_continuation:
         adapter_kwargs["native-continuation"] = ""
 
-    adapter_command = [sys.executable, "-m", adapter_module]
-    for key, value in adapter_kwargs.items():
-        if value:
-            adapter_command.extend((f"--{key}", value))
-        else:
-            adapter_command.append(f"--{key}")
+    adapter_command = _adapter_command(adapter_module, adapter_kwargs)
     adapter_command.extend(
         _tool_grant_arguments(
             args,
