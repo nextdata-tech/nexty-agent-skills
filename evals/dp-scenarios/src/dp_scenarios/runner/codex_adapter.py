@@ -75,9 +75,14 @@ setup commands; do not use destructive commands such as `rm`/`rm -f`, shell
 command chains, pipelines, redirects, or a custom working directory. If a
 command cannot start or is rejected, stop issuing that command shape and switch
 to the file tool or report the blocker; do not spend the turn retrying it.
-Use the provider-native collaboration child only once, for the retained-capture
-review. Do not use `spawnAgent` for closure authoring, source exploration, or
-shell helpers, and do not launch background helpers.
+Collaboration is a single-use channel in this harness. Do not use `spawnAgent` for closure authoring,
+source exploration, shell helpers,
+validation debugging, or any other work before capture. After capture returns
+its matching `report_requirement` review action, use exactly one
+provider-native collaboration child for that retained-capture review; wait for
+and close that child before reporting. Do not launch background helpers or a
+second child after a review finding or reset: the parent must repair the
+closure itself and recapture.
 Respond directly to each operator turn and continue the workflow until the
 operator's next message arrives.
 
