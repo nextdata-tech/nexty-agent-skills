@@ -30,10 +30,12 @@ incomplete children, wait events, and background launches do not satisfy the
 construction gate. The Codex prompt carries the workflow-v2 action-discipline
 guard, and the Codex live transport now enforces the critical boundary in the
 persistent runner-owned Desktop session: a successful capture that returns a
-pending review arms a Codex-only guard, blocked reset/inspect/list/check/
-prepare operations receive a corrective `isError` MCP result, and the guard
-clears only after a successful review report. Claude and replay paths do not
-enable this guard.
+pending review arms a Codex-only guard, blocked inspect/list/check/prepare
+operations receive a corrective `isError` MCP result, and the guard clears
+after either a valid clear report or a valid `workflow/review_findings` relay.
+The latter is necessary because an authorized remediation reset is the next
+legal action after findings; the proxy must release that reset to the
+supervisor. Claude and replay paths do not enable this guard.
 
 The available live Codex smoke is provider evidence only. The prior B1 Codex
 runs were `ungraded` because the agent re-entered an existing workflow after a
@@ -51,14 +53,20 @@ completed child result, but Codex sent the bounded review report as a
 JSON-encoded string instead of the required object; the supervisor correctly
 rejected it as `workflow/review_incomplete`, and that run also ended
 `ungraded`/`turn_timeout`. Neither is a pass or a benchmark comparison. Full
-local validation after the latest runner changes is 3194 passed, 37 skipped,
+local validation after the latest runner changes is 3196 passed, 37 skipped,
 1 warning. A subsequent run sent the report as an object and reached the
 reviewer finding path, but mutated/reset the captured workflow before returning
 the non-clear finding; the supervisor rejected the stale operation and the run
 ended `ungraded`/`turn_timeout`. The latest prompt fix makes captured inputs
 immutable until reporting and requires non-clear reports to stop for operator
 adjudication. A future measured entry still requires a complete authenticated
-scenario run with a terminal report.
+scenario run with a terminal report. The first run after this guard fix reached
+four successful resets, a clear review, and `check_data_product`, proving that
+the findings-to-reset path now reaches the supervisor. It still ended
+`ungraded`/`turn_timeout` because the Codex parent did not complete that turn
+and never reached validation, admission, publication, or query. This is
+incomplete provider evidence, not a scenario pass; a timeout result is not
+benchmark evidence of skill quality.
 
 ## Evidence
 
