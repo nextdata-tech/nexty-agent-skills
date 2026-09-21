@@ -153,6 +153,7 @@ SOLICITING_OPENER_PATTERN = re.compile(r"\s*which\b", re.IGNORECASE)
 # mandate for the turn.
 SOLICITATION_PATTERN = re.compile(
     r"\b(please\s+(approve|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
+    r"|please\s+adjudicate"
     r"|can\s+you|could\s+you|would\s+you|do\s+you\s+want|what\s+would\s+you\s+like"
     r"|let\s+me\s+know|up\s+to\s+you|sign\s*off\s+on|go-?ahead"
     r"|waiting\s+(?:on|for)\s+you|awaiting\s+your|shall\s+i"

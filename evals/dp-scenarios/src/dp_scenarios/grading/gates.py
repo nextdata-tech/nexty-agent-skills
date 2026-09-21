@@ -322,10 +322,14 @@ def _authored_closure(files: object) -> bool:
 
     Counts as codegen: a touched path with a ``closure`` component, which the
     live adapter's system prompt makes the contractual home of the authored
-    data product.  Because the live adapter derives ``files_touched`` from a
-    workspace diff rather than from tool names, this catches a closure write
-    however it was performed -- Write, Edit, a Bash heredoc, or an MCP build
-    tool alike.
+    data product.  The API-source skill has one explicit pre-consent
+    exception: its closure-local ``connectivity_check.py`` probe may be
+    authored before capture so it can perform the payload-inspection gate.
+    Exclude that one path here; it is a source probe, not production closure
+    generation.  Because the live adapter derives ``files_touched`` from a
+    workspace diff rather than from tool names, this catches every other
+    closure write however it was performed -- Write, Edit, a Bash heredoc, or
+    an MCP build tool alike.
 
     Deliberately does not count: tool calls of any name, including writes.
     A tool name cannot distinguish authoring the closure from authoring the
@@ -348,7 +352,10 @@ def _authored_closure(files: object) -> bool:
             path = path.as_posix()
         if not isinstance(path, str):
             continue
-        if CLOSURE_DIR in PurePosixPath(path.replace("\\", "/")).parts:
+        normalized = PurePosixPath(path.replace("\\", "/"))
+        if normalized.name == "connectivity_check.py" and CLOSURE_DIR in normalized.parts:
+            continue
+        if CLOSURE_DIR in normalized.parts:
             return True
     return False
 

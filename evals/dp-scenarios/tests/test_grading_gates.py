@@ -519,6 +519,12 @@ def test_intake_codegen_inference_ignores_non_authoring_observations() -> None:
     assert "intake_codegen_missing" in codes(
         {"turn": 3, "files_touched": "closure/spec.py"}
     )
+    # API-source has one documented pre-consent exception: the connectivity
+    # probe can be written before capture. It must not count as production
+    # codegen for the approval ordering check.
+    assert "intake_codegen_missing" in codes(
+        {"turn": 1, "files_touched": [{"path": "closure/connectivity_check.py"}]}
+    )
 
     # A nested closure write is authoring, wherever it sits in the tree.
     assert "intake_codegen_missing" not in codes(

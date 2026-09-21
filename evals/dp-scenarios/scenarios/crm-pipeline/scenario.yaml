@@ -10,7 +10,7 @@ fixture:
 coverage:
   variant: crm-rest-pagination-auth-expiry
   untested: This package exercises the local mock CRM transport and agent evidence contract; it does not claim a real CRM credential or an authenticated live agent run.
-turn_budget: 17
+turn_budget: 20
 repeatability:
   tier: mock-source
   epochs: 3
@@ -24,13 +24,13 @@ phase_map:
   1: 1
   2: 2
   3: 3
-  4: 4
-  5: 5
-  6: 6
-  7: 7
+  4: 3
+  5: 3
+  6: 5
+  7: 6
   8: 7
-  9: 7
-  10: 7
+  9: 3
+  10: 3
   11: 7
   12: 7
   13: 7
@@ -38,6 +38,9 @@ phase_map:
   15: 7
   16: 7
   17: 7
+  18: 7
+  19: 7
+  20: 7
 required_plants:
   - crm_pipeline_pagination
 gates:

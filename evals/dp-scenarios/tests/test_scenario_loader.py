@@ -699,7 +699,7 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             for turn_number, turn in enumerate(scenario.script.turns, start=1)
             if turn.approval
         ]
-        expected_count = 2 if scenario.id == "inventory-position" else 1
+        expected_count = 3 if scenario.id == "crm-pipeline" else 2 if scenario.id == "inventory-position" else 1
         assert len(approval_turns) == expected_count, scenario.id
         assert all(
             scenario.phase_map[turn_number] == GATE_PHASES["narrowing"]

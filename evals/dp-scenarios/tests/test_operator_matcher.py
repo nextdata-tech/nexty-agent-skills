@@ -90,6 +90,27 @@ def test_planted_decision_is_answered_by_declared_id() -> None:
     assert result.reply == "Yes."
 
 
+def test_adjudicate_is_an_explicit_operator_solicitation() -> None:
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["decision_answers"] = {
+        "amount_precision": {
+            "terms": ["fractional", "amount"],
+            "answer": "Preserve the exact amount.",
+        }
+    }
+    bank = MatcherBank(
+        load_persona(ROOT / "scenarios/_personas/rubber-stamper.yaml"),
+        answer_sheet_from_mapping(raw),
+    )  # type: ignore[arg-type]
+
+    result = bank.reply_for(
+        "The review found fractional amounts. Please adjudicate the finding."
+    )
+
+    assert result.rule_id == "decision.answer.amount_precision"
+    assert result.reply == "Preserve the exact amount."
+
+
 def test_opening_question_is_one_sentence_when_it_has_one_terminator() -> None:
     raw = sheet().to_mapping()  # type: ignore[union-attr]
     raw["opening_message"] = "What outcome should we improve?"
