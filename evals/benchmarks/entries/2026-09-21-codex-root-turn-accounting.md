@@ -28,6 +28,13 @@ the tier then correctly voided it as incomplete evidence. No scenario pass is
 claimed. The live run also had genuine construction blockers and did not reach
 publication or query.
 
+The corrected runner was then exercised against the same B3 scenario and real
+supervisor. All eight turns recorded exactly one root terminal result, the
+engine ended `completed`, and the scenario was reported as a scored `failed`
+run with the same genuine construction blockers. This validates the runner's
+classification change, not the skill's scenario quality, so it remains
+NO_EVAL evidence.
+
 ## Evidence
 
 The carrying tests are
