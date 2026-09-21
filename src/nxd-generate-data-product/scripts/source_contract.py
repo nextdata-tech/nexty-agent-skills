@@ -79,9 +79,11 @@ def read_csv_rows(
     rows: list[dict[str, str]] = []
     for path in csv_paths:
         if path.is_symlink() or not path.is_file():
-            raise RuntimeError(f"{source_name}: source file is not regular: {path}")
+            raise RuntimeError(
+                f"{source_name}: source file is a symlink or not regular: {path}"
+            )
         try:
-            with path.open(newline="", encoding="utf-8") as handle:
+            with path.open(newline="", encoding="utf-8-sig") as handle:
                 reader = csv.DictReader(handle)
                 headers = reader.fieldnames or []
                 if any(header is None or not header for header in headers):
@@ -106,16 +108,20 @@ def read_csv_rows(
                             "than the declared header"
                         )
                     missing_values = [
-                        column for column in required if row.get(column) is None
+                        column
+                        for column in required
+                        if row.get(column) is None or not str(row[column]).strip()
                     ]
                     if missing_values:
                         raise RuntimeError(
-                            f"{source_name}: {path}:{row_number} has missing "
+                            f"{source_name}: {path}:{row_number} has missing or blank "
                             f"values for required columns {missing_values}"
                         )
                     rows.append(dict(row))
-        except OSError as exc:
-            raise RuntimeError(f"{source_name}: could not read {path}: {exc}") from None
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeError(
+                f"{source_name}: could not read or decode {path}: {exc}"
+            ) from None
     return rows
 
 
@@ -165,16 +171,37 @@ def coverage_summary(
     }
 
 
-def ratio_cents(numerator: Any, denominator: Any, *, metric_name: str) -> int:
-    """Compute a positive-denominator ratio in integer cents, half-up rounded."""
+def ratio_value(
+    numerator: Any,
+    denominator: Any,
+    *,
+    metric_name: str,
+    quantum: Any = "1",
+) -> Decimal:
+    """Compute a positive-denominator ratio rounded to the approved quantum."""
     try:
         number = Decimal(str(numerator))
         divisor = Decimal(str(denominator))
+        rounding_quantum = Decimal(str(quantum))
     except (InvalidOperation, ValueError) as exc:
         raise RuntimeError(f"{metric_name}: ratio inputs must be numeric") from exc
-    if not number.is_finite() or not divisor.is_finite() or divisor <= 0:
-        raise RuntimeError(f"{metric_name}: ratio requires finite values and a positive denominator")
-    return int((number / divisor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if (
+        not number.is_finite()
+        or not divisor.is_finite()
+        or not rounding_quantum.is_finite()
+        or divisor <= 0
+        or rounding_quantum <= 0
+    ):
+        raise RuntimeError(
+            f"{metric_name}: ratio requires finite values, a positive denominator, "
+            "and a positive quantum"
+        )
+    return (number / divisor).quantize(rounding_quantum, rounding=ROUND_HALF_UP)
+
+
+def ratio_cents(numerator: Any, denominator: Any, *, metric_name: str) -> int:
+    """Compute a ratio whose inputs and output are already expressed in cents."""
+    return int(ratio_value(numerator, denominator, metric_name=metric_name))
 
 
 def assert_aggregate_ratio(
@@ -185,15 +212,20 @@ def assert_aggregate_ratio(
     denominator_column: str,
     ratio_column: str,
     metric_name: str,
+    quantum: Any = "1",
 ) -> None:
-    """Reject an aggregate ratio that was formed by summing row-level ratios."""
+    """Reject a summed row ratio and enforce the approved output quantum."""
     try:
         numerator = sum(Decimal(str(row[numerator_column])) for row in source_rows)
         denominator = sum(Decimal(str(row[denominator_column])) for row in source_rows)
         actual = Decimal(str(output_row[ratio_column]))
     except (KeyError, InvalidOperation, ValueError) as exc:
-        raise RuntimeError(f"{metric_name}: ratio fields are missing or non-numeric") from exc
-    expected = Decimal(ratio_cents(numerator, denominator, metric_name=metric_name))
+        raise RuntimeError(
+            f"{metric_name}: ratio fields are missing or non-numeric"
+        ) from exc
+    expected = ratio_value(
+        numerator, denominator, metric_name=metric_name, quantum=quantum
+    )
     if actual != expected:
         raise RuntimeError(
             f"{metric_name}: {ratio_column}={actual} does not equal "
@@ -208,19 +240,23 @@ def assert_row_ratios(
     denominator_column: str,
     ratio_column: str,
     metric_name: str,
+    quantum: Any = "1",
 ) -> None:
-    """Validate a ratio column at its declared row grain."""
+    """Validate a ratio column at its declared row grain and output quantum."""
     for index, row in enumerate(rows, start=1):
-        expected = ratio_cents(
-            row[numerator_column], row[denominator_column], metric_name=metric_name
-        )
         try:
+            expected = ratio_value(
+                row[numerator_column],
+                row[denominator_column],
+                metric_name=metric_name,
+                quantum=quantum,
+            )
             actual = Decimal(str(row[ratio_column]))
         except (KeyError, InvalidOperation, ValueError) as exc:
             raise RuntimeError(
                 f"{metric_name}: row {index} ratio is missing or non-numeric"
             ) from exc
-        if actual != Decimal(expected):
+        if actual != expected:
             raise RuntimeError(
                 f"{metric_name}: row {index} {ratio_column}={actual} does not equal "
                 f"{expected} from the additive inputs"

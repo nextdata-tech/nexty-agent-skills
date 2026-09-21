@@ -768,7 +768,8 @@ conversion_coverage = coverage_summary(
 
 # For an aggregate CPA row, compute from the additive totals. The helper
 # rejects `sum(pair["cpa_cents"] for pair in pairs)` even when that number looks
-# plausible on a small fixture.
+# plausible on a small fixture. The default quantum is one cent because these
+# inputs and the output are cent-scaled.
 assert_aggregate_ratio(
     matched_pairs,
     match_metrics_row,
@@ -780,14 +781,20 @@ assert_aggregate_ratio(
 ```
 
 `required_columns` is the minimum approved header set; `expected_columns` makes
-the header set exact and rejects an extra field as well. The helper rejects a
-missing or duplicate identity before matching, rejects a matched ID that is not
-in its source, and returns the complete unmatched identity list so the closure
-cannot hide a source-side miss. Coverage rates are integer basis points (`6000`
-means 60%). Ratios use finite values, a positive denominator, and explicit
-half-up rounding. If the approved grain is not the source row, write a separate
-assertion that names that grain and reconcile the additive totals before
-yielding the derived rows.
+the header set exact and rejects an extra field as well. The reader rejects
+missing or blank required values before matching. After accepted matching,
+`coverage_summary` rejects duplicate source identities and matched IDs that are
+not in the source, and returns the complete unmatched identity list so the
+closure cannot hide a source-side miss. Coverage rates are integer basis points
+(`6000` means 60%). Ratios use finite values, a positive denominator, and
+explicit half-up rounding. The default quantum of `1` is appropriate only when
+the inputs and output are already in an integer unit such as cents; pass the
+approved output quantum (for example `quantum="0.001"`) for fractional rates.
+If the approved grain is not the source row, write a separate assertion that
+names that grain and reconcile the additive totals before yielding the derived
+rows. An empty source or zero denominator must remain an explicit approved
+policy (such as a null/undefined output); do not invent a zero to make the
+assertion pass.
 
 ## Flat dicts, and why
 

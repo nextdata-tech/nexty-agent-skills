@@ -38,9 +38,28 @@ def test_read_csv_rows_checks_required_and_duplicate_headers(tmp_path: Path):
         )
 
     missing_value = _write(tmp_path / "missing-value.csv", "id,name\n1\n")
-    with pytest.raises(RuntimeError, match="missing values"):
+    with pytest.raises(RuntimeError, match="missing or blank values"):
         recipe.read_csv_rows(
             missing_value, required_columns=("id", "name"), source_name="source"
+        )
+
+    blank_value = _write(tmp_path / "blank-value.csv", "id,name\n1,   \n")
+    with pytest.raises(RuntimeError, match="missing or blank values"):
+        recipe.read_csv_rows(
+            blank_value, required_columns=("id", "name"), source_name="source"
+        )
+
+    bom_source = tmp_path / "bom.csv"
+    bom_source.write_bytes(b"\xef\xbb\xbfid,name\n1,one\n")
+    assert recipe.read_csv_rows(
+        bom_source, required_columns=("id", "name"), source_name="source"
+    ) == [{"id": "1", "name": "one"}]
+
+    invalid_encoding = tmp_path / "invalid-encoding.csv"
+    invalid_encoding.write_bytes(b"id,name\n1,\xff\n")
+    with pytest.raises(RuntimeError, match="could not read or decode"):
+        recipe.read_csv_rows(
+            invalid_encoding, required_columns=("id", "name"), source_name="source"
         )
 
     duplicate = _write(tmp_path / "duplicate.csv", "id,id\n1,one\n")
@@ -110,6 +129,28 @@ def test_aggregate_ratio_uses_additive_totals_not_sum_of_row_ratios():
             metric_name="cpa",
         )
 
+    # Fractional rates need an explicit output quantum; the default remains
+    # integer cent/unit rounding for metrics such as CPA in cent-scaled inputs.
+    recipe.assert_aggregate_ratio(
+        [{"conversions": "34", "visits": "1000"}],
+        {"conversion_rate": "0.034"},
+        numerator_column="conversions",
+        denominator_column="visits",
+        ratio_column="conversion_rate",
+        metric_name="conversion_rate",
+        quantum="0.001",
+    )
+    with pytest.raises(RuntimeError, match="do not sum row-level ratios"):
+        recipe.assert_aggregate_ratio(
+            [{"conversions": "34", "visits": "1000"}],
+            {"conversion_rate": "0"},
+            numerator_column="conversions",
+            denominator_column="visits",
+            ratio_column="conversion_rate",
+            metric_name="conversion_rate",
+            quantum="0.001",
+        )
+
 
 def test_row_ratio_assertion_covers_the_non_aggregate_path():
     recipe = _recipe()
@@ -128,6 +169,15 @@ def test_row_ratio_assertion_covers_the_non_aggregate_path():
     with pytest.raises(RuntimeError, match="does not equal"):
         recipe.assert_row_ratios(
             rows,
+            numerator_column="spend_cents",
+            denominator_column="conversions",
+            ratio_column="cpa_cents",
+            metric_name="cpa",
+        )
+
+    with pytest.raises(RuntimeError, match="row 1 ratio is missing or non-numeric"):
+        recipe.assert_row_ratios(
+            [{"spend_cents": "100", "cpa_cents": "50"}],
             numerator_column="spend_cents",
             denominator_column="conversions",
             ratio_column="cpa_cents",
