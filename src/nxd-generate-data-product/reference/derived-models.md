@@ -15,6 +15,7 @@ shows the source-independent checks and concrete failure shapes they require.
 - [Score explainability: one row per scored criterion](#score-explainability-one-row-per-scored-criterion)
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
+- [Fail-closed source and ratio contracts](#fail-closed-source-and-ratio-contracts)
 - [Flat dicts, and why](#flat-dicts-and-why)
   - [A column that is all-None is DROPPED, not landed as nulls](#a-column-that-is-all-none-is-dropped-not-landed-as-nulls)
   - [Closing over rows: use a factory, not a default argument](#closing-over-rows-use-a-factory-not-a-default-argument)
@@ -719,6 +720,74 @@ or casting an ID column: `int()` on a `"T1257"`-style key raises
 money so cent-level reconciliation asserts hold. Cast to `float` only in the final dict, since dlt
 has no `Decimal` mapping here; do the reconciliation in `Decimal` **before**
 that cast.
+
+## Fail-closed source and ratio contracts
+
+The ordinary `_read_source_rows` example above is enough only when the
+derivation has no source-field or coverage contract beyond the model's grain.
+For a CSV/file-backed multi-source join, copy/adapt the source of
+[`scripts/source_contract.py`](../scripts/source_contract.py) directly into
+`transform/main.py` and use its checks before any matching or resource
+construction. Do not import it from the installed skill directory: the
+supervisor receives the closure's staged transform, not the skill checkout.
+
+For an API or database source, there is no CSV export to reopen. Capture the
+complete fetched rows in memory at the approved source grain, validate their
+field set with the same fail-closed rule, and apply `coverage_summary` and the
+ratio assertions to those rows. Do not invent a `data/` tree just to use the
+CSV reader.
+
+```python
+# Copy/adapt the source_contract.py definitions above this code in the
+# self-contained transform. Do not make the staged transform depend on a file
+# that exists only in the installed skill tree.
+
+spend = read_csv_rows(
+    sorted((source_root / "spend").glob("*.csv")),
+    required_columns=("spend_id", "campaign_name", "spend_cents"),
+    expected_columns=("spend_id", "campaign_name", "spend_cents"),
+    source_name="spend",
+)
+conversions = read_csv_rows(
+    sorted((source_root / "conversions").glob("*.csv")),
+    required_columns=("conversion_id", "campaign_name", "conversions"),
+    expected_columns=("conversion_id", "campaign_name", "conversions"),
+    source_name="conversions",
+)
+
+# `matched_spend_ids` and `matched_conversion_ids` come from the same
+# accepted-pair set. A coverage row is emitted for EACH source side.
+spend_coverage = coverage_summary(
+    spend, matched_spend_ids, id_column="spend_id", source_name="spend"
+)
+conversion_coverage = coverage_summary(
+    conversions,
+    matched_conversion_ids,
+    id_column="conversion_id", source_name="conversions"
+)
+
+# For an aggregate CPA row, compute from the additive totals. The helper
+# rejects `sum(pair["cpa_cents"] for pair in pairs)` even when that number looks
+# plausible on a small fixture.
+assert_aggregate_ratio(
+    matched_pairs,
+    match_metrics_row,
+    numerator_column="spend_cents",
+    denominator_column="conversions",
+    ratio_column="cpa_cents",
+    metric_name="matched_cpa",
+)
+```
+
+`required_columns` is the minimum approved header set; `expected_columns` makes
+the header set exact and rejects an extra field as well. The helper rejects a
+missing or duplicate identity before matching, rejects a matched ID that is not
+in its source, and returns the complete unmatched identity list so the closure
+cannot hide a source-side miss. Coverage rates are integer basis points (`6000`
+means 60%). Ratios use finite values, a positive denominator, and explicit
+half-up rounding. If the approved grain is not the source row, write a separate
+assertion that names that grain and reconcile the additive totals before
+yielding the derived rows.
 
 ## Flat dicts, and why
 
