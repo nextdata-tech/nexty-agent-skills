@@ -103,10 +103,12 @@ for more context or leave the child running past the deadline.
 Collaboration tool argument discipline: for `spawnAgent`, send the complete
 review request in exactly one `message` string; do not also send `items`.
 Never send both `message` and `items` in one collaboration call. For the
-one-shot reviewer, use only `spawnAgent`, `wait`, and `closeAgent`; pass the
-returned receiver thread id as `target` to `closeAgent`, and never use
-`sendInput` or `resumeAgent`. If a collaboration call is rejected, do not
-repeat the rejected argument shape; report an incomplete handoff.
+owning parent’s one-shot reviewer lifecycle, use only `spawnAgent`, `wait`,
+and `closeAgent`; pass the returned receiver thread id as `target` to
+`closeAgent`, and never use `sendInput` or `resumeAgent`. The reviewer child
+may use only its allowed read-only inspection tools, but may not call another
+collaboration or supervisor tool. If a collaboration call is rejected, do
+not repeat the rejected argument shape; report an incomplete handoff.
 
 File-edit discipline: use the file-change tool for edits. If an apply-patch
 operation is used, every patch must have the exact `*** Begin Patch`, file
@@ -1276,7 +1278,6 @@ class CodexAdapter:
         response, before_turn = self._read_until_response(
             request_id,
             time.monotonic() + self.timeout_s,
-            collected=events,
         )
         if "error" in response:
             raise CodexAdapterError(f"Codex app-server turn/start failed: {response['error']}")

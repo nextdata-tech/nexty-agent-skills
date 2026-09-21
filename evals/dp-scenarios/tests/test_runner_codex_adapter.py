@@ -66,6 +66,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not call `sendInput` or `resumeAgent`" in CODEX_SYSTEM_PROMPT
     assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
     assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
+    assert "owning parent’s one-shot reviewer lifecycle" in CODEX_SYSTEM_PROMPT
+    assert "reviewer child\nmay use only its allowed read-only inspection tools" in CODEX_SYSTEM_PROMPT
     assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
     assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
@@ -198,6 +200,38 @@ def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -
         if isinstance(value, BaseException):
             raise value
         return value
+
+    adapter._read_streams = read_streams
+    clock = iter((0.0, 0.0, 0.0, REVIEW_DEADLINE_MS / 1000.0 + 1.0))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(TimeoutError, match="reviewer deadline"):
+        adapter._collect_turn(1, "", [])
+
+
+def test_codex_reviewer_deadline_wins_for_spawn_buffered_with_turn_start(monkeypatch) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.timeout_s = 1000.0
+    spawn_started = {
+        "method": "item/started",
+        "params": {
+            "item": {
+                "type": "collabAgentToolCall",
+                "tool": "spawnAgent",
+                "receiverThreadIds": ["child-1"],
+            }
+        },
+    }
+    adapter._read_until_response = lambda *_args, **_kwargs: (
+        {"result": {"turn": {"id": "root-turn"}}},
+        [spawn_started],
+    )
+    adapter._is_server_request = lambda _event: False
+
+    def read_streams(_deadline):
+        raise TimeoutError("stream deadline")
 
     adapter._read_streams = read_streams
     clock = iter((0.0, 0.0, 0.0, REVIEW_DEADLINE_MS / 1000.0 + 1.0))
