@@ -652,6 +652,7 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
     app_command = adapter._app_server_command()
     assert app_command[:3] == ["/bin/true", "app-server", "--stdio"]
     assert app_command[3:5] == ["--enable", "multi_agent"]
+    assert app_command[5:7] == ["--enable", "multi_agent_v2"]
     assert 'mcp_servers.nxd-desktop.command="/bin/echo"' in app_command
     assert 'mcp_servers.nxd-desktop.args=["--proxy", "server-spec.json"]' in app_command
     assert 'mcp_servers.nxd-desktop.default_tools_approval_mode="approve"' in app_command
