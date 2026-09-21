@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from dp_scenarios.operator.answer_sheet import script_turn_text
 from dp_scenarios.scenario import SCENARIO_TIERS, load_scenario
 from dp_scenarios.synthgen import generate_dataset
 
@@ -61,6 +62,16 @@ def test_b3_loads_with_full_tier_and_declared_decision_plant() -> None:
     assert scenario.tier == "full"
     assert scenario.run_order == 12
     assert scenario.events.planted_card_ids() == {"marketing_attribution_unmatched_cpa"}
+
+
+@pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
+def test_b3_places_scope_requirements_before_a_pure_approval_turn() -> None:
+    turns = _scenario().answer_sheet.turns
+    assert "separate spend-side and conversion-side match rates" in script_turn_text(turns[1])
+    assert "all unmatched rows visible" in script_turn_text(turns[1])
+    assert turns[1]["substitute_reply"] is False
+    assert script_turn_text(turns[2]) == "Approved—proceed with the plan."
+    assert turns[2]["approval"] is True
 
 
 @pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")

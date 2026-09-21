@@ -3,8 +3,9 @@ scenario_id: marketing-attribution
 opening_message: Which supplied records can be connected safely?
 turns:
   - Which supplied records can be connected safely?
-  - Please inspect both supplied sources and report their match coverage.
-  - text: "Approved. Attribute only demonstrably safe campaign matches, publish separate spend-side and conversion-side match rates, and keep all unmatched rows visible."
+  - text: "Please inspect both supplied sources and report their match coverage. Attribute only demonstrably safe campaign matches, publish separate spend-side and conversion-side match rates, and keep all unmatched rows visible."
+    substitute_reply: false
+  - text: "Approved—proceed with the plan."
     substitute_reply: false
     approval: true
   - text: "[DECISION NEEDED] For campaign CPA, use only conversions from safely matched campaign pairs; preserve unmatched conversions as diagnostics."
