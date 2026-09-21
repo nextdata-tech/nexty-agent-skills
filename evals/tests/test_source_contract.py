@@ -10,6 +10,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "src" / "nxd-generate-data-product" / "scripts" / "source_contract.py"
+GUIDANCE = (
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "pre-capture-audit.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "derived-models.md",
+)
 
 
 def _recipe():
@@ -23,6 +28,17 @@ def _recipe():
 def _write(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_ratio_guidance_bans_reducing_row_level_metrics() -> None:
+    """The docs must not turn a row-level ratio into an aggregate metric."""
+    for path in GUIDANCE:
+        text = path.read_text(encoding="utf-8")
+        assert "row-level ratio" in text, f"{path} lost the row-level ratio rule"
+        assert "Agg.AVG" in text, f"{path} lost the explicit Agg.AVG ban"
+        assert "any other reduction" in text, f"{path} weakened the reduction ban"
+        assert "additive numerator" in text, f"{path} lost aggregate ratio guidance"
+        assert "assert_row_ratios" in text, f"{path} lost the row-grain alternative"
 
 
 def test_read_csv_rows_checks_required_and_duplicate_headers(tmp_path: Path):

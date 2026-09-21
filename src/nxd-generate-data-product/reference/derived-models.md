@@ -737,6 +737,14 @@ field set with the same fail-closed rule, and apply `coverage_summary` and the
 ratio assertions to those rows. Do not invent a `data/` tree just to use the
 CSV reader.
 
+The source contract must preserve the ratio's grain. For aggregate queries,
+expose additive numerator and denominator metrics separately and compute the
+ratio from those query results. Never expose a row-level ratio (such as
+per-campaign CPA) as a semantic metric with `Agg.AVG` or any other reduction.
+The allowed row-grain alternative is a derived ratio column validated with
+`assert_row_ratios`; it may be exposed at that row grain, but never through a
+reducing metric over the ratio column.
+
 ```python
 # Copy/adapt the source_contract.py definitions above this code in the
 # self-contained transform. Do not make the staged transform depend on a file
