@@ -300,6 +300,27 @@ def test_codex_reviewer_deadline_wins_for_spawn_buffered_with_turn_start(monkeyp
         adapter._collect_turn(1, "", [])
 
 
+def test_codex_turn_deadline_wins_when_nonterminal_events_keep_arriving(monkeypatch) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.timeout_s = 1.0
+    adapter._read_until_response = lambda *_args, **_kwargs: (
+        {"result": {"turn": {"id": "root-turn"}}},
+        [],
+    )
+    adapter._is_server_request = lambda _event: False
+    adapter._read_streams = lambda _deadline: {
+        "method": "thread/tokenUsage/updated",
+        "params": {},
+    }
+    clock = iter((0.0, 0.0, 2.0, 2.0, 2.0))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(TimeoutError, match="turn deadline"):
+        adapter._collect_turn(1, "", [])
+
+
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     result, observations = parse_codex_events(
         [

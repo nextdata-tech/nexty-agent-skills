@@ -1366,6 +1366,8 @@ class CodexAdapter:
                     "Codex reviewer child did not complete before the "
                     f"{review_timeout_seconds:.1f}-second reviewer deadline"
                 )
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Codex app-server turn deadline expired")
             if normalized.get("type") in {"turn.completed", "turn.interrupted", "turn.failed"}:
                 params = event.get("params")
                 completed_turn = params.get("turn") if isinstance(params, Mapping) else None
