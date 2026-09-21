@@ -122,7 +122,7 @@ def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> 
     assert completed_deadline == deadline
 
 
-def test_codex_reviewer_deadline_is_cleared_by_close() -> None:
+def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> None:
     receiver_ids = {"child-1"}
     deadline = 10.0 + REVIEW_DEADLINE_MS / 1000.0
     close = {
@@ -133,9 +133,11 @@ def test_codex_reviewer_deadline_is_cleared_by_close() -> None:
             "receiverThreadId": "child-1",
         },
     }
-    assert _update_reviewer_deadline(
+    updated_ids, updated_deadline = _update_reviewer_deadline(
         close, receiver_ids, deadline, now=20.0
-    ) == (set(), None)
+    )
+    assert updated_ids == {"child-1"}
+    assert updated_deadline == deadline
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
@@ -183,6 +185,29 @@ def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     assert result.tool_calls[0].name == "mcp__nxd-desktop__advance_workflow"
     assert observations[0]["tool"] == "advance_workflow"
     assert observations[0]["result"] == {"admission": {"run_id": "run-1"}}
+
+
+def test_parse_codex_events_counts_only_root_turn_completion() -> None:
+    result, _ = parse_codex_events(
+        [
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "child-turn", "status": "completed"}},
+            },
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "root-turn", "status": "completed"}},
+            },
+        ],
+        redact_json_rpc=_identity,
+        redact_text=lambda value: value,
+        session_id="thread-1",
+        root_turn_id="root-turn",
+    )
+
+    assert result.terminal_result_count == 1
+    assert result.terminal_result_subtype == "success"
+    assert result.terminal_result_is_error is False
 
 
 def test_parse_codex_events_marks_unanswered_mcp_call_as_wedged() -> None:

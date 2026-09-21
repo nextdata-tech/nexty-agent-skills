@@ -397,12 +397,10 @@ def _update_reviewer_deadline(
         if ids and deadline_at is None:
             deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         return receiver_ids, deadline_at
-    if (
-        tool == "closeAgent"
-        and event.get("type") == "item.completed"
-        and receiver_ids & ids
-    ):
-        return set(), None
+    # ``closeAgent`` only reports that the collaboration handle was closed;
+    # it does not prove that the child returned terminal claims. Keep the
+    # absolute per-turn deadline armed until the parent turn terminates. The
+    # state is recreated for every turn, so no explicit cleanup is needed.
     return receiver_ids, deadline_at
 
 
@@ -419,6 +417,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         return {"type": "thread.started", "thread_id": thread_id}
     if method == "turn/completed":
         turn = params.get("turn")
+        turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         status = turn.get("status") if isinstance(turn, Mapping) else None
         event_type = {
             "completed": "turn.completed",
@@ -426,6 +425,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         }.get(status, "turn.failed")
         return {
             "type": event_type,
+            "turn_id": turn_id,
             "is_error": status != "completed",
             "error": turn.get("error") if isinstance(turn, Mapping) else None,
         }
@@ -523,6 +523,7 @@ def parse_codex_events(
     redact_json_rpc: Any,
     redact_text: Any,
     session_id: str | None,
+    root_turn_id: str | None = None,
 ) -> tuple[TurnResult, list[dict[str, object]]]:
     """Convert one Codex JSONL turn into structured harness observations."""
 
@@ -574,6 +575,8 @@ def parse_codex_events(
                 thread_id = value
             continue
         if event_type == "turn.failed":
+            if root_turn_id is not None and event.get("turn_id") != root_turn_id:
+                continue
             terminal_count += 1
             terminal_subtype = "failed"
             terminal_is_error = True
@@ -582,11 +585,15 @@ def parse_codex_events(
             environment_details.append(detail)
             continue
         if event_type == "turn.interrupted":
+            if root_turn_id is not None and event.get("turn_id") != root_turn_id:
+                continue
             terminal_count += 1
             terminal_subtype = "interrupted"
             terminal_is_error = True
             continue
         if event_type == "turn.completed":
+            if root_turn_id is not None and event.get("turn_id") != root_turn_id:
+                continue
             terminal_count += 1
             # The shared operator contract uses Claude's terminal vocabulary:
             # a normal provider completion is a successful turn. Keeping
@@ -800,6 +807,7 @@ class CodexAdapter:
         self.supervisor_data_dir = supervisor_data_dir
         self.native_continuation = bool(native_continuation)
         self._thread_id = resume_session_id
+        self._active_turn_id: str | None = None
         self._started = False
         self._before: dict[str, bytes] = {}
         self._facts: dict[str, object] = {}
@@ -1198,6 +1206,7 @@ class CodexAdapter:
         turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         if not isinstance(turn_id, str) or not turn_id:
             raise CodexAdapterError("Codex app-server turn/start returned no turn identity")
+        self._active_turn_id = turn_id
         deadline = time.monotonic() + self.timeout_s
         reviewer_receiver_ids: set[str] = set()
         reviewer_deadline_at: float | None = None
@@ -1260,6 +1269,7 @@ class CodexAdapter:
             redact_json_rpc=self._redact_json_rpc,
             redact_text=self._redact_text,
             session_id=self._thread_id,
+            root_turn_id=self._active_turn_id,
         )
         if parsed.session_id:
             self._thread_id = parsed.session_id
@@ -1333,6 +1343,7 @@ class CodexAdapter:
                 target.write_bytes(content)
                 attachment_paths.append(target.relative_to(Path.cwd()).as_posix())
         prompt = self._prompt(text, attachment_paths)
+        self._active_turn_id = None
         process = self._process
         if process is None:
             raise CodexAdapterError("Codex app-server is not running")
