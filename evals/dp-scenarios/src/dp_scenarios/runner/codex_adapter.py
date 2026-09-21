@@ -1273,8 +1273,6 @@ class CodexAdapter:
             "--stdio",
             "--enable",
             "multi_agent",
-            "--enable",
-            "multi_agent_v2",
             "-c",
             'approval_policy="never"',
             "-c",
