@@ -15,6 +15,7 @@ from _repo_paths import REPO_ROOT
 
 from dp_scenarios.runner.codex_adapter import (
     CODEX_SYSTEM_PROMPT,
+    CODEX_FILE_CHANGE_FAILURE,
     CodexAdapter,
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
@@ -80,6 +81,9 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "supplied source export for a\nfile-backed scenario" in CODEX_SYSTEM_PROMPT
     assert "NXD_EVAL_FIXTURE_DIR" in CODEX_SYSTEM_PROMPT
     assert "file-backed scenario is not expected to have an `infra-profile.yaml`" in CODEX_SYSTEM_PROMPT
+    assert "do not invoke or simulate a shell `apply_patch` command" in CODEX_SYSTEM_PROMPT
+    assert "bare dependency, YAML, or JSON line as a patch header" in CODEX_SYSTEM_PROMPT
+    assert "stop closure authoring and report the exact" in CODEX_SYSTEM_PROMPT
 
 
 def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> None:
@@ -91,6 +95,8 @@ def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> N
     assert f"NXD_EVAL_FIXTURE_DIR={adapter.fixture_dir}" in prompt
     assert "read only the supplied input files" in prompt
     assert "do not use oracle or gold files" in prompt
+    assert "one complete Add File operation" in prompt
+    assert "raw file contents in patch metadata" in prompt
 
 
 def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> None:
@@ -366,6 +372,33 @@ def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     assert result.tool_calls[0].name == "mcp__nxd-desktop__advance_workflow"
     assert observations[0]["tool"] == "advance_workflow"
     assert observations[0]["result"] == {"admission": {"run_id": "run-1"}}
+
+
+def test_parse_codex_events_surfaces_failed_file_change_without_raw_error() -> None:
+    result, observations = parse_codex_events(
+        [
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "file_change",
+                    "status": "failed",
+                    "error": "raw patch content must not become a diagnostic",
+                },
+            },
+            {"type": "turn.completed", "turn_id": "root-turn", "is_error": False},
+        ],
+        redact_json_rpc=_identity,
+        redact_text=_identity,
+        session_id="session-1",
+        root_turn_id="root-turn",
+    )
+
+    assert observations == []
+    assert result.environment_wedged is True
+    assert result.environment_detail == CODEX_FILE_CHANGE_FAILURE
+    assert CODEX_FILE_CHANGE_FAILURE in result.transcript_delta
+    assert "raw patch content" not in result.environment_detail
+    assert result.tool_calls[0].result == {"status": "failed", "is_error": True}
 
 
 def test_parse_codex_events_counts_only_root_turn_completion() -> None:

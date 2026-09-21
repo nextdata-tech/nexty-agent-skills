@@ -57,6 +57,12 @@ class CodexAdapterError(RuntimeError):
         self.reason = reason
 
 
+CODEX_FILE_CHANGE_FAILURE = "codex_file_change_failed"
+_FILE_CHANGE_FAILURE_STATUSES = frozenset(
+    {"failed", "error", "rejected", "cancelled", "canceled"}
+)
+
+
 CODEX_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
 
 Work only in the current workspace. Read scenario-evidence-contract.json,
@@ -82,9 +88,16 @@ reading the exact fixture path, or reading the supplied skill files only, and
 must never print credential values or environment-file contents. If a shell command is
 rejected, do not retry the same command shape; return to the declared MCP and
 skill flow or report the blocker.
-Complete closure authoring in this parent turn. Prefer the file-edit/apply-patch
-tool for text changes and keep Bash to simple workspace-relative inspection or
-setup commands; do not use destructive commands such as `rm`/`rm -f`, shell
+Complete closure authoring in this parent turn. Use the native file-change tool
+for text changes and keep Bash to simple workspace-relative inspection or
+setup commands; do not invoke or simulate a shell `apply_patch` command. For a
+new text file, submit one complete Add File operation with every content line
+encoded as an added line; for an existing file, use a valid Update File
+operation with an `@@` hunk and explicit context/add/remove prefixes. Never
+submit a bare dependency, YAML, or JSON line as a patch header. If the native
+file-change tool rejects an edit, stop closure authoring and report the exact
+blocker instead of retrying malformed patch syntax; do not use destructive
+commands such as `rm`/`rm -f`, shell
 command chains, pipelines, redirects, or a custom working directory. If a
 command cannot start or is rejected, stop issuing that command shape and switch
 to the file tool or report the blocker; do not spend the turn retrying it.
@@ -549,6 +562,11 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         if item_type == "fileChange":
             normalized = dict(item)
             normalized["type"] = "file_change"
+            normalized["is_error"] = bool(
+                item.get("is_error")
+                or item.get("error")
+                or item.get("status") in _FILE_CHANGE_FAILURE_STATUSES
+            )
             return {"type": method.replace("/", "."), "item": normalized}
         if item_type in {"collabAgentToolCall", "collab_tool_call"}:
             normalized = dict(item)
@@ -730,8 +748,25 @@ def parse_codex_events(
             transcript.append("[tool_result] " + redact_text(str(result)[:1500]))
             continue
         if item_type in {"file_change", "patch", "apply_patch"} and event_type == "item.completed":
-            calls.append(ToolCall("codex_file_change", redact_json_rpc(dict(item)), None))
-            transcript.append("[tool_use:file_change] " + redact_text(json.dumps(dict(item), default=str)[:600]))
+            is_error = bool(
+                item.get("is_error")
+                or item.get("error")
+                or item.get("status") in _FILE_CHANGE_FAILURE_STATUSES
+            )
+            result = {
+                "status": item.get("status"),
+                "is_error": is_error,
+            }
+            calls.append(
+                ToolCall("codex_file_change", redact_json_rpc(dict(item)), result)
+            )
+            transcript.append(
+                "[tool_use:file_change] "
+                + redact_text(json.dumps(dict(item), default=str)[:600])
+            )
+            if is_error:
+                environment_details.append(CODEX_FILE_CHANGE_FAILURE)
+                transcript.append("[tool_result:file_change] " + CODEX_FILE_CHANGE_FAILURE)
             continue
         if item_type == "collab_agent_tool_call":
             tool = item.get("tool")
@@ -1389,6 +1424,13 @@ class CodexAdapter:
         )
         if attachment_paths:
             text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
+        text += (
+            "\n\nNative file-change reminder: use one complete Add File operation for "
+            "each new text file, or a correctly structured Update File hunk for "
+            "an existing file. Never place raw file contents in patch metadata "
+            "or use a bare content line as a hunk header. If an edit is rejected, "
+            "report the blocker rather than retrying malformed patch syntax."
+        )
         return text
 
     def _terminate(self, process: subprocess.Popen[bytes]) -> None:
