@@ -75,14 +75,16 @@ setup commands; do not use destructive commands such as `rm`/`rm -f`, shell
 command chains, pipelines, redirects, or a custom working directory. If a
 command cannot start or is rejected, stop issuing that command shape and switch
 to the file tool or report the blocker; do not spend the turn retrying it.
-Collaboration is a single-use channel in this harness. Do not use `spawnAgent` for closure authoring,
-source exploration, shell helpers,
-validation debugging, or any other work before capture. After capture returns
-its matching `report_requirement` review action, use exactly one
-provider-native collaboration child for that retained-capture review; wait for
-and close that child before reporting. Do not launch background helpers or a
-second child after a review finding or reset: the parent must repair the
-closure itself and recapture.
+Collaboration is bounded per retained capture in this harness. Do not use `spawnAgent` for closure authoring,
+source exploration, shell helpers, validation debugging, or any other work before capture. After a successful
+capture returns its matching `report_requirement` review action, use exactly
+one provider-native collaboration child for that retained-capture review;
+wait for and close that child before reporting. Do not launch background
+helpers or a second child while the same captured review binding is current.
+If a required repair or reset produces a new successful capture and a new
+`review_input` binding, that new capture authorizes exactly one fresh reviewer;
+the per-capture limit resets, but the parent must still repair the closure
+itself and recapture rather than using another child for the old capture.
 Respond directly to each operator turn and continue the workflow until the
 operator's next message arrives.
 
