@@ -1451,6 +1451,7 @@ class CodexAdapter:
         environment_detail: str | None = None,
         turn_timed_out: bool = False,
         failure_reason: str | None = None,
+        lightweight: bool = False,
     ) -> TurnResult:
         parsed, observations = parse_codex_events(
             events,
@@ -1463,26 +1464,28 @@ class CodexAdapter:
             self._thread_id = parsed.session_id
         if parsed.last_mcp_call:
             self._last_mcp_call = parsed.last_mcp_call
-        after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
-        changed = _changed_files(self._before, after)
-        self._before = after
-        _update_machine_artifacts(
-            observations,
-            artifact_dir=self.artifact_dir,
-            facts=self._facts,
-            build_context=self._build_context,
-            lifecycles=self._lifecycles,
-            built_runs=self._built_runs,
-            query_history=self._query_history,
-        )
-        workflow = self._build_context.get("workflow")
-        _update_from_state_dir(
-            self.supervisor_data_dir,
-            facts=self._facts,
-            built_runs=self._built_runs,
-            workflow=workflow if isinstance(workflow, str) and workflow else None,
-        )
-        _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
+        changed: tuple[TouchedFile, ...] = ()
+        if not lightweight:
+            after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
+            changed = _changed_files(self._before, after)
+            self._before = after
+            _update_machine_artifacts(
+                observations,
+                artifact_dir=self.artifact_dir,
+                facts=self._facts,
+                build_context=self._build_context,
+                lifecycles=self._lifecycles,
+                built_runs=self._built_runs,
+                query_history=self._query_history,
+            )
+            workflow = self._build_context.get("workflow")
+            _update_from_state_dir(
+                self.supervisor_data_dir,
+                facts=self._facts,
+                built_runs=self._built_runs,
+                workflow=workflow if isinstance(workflow, str) and workflow else None,
+            )
+            _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
         details = [value for value in (parsed.environment_detail, environment_detail) if value]
         safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
         return TurnResult(
@@ -1574,6 +1577,7 @@ class CodexAdapter:
                 ),
                 turn_timed_out=True,
                 failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_NO_TERMINAL_RESULT,
+                lightweight=True,
             )
         except (CodexAdapterError, OSError, ValueError) as exc:
             detail = "\n".join(self._stderr_tail)[-2000:]

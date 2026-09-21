@@ -979,6 +979,20 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         supervisor_data_dir=tmp_path,
     )
 
+    import dp_scenarios.runner.codex_adapter as codex_adapter_module
+
+    original_snapshot = codex_adapter_module._snapshot_workspace
+    snapshot_calls = 0
+
+    def snapshot_once(*args, **kwargs):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls > 1:
+            raise AssertionError("timeout finalization performed an unbounded workspace scan")
+        return original_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(codex_adapter_module, "_snapshot_workspace", snapshot_once)
+
     result = adapter.send({"message": {"text": "one", "attachments": []}})
     adapter.close()
 
