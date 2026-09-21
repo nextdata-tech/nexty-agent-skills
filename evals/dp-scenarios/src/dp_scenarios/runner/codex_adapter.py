@@ -371,7 +371,7 @@ def _update_reviewer_deadline(
     *,
     now: float,
 ) -> tuple[set[str], float | None]:
-    """Arm the bounded reviewer clock and clear it after ``closeAgent``."""
+    """Arm the bounded reviewer clock for the current parent turn."""
 
     if event.get("type") not in {"item.started", "item.completed"}:
         return receiver_ids, deadline_at
@@ -397,12 +397,10 @@ def _update_reviewer_deadline(
         if ids and deadline_at is None:
             deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         return receiver_ids, deadline_at
-    if (
-        tool == "closeAgent"
-        and event.get("type") == "item.completed"
-        and receiver_ids & ids
-    ):
-        return set(), None
+    # ``closeAgent`` only reports that the collaboration handle was closed;
+    # it does not prove that the child returned terminal claims. Keep the
+    # absolute per-turn deadline armed until the parent turn terminates. The
+    # state is recreated for every turn, so no explicit cleanup is needed.
     return receiver_ids, deadline_at
 
 
@@ -1216,7 +1214,18 @@ class CodexAdapter:
             read_deadline = deadline
             if reviewer_deadline_at is not None:
                 read_deadline = min(read_deadline, reviewer_deadline_at)
-            event = self._read_streams(read_deadline)
+            try:
+                event = self._read_streams(read_deadline)
+            except TimeoutError as exc:
+                if (
+                    reviewer_deadline_at is not None
+                    and time.monotonic() >= reviewer_deadline_at
+                ):
+                    raise TimeoutError(
+                        "Codex reviewer child did not complete before the "
+                        f"{REVIEW_DEADLINE_MS / 1000:.1f}-second reviewer deadline"
+                    ) from exc
+                raise
             if self._is_server_request(event):
                 self._reject_server_request(event)
                 continue

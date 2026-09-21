@@ -122,7 +122,7 @@ def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> 
     assert completed_deadline == deadline
 
 
-def test_codex_reviewer_deadline_is_cleared_by_close() -> None:
+def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> None:
     receiver_ids = {"child-1"}
     deadline = 10.0 + REVIEW_DEADLINE_MS / 1000.0
     close = {
@@ -133,9 +133,47 @@ def test_codex_reviewer_deadline_is_cleared_by_close() -> None:
             "receiverThreadId": "child-1",
         },
     }
-    assert _update_reviewer_deadline(
-        close, receiver_ids, deadline, now=20.0
-    ) == (set(), None)
+    assert _update_reviewer_deadline(close, receiver_ids, deadline, now=20.0) == (
+        receiver_ids,
+        deadline,
+    )
+
+
+def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.timeout_s = 1000.0
+    adapter._read_until_response = lambda *_args, **_kwargs: (
+        {"result": {"turn": {"id": "root-turn"}}},
+        [],
+    )
+    adapter._is_server_request = lambda _event: False
+
+    spawn_started = {
+        "method": "item/started",
+        "params": {
+            "item": {
+                "type": "collabAgentToolCall",
+                "tool": "spawnAgent",
+                "receiverThreadIds": ["child-1"],
+            }
+        },
+    }
+    reads = iter((spawn_started, TimeoutError("stream deadline")))
+
+    def read_streams(_deadline):
+        value = next(reads)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    adapter._read_streams = read_streams
+    clock = iter((0.0, 0.0, 0.0, REVIEW_DEADLINE_MS / 1000.0 + 1.0))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(TimeoutError, match="reviewer deadline"):
+        adapter._collect_turn(1, "", [])
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
