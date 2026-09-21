@@ -455,6 +455,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
     parser.add_argument("--codex", type=Path, help="Codex executable (default: codex on PATH)")
     parser.add_argument(
+        "--codex-multi-agent-v2",
+        action="store_true",
+        help="enable Codex's experimental multi-agent-v2 backend",
+    )
+    parser.add_argument(
         "--codex-home",
         type=Path,
         help=(
@@ -561,6 +566,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--native-continuation is not yet supported by the Codex backend; "
             "Codex app-server continuity is kept within one live runner process"
         )
+    if args.codex_multi_agent_v2 and args.agent_backend != "codex":
+        raise TierError("--codex-multi-agent-v2 requires --agent-backend codex")
     agent_model = args.model or ("sonnet" if args.agent_backend == "claude" else "gpt-5.6-luna")
     repo_root = REPO_ROOT
     skill_pack_root = _validated_skill_pack_root(args.skill_pack_root)
@@ -665,6 +672,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "desktop-supervisor": str(supervisor),
             "desktop-python": str(desktop_python),
             "timeout": str(_adapter_timeout(args.turn_timeout)),
+            "multi-agent-v2": "" if args.codex_multi_agent_v2 else None,
             "review-timeout": f"{review_timeout_seconds:.15g}",
         }
     if args.native_continuation:

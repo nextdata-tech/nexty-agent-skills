@@ -658,6 +658,26 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
     assert "mcp_servers.nxd-desktop.required=true" in app_command
     assert "mcp_servers.nxd-desktop.startup_timeout_sec=30" in app_command
 
+    v2_adapter = CodexAdapter(
+        codex=Path("/bin/true"),
+        model="gpt-5.6-sol",
+        effort="ultra",
+        skill_pack_root=REPO_ROOT,
+        repo_root=REPO_ROOT,
+        fixture_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts-v2",
+        desktop_supervisor=Path("/bin/true"),
+        desktop_python=Path("/bin/true"),
+        timeout_s=5,
+        append_system_prompt="test",
+        mcp_config=config_path,
+        strict_mcp_config=True,
+        supervisor_data_dir=tmp_path,
+        multi_agent_v2=True,
+    )
+    v2_command = v2_adapter._app_server_command()
+    assert v2_command[3:7] == ["--enable", "multi_agent_v2", "--enable", "multi_agent"]
+
 
 def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
     tmp_path: Path, monkeypatch

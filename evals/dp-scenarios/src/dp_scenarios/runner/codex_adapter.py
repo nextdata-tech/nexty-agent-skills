@@ -888,6 +888,7 @@ class CodexAdapter:
         strict_mcp_config: bool = False,
         allowed_tools: str | None = None,
         supervisor_data_dir: Path | None = None,
+        multi_agent_v2: bool = False,
         review_timeout_seconds: float | None = None,
         native_continuation: bool = False,
         resume_session_id: str | None = None,
@@ -907,6 +908,7 @@ class CodexAdapter:
         self.strict_mcp_config = strict_mcp_config
         self.allowed_tools = allowed_tools
         self.supervisor_data_dir = supervisor_data_dir
+        self.multi_agent_v2 = bool(multi_agent_v2)
         self.review_timeout_seconds = validate_review_timeout_seconds(
             REVIEW_DEADLINE_MS / 1000.0
             if review_timeout_seconds is None
@@ -1035,6 +1037,8 @@ class CodexAdapter:
             "-c",
             f"model_reasoning_effort={_toml_string(self.effort)}",
         ]
+        if self.multi_agent_v2:
+            command[3:3] = ["--enable", "multi_agent_v2"]
         command.extend(
             (
                 "-c",
@@ -1584,6 +1588,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mcp-config", type=Path, required=True)
     parser.add_argument("--strict-mcp-config", action="store_true")
     parser.add_argument("--supervisor-data-dir", type=Path, required=True)
+    parser.add_argument(
+        "--multi-agent-v2",
+        action="store_true",
+        help="enable Codex's experimental multi-agent-v2 collaboration backend",
+    )
     parser.add_argument("--allowedTools")
     parser.add_argument("--native-continuation", action="store_true")
     parser.add_argument("--resume-session-id")
@@ -1609,6 +1618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         strict_mcp_config=args.strict_mcp_config,
         allowed_tools=args.allowedTools,
         supervisor_data_dir=args.supervisor_data_dir.expanduser().resolve(),
+        multi_agent_v2=args.multi_agent_v2,
         review_timeout_seconds=args.review_timeout,
         native_continuation=args.native_continuation,
         resume_session_id=args.resume_session_id,
