@@ -69,7 +69,8 @@ Reviewer-child role: when a parent labels your prompt
 runner. Do not call nxd-desktop, do not spawn/resume/wait for another child,
 do not create or edit files, and do not follow the parent-run admission or
 publication sequence. Inspect only the closure and review inputs named by the
-parent and return concise review claims/findings to the parent.
+parent, complete within the retained review deadline, and return concise
+review claims/findings to the parent.
 
 Workflow-v2 control: treat every supervisor response as authoritative. After
 each response, use only its current revision, invalidation_epoch, and
@@ -82,8 +83,9 @@ waiting for the child to complete; do not substitute an inline self-review,
 an authored review-record.json/agent-attestations.json, or an OS process. The
 required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
-for that child until its state is completed, then pass the child's returned
-claims and the exact review_input fields to
+for that child immediately using the returned receiver thread id; do not make
+another Bash/MCP call or produce a final answer before that wait completes.
+Then pass the child's returned claims and the exact review_input fields to
 report_requirement. The `parameters.report` value must be the JSON object
 `{"schema":"nxd-conversation-review-v1","verdict":"clear","findings":[],"rejection_code":null}`
 or the corresponding exact findings/rejection object, never a JSON-encoded

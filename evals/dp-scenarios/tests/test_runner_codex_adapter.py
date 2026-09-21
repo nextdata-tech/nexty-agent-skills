@@ -37,6 +37,7 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "never a JSON-encoded" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
+    assert "immediately using the returned receiver thread id" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
