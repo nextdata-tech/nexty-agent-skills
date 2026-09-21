@@ -69,6 +69,15 @@ closure authoring or reading the supplied skill files only, and must never
 print credential values or environment-file contents. If a shell command is
 rejected, do not retry the same command shape; return to the declared MCP and
 skill flow or report the blocker.
+Complete closure authoring in this parent turn. Prefer the file-edit/apply-patch
+tool for text changes and keep Bash to simple workspace-relative inspection or
+setup commands; do not use destructive commands such as `rm`/`rm -f`, shell
+command chains, pipelines, redirects, or a custom working directory. If a
+command cannot start or is rejected, stop issuing that command shape and switch
+to the file tool or report the blocker; do not spend the turn retrying it.
+Use the provider-native collaboration child only once, for the retained-capture
+review. Do not use `spawnAgent` for closure authoring, source exploration, or
+shell helpers, and do not launch background helpers.
 Respond directly to each operator turn and continue the workflow until the
 operator's next message arrives.
 
