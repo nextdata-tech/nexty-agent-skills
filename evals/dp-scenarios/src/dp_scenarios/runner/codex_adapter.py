@@ -383,9 +383,19 @@ def _update_reviewer_deadline(
         return receiver_ids, deadline_at
     tool = item.get("tool")
     ids = _collab_receiver_ids(item)
-    if tool == "spawnAgent" and event.get("type") == "item.completed" and ids:
+    if tool == "spawnAgent" and event.get("type") == "item.started":
+        # App-server runs can report the spawn as started before they know the
+        # receiver thread id. Arm the absolute deadline at that point, then
+        # merge any ids that arrive with the later completion event without
+        # extending the deadline.
+        receiver_ids |= ids
         if deadline_at is None:
-            return ids, now + REVIEW_DEADLINE_MS / 1000.0
+            deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
+        return receiver_ids, deadline_at
+    if tool == "spawnAgent" and event.get("type") == "item.completed":
+        receiver_ids |= ids
+        if ids and deadline_at is None:
+            deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         return receiver_ids, deadline_at
     if (
         tool == "closeAgent"

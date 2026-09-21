@@ -77,9 +77,9 @@ def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> 
     } <= _COLLAB_FAILURE_STATUSES
 
 
-def test_codex_reviewer_deadline_is_armed_and_cleared_by_close() -> None:
+def test_codex_reviewer_deadline_is_armed_on_spawn_start_with_receiver_id() -> None:
     spawn = {
-        "type": "item.completed",
+        "type": "item.started",
         "item": {
             "type": "collab_agent_tool_call",
             "tool": "spawnAgent",
@@ -92,6 +92,39 @@ def test_codex_reviewer_deadline_is_armed_and_cleared_by_close() -> None:
     assert receiver_ids == {"child-1"}
     assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
 
+
+def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> None:
+    started = {
+        "type": "item.started",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+        },
+    }
+    receiver_ids, deadline = _update_reviewer_deadline(
+        started, set(), None, now=10.0
+    )
+    assert receiver_ids == set()
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
+
+    completed = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "receiverThreadIds": ["child-1"],
+        },
+    }
+    receiver_ids, completed_deadline = _update_reviewer_deadline(
+        completed, receiver_ids, deadline, now=20.0
+    )
+    assert receiver_ids == {"child-1"}
+    assert completed_deadline == deadline
+
+
+def test_codex_reviewer_deadline_is_cleared_by_close() -> None:
+    receiver_ids = {"child-1"}
+    deadline = 10.0 + REVIEW_DEADLINE_MS / 1000.0
     close = {
         "type": "item.completed",
         "item": {
