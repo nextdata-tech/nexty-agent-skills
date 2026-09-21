@@ -70,6 +70,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "reviewer child\nmay use only its allowed read-only inspection tools" in CODEX_SYSTEM_PROMPT
     assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
     assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
+    assert "prefix every changed line" in CODEX_SYSTEM_PROMPT
+    assert "`+`" in CODEX_SYSTEM_PROMPT and "`-`" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT

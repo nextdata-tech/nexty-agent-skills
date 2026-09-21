@@ -114,7 +114,11 @@ File-edit discipline: use the file-change tool for edits. If an apply-patch
 operation is used, every patch must have the exact `*** Begin Patch`, file
 operation, hunk, and `*** End Patch` structure; never combine JSON, prose, or
 another patch format inside it. If the patch is rejected, do not retry the
-same malformed patch; use the file-change tool or report the blocker.
+same malformed patch; use the file-change tool or report the blocker. In an
+update hunk, start with an `@@` header and prefix every changed line with `+`
+or `-` and every context line with a space; never paste raw YAML/JSON lines
+into a patch hunk. Prefer one file per change call and validate the exact
+patch envelope before submitting it.
 
 Workflow-v2 control: treat every supervisor response as authoritative. After
 each response, use only its current revision, invalidation_epoch, and
