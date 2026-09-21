@@ -260,6 +260,10 @@ per set of metrics over that table:
 - `semantic_model("<name>")` — the bare lowercase physical table name.
 - `.schema({...})` maps each column to `field(<type>(), <role>())`. A column with no role
   produces no metric, dimension or join and is absent from `describe_models` — unqueryable.
+- **Declare only physical output models in `models.py`.** Every `semantic_model(...)` must be a required `.promise(...)` or optional `.model(...)` in `spec.py` and
+  `PHYSICAL_MODELS`; never add a source-only/staging-only model just to document
+  rows the transform reads but does not land — keep those rows as transform data, or
+  land and promise the model explicitly.
 - **Base models carry ONLY `primary_key()`, `dimension(...)`, or `join(...)`** — a metric there RAISES.
   Roles COMPOSE, and a bare `primary_key()` is **not groupable**: pair every key with a `dimension(...)`.
 - A metric belongs on `semantic_view("<base>_metrics", <base>)` with
@@ -270,18 +274,14 @@ per set of metrics over that table:
   (or count a non-null key) in a semantic view and register it with
   `data_product_output().model(view)`. This supports `describe_models` and
   grouped aggregate queries without record-level rows or placeholder data.
+- **Every query-facing promised model needs a semantic view.** Define the view
+  over that model and register it with `.model(...)` in `data_product_output()`;
+  a physical table without one may build but cannot be selected by
+  `run_semantic_query`.
 
 Role builders: `field(number(), primary_key(), dimension(name=..., description="..."))` — key roles compose with a dimension, and `grain` is deprecated; `field(string(), dimension(name=..., pii=<flag>, description="..."))`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`. Put semantic descriptions on the `dimension(...)` or `metric(...)` role, not only on the enclosing `field(...)` / `metric_field(...)` wrapper: wrapper-only text is not reachable by the semantic catalog checker. **Timestamp types are parameterized:** import `DurationUnit` from `nxd.core.yaml_schemas` and use `timestamp(unit=DurationUnit.Milliseconds)` (or the source's required precision); never emit bare `timestamp()`, which raises `TypeError` during supervisor spec compilation. See [reference/nxd-spec-api.md](reference/nxd-spec-api.md) for the full type surface.
 
-**Every field takes a role, except a measure a metric aggregates.** A field carrying a dimension or metric needs a `description=` on that semantic role; `primary_key()`/`join()` take none. Every `semantic_model` needs `.description(...)`, and a `join(...)` needs a
-`dimension(...)` on the same field. A model a Question or Output reads needs a
-view with a metric — a bare `COUNT` will do — because `run_semantic_query`
-requires a measure. Otherwise it is unqueryable (`struct.model_not_queryable`);
-the same silent failure applies to `struct.key_not_groupable`. `describe_models`
-is all a later consumer sees, so a bare column is invisible and a bare name
-unusable. Put descriptions directly on `dimension(...)`/`metric(...)` — a wrapper-only `field()`/`metric_field()` description is not reachable and yields
-`struct.description_unreachable`. A dimension a **ruling** created must state
-that ruling.
+**Every field takes a role, except a measure a metric aggregates.** A field carrying a dimension or metric needs a `description=` on that semantic role; `primary_key()`/`join()` take none. Every `semantic_model` needs `.description(...)`, and a `join(...)` needs a `dimension(...)` on the same field. The semantic view must carry a metric — a bare `COUNT` will do — or the model is unqueryable (`struct.model_not_queryable`); a bare key is likewise not groupable. `describe_models` is all a later consumer sees, so a bare column is invisible and a bare name unusable. Put descriptions directly on `dimension(...)`/`metric(...)` — a wrapper-only `field()`/`metric_field()` description is not reachable and yields `struct.description_unreachable`. A dimension a **ruling** created must state that ruling.
 Metrics stay question-driven: a numeric no question aggregates is a `number`
 dimension. No marker model: produce-verification is `.transform-complete`.
 `reference/models-example.md` shows the shape.
