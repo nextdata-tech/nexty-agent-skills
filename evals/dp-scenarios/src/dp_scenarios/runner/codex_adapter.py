@@ -109,6 +109,8 @@ required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id; do not make
 another Bash/MCP call or produce a final answer before that wait completes.
+Do not call `sendInput` or `resumeAgent` for this one-shot reviewer: its spawn
+prompt is final, and the only follow-up operations are `wait` and `closeAgent`.
 After the wait returns terminal claims, close that same child with
 `closeAgent` using its receiver thread id before reporting; completed child
 threads remain allocated to the app-server until explicitly closed. Then pass
