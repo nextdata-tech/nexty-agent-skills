@@ -1985,6 +1985,8 @@ def test_distinct_stop_conditions_remain_distinct(
     run = result.scenario_runs[0]
     assert run.stop_condition == expected_stop
     assert run.score.state is expected_state
+    if name == "exhausted":
+        assert run.qualification.reasons[0] == "script_exhausted"
     reported = machine_report(result)["scenarios"][0]["runs"][0]
     assert reported["terminal_state"] == expected_stop
     assert reported["score"]["state"] == expected_state.value

@@ -122,7 +122,7 @@ def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> 
     assert completed_deadline == deadline
 
 
-def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> None:
+def test_codex_reviewer_deadline_is_cleared_by_close() -> None:
     receiver_ids = {"child-1"}
     deadline = 10.0 + REVIEW_DEADLINE_MS / 1000.0
     close = {
@@ -133,11 +133,9 @@ def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> Non
             "receiverThreadId": "child-1",
         },
     }
-    updated_ids, updated_deadline = _update_reviewer_deadline(
+    assert _update_reviewer_deadline(
         close, receiver_ids, deadline, now=20.0
-    )
-    assert updated_ids == {"child-1"}
-    assert updated_deadline == deadline
+    ) == (set(), None)
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:

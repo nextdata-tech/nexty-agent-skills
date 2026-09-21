@@ -82,6 +82,7 @@ def qualify_run(
     validation_mode: str = "live",
     operator_mode: str | None = None,
     truncated: bool = False,
+    truncation_reason: str | None = None,
 ) -> QualificationRecord:
     """Map score and replay evidence to a deliberately conservative status.
 
@@ -91,6 +92,10 @@ def qualify_run(
     the cap's two historical values so a driver run is not mislabelled
     ``generated_surface`` in ``qualification.json`` while
     ``operator-observations.json`` records ``driver``.
+
+    ``truncation_reason`` distinguishes an exhausted operator script from a
+    turn that actually hit its deadline.  ``truncated=True`` remains the
+    compatibility shorthand for the latter.
     """
 
     operator_mode = "driver" if driver else (operator_mode or ("generated_surface" if generated_operator else "scripted"))
@@ -101,10 +106,11 @@ def qualify_run(
             operator_mode,
             _with_waived_reasons(score, ("run_invalid",)),
         )
+    incomplete_reason = truncation_reason or ("turn_timeout_truncated" if truncated else None)
     if score.state is TerminalState.UNGRADED:
         reasons = _ungraded_reasons(score)
-        if truncated:
-            reasons = ("turn_timeout_truncated",) + reasons
+        if incomplete_reason is not None:
+            reasons = (incomplete_reason,) + reasons
         return QualificationRecord(
             QualificationDisposition.OBSERVED,
             replay_status,
@@ -113,8 +119,8 @@ def qualify_run(
         )
     if score.state is not TerminalState.PASSED:
         reasons = (f"score_state:{score.state.value}",)
-        if truncated:
-            reasons = ("turn_timeout_truncated",) + reasons
+        if incomplete_reason is not None:
+            reasons = (incomplete_reason,) + reasons
         return QualificationRecord(
             QualificationDisposition.REJECTED,
             replay_status,
@@ -131,15 +137,15 @@ def qualify_run(
             operator_mode,
             _with_waived_reasons(score, reasons),
         )
-    if truncated:
-        # A turn that ran out of time normally leaves later plants unfired, so
-        # the run's placement in the tier was never actually reached.  Cap it
-        # at OBSERVED however clean the rest of the evidence looks.
+    if incomplete_reason is not None:
+        # An incomplete terminal normally leaves later plants unfired, so the
+        # run's placement in the tier was never actually reached. Cap it at
+        # OBSERVED however clean the rest of the evidence looks.
         return QualificationRecord(
             QualificationDisposition.OBSERVED,
             replay_status,
             operator_mode,
-            _with_waived_reasons(score, ("turn_timeout_truncated",)),
+            _with_waived_reasons(score, (incomplete_reason,)),
         )
     if driver:
         # A model authored the operator's words.  Nothing downstream of that

@@ -397,10 +397,12 @@ def _update_reviewer_deadline(
         if ids and deadline_at is None:
             deadline_at = now + REVIEW_DEADLINE_MS / 1000.0
         return receiver_ids, deadline_at
-    # ``closeAgent`` only reports that the collaboration handle was closed;
-    # it does not prove that the child returned terminal claims. Keep the
-    # absolute per-turn deadline armed until the parent turn terminates. The
-    # state is recreated for every turn, so no explicit cleanup is needed.
+    if (
+        tool == "closeAgent"
+        and event.get("type") == "item.completed"
+        and receiver_ids & ids
+    ):
+        return set(), None
     return receiver_ids, deadline_at
 
 
