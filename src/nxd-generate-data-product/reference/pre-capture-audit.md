@@ -24,6 +24,12 @@ subject-bound `session_decision`, the trusted materializer projects it to
   before yielding any resource or avoid landing the relation. Do not try to
   enforce that requirement by toggling `.promise()` / `.model()` or removing a
   semantic role.
+- Treat every generated description as approved content, not free-form
+  documentation: model, field, metric, and custom-contract descriptions must
+  be copied from the relevant approved blueprint section. A useful paraphrase
+  is still an unapproved closure value and can fail the supervisor's
+  `struct.description_unreachable` check; amend and re-approve the blueprint if
+  the wording itself needs to change.
 - Compare the closure README with the actual mechanism: describe explicit
   Outputs, physical support relations, the DuckDB surface, and privacy limits
   as they are implemented. Do not preserve a claim that the code cannot enforce.

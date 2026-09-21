@@ -148,7 +148,7 @@ The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved ab
   description, and which questions the semantic layer must answer.
 - The inferred model gives each base model's primary key, dimensions, joins,
   PII flags, metrics, and column types. Base roles and metric views are
-  different authored objects — see Step 2. `pii=True` and a roleless field control semantic discovery; they do not mask a column in the physical DuckDB table or direct SQL. When an approved output promises that raw PII is never exposed, project every sensitive column out before any dlt resource is yielded or any pipeline write occurs. The transform may use those source values in memory for approved derived flags, but no supported physical output may retain them.
+  different authored objects — see Step 2. `pii=True` and a roleless field control semantic discovery; they do not mask a column in the physical DuckDB table or direct SQL. When an approved output promises that raw PII is never exposed, project every sensitive column out before any dlt resource is yielded or any pipeline write occurs. The transform may use those source values in memory for approved derived flags, but no supported physical output may retain them. Every non-empty model, field, metric, and contract description must be copied from the relevant approved blueprint section; do not invent a paraphrase that is unreachable from the approved plan. If new wording is needed, amend and re-approve the blueprint before capture.
 - Each connector config names a **connector type** (CSV / other local file /
   database / REST API) plus its location. For non-CSV types follow
   `reference/file-source.md` / `database-source.md` / `api-source.md`; for
