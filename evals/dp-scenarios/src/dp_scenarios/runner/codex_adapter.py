@@ -62,6 +62,13 @@ provided skill-pack directory before acting. Use the runner-owned nxd-desktop
 MCP server for supervisor operations; do not invent supervisor results from
 your own prose. Keep the authored closure in closure/ and do not create or
 edit artifacts/ files. Follow every conduct rule in the evidence contract.
+Do not use Bash, curl, WebFetch, or another direct HTTP/client probe to inspect
+the scenario source or its credentials; source observations must come from the
+generated connector runtime and the supervisor MCP workflow. Bash is for local
+closure authoring or reading the supplied skill files only, and must never
+print credential values or environment-file contents. If a shell command is
+rejected, do not retry the same command shape; return to the declared MCP and
+skill flow or report the blocker.
 Respond directly to each operator turn and continue the workflow until the
 operator's next message arrives.
 
