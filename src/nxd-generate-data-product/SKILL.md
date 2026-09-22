@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.51.6
+  version: 0.52.0
 ---
 
 # nxd-generate-data-product skill
@@ -35,20 +35,20 @@ vocabulary — the Workflow's **policy read-back gate** runs before any file is
 written. A closure whose scoring policy the user never saw is the one failure
 this skill treats as unrecoverable.
 
-**Connector types at a glance** — the canonical mapping; every other mention below points back here. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
-
+**Connector types at a glance** — see the [source types index](reference/source-types.md) for the canonical mapping and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 | Type | Service | `secrets[...]` key | Companion artifact |
 |---|---|---|---|
 | CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
 | Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
 | Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |
 | REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |
-
+| Google Drive files | `api-source` with `source_kind: google_drive_files` | flat Drive API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform lists and downloads selected files |
+| Google Sheets | `api-source` with `source_kind: google_sheets` | flat Sheets API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform reads selected spreadsheet ranges |
+Specialized Drive/Sheets profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape.
 The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
 It runs the transform, verifies staging, and stands up the semantic MCP endpoint.
 Return facts and a structured handoff to `nxd-run-job-loop`; internal terms may appear in implementation guidance and structured handoffs.
 The owning loop translates status, failures, costs, and publication state into plain chat and never copies raw internal output; see [user-facing language](../nxd-run-job-loop/reference/user-facing-language.md).
-
 ## The closure layout
 
 Choose and normalize one absolute `<dp-root>` — the exact directory submitted through the supervisor's returned `capture` action — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`. A declared custom contract additionally requires exactly one verifier under `contracts/expectations/` or `contracts/promises/` plus its matching `spec.py` wiring; an empty inventory has no contract placeholder. For an `api-source`, write the closure-local `connectivity_check.py` first **after** `prepare_workflow` returns its consent subject and the operator's explicit approval has been relayed through `session_decision`; it is the first post-consent closure artifact, not a pre-consent exception. Then use it for the payload-inspection gate described in [reference/api-source.md](reference/api-source.md#payload-inspection-gate--before-authoring).

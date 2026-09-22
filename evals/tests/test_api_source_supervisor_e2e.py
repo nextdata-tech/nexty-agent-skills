@@ -307,6 +307,20 @@ def test_orphans_are_excluded_so_their_disposition_stays_the_authors_call():
     assert sum(verifier.checks_per_team(stub).values()) < len(stub.CHECKS)
 
 
+def test_beacon_latency_is_an_integer_for_every_check_row():
+    """Latency is not an additional nullable-schema trap in this scenario.
+
+    The cell grades nested-result flattening and tri-state status separately;
+    keeping latency numeric ensures a generated closure reaches those checks
+    instead of failing on an ungraded fixture detail.
+    """
+    assert all(
+        isinstance(row["result"]["latency_ms"], int)
+        and not isinstance(row["result"]["latency_ms"], bool)
+        for row in stub.CHECKS
+    )
+
+
 def test_selection_search_prefers_a_count_measure_and_needs_a_team_dimension():
     selections = verifier.team_selections(
         ["avg_latency_ms", "check_count"], ["team", "monitor_name"])

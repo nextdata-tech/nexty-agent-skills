@@ -1,0 +1,36 @@
+provider: hubspot
+source_kind: rest_api
+base_url: https://api.hubapi.com
+auth:
+  type: bearer
+  token: hs_eval_token_7c2e8f1d4a9b
+  required_scopes:
+    - crm.objects.contacts.read
+operations:
+  contacts:
+    method: GET
+    path: /crm/objects/2026-03/contacts
+    response:
+      rows_path: results
+      cursor_path: paging.next.after
+      cursor_parameter: after
+      row_fields:
+        - id
+        - properties.email
+        - properties.createdate
+        - properties.lastmodifieddate
+  contact_search:
+    method: POST
+    path: /crm/objects/2026-03/contacts/search
+    intent: read
+    request:
+      properties:
+        - email
+        - firstname
+        - lastname
+      limit: 100
+      after: null
+      filterGroups: []
+    response:
+      rows_path: results
+      cursor_path: paging.next.after

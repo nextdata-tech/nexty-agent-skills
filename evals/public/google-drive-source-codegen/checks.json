@@ -1,0 +1,38 @@
+{
+  "name": "Generate a Google Drive file data-product source",
+  "skills": [
+    "nxd-generate-data-product"
+  ],
+  "deterministic_check": {
+    "script": "check_google_drive_source.py",
+    "deps": [],
+    "redaction_markers": ["gdrive_eval_token_2b8a5f0d91c4"],
+    "redaction_input_files": ["source-contract.yaml"]
+  },
+  "checks": [
+    {
+      "id": "contract-read-before-authoring",
+      "check": "The generated closure reflects the supplied pinned Google Drive file contract."
+    },
+    {
+      "id": "official-drive-client",
+      "check": "The source uses Google's official Drive client for files.list and file-content download, not a hand-written HTTP loop."
+    },
+    {
+      "id": "file-listing-contract",
+      "check": "The source follows nextPageToken, applies the configured folder/query and CSV MIME filter, and carries file lineage fields."
+    },
+    {
+      "id": "dlt-flat-resource",
+      "check": "Downloaded CSV rows are yielded through dlt as flat scalar records and landed through the standard DuckDB output path."
+    },
+    {
+      "id": "auth-boundary",
+      "check": "Bearer auth is assembled from flat secrets, the synthetic token is absent from source code, and sensitivity artifacts are present."
+    },
+    {
+      "id": "read-only-operation-selection",
+      "check": "The generated source does not upload, delete, or modify permissions."
+    }
+  ]
+}
