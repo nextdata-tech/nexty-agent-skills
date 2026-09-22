@@ -536,6 +536,8 @@ def test_review_reader_discovered_before_capture_works_after_allowlist_publish(t
             proxy.kill()
         proxy.wait()
         session.cleanup()
+
+
 def test_review_allowlist_is_cleared_after_review_report(tmp_path):
     session = ds.DesktopStdioSession(
         [sys.executable, "/tmp/fake-server.py"], root=tmp_path / "session"

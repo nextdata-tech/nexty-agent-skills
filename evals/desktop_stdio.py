@@ -319,11 +319,6 @@ def _review_reader_roots(
     return roots, None
 
 
-def _review_reader_available(allowlist_path: Path) -> bool:
-    """Whether the synthetic reader can be safely advertised right now."""
-
-    roots, error = _review_reader_roots(allowlist_path)
-    return error is None and bool(roots)
 def _review_reader_path(
     path_value: object, allowlist_path: Path
 ) -> tuple[Path, str | None]:

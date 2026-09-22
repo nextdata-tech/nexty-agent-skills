@@ -341,6 +341,8 @@ def test_reviewer_wait_without_target_is_fatal_only_with_explicit_failure() -> N
         },
     }
     assert _reviewer_wait_without_target(wait, True) is True
+
+
 def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
     adapter.timeout_s = 1000.0
