@@ -2352,6 +2352,60 @@ def test_construction_binds_each_review_to_its_own_retained_capture() -> None:
     assert result.codes == ()
 
 
+def test_construction_rejects_a_review_bound_to_an_older_capture() -> None:
+    def capture(root: str, blueprint: str) -> dict[str, object]:
+        return {
+            "name": "mcp__nxd-desktop__advance_workflow",
+            "arguments": {
+                "workflow": "workflow",
+                "action": {"type": "capture", "parameters": {}},
+            },
+            "result": {
+                "is_error": False,
+                "content": {
+                    "workflow": "workflow",
+                    "requirements": [{
+                        "id": "review",
+                        "status": "pending",
+                        "review_input": {
+                            "retained_capture_root": root,
+                            "retained_blueprint_path": blueprint,
+                        },
+                    }],
+                },
+            },
+        }
+
+    stale = _review_call(1)
+    stale["arguments"]["prompt"] = stale["arguments"]["prompt"].replace(
+        "/captured/root", "/captured/first"
+    ).replace("/captured/blueprint.md", "/captured/first-blueprint.md")
+    observations = {
+        "turns": [{
+            "turn": 1,
+            "tool_calls": [
+                capture("/captured/first", "/captured/first-blueprint.md"),
+                capture("/captured/second", "/captured/second-blueprint.md"),
+                stale,
+                _workflow_validation_call(),
+                _workflow_start_run_call(),
+            ],
+        }]
+    }
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(review_round_index=1),),
+        review_rounds={"closure": [_review_round()]},
+        published_closure=_published_build(call_index=4),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
 def test_construction_does_not_hide_an_unresolved_earlier_round_with_a_later_one() -> (
     None
 ):

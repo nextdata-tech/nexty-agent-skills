@@ -1615,6 +1615,55 @@ def _review_inputs_from_captures(
     return tuple(collected)
 
 
+def _review_input_from_capture_call(
+    call: Mapping[str, object],
+    *,
+    expected_advance: str,
+    workflow: str | None,
+) -> tuple[tuple[str, str], ...] | None:
+    """Return the review input issued by one capture in event order."""
+
+    if call.get("name") != expected_advance:
+        return None
+    arguments = call.get("arguments")
+    result = call.get("result")
+    if (
+        not isinstance(arguments, Mapping)
+        or not isinstance(result, Mapping)
+        or result.get("is_error") is not False
+        or (
+            workflow is not None
+            and _normalized_workflow(arguments.get("workflow")) != workflow
+        )
+    ):
+        return None
+    action = arguments.get("action")
+    if not isinstance(action, Mapping) or action.get("type") != "capture":
+        return None
+    content = result.get("content")
+    requirements = content.get("requirements") if isinstance(content, Mapping) else None
+    if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes, bytearray)):
+        return None
+    for requirement in requirements:
+        if (
+            not isinstance(requirement, Mapping)
+            or requirement.get("id") != "review"
+            or str(requirement.get("status", "")).casefold() != "pending"
+        ):
+            continue
+        review_input = requirement.get("review_input")
+        if not isinstance(review_input, Mapping):
+            return None
+        values: list[tuple[str, str]] = []
+        for key in ("retained_capture_root", "retained_blueprint_path"):
+            value = review_input.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append((key, value))
+        return tuple(values)
+    return None
+
+
 def _review_dispatches(
     observations: object,
     *,
@@ -1640,20 +1689,32 @@ def _review_dispatches(
     expected_reset = desktop_prefix + "reset_workflow"
     marker_found: list[ReviewDispatch] = []
     workflow_reports: list[tuple[EventPosition, str, int, str, str]] = []
+    current_review_inputs: tuple[tuple[str, str], ...] = ()
     for position, call in _positioned_calls(observations):
         name = call.get("name")
         if not isinstance(name, str):
             continue
         if name.casefold() in {"task", "agent"}:
+            scoped_review_inputs = current_review_inputs or (
+                (review_input,) if review_input is not None else ()
+            )
             dispatch = _completed_review_delegation(
                 call,
                 position,
                 review_input=review_input,
-                review_inputs=review_inputs,
+                review_inputs=scoped_review_inputs or review_inputs,
                 workflow=workflow,
             )
             if dispatch is not None:
                 marker_found.append(dispatch)
+            continue
+        capture_input = _review_input_from_capture_call(
+            call,
+            expected_advance=expected_advance,
+            workflow=workflow,
+        )
+        if capture_input is not None:
+            current_review_inputs = (capture_input,)
             continue
         # The workflow-v2 supervisor owns these events.  In particular, the
         # first report can have operation.status=failed when it records
