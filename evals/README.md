@@ -44,7 +44,7 @@ There are three ways the suite runs, and only one of them is unconditional:
 | | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 21 `ci_skip` | every runnable scenario (23 of 44; the 21 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 21 `ci_skip` | every runnable scenario (27 of 48; the 21 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. the 12 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
@@ -218,7 +218,7 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 18 of 44 public scenarios use this today
+Only 22 of 48 public scenarios use this today
 (`authenticated-api-source-build`, `coauthor-executable-policy-readback`,
 `coauthor-supplied-rubric`, `derive-models-from-questions`,
 `dp-static-artifact-lifecycle`, `desktop-custom-contracts`,
@@ -227,7 +227,9 @@ Only 18 of 44 public scenarios use this today
 `terminal-field-mapper-adapter-contract`, `terminal-self-check-provenance`,
 `incremental-transform-state`, `terminal-authenticated-dlt-api-ingestion`,
 `terminal-timeout-lifecycle`, `google-drive-source-codegen`,
-`hubspot-api-source-codegen`, `google-sheets-source-codegen`). It is the strongest signal available — prefer it
+`hubspot-api-source-codegen`, `google-sheets-source-codegen`,
+`file-source-codegen`, `postgres-source-codegen`, `salesforce-api-source-codegen`,
+`jira-api-source-codegen`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)

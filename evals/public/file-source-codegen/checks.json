@@ -1,0 +1,29 @@
+{
+  "name": "Generate a local file data-product source",
+  "skills": [
+    "nxd-generate-data-product"
+  ],
+  "deterministic_check": {
+    "script": "check_file_source.py",
+    "deps": [],
+    "redaction_input_files": ["source-contract.yaml"]
+  },
+  "checks": [
+    {
+      "id": "contract-read-before-authoring",
+      "check": "The generated closure reflects the pinned three-model file contract and keeps the source as local non-secret topology."
+    },
+    {
+      "id": "format-specific-readers",
+      "check": "JSONL uses dlt read_jsonl, Parquet uses dlt read_parquet, and plain JSON uses a custom JSON loader rather than the JSONL reader."
+    },
+    {
+      "id": "model-and-path-contract",
+      "check": "The relative file-source path, model directories, resource names, and file-source service match the supplied contract."
+    },
+    {
+      "id": "desktop-landing-boundary",
+      "check": "Rows are landed through the standard local DuckDB pipeline without a network client or live-provider claim."
+    }
+  ]
+}

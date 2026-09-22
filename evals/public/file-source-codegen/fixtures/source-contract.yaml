@@ -1,0 +1,15 @@
+source_kind: file
+source_root: data
+models:
+  events:
+    format: jsonl
+    file: events/events.jsonl
+    columns: [event_id, occurred_at, event_type]
+  refunds:
+    format: json
+    file: refunds/refunds.json
+    columns: [refund_id, order_id, amount]
+  inventory:
+    format: parquet
+    file: inventory/inventory.parquet
+    columns: [sku, warehouse, quantity]

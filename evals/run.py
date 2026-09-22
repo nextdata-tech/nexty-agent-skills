@@ -258,6 +258,10 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     # Source-codegen checkers are runner-side oracle material. The agent gets
     # the pinned source contract, but not the exact static gate it is being
     # measured against.
+    "file-source-codegen": frozenset({"check_file_source.py"}),
+    "postgres-source-codegen": frozenset({"check_postgres_source.py"}),
+    "salesforce-api-source-codegen": frozenset({"check_salesforce_api_source.py"}),
+    "jira-api-source-codegen": frozenset({"check_jira_api_source.py"}),
     "hubspot-api-source-codegen": frozenset({"check_hubspot_api_source.py"}),
     "google-drive-source-codegen": frozenset({"check_google_drive_source.py"}),
     # The optional-output desktop verifier is runner-side ground truth: it
