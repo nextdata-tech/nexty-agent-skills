@@ -64,12 +64,10 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "retry with the exact same current binding" in CODEX_SYSTEM_PROMPT
     assert "Do not edit the closure, blueprint, or review record" in CODEX_SYSTEM_PROMPT
     assert "stale subject or dependency" in CODEX_SYSTEM_PROMPT
-    assert "close that same child with" in CODEX_SYSTEM_PROMPT
-    assert "exact receiver thread id in its `target` argument" in CODEX_SYSTEM_PROMPT
+    assert "never use `sendInput`, `resumeAgent`, or `closeAgent`" in CODEX_SYSTEM_PROMPT
     assert "wait` reports the child as completed but returns no non-empty message" in CODEX_SYSTEM_PROMPT
     assert "issue `wait` once more with the same target" in CODEX_SYSTEM_PROMPT
     assert "missing child claims" in CODEX_SYSTEM_PROMPT
-    assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
     assert "end that turn with a direct question" in CODEX_SYSTEM_PROMPT
@@ -77,7 +75,10 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "end the" in CODEX_SYSTEM_PROMPT
     assert "same turn" in CODEX_SYSTEM_PROMPT
     assert "immediately using the returned receiver thread id" in CODEX_SYSTEM_PROMPT
-    assert "Do not call `sendInput` or `resumeAgent`" in CODEX_SYSTEM_PROMPT
+    assert '`wait` as\n`{"targets":["<exact non-empty receiver thread id>"]}`' in CODEX_SYSTEM_PROMPT
+    assert "use the `targets`" in CODEX_SYSTEM_PROMPT
+    assert "never an empty array" in CODEX_SYSTEM_PROMPT
+    assert "`wait` is the only follow-up" in CODEX_SYSTEM_PROMPT
     assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
     assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
     assert "same supervisor response under" in CODEX_SYSTEM_PROMPT

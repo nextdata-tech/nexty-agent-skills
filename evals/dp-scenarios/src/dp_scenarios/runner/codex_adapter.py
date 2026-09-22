@@ -128,7 +128,7 @@ Collaboration is bounded per retained capture in this harness. Do not use `spawn
 source exploration, shell helpers, validation debugging, or any other work before capture. After a successful
 capture returns its matching `report_requirement` review action, use exactly
 one provider-native collaboration child for that retained-capture review;
-wait for and close that child before reporting. Do not launch background
+wait for that child before reporting. Do not launch background
 helpers or a second child while the same captured review binding is current.
 If a required repair or reset produces a new successful capture and a new
 `review_input` binding, that new capture authorizes exactly one fresh reviewer;
@@ -169,9 +169,8 @@ report that blocker instead of repeating reset/capture.
 Collaboration tool argument discipline: for `spawnAgent`, send the complete
 review request in exactly one `message` string; do not also send `items`.
 Never send both `message` and `items` in one collaboration call. For the
-owning parent’s one-shot reviewer lifecycle, use only `spawnAgent`, `wait`,
-and `closeAgent`; pass the returned receiver thread id as `target` to
-`closeAgent`, and never use `sendInput` or `resumeAgent`. The reviewer child
+owning parent’s one-shot reviewer lifecycle, use only `spawnAgent` and `wait`;
+never use `sendInput`, `resumeAgent`, or `closeAgent`. The reviewer child
 may use only its allowed read-only inspection tools, but may not call another
 collaboration or supervisor tool. If a collaboration call is rejected, do
 not repeat the rejected argument shape; report an incomplete handoff. If
@@ -208,19 +207,19 @@ call `mcp__nxd-desktop__read_review_input`; that runner-owned reader is exposed
 only for the `CODEX_REVIEW_CHILD` handoff. The
 required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
-for that child immediately using the returned receiver thread id; do not make
+for that child immediately using the returned receiver thread id. The native
+collaboration argument shapes are strict: call `wait` as
+`{"targets":["<exact non-empty receiver thread id>"]}` (use the `targets`
+array key, never `target` or `ids`, and never an empty array). Do not make
 another Bash/MCP call or produce a final answer before that wait completes.
 If `wait` reports the child as completed but returns no non-empty message, do
 not treat that as terminal claims: issue `wait` once more with the same target.
 If the repeated wait is still empty, leave the review incomplete and report
 the missing child claims rather than closing the child or fabricating a result.
-Do not call `sendInput` or `resumeAgent` for this one-shot reviewer: its spawn
-prompt is final, and the only follow-up operations are `wait` and `closeAgent`.
-After the wait returns terminal claims, close that same child with
-`closeAgent`, passing the exact receiver thread id in its `target` argument
-(not `receiverThreadId`), before reporting; completed child
-threads remain allocated to the app-server until explicitly closed. Then pass
-the child's returned claims and the exact review_input fields to
+Do not call `sendInput`, `resumeAgent`, or `closeAgent` for this one-shot
+reviewer: its spawn prompt is final, and `wait` is the only follow-up
+operation. After the wait returns terminal claims, pass the child's returned
+claims and the exact review_input fields to
 report_requirement. Copy every field from the current review_input as a
 sibling of `report` in the action parameters: `requirement_id`, `generation`,
 `subject_sha256`, `dependency_evidence_sha256`, `session_ref`, and
