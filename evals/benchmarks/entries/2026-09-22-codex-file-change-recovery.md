@@ -24,16 +24,21 @@ thread identities resumable through the native checkpoint seam, persists a
 minimal report for an abort before grading, and records report-safe terminal
 and provider-usage diagnostics. Reviewer evidence now carries a prompt hash,
 intermediate reviewer waits remain non-fatal, and the review proxy advertises
-and serves its synthetic reader only while a validated allowlist exists. Core
-Claude runs perform a non-generative authentication preflight; provider usage
-limits remain an external condition because the local CLI exposes no quota
-endpoint.
+its synthetic reader before capture so Codex app-server catalog caching cannot
+hide the tool from the child; each call still fails closed until the exact
+allowlist is published, which is written atomically. Core Claude runs perform
+a non-generative authentication preflight; provider usage limits remain an
+external condition because the local CLI exposes no quota endpoint.
 
 The carrying B1 Codex attempt ended incomplete after a malformed native file
 change, so it is not a before/after scenario result and no scenario pass is
-claimed. The focused regression suite exercises the corrected event handling,
-terminal classification, provider continuation, durable abort reporting,
-review lock, bounded review reader, authentication preflight, and MCP proxy.
+claimed. A fresh B1 attempt exercised the catalog fix: the reviewer made 50
+successful runner-owned reads of the retained input, but the Codex app-server
+never emitted the parent turn's terminal result and the run ended
+`ungraded`/`turn_timeout`; that remains provider/runtime evidence, not a pass.
+The focused regression suite exercises the corrected event handling, terminal
+classification, provider continuation, durable abort reporting, review lock,
+bounded review reader, authentication preflight, and MCP proxy.
 
 ## Evidence
 

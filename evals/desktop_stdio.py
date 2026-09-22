@@ -174,15 +174,23 @@ _TRACE_LOCK = threading.Lock()
 def _write_private_text(path: Path, text: str) -> None:
     """Atomically create/truncate a runner-owned file with mode 0600."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
     finally:
         if fd != -1:
             os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            temporary_path.unlink()
 
 
 def redact_json_rpc(value: Any, *, key: str = "") -> Any:
@@ -411,13 +419,24 @@ def _review_reader_result(
 def _augment_tools_list(
     message: Mapping[str, Any], *, allowlist_path: Path
 ) -> dict[str, Any]:
-    """Add the reader only while a valid captured review is available."""
+    """Keep the reader in the catalog while the allowlist gates every call.
+
+    Codex app-server caches the MCP tool catalog for the parent thread, and
+    clients that do consult that catalog need the name before capture. Waiting
+    to advertise this synthetic tool until after capture therefore makes it
+    invisible to those clients: the allowlist is valid by the time the child
+    runs, but the client received the earlier catalog. Advertising the name
+    from startup fixes that discovery path; some app-server versions still do
+    not propagate MCP tools into collaboration children, so the Codex adapter
+    has a strictly read-only fallback for that boundary. The
+    ``_review_reader_result`` still fails closed until the runner publishes the
+    exact current review paths, so catalog visibility does not grant access to
+    any path.
+    """
 
     augmented = dict(message)
     result = message.get("result")
     if not isinstance(result, Mapping) or not isinstance(result.get("tools"), list):
-        return augmented
-    if not _review_reader_available(allowlist_path):
         return augmented
     result_copy = dict(result)
     tools = list(result["tools"])
