@@ -21,6 +21,12 @@ narrated back in chat or written into any committed source file.
 
 Go and look at what the endpoints actually return before you design the
 models, the same way you would for any connector you have not used before.
+After consent, create only the closure-local `connectivity_check.py`, run it
+against both configured endpoints with the supplied runtime credential, and
+read both returned payloads before writing `infra-profile.yaml`, `.gitignore`,
+`SENSITIVE`, `spec.py`, `models.py`, `transform/`, or any other closure file.
+The brief specifies bearer authentication; dispatch on `auth_type` and reject
+unsupported modes, but do not add speculative API-key or OAuth flows.
 
 This is an NXD desktop data product on the local DuckDB store. Consult the
 installed Nexty skills for the platform's connector, derivation and assertion
