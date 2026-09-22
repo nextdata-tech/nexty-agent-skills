@@ -1112,6 +1112,109 @@ def test_construction_observes_the_review_the_mandated_flow_actually_produces() 
     assert result.codes == ()
 
 
+def test_construction_accepts_claude_agent_result_with_null_error_flag() -> None:
+    """Claude marks a successful Agent result with ``is_error: null``."""
+
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"][0]["result"]["is_error"] = None
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation("one claim, rejected"),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+@pytest.mark.parametrize("is_error", ["false", 0])
+def test_construction_rejects_malformed_claude_agent_error_flag(is_error: object) -> None:
+    observations = _dispatch_observations()
+    observations["turns"][0]["tool_calls"][0]["result"]["is_error"] = is_error
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation("one claim, rejected"),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
+def test_construction_accepts_runner_owned_review_observation_after_prompt_redaction() -> None:
+    """Report-safe adapter evidence survives redaction of the Agent prompt."""
+
+    observations = _dispatch_observations()
+    helper = observations["turns"][0]["tool_calls"][0]
+    helper["arguments"]["prompt"] = "[redacted]"
+    helper["observation"] = {
+        "schema": "nxd-review-observation-v1",
+        "subagent_type": "general-purpose",
+        "inline": True,
+        "marker_valid": True,
+        "review_input_bound": True,
+        "request_contract_valid": True,
+        "review_skill_instruction": True,
+        "claims_returned": True,
+        "result_ok": True,
+        "workflow": "workflow",
+        "eligible": True,
+        "closure_path": "closure",
+        "review_round_index": 0,
+    }
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation("one claim, rejected"),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is True
+    assert result.codes == ()
+
+
+def test_construction_rejects_incomplete_runner_owned_review_observation() -> None:
+    observations = _dispatch_observations()
+    helper = observations["turns"][0]["tool_calls"][0]
+    helper["arguments"]["prompt"] = "[redacted]"
+    helper["observation"] = {
+        "schema": "nxd-review-observation-v1",
+        "subagent_type": "general-purpose",
+        "inline": True,
+        "marker_valid": True,
+        "review_input_bound": False,
+        "request_contract_valid": True,
+        "review_skill_instruction": True,
+        "claims_returned": True,
+        "result_ok": True,
+        "workflow": "workflow",
+        "eligible": False,
+        "closure_path": "closure",
+        "review_round_index": 0,
+    }
+
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=observations,
+        attestations=(_review_attestation(),),
+        review_rounds=_rounds_for(),
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert "construction_adversarial_review_not_observed" in result.codes
+
+
 def test_construction_uses_harness_chronology_not_attestation_turn() -> None:
     """A legacy or omitted turn must not override observed event order."""
 

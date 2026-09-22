@@ -48,6 +48,8 @@ from dp_scenarios.runner.review_guard import (
     validate_review_timeout_seconds,
     write_initial_state,
 )
+from dp_scenarios.runner.review_guard import _claim_text as _review_claim_text
+from dp_scenarios.runner.review_guard import _marker as _parse_review_marker
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
@@ -294,7 +296,9 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "retained-input conversation review, trusted validation, and start_run. "
     "Never fall back to check_data_product or build_data_product.",
     "When capture returns a review action, dispatch exactly one general-purpose "
-    "Agent or Task conversation child with the supervisor-provided review_input "
+    "Agent or Task conversation child: set its subagent_type argument exactly "
+    "to \"general-purpose\" (never omit it or invent a custom type), and use "
+    "the supervisor-provided review_input "
     "and this exact prompt template (replace only the angle-bracketed values):\n"
     "retained_capture_root: <exact retained_capture_root from review_input>\n"
     "retained_blueprint_path: <exact retained_blueprint_path from review_input>\n"
@@ -614,6 +618,184 @@ def _payload_from_call(call: Mapping[str, object]) -> object:
     return result.get("content")
 
 
+_SANITIZED_REQUEST_LABEL = "Sanitized original request:"
+_REVIEW_SKILL_INSTRUCTION = "Load and follow nxd-review-closure."
+
+
+def _review_input_from_mcp_call(
+    use: Mapping[str, object], paired: Mapping[str, object] | None
+) -> tuple[tuple[str, str], ...] | None:
+    """Extract one supervisor-issued review input without persisting its paths."""
+
+    if (
+        _mcp_name(use.get("name")) != "advance_workflow"
+        or paired is None
+        or paired.get("is_error") is True
+    ):
+        return None
+    arguments = use.get("input")
+    action = arguments.get("action") if isinstance(arguments, Mapping) else None
+    if not isinstance(action, Mapping) or action.get("type") != "capture":
+        return None
+    content = _payload_from_call(paired)
+    requirements = content.get("requirements") if isinstance(content, Mapping) else None
+    if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes, bytearray)):
+        return None
+    for requirement in requirements:
+        if (
+            not isinstance(requirement, Mapping)
+            or requirement.get("id") != "review"
+            or str(requirement.get("status", "")).casefold() != "pending"
+        ):
+            continue
+        review_input = requirement.get("review_input")
+        if not isinstance(review_input, Mapping):
+            return None
+        values: list[tuple[str, str]] = []
+        for key in ("retained_capture_root", "retained_blueprint_path"):
+            value = review_input.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append((key, value))
+        return tuple(values)
+    return None
+
+
+def _review_input_from_mcp_observation(
+    observation: Mapping[str, object],
+) -> tuple[tuple[str, str], ...] | None:
+    """Read one already-normalized capture observation for session state."""
+
+    if observation.get("tool") != "advance_workflow" or observation.get("is_error"):
+        return None
+    arguments = observation.get("arguments")
+    action = arguments.get("action") if isinstance(arguments, Mapping) else None
+    if not isinstance(action, Mapping) or action.get("type") != "capture":
+        return None
+    content = observation.get("result")
+    requirements = content.get("requirements") if isinstance(content, Mapping) else None
+    if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes, bytearray)):
+        return None
+    for requirement in requirements:
+        if (
+            not isinstance(requirement, Mapping)
+            or requirement.get("id") != "review"
+            or str(requirement.get("status", "")).casefold() != "pending"
+        ):
+            continue
+        review_input = requirement.get("review_input")
+        if not isinstance(review_input, Mapping):
+            return None
+        values: list[tuple[str, str]] = []
+        for key in ("retained_capture_root", "retained_blueprint_path"):
+            value = review_input.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append((key, value))
+        return tuple(values)
+    return None
+
+
+def _capture_workflow(use: Mapping[str, object]) -> str | None:
+    """Return the workflow named by a capture call, if it is well formed."""
+
+    arguments = use.get("input")
+    workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+    return workflow.strip() if isinstance(workflow, str) and workflow.strip() else None
+
+
+def _prompt_binds_review_input(
+    prompt: str, review_inputs: Sequence[tuple[tuple[str, str], ...]]
+) -> bool:
+    """Check exact supervisor paths while they are still in process memory."""
+
+    if (
+        prompt.count(_SANITIZED_REQUEST_LABEL) != 1
+        or prompt.splitlines().count(_REVIEW_SKILL_INSTRUCTION) != 1
+    ):
+        return False
+    request_lines = [
+        line for line in prompt.splitlines() if line.startswith(_SANITIZED_REQUEST_LABEL)
+    ]
+    if len(request_lines) != 1 or not request_lines[0][len(_SANITIZED_REQUEST_LABEL) :].strip():
+        return False
+    for candidate in review_inputs:
+        if all(
+            prompt.splitlines().count(f"{field}: {value}") == 1
+            for field, value in candidate
+        ):
+            return True
+    return False
+
+
+def _review_observation(
+    use: Mapping[str, object],
+    paired: Mapping[str, object] | None,
+    review_inputs: Sequence[tuple[tuple[str, str], ...]],
+    review_workflow: str | None,
+) -> Mapping[str, object] | None:
+    """Return minimal harness-owned evidence for a completed reviewer child.
+
+    Claude report redaction can remove the prompt that proves this dispatch.
+    Keep the proof as derived booleans and normalized marker identity; never
+    retain the prompt or supervisor paths in the replay artifact.
+    """
+
+    name = str(use.get("name", "")).casefold()
+    if name not in {"agent", "task"}:
+        return None
+    arguments = use.get("input")
+    prompt = arguments.get("prompt") if isinstance(arguments, Mapping) else None
+    marker = _parse_review_marker(prompt)
+    claims = _review_claim_text(_payload_from_call(paired)) if paired is not None else []
+    result_ok = (
+        paired is not None
+        and "is_error" in paired
+        and (paired.get("is_error") is False or paired.get("is_error") is None)
+    )
+    subagent_type_ok = isinstance(arguments, Mapping) and arguments.get("subagent_type") == "general-purpose"
+    inline = not (isinstance(arguments, Mapping) and arguments.get("run_in_background") is True)
+    skill_instruction = isinstance(prompt, str) and prompt.splitlines().count(_REVIEW_SKILL_INSTRUCTION) == 1
+    request_contract = isinstance(prompt, str) and prompt.count(_SANITIZED_REQUEST_LABEL) == 1
+    input_bound = isinstance(prompt, str) and _prompt_binds_review_input(prompt, review_inputs)
+    claims_returned = any(
+        item.strip() and "async agent launched" not in item.casefold()
+        for item in claims
+    )
+    if marker is None and not any(
+        (subagent_type_ok, skill_instruction, request_contract, input_bound, claims_returned)
+    ):
+        return None
+    observation: dict[str, object] = {
+        "schema": "nxd-review-observation-v1",
+        "subagent_type": "general-purpose" if subagent_type_ok else "other",
+        "inline": inline,
+        "marker_valid": marker is not None,
+        "review_input_bound": input_bound,
+        "request_contract_valid": request_contract,
+        "review_skill_instruction": skill_instruction,
+        "claims_returned": claims_returned,
+        "result_ok": result_ok,
+        "workflow": review_workflow,
+    }
+    if marker is not None:
+        observation["closure_path"], observation["review_round_index"] = marker
+    observation["eligible"] = all(
+        (
+            subagent_type_ok,
+            inline,
+            marker is not None,
+            input_bound,
+            request_contract,
+            skill_instruction,
+            claims_returned,
+            result_ok,
+            review_workflow is not None,
+        )
+    )
+    return observation
+
+
 def _snapshot_workspace(workspace: Path, *, artifact_dir: Path) -> dict[str, bytes]:
     """Snapshot small, contained agent files while excluding runner evidence."""
 
@@ -672,6 +854,8 @@ def parse_claude_events(
     redact_json_rpc: Any,
     redact_text: Any,
     session_id: str,
+    review_inputs: Sequence[tuple[tuple[str, str], ...]] = (),
+    review_workflow: str | None = None,
 ) -> tuple[TurnResult, list[dict[str, object]]]:
     """Convert one completed Claude stream turn into a typed result.
 
@@ -754,17 +938,40 @@ def parse_claude_events(
     build_failures = 0
     unpaired_mcp_tools: list[str] = []
     mcp_observations: list[dict[str, object]] = []
+    available_review_inputs = list(review_inputs)
+    available_review_workflow = review_workflow
     for use in tool_uses:
         identifier = use.get("id")
         paired = tool_results.get(identifier) if isinstance(identifier, str) else None
         result_value = paired
+        review_observation = _review_observation(
+            use,
+            paired,
+            available_review_inputs,
+            available_review_workflow,
+        )
+        safe_arguments = _json_safe(use.get("input", {}), redact_json_rpc)
+        if (
+            str(use.get("name", "")).casefold() in {"agent", "task"}
+            and isinstance(safe_arguments, Mapping)
+            and "prompt" in safe_arguments
+        ):
+            safe_arguments = dict(safe_arguments)
+            safe_arguments["prompt"] = "[redacted]"
         calls.append(
             ToolCall(
                 str(use["name"]),
-                _json_safe(use.get("input", {}), redact_json_rpc),
+                safe_arguments,
                 result_value,
+                review_observation,
             )
         )
+        review_input = _review_input_from_mcp_call(use, paired)
+        if review_input is not None:
+            # A fresh capture supersedes the previous generation. Do not let
+            # a reviewer bind to an older or foreign capture still in memory.
+            available_review_inputs = [review_input]
+            available_review_workflow = _capture_workflow(use)
         if paired is not None:
             flat_results.append(paired)
         mcp_tool = _mcp_name(use.get("name"))
@@ -1376,6 +1583,11 @@ class ClaudeCodeAdapter:
         self._built_runs: set[str] = set()
         # Every structured semantic-query result in this session, in order.
         self._query_history: list[dict[str, object]] = []
+        # Exact supervisor review inputs stay in memory only.  The parser uses
+        # them to derive a report-safe binding boolean for reviewer calls;
+        # their paths never enter the replay artifact.
+        self._review_inputs: list[tuple[tuple[str, str], ...]] = []
+        self._review_workflow: str | None = None
         # The supervisor's own data directory, when this adapter owns the
         # server.  It is the runner's copy of the build evidence.
         # On the --mcp-config path this adapter does not start the supervisor,
@@ -1904,12 +2116,34 @@ class ClaudeCodeAdapter:
     ) -> TurnResult:
         """Convert complete or partial stream events into one typed result."""
 
+        review_inputs = getattr(self, "_review_inputs", [])
+        review_workflow = getattr(self, "_review_workflow", None)
         result, observations = parse_claude_events(
             events,
             redact_json_rpc=self._redact_json_rpc,
             redact_text=self._redact_text,
             session_id=getattr(self, "_resume_session_id", None) or self._session_id,
+            review_inputs=tuple(review_inputs),
+            review_workflow=review_workflow,
         )
+        latest_review_input: tuple[tuple[str, str], ...] | None = None
+        latest_review_workflow: str | None = None
+        for observation in observations:
+            review_input = _review_input_from_mcp_observation(observation)
+            if review_input is not None:
+                latest_review_input = review_input
+                arguments = observation.get("arguments")
+                workflow = arguments.get("workflow") if isinstance(arguments, Mapping) else None
+                latest_review_workflow = (
+                    workflow.strip()
+                    if isinstance(workflow, str) and workflow.strip()
+                    else None
+                )
+        if latest_review_input is not None:
+            review_inputs[:] = [latest_review_input]
+            review_workflow = latest_review_workflow
+        self._review_inputs = review_inputs
+        self._review_workflow = review_workflow
         if result.last_mcp_call is not None:
             self._last_mcp_call = result.last_mcp_call
         after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)

@@ -145,7 +145,12 @@ def turn_result_to_dict(result: TurnResult) -> dict[str, object]:
         "transcript_delta": _encode(result.transcript_delta),
         "agent_message": _encode(result.agent_message),
         "tool_calls": [
-            {"name": call.name, "arguments": _encode(call.arguments), "result": _encode(call.result)}
+            {
+                "name": call.name,
+                "arguments": _encode(call.arguments),
+                "result": _encode(call.result),
+                "observation": _encode(call.observation),
+            }
             for call in result.tool_calls
         ],
         "tool_results": _encode(list(result.tool_results)),
@@ -200,7 +205,14 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
     for raw in raw_calls:
         if not isinstance(raw, Mapping) or not isinstance(raw.get("name"), str):
             raise SessionError("recorded tool call has an invalid shape")
-        calls.append(ToolCall(raw["name"], _decode(raw.get("arguments")), _decode(raw.get("result"))))
+        calls.append(
+            ToolCall(
+                raw["name"],
+                _decode(raw.get("arguments")),
+                _decode(raw.get("result")),
+                _decode(raw.get("observation")),
+            )
+        )
     files: list[TouchedFile] = []
     for raw in raw_files:
         if not isinstance(raw, Mapping):
@@ -304,6 +316,20 @@ class ReplayRecording:
                 raw_result = raw_turn.get("result")
                 if not isinstance(raw_result, Mapping):
                     continue
+                raw_tool_calls = raw_result.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    for raw_call in raw_tool_calls:
+                        if not isinstance(raw_call, dict):
+                            continue
+                        name = raw_call.get("name")
+                        arguments = raw_call.get("arguments")
+                        if (
+                            isinstance(name, str)
+                            and name.casefold() in {"agent", "task"}
+                            and isinstance(arguments, dict)
+                            and "prompt" in arguments
+                        ):
+                            arguments["prompt"] = "[redacted]"
                 raw_files = raw_result.get("files_touched")
                 if not isinstance(raw_files, list):
                     continue
@@ -486,6 +512,7 @@ def _immutable_recording_snapshot(turns: Sequence[RecordedTurn]) -> ReplayRecord
                     call,
                     arguments=_freeze_value(call.arguments),
                     result=_freeze_value(call.result),
+                    observation=_freeze_value(call.observation),
                 )
                 for call in result.tool_calls
             ),

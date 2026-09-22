@@ -1410,12 +1410,56 @@ def _review_claim_text(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _completed_report_safe_review(
+    observation: object, position: EventPosition, *, workflow: str | None = None
+) -> ReviewDispatch | None:
+    """Read adapter-derived review evidence without trusting redacted prompts.
+
+    Claude report artifacts intentionally redact Agent prompts because they can
+    contain retained supervisor paths and source material.  The live adapter
+    therefore emits this narrow, runner-owned observation before redaction.
+    It is accepted only when every required predicate was true in memory; no
+    prompt text or retained path is recovered from the report.
+    """
+
+    if not isinstance(observation, Mapping):
+        return None
+    if observation.get("schema") != "nxd-review-observation-v1":
+        return None
+    if any(
+        observation.get(key) is not True
+        for key in (
+            "eligible",
+            "inline",
+            "marker_valid",
+            "review_input_bound",
+            "request_contract_valid",
+            "review_skill_instruction",
+            "claims_returned",
+            "result_ok",
+        )
+    ) or observation.get("subagent_type") != "general-purpose":
+        return None
+    if workflow is not None and observation.get("workflow") != workflow:
+        return None
+    closure_path = _normalized_closure_path(observation.get("closure_path"))
+    review_round_index = observation.get("review_round_index")
+    if (
+        closure_path is None
+        or not _is_int(review_round_index)
+        or review_round_index < 0
+    ):
+        return None
+    return ReviewDispatch(position, closure_path, review_round_index)
+
+
 def _completed_review_delegation(
     call: Mapping[str, object],
     position: EventPosition,
     *,
     review_input: tuple[tuple[str, str], ...] | None = None,
     review_inputs: Sequence[tuple[tuple[str, str], ...]] | None = None,
+    workflow: str | None = None,
 ) -> ReviewDispatch | None:
     """Return the marked closure when a reviewer completed inline.
 
@@ -1428,6 +1472,11 @@ def _completed_review_delegation(
     result = call.get("result")
     if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
         return None
+    report_safe = _completed_report_safe_review(
+        call.get("observation"), position, workflow=workflow
+    )
+    if report_safe is not None:
+        return report_safe
     # The shipped workflow requires one built-in general-purpose conversation
     # child.  The reviewer identity belongs in the prompt, not in a custom
     # ``subagent_type``: the plugin does not register an nxd-review-closure
@@ -1450,7 +1499,18 @@ def _completed_review_delegation(
     if arguments.get("run_in_background") is True:
         return None
     marker = _review_dispatch_marker(arguments.get("prompt"))
-    if marker is None or result.get("is_error") is not False:
+    # Claude's successful Agent result carries ``is_error: null`` rather than
+    # the Codex adapter's explicit ``False``.  A non-error result is therefore
+    # either false or absent/null; only an explicit true is a failure.  The
+    # non-empty claims check below still keeps launch-only acknowledgements out.
+    if (
+        marker is None
+        or "is_error" not in result
+        or (
+            result.get("is_error") is not False
+            and result.get("is_error") is not None
+        )
+    ):
         return None
     content = result.get("content")
     claims = _review_claim_text(content)
@@ -1590,6 +1650,7 @@ def _review_dispatches(
                 position,
                 review_input=review_input,
                 review_inputs=review_inputs,
+                workflow=workflow,
             )
             if dispatch is not None:
                 marker_found.append(dispatch)

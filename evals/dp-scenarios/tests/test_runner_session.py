@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import sys
 from dataclasses import FrozenInstanceError
@@ -70,7 +71,14 @@ def test_recording_round_trip_preserves_structured_observations_and_files(tmp_pa
     response = TurnResult(
         transcript_delta="delta",
         agent_message="What is the source?",
-        tool_calls=(ToolCall("read", {"path": "spec.json"}, {"ok": True}),),
+        tool_calls=(
+            ToolCall(
+                "read",
+                {"path": "spec.json"},
+                {"ok": True},
+                {"schema": "runner-observation-v1", "eligible": True},
+            ),
+        ),
         tool_results=({"rows": 4},),
         files_touched=(TouchedFile("closure/spec.json", b'{"metric":"m"}'),),
         approval_artifact="artifact://spec",
@@ -89,6 +97,36 @@ def test_recording_round_trip_preserves_structured_observations_and_files(tmp_pa
     assert observed == response
     assert (replay_root / "closure/spec.json").read_bytes() == b'{"metric":"m"}'
     assert replay.sent_messages == [message]
+
+
+def test_report_redacts_agent_prompt_but_keeps_runner_observation() -> None:
+    recording = ReplayRecording(
+        (
+            RecordedTurn(
+                OperatorMessage("Review."),
+                TurnResult(
+                    tool_calls=(ToolCall(
+                        "Agent",
+                        {"prompt": "retained_capture_root: /private/secret/capture"},
+                        {"is_error": False, "content": "claim"},
+                        {
+                            "schema": "nxd-review-observation-v1",
+                            "eligible": True,
+                            "workflow": "workflow",
+                        },
+                    ),),
+                ),
+            ),
+        ),
+    )
+
+    report = recording.to_report_dict()
+    encoded = json.dumps(report, sort_keys=True)
+
+    assert "/private/secret/capture" not in encoded
+    call = report["turns"][0]["result"]["tool_calls"][0]
+    assert call["arguments"]["prompt"] == "[redacted]"
+    assert call["observation"]["schema"] == "nxd-review-observation-v1"
 
 
 def test_recording_transport_captures_observations_not_just_agent_text() -> None:

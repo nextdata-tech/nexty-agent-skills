@@ -42,6 +42,10 @@ class ToolCall:
     name: str
     arguments: object = None
     result: object = None
+    #: Runner-derived, report-safe observations that must not be supplied by
+    #: the agent. Backends use this for evidence whose source arguments are
+    #: intentionally redacted before the replay artifact is written.
+    observation: object = None
 
 
 @dataclass(frozen=True, slots=True)

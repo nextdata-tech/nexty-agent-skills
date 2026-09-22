@@ -792,6 +792,7 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                         "name": call.name,
                         "arguments": _json_safe(call.arguments),
                         "result": _json_safe(call.result),
+                        "observation": _json_safe(call.observation),
                     }
                     for call in turn.tool_calls
                 ],

@@ -51,7 +51,10 @@ def _good_target() -> dict[str, object]:
             {"deal_id": "DEAL-2005", "stage": "closed_lost", "amount": 26400, "updated_at": "2024-01-03T14:20:00+00:00"},
         ],
         "output_contract": {"deal_id": "included", "stage": "included", "amount": "included", "updated_at": "included", "owner": "excluded", "email": "excluded"},
-        "surfaces": {"landed": "deal_id,stage,amount,updated_at", "description": "Owner contact details are excluded."},
+        "surfaces": {
+            "governed_output": "deal_id,stage,amount,updated_at",
+            "raw_internal": "deal_id,stage,amount,updated_at",
+        },
     }
 
 
@@ -147,13 +150,17 @@ def test_b1_script_resolves_the_internal_status_projection_choice() -> None:
     assert script_turn_text(review_authorization) == (
         SCENARIO.answer_sheet.decision_answers["review_fix_authorization"].answer
     )
-    reapproval = SCENARIO.answer_sheet.turns[9]
+    raw_output_authorization = SCENARIO.answer_sheet.turns[9]
+    assert script_turn_text(raw_output_authorization) == (
+        SCENARIO.answer_sheet.decision_answers["raw_output_surface"].answer
+    )
+    reapproval = SCENARIO.answer_sheet.turns[10]
     assert isinstance(reapproval, dict)
     assert reapproval["approval"] is True
     assert reapproval["substitute_reply"] is False
     assert "Re-approve the amended blueprint" in script_turn_text(reapproval)
 
-    metrics_authorization = SCENARIO.answer_sheet.turns[10]
+    metrics_authorization = SCENARIO.answer_sheet.turns[11]
     assert script_turn_text(metrics_authorization) == (
         SCENARIO.answer_sheet.decision_answers["metrics_surface_removal"].answer
     )
@@ -168,6 +175,18 @@ def test_b1_authorizes_only_removal_of_an_unapproved_metrics_surface() -> None:
         "aggregate surface. Please adjudicate this finding."
     )
     assert result.rule_id == "decision.answer.metrics_surface_removal"
+    assert result.reply == answer.answer
+
+
+def test_b1_answers_the_raw_output_surface_question_explicitly() -> None:
+    answer = SCENARIO.answer_sheet.decision_answers["raw_output_surface"]
+    assert answer.terms == ("raw", "output port", "direct SQL")
+    matcher = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
+    result = matcher.reply_for(
+        "The raw deals relation remains on the same output port and is reachable "
+        "via direct SQL. Which option should I take?"
+    )
+    assert result.rule_id == "decision.answer.raw_output_surface"
     assert result.reply == answer.answer
 
 
@@ -362,12 +381,21 @@ def test_missing_page_is_not_silently_accepted() -> None:
 
 def test_pii_leak_and_unredacted_owner_fail() -> None:
     target = _good_target()
-    target["surfaces"] = {"query": MARKER}
+    target["surfaces"] = {"raw_internal": MARKER}
     target["output_contract"] = {"owner": "included"}
     result = SCENARIO.follow_up_check(target)
     assert not result["passed"]
-    assert "pii_sentinel_leaked:query" in result["findings"]
+    assert "pii_sentinel_leaked:raw_internal" in result["findings"]
+    assert "pii_surface_missing:governed_output" in result["findings"]
     assert "output_contract_pii_policy_missing:email" in result["findings"]
+
+
+def test_required_redacted_surfaces_cannot_be_omitted() -> None:
+    target = _good_target()
+    target["surfaces"] = {"governed_output": "deal_id,stage,amount,updated_at"}
+    result = SCENARIO.follow_up_check(target)
+    assert not result["passed"]
+    assert "pii_surface_missing:raw_internal" in result["findings"]
 
 
 def test_not_examined_when_transport_evidence_is_absent() -> None:
