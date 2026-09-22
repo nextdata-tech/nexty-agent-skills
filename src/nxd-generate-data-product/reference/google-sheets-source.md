@@ -23,6 +23,7 @@ client and a dlt resource; it does not hand-roll HTTP transport.
 | `spreadsheet_id` | true | Spreadsheet to read |
 | `sheet_range` | true | A1 range, including the tab name when needed |
 | `value_render_option` | true | Usually `FORMATTED_VALUE` or `UNFORMATTED_VALUE` |
+| `access` | true | Declared source intent, normally `read-only`; it does not grant provider access |
 | `auth_type` | true | `bearer` for the supplied OAuth access token |
 | `auth_token` | false | Runtime OAuth access token |
 
@@ -43,6 +44,11 @@ The generated transform must:
    explicitly approved overflow policy.
 5. Yield rows through dlt and use the standard DuckDB output/read-back
    assertion.
+
+`access: read-only` is an explicit source contract, not an authorization
+mechanism. The provider still decides whether the token may read the selected
+spreadsheet and range; a valid token without that permission is an
+authorization failure, not anonymous fallback.
 
 Formula handling is a user decision. `FORMATTED_VALUE` reads the displayed
 result; `FORMULA` preserves formula expressions; do not silently choose a
