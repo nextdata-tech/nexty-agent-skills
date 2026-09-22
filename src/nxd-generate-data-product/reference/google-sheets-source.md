@@ -1,5 +1,7 @@
 # Google Sheets source
 
+This recipe is listed in the [source types index](source-types.md).
+
 ## Scope
 
 Use this profile when a user wants one or more ranges from a Google

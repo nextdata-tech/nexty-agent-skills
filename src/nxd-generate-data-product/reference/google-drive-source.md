@@ -1,5 +1,7 @@
 # Google Drive file source
 
+This recipe is listed in the [source types index](source-types.md).
+
 ## Scope
 
 Use this profile when a user wants tabular files stored in Google Drive or a
@@ -47,9 +49,9 @@ The generated transform must:
 6. Run one dlt pipeline through the `DuckDbOutput` destination and assert that
    only the promised physical models were written.
 
-Google Workspace files are a separate mode: use
-`reference/google-sheets-source.md` for Sheets rather than treating a Sheet's
-export URL as a normal binary CSV file.
+Google Workspace files are a separate mode: use the [source types index](source-types.md)
+to select the Sheets recipe rather than treating a Sheet's export URL as a
+normal binary CSV file.
 
 ## Credential and failure behavior
 
