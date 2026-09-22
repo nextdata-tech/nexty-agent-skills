@@ -170,7 +170,8 @@ DP_FAILURE_MODES = frozenset({
 })
 DP_FAILURE_REASONS = frozenset({
     "provider_session_limit", "child_no_terminal_result", "child_exited_early",
-    "shared_runtime_contention", "interrupted_unclassified",
+    "codex_root_turn_no_terminal_result", "shared_runtime_contention",
+    "interrupted_unclassified",
 })
 DP_SCORE_STATES = frozenset({"passed", "failed", "invalid", "ungraded", "automatic zero"})
 DP_RAW_REPORT_FIELDS = frozenset({

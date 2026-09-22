@@ -6,6 +6,7 @@ import pytest
 
 from dp_scenarios.failure_reasons import (
     CHILD_NO_TERMINAL_RESULT,
+    CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
     SHARED_RUNTIME_CONTENTION,
     classify_failure_reason,
@@ -56,3 +57,7 @@ def test_ordinary_agent_prose_is_not_classified() -> None:
 def test_first_reason_ignores_blanks_and_unknown_values() -> None:
     assert first_reason((None, "", "not-a-reason", CHILD_NO_TERMINAL_RESULT)) == CHILD_NO_TERMINAL_RESULT
     assert first_reason((None, "made-up")) is None
+
+
+def test_first_reason_accepts_the_codex_root_turn_timeout_reason() -> None:
+    assert first_reason((CODEX_ROOT_TURN_NO_TERMINAL_RESULT,)) == CODEX_ROOT_TURN_NO_TERMINAL_RESULT

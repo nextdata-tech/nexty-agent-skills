@@ -20,6 +20,7 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
     _event_debug_tail,
+    _codex_timeout_failure_reason,
     _review_pending_after_observations,
     _reviewer_wait_without_target,
     _turn_sandbox_policy,
@@ -27,6 +28,10 @@ from dp_scenarios.runner.codex_adapter import (
     _update_reviewer_deadline_from_events,
     _load_mcp_server,
     parse_codex_events,
+)
+from dp_scenarios.failure_reasons import (
+    CHILD_NO_TERMINAL_RESULT,
+    CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
 )
 from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
 
@@ -424,6 +429,28 @@ def test_codex_turn_deadline_wins_when_nonterminal_events_keep_arriving(monkeypa
 
     with pytest.raises(TimeoutError, match="turn deadline"):
         adapter._collect_turn(1, "", [])
+
+
+def test_codex_root_turn_timeout_is_not_reported_as_a_child_timeout() -> None:
+    assert (
+        _codex_timeout_failure_reason(
+            TimeoutError("Codex app-server turn deadline expired"),
+            "",
+            root_turn_id="root-turn",
+        )
+        == CODEX_ROOT_TURN_NO_TERMINAL_RESULT
+    )
+
+
+def test_codex_reviewer_timeout_keeps_the_child_timeout_reason() -> None:
+    assert (
+        _codex_timeout_failure_reason(
+            TimeoutError("Codex reviewer child did not complete before the 300.0-second reviewer deadline"),
+            "",
+            root_turn_id="root-turn",
+        )
+        == CHILD_NO_TERMINAL_RESULT
+    )
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
@@ -1098,6 +1125,7 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     adapter.close()
 
     assert result.turn_timed_out is True
+    assert result.failure_reason == CODEX_ROOT_TURN_NO_TERMINAL_RESULT
     assert result.session_id == "00000000-0000-4000-8000-000000000020"
     assert result.agent_message == "partial"
     assert result.last_mcp_call == "inspect_run:unanswered"

@@ -548,6 +548,7 @@ carries the block whether or not it was interrupted:
 | --- | --- | --- |
 | `provider_session_limit` | The provider refused another turn (usage, rate, or credit ceiling). | Wait for the reset; the scenario is untested, not failed. |
 | `child_no_terminal_result` | The child stayed alive past the turn deadline without emitting a `result`. | Reruns are worth trying; check `last_mcp_call` for where it stalled. |
+| `codex_root_turn_no_terminal_result` | The Codex app-server root turn stayed alive past its deadline without emitting a root terminal result. | Check the app-server event tail; the run is incomplete and ungraded. |
 | `child_exited_early` | The child exited before emitting a `result`. | Read `failure_detail`; usually a startup or config fault. |
 | `shared_runtime_contention` | Two runs contended on shared runtime state (locked store, busy port). | Rerun; live canary closures are already copied per run. |
 

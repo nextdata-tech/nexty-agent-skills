@@ -28,6 +28,7 @@ from typing import Any
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
+    CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
     classify_failure_reason,
     first_reason,
 )
@@ -62,6 +63,24 @@ CODEX_FILE_CHANGE_FAILURE = "codex_file_change_failed"
 _FILE_CHANGE_FAILURE_STATUSES = frozenset(
     {"failed", "error", "rejected", "cancelled", "canceled"}
 )
+
+
+def _codex_timeout_failure_reason(
+    error: TimeoutError,
+    detail: str,
+    *,
+    root_turn_id: str | None,
+) -> str:
+    """Classify a Codex timeout without changing provider-neutral fallbacks."""
+
+    classified = classify_failure_reason(str(error) + detail)
+    if classified is not None:
+        return classified
+    if "Codex reviewer child did not complete" in str(error):
+        return CHILD_NO_TERMINAL_RESULT
+    if root_turn_id is not None:
+        return CODEX_ROOT_TURN_NO_TERMINAL_RESULT
+    return CHILD_NO_TERMINAL_RESULT
 
 
 CODEX_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
@@ -1776,7 +1795,11 @@ class CodexAdapter:
                     + (f"; event_tail={event_tail}" if event_tail else "")
                 ),
                 turn_timed_out=True,
-                failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_NO_TERMINAL_RESULT,
+                failure_reason=_codex_timeout_failure_reason(
+                    exc,
+                    detail,
+                    root_turn_id=self._active_turn_id,
+                ),
                 lightweight=True,
             )
         except (CodexAdapterError, OSError, ValueError) as exc:
