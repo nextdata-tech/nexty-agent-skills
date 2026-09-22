@@ -1506,7 +1506,7 @@ class OperatorEngine:
                 sentinel_tripped = True
             if result.last_mcp_call:
                 last_mcp_call = result.last_mcp_call
-            if result.environment_wedged:
+            if result.environment_wedged and not result.turn_timed_out:
                 self.failure_modes.append("environment_wedge")
                 environment_wedged = True
             if result.turn_timed_out:
@@ -1661,7 +1661,7 @@ class OperatorEngine:
             if sentinel_tripped or environment_wedged or turn_timed_out:
                 break
 
-        if environment_wedged:
+        if environment_wedged and not turn_timed_out:
             terminal_state = TerminalState.ENVIRONMENT_WEDGE
             reason = "environment_wedge"
         elif sentinel_tripped:

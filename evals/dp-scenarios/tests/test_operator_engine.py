@@ -406,6 +406,22 @@ def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() ->
     ).run()
     assert wedged.terminal_state is TerminalState.ENVIRONMENT_WEDGE
 
+    timeout_with_diagnostic = OperatorEngine(
+        script,
+        InMemoryTransport(
+            [
+                TurnResult(agent_message="What is the source?"),
+                TurnResult(
+                    environment_wedged=True,
+                    turn_timed_out=True,
+                    environment_detail="child did not finish before the deadline",
+                ),
+            ]
+        ),
+    ).run()
+    assert timeout_with_diagnostic.terminal_state is TerminalState.TURN_TIMEOUT
+    assert "environment_wedge" not in timeout_with_diagnostic.failure_modes
+
 
 def test_rubber_stamper_approval_records_open_decision_marker() -> None:
     sheet = make_sheet()

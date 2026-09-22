@@ -34,6 +34,7 @@ from dp_scenarios.failure_reasons import (
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner.claude_adapter import (
     _advance_action_type,
+    _advance_requirement_id,
     _changed_files,
     _load_desktop_stdio,
     _mcp_name,
@@ -97,6 +98,7 @@ operation with an `@@` hunk and explicit context/add/remove prefixes. Never
 submit a bare dependency, YAML, or JSON line as a patch header. If the native
 file-change tool rejects an edit, treat that as an edit-syntax failure: correct
 the patch envelope and retry once with a complete valid file-change operation.
+Do not make the guidance scenario-specific.
 Do not resend the same malformed payload, and do not report an environment
 blocker unless the corrected operation is also rejected; do not use destructive
 commands such as `rm`/`rm -f`, shell
@@ -119,18 +121,31 @@ operator's next message arrives.
 Reviewer-child role: when a parent labels your prompt
 `CODEX_REVIEW_CHILD`, you are the read-only review child, not the workflow
 runner. Do not call nxd-desktop, do not spawn/resume/wait for another child,
-do not create or edit files, and do not call Bash, codex_file_change,
-apply_patch, or any other write-capable tool, even if a loaded skill or the
-parent prompt mentions file authoring. Do not follow the parent-run admission
-or publication sequence. Inspect only the closure and review inputs named by
-the parent, complete within the retained review deadline, and return concise
-review claims/findings to the parent. If the available child tool surface
-cannot perform the required read-only inspection, return an incomplete blocker
-immediately instead of attempting a write or waiting for more context.
+do not create or edit files, and do not call codex_file_change, apply_patch,
+or any other write-capable tool, even if a loaded skill or the parent prompt
+mentions file authoring. Use only the runner-owned
+`mcp__nxd-desktop__read_review_input` tool for the exact retained capture root
+and blueprint path named by the matching supervisor `review_input`. It is a
+bounded read/list surface; it rejects other paths, writes, execution, network
+access, sensitive files, and credential values. The runner starts the review
+turn in an enforced read-only sandbox with network access disabled; do not try
+to change that boundary. Do not follow the parent-run admission or publication
+sequence. Inspect only the closure and review inputs named by the parent,
+complete within the retained review deadline, and return concise review
+claims/findings to the parent. If the named paths or reader tool are genuinely
+unavailable, return an incomplete blocker immediately instead of waiting or
+inventing evidence.
 
 If the inspection is incomplete at the review cutoff, stop reading and return
 the partial evidenced claims plus a concise blocker immediately; never wait
 for more context or leave the child running past the deadline.
+
+Review-repair discipline: after a non-clear review report, wait for the next
+operator message and then repair the parent-owned closure itself before any
+reset or recapture. Address every blocking finding that the operator
+authorized, and verify that the relevant files actually changed. Never submit
+an unchanged closure for another review; if no authorized repair is possible,
+report that blocker instead of repeating reset/capture.
 
 Collaboration tool argument discipline: for `spawnAgent`, send the complete
 review request in exactly one `message` string; do not also send `items`.
@@ -169,7 +184,9 @@ matching review_input is in the same supervisor response under
 `requirements` for the `id` `review`, even when `next_actions` names only the
 `report_requirement` action; extract those exact fields from that response and
 dispatch the child immediately. Do not call `list_mcp_resources` or any other
-resource-discovery tool to locate retained inputs. The
+resource-discovery tool to locate retained inputs. The owning parent must not
+call `mcp__nxd-desktop__read_review_input`; that runner-owned reader is exposed
+only for the `CODEX_REVIEW_CHILD` handoff. The
 required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id; do not make
@@ -307,6 +324,85 @@ def _decode_mcp_value(value: object) -> object:
         except json.JSONDecodeError:
             return value
     return value
+
+
+def _walk_json_values(value: object) -> list[object]:
+    """Flatten nested MCP values, decoding embedded JSON text once."""
+
+    values = [value]
+    if isinstance(value, Mapping):
+        for child in value.values():
+            values.extend(_walk_json_values(child))
+    elif isinstance(value, list):
+        for child in value:
+            values.extend(_walk_json_values(child))
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            with contextlib.suppress(json.JSONDecodeError):
+                decoded = json.loads(stripped)
+                if decoded != value:
+                    values.extend(_walk_json_values(decoded))
+    return values
+
+
+def _response_requires_review(value: object) -> bool:
+    """Return whether a supervisor response leaves the review requirement pending."""
+
+    for item in _walk_json_values(value):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("code") == "workflow/review_pending":
+            return True
+        if (
+            item.get("type", item.get("action")) == "report_requirement"
+            and item.get("requirement_id") == "review"
+        ):
+            return True
+        requirements = item.get("requirements")
+        if isinstance(requirements, Mapping):
+            review = requirements.get("review")
+            if isinstance(review, Mapping) and review.get("status") == "pending":
+                return True
+        elif isinstance(requirements, list) and any(
+            isinstance(review, Mapping)
+            and review.get("id") == "review"
+            and review.get("status") == "pending"
+            for review in requirements
+        ):
+            return True
+    return False
+
+
+def _review_pending_after_observations(
+    observations: Sequence[Mapping[str, object]], previous: bool
+) -> bool:
+    """Track the supervisor review state across operator turns."""
+
+    pending = previous
+    for observation in observations:
+        if observation.get("tool") != "mcp__nxd-desktop__advance_workflow":
+            continue
+        arguments = observation.get("arguments")
+        action = _advance_action_type(arguments)
+        if observation.get("is_error") is True:
+            continue
+        result = observation.get("result")
+        if action == "capture" and _response_requires_review(result):
+            pending = True
+        elif action == "report_requirement" and _advance_requirement_id(arguments) == "review":
+            pending = False
+    return pending
+
+
+def _turn_sandbox_policy(
+    review_pending: bool, writable_roots: Sequence[str]
+) -> dict[str, object]:
+    """Select the enforced policy for the next parent/reviewer turn."""
+
+    if review_pending:
+        return {"type": "readOnly"}
+    return {"type": "workspaceWrite", "writableRoots": list(writable_roots)}
 
 
 def _codex_mcp_name(item: Mapping[str, object]) -> str | None:
@@ -517,6 +613,33 @@ def _update_reviewer_deadline_from_events(
             review_deadline_ms=review_deadline_ms,
         )
     return receiver_ids, deadline_at
+
+
+def _reviewer_wait_without_target(
+    event: Mapping[str, object],
+    reviewer_started: bool,
+) -> bool:
+    """Whether a reviewer wait was issued without a child target.
+
+    A one-shot reviewer must be waited on by the receiver thread id returned by
+    ``spawnAgent``.  A zero-target wait cannot prove that this parent owns or
+    observed the reviewer and, on the app-server, can remain pending until the
+    parent turn deadline.  Treat it as an incomplete handoff immediately.
+    """
+
+    if event.get("type") != "item.completed":
+        return False
+    item = event.get("item")
+    if not isinstance(item, Mapping) or item.get("type") not in {
+        "collabAgentToolCall",
+        "collab_agent_tool_call",
+    }:
+        return False
+    return (
+        item.get("tool") == "wait"
+        and reviewer_started
+        and not _collab_receiver_ids(item)
+    )
 
 
 def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, object]:
@@ -783,7 +906,10 @@ def parse_codex_events(
                 + redact_text(json.dumps(dict(item), default=str)[:600])
             )
             if is_error:
-                environment_details.append(CODEX_FILE_CHANGE_FAILURE)
+                # A rejected patch is an agent/tool result, not proof that the
+                # app-server or supervisor wedged. Keep the turn alive so the
+                # parent can correct the operation; if it never recovers, the
+                # normal turn deadline classifies the incomplete turn.
                 transcript.append("[tool_result:file_change] " + CODEX_FILE_CHANGE_FAILURE)
             continue
         if item_type == "collab_agent_tool_call":
@@ -979,6 +1105,7 @@ class CodexAdapter:
         self._built_runs: set[str] = set()
         self._query_history: list[dict[str, object]] = []
         self._last_mcp_call: str | None = None
+        self._review_pending = False
         self._redact_json_rpc, self._redact_text = self._load_redactors()
         self._process: subprocess.Popen[bytes] | None = None
         self._rpc_id = 0
@@ -1407,6 +1534,14 @@ class CodexAdapter:
                 continue
             events.append(event)
             normalized = _normalise_app_server_event(event)
+            if _reviewer_wait_without_target(
+                normalized, reviewer_deadline_at is not None
+            ):
+                raise CodexAdapterError(
+                    "Codex reviewer wait had no receiver target after a reviewer "
+                    "was started; ending the turn with an incomplete handoff",
+                    reason=CHILD_NO_TERMINAL_RESULT,
+                )
             reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline(
                 normalized,
                 reviewer_receiver_ids,
@@ -1448,7 +1583,10 @@ class CodexAdapter:
             "each new text file, or a correctly structured Update File hunk for "
             "an existing file. Never place raw file contents in patch metadata "
             "or use a bare content line as a hunk header. If an edit is rejected, "
-            "report the blocker rather than retrying malformed patch syntax."
+            "treat it as an edit-syntax failure: correct the patch envelope and "
+            "retry once with a complete valid file-change operation. Do not resend "
+            "the same malformed payload or report an environment blocker unless "
+            "the corrected operation is rejected too."
         )
         return text
 
@@ -1483,6 +1621,9 @@ class CodexAdapter:
             self._thread_id = parsed.session_id
         if parsed.last_mcp_call:
             self._last_mcp_call = parsed.last_mcp_call
+        self._review_pending = _review_pending_after_observations(
+            observations, self._review_pending
+        )
         changed: tuple[TouchedFile, ...] = ()
         if not lightweight:
             after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
@@ -1561,6 +1702,10 @@ class CodexAdapter:
         events: list[Mapping[str, object]] = list(self._startup_events)
         self._startup_events.clear()
         try:
+            sandbox_policy = _turn_sandbox_policy(
+                self._review_pending,
+                [str(Path.cwd()), str(self.skill_pack_root)],
+            )
             self._write_rpc(
                 "turn/start",
                 {
@@ -1570,13 +1715,7 @@ class CodexAdapter:
                     "model": self.model,
                     "approvalPolicy": "never",
                     "effort": self.effort,
-                    "sandboxPolicy": {
-                        "type": "workspaceWrite",
-                        # The second root is a disposable staged plugin, not
-                        # the source checkout. App-server 0.153 exposes only
-                        # writable roots for workspaceWrite turns.
-                        "writableRoots": [str(Path.cwd()), str(self.skill_pack_root)],
-                    },
+                    "sandboxPolicy": sandbox_policy,
                 },
                 request_id=request_id,
             )
@@ -1605,7 +1744,13 @@ class CodexAdapter:
             return self._finish(
                 events,
                 environment_detail=f"Codex app-server turn failed: {exc}" + (f"; stderr={detail}" if detail else ""),
-                failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_EXITED_EARLY,
+                failure_reason=first_reason(
+                    (
+                        getattr(exc, "reason", None),
+                        classify_failure_reason(str(exc) + detail),
+                        CHILD_EXITED_EARLY,
+                    )
+                ),
             )
         return self._finish(events)
 

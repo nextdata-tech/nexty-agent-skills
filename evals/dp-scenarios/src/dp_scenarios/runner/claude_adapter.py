@@ -1073,6 +1073,18 @@ def _advance_action_type(arguments: object) -> str | None:
     return action_type if isinstance(action_type, str) else None
 
 
+def _advance_requirement_id(arguments: object) -> str | None:
+    """Return the requirement id from an advance request when present."""
+
+    if not isinstance(arguments, Mapping):
+        return None
+    action = arguments.get("action")
+    if not isinstance(action, Mapping):
+        return None
+    requirement_id = action.get("requirement_id")
+    return requirement_id if isinstance(requirement_id, str) else None
+
+
 def _workflow_admission(
     payload: Mapping[str, object], arguments: object
 ) -> Mapping[str, object] | None:
