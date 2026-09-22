@@ -140,17 +140,17 @@ operator's next message arrives.
 Reviewer-child role: when a parent labels your prompt
 `CODEX_REVIEW_CHILD`, you are the read-only review child, not the workflow
 runner. Do not call nxd-desktop, do not spawn/resume/wait for another child,
-do not create or edit files, and do not call codex_file_change, apply_patch,
-or any other write-capable tool, even if a loaded skill or the parent prompt
-mentions file authoring. Use only the runner-owned
-`mcp__nxd-desktop__read_review_input` tool for the exact retained capture root
-and blueprint path named by the matching supervisor `review_input`. It is a
-bounded read/list surface; it rejects other paths, writes, execution, network
-access, sensitive files, and credential values. The runner starts the review
-turn in an enforced read-only sandbox with network access disabled; do not try
-to change that boundary. Do not follow the parent-run admission or publication
-sequence. Inspect only the closure and review inputs named by the parent,
-complete within the retained review deadline, and return concise review
+do not call Bash, do not create or edit files, and do not call
+codex_file_change, apply_patch, or any other write-capable tool, even if a
+loaded skill or the parent prompt mentions file authoring. Use only the
+runner-owned `mcp__nxd-desktop__read_review_input` tool for the exact retained
+capture root and blueprint path named by the matching supervisor `review_input`.
+It is a bounded read/list surface; it rejects other paths, writes, execution,
+network access, sensitive files, and credential values. The runner starts the
+review turn in an enforced read-only sandbox with network access disabled; do
+not try to change that boundary. Do not follow the parent-run admission or
+publication sequence. Inspect only the closure and review inputs named by the
+parent, complete within the retained review deadline, and return concise review
 claims/findings to the parent. If the named paths or reader tool are genuinely
 unavailable, return an incomplete blocker immediately instead of waiting or
 inventing evidence.

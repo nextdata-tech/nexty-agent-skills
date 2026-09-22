@@ -90,6 +90,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "return an incomplete blocker" in CODEX_SYSTEM_PROMPT
     assert "Review-repair discipline" in CODEX_SYSTEM_PROMPT
     assert "an unchanged closure for another review" in CODEX_SYSTEM_PROMPT
+    assert "do not call Bash" in CODEX_SYSTEM_PROMPT
+    assert "do not call Bash, codex_file_change" not in CODEX_SYSTEM_PROMPT
     assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
     assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
     assert "prefix every changed line" in CODEX_SYSTEM_PROMPT
