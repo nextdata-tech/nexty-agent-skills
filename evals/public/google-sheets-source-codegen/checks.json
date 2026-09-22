@@ -1,0 +1,42 @@
+{
+  "name": "Generate a Google Sheets data-product source",
+  "skills": [
+    "nxd-generate-data-product"
+  ],
+  "deterministic_check": {
+    "script": "check_google_sheets_source.py",
+    "deps": [],
+    "redaction_markers": ["gsheets_eval_token_6e4b1c9a2d7f"],
+    "redaction_input_files": ["source-contract.yaml"]
+  },
+  "checks": [
+    {
+      "id": "contract-read-before-authoring",
+      "check": "The generated closure reflects the supplied pinned Google Sheets range contract, including its spreadsheet, tab/range, and rendered-value decision."
+    },
+    {
+      "id": "official-sheets-client",
+      "check": "The source uses Google's official Sheets client and spreadsheets.values.get rather than a hand-written HTTP loop."
+    },
+    {
+      "id": "range-and-rendering-contract",
+      "check": "The source reads the configured A1 range, passes the configured valueRenderOption, validates malformed A1 input before a provider request, and does not switch to formula expressions."
+    },
+    {
+      "id": "header-row-normalization",
+      "check": "The first returned row supplies ordered headers; subsequent rows are flat records, preserve blank cells as null-like values, and pad missing trailing cells deterministically."
+    },
+    {
+      "id": "auth-boundary",
+      "check": "Bearer auth and access policy are flat profile attributes, the client is assembled from secrets, the synthetic token is absent from source code, and sensitivity artifacts are present."
+    },
+    {
+      "id": "read-only-single-range",
+      "check": "The generated source reads only the configured range and does not add write, append, update, clear, or permission-changing operations."
+    },
+    {
+      "id": "desktop-landing-boundary",
+      "check": "Rows are yielded through dlt and landed through the standard local DuckDB pipeline, with a connectivity-check artifact present but no live-provider claim."
+    }
+  ]
+}

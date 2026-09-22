@@ -1,0 +1,22 @@
+provider: google_sheets
+source_kind: google_sheets
+base_url: https://sheets.googleapis.com/v4
+auth:
+  type: bearer
+  token: gsheets_eval_token_6e4b1c9a2d7f
+  access: read-only
+spreadsheet:
+  id: spreadsheet_eval_42
+  range: Orders!A1:D3
+  value_render_option: UNFORMATTED_VALUE
+  has_headers: true
+  header_policy: preserve_ordered_contract_headers
+  malformed_range_example: Orders!A0:D3
+values:
+  configured_range: Orders!A1:D3
+  rows:
+    - [order_id, customer_id, amount, displayed_total]
+    - [O-1, C-1, 10.5, 11.0]
+    - [O-2, "", 20.0]
+  untouched_tab: InternalNotes
+  formula_policy: rendered_value
