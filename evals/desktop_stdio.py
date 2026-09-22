@@ -264,22 +264,28 @@ def _review_reader_error(message: str) -> dict[str, Any]:
     }
 
 
-def _review_reader_path(
-    path_value: object, allowlist_path: Path
-) -> tuple[Path, str | None]:
-    """Resolve a requested review path against the current private allowlist."""
+def _review_entry_is_sensitive(name: str) -> bool:
+    """Return whether a review-reader path component is credential-shaped."""
 
-    if not isinstance(path_value, str) or not path_value.strip():
-        return Path(), "path must be a non-empty absolute path"
-    requested = Path(path_value)
-    if not requested.is_absolute():
-        return Path(), "path must be absolute"
+    lowered = name.casefold()
+    return (
+        lowered in _REVIEW_READER_DENIED_NAMES
+        or lowered.startswith(".env.")
+        or lowered.endswith((".pem", ".key", ".p12", ".pfx"))
+    )
+
+
+def _review_reader_roots(
+    allowlist_path: Path,
+) -> tuple[list[tuple[Path, bool]], str | None]:
+    """Load and validate the current review roots without exposing values."""
+
     try:
         raw = json.loads(allowlist_path.read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return Path(), "review input allowlist is unavailable"
+        return [], "review input allowlist is unavailable"
     if not isinstance(raw, Mapping):
-        return Path(), "review input allowlist is malformed"
+        return [], "review input allowlist is malformed"
     roots: list[tuple[Path, bool]] = []
     for key, is_directory in (
         ("retained_capture_root", True),
@@ -290,26 +296,47 @@ def _review_reader_path(
             continue
         root = Path(value)
         if not root.is_absolute():
-            return Path(), "review input allowlist contains a non-absolute path"
+            return [], "review input allowlist contains a non-absolute path"
         try:
             resolved_root = root.resolve(strict=True)
         except OSError:
-            return Path(), "review input root is unavailable"
+            return [], "review input root is unavailable"
         if is_directory and not resolved_root.is_dir():
-            return Path(), "retained capture root is not a directory"
+            return [], "retained capture root is not a directory"
         if not is_directory and not resolved_root.is_file():
-            return Path(), "retained blueprint path is not a regular file"
+            return [], "retained blueprint path is not a regular file"
         roots.append((resolved_root, is_directory))
     if not roots:
-        return Path(), "review input allowlist is empty"
+        return [], "review input allowlist is empty"
+    return roots, None
+
+
+def _review_reader_available(allowlist_path: Path) -> bool:
+    """Whether the synthetic reader can be safely advertised right now."""
+
+    roots, error = _review_reader_roots(allowlist_path)
+    return error is None and bool(roots)
+
+
+def _review_reader_path(
+    path_value: object, allowlist_path: Path
+) -> tuple[Path, str | None]:
+    """Resolve a requested review path against the current private allowlist."""
+
+    if not isinstance(path_value, str) or not path_value.strip():
+        return Path(), "path must be a non-empty absolute path"
+    requested = Path(path_value)
+    if not requested.is_absolute():
+        return Path(), "path must be absolute"
+    roots, error = _review_reader_roots(allowlist_path)
+    if error is not None:
+        return Path(), error
     try:
         resolved = requested.resolve(strict=True)
     except OSError:
         return Path(), "requested review path is unavailable"
     if any(
-        part.lower() in _REVIEW_READER_DENIED_NAMES
-        or part.lower().startswith(".env.")
-        or part.lower().endswith((".pem", ".key", ".p12", ".pfx"))
+        _review_entry_is_sensitive(part)
         for part in resolved.parts
     ):
         return Path(), "requested review path is sensitive"
@@ -353,7 +380,7 @@ def _review_reader_result(
             for entry in sorted(path.iterdir(), key=lambda item: item.name):
                 if len(entries) >= max_lines:
                     break
-                if entry.name.lower() in _REVIEW_READER_DENIED_NAMES:
+                if _review_entry_is_sensitive(entry.name):
                     continue
                 entries.append(
                     {
@@ -381,12 +408,16 @@ def _review_reader_result(
     }
 
 
-def _augment_tools_list(message: Mapping[str, Any]) -> dict[str, Any]:
-    """Add the runner-owned reader without changing the supervisor's tools."""
+def _augment_tools_list(
+    message: Mapping[str, Any], *, allowlist_path: Path
+) -> dict[str, Any]:
+    """Add the reader only while a valid captured review is available."""
 
     augmented = dict(message)
     result = message.get("result")
     if not isinstance(result, Mapping) or not isinstance(result.get("tools"), list):
+        return augmented
+    if not _review_reader_available(allowlist_path):
         return augmented
     result_copy = dict(result)
     tools = list(result["tools"])
@@ -1508,7 +1539,9 @@ def run_stdio_proxy(spec_path: Path) -> int:
                     and not (state is not None and state.timed_out)
                     and response_operation == "tools/list"
                 ):
-                    output_message = _augment_tools_list(message)
+                    output_message = _augment_tools_list(
+                        message, allowlist_path=review_allowlist_path
+                    )
                     if output_message != message:
                         output_line = (
                             json.dumps(output_message, separators=(",", ":")).encode()
@@ -1596,6 +1629,12 @@ def run_stdio_proxy(spec_path: Path) -> int:
         with contextlib.suppress(OSError):
             bridge.shutdown(socket.SHUT_WR)
         reader.join(timeout=5)
+        # The child may close its bridge without answering every forwarded
+        # request. Drop correlation state before returning so a long-lived
+        # proxy cannot retain request metadata past the child lifecycle.
+        with state_lock:
+            pending.clear()
+            request_methods.clear()
         try:
             server_result = json.loads(
                 server_process_result_path.read_text(encoding="utf-8")

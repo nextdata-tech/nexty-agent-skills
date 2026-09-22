@@ -317,8 +317,23 @@ def test_reviewer_wait_without_target_is_fail_closed() -> None:
             "tool": "wait",
         },
     }
-    assert _reviewer_wait_without_target(wait, True) is True
+    # A completed wait item can be an intermediate app-server spelling that
+    # has not yet carried the child target or terminal state.  The turn-level
+    # pending-child check remains fail-closed at the actual turn boundary.
+    assert _reviewer_wait_without_target(wait, True) is False
     assert _reviewer_wait_without_target(wait, False) is False
+
+
+def test_reviewer_wait_without_target_is_fatal_only_with_explicit_failure() -> None:
+    wait = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "wait",
+            "status": "failed",
+        },
+    }
+    assert _reviewer_wait_without_target(wait, True) is True
 
 
 def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -> None:
@@ -452,6 +467,9 @@ def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     assert result.terminal_result_count == 1
     assert result.terminal_result_subtype == "success"
     assert result.terminal_result_is_error is False
+    assert result.provider_model_calls == 1
+    assert result.input_tokens == 3
+    assert result.output_tokens == 2
     assert result.last_mcp_call == "advance_workflow:ok"
     assert result.tool_calls[0].name == "mcp__nxd-desktop__advance_workflow"
     assert observations[0]["tool"] == "advance_workflow"

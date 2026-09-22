@@ -19,17 +19,34 @@ patch. The operator now also gives a simultaneous timeout precedence over a
 diagnostic wedge, and the Codex review lock is released only for the review
 requirement it actually satisfied.
 
+The same hardening pass makes continuation provider-neutral, keeps Codex
+thread identities resumable through the native checkpoint seam, persists a
+minimal report for an abort before grading, and records report-safe terminal
+and provider-usage diagnostics. Reviewer evidence now carries a prompt hash,
+intermediate reviewer waits remain non-fatal, and the review proxy advertises
+and serves its synthetic reader only while a validated allowlist exists. Core
+Claude runs perform a non-generative authentication preflight; provider usage
+limits remain an external condition because the local CLI exposes no quota
+endpoint.
+
 The carrying B1 Codex attempt ended incomplete after a malformed native file
 change, so it is not a before/after scenario result and no scenario pass is
 claimed. The focused regression suite exercises the corrected event handling,
-terminal classification, review lock, bounded review reader, and MCP proxy.
+terminal classification, provider continuation, durable abort reporting,
+review lock, bounded review reader, authentication preflight, and MCP proxy.
 
 ## Evidence
 
 - `evals/dp-scenarios/tests/test_runner_codex_adapter.py` — rejected native
-  file changes remain recoverable and non-review requirement reports do not
-  clear the review lock.
+  file changes remain recoverable, provider usage is report-safe, and
+  non-review requirement reports do not clear the review lock.
 - `evals/dp-scenarios/tests/test_operator_engine.py` — timeout wins over a
   simultaneous environment diagnostic.
 - `evals/tests/test_desktop_stdio.py` — the runner-owned review reader accepts
   the reviewer’s real bounds and remains path/sensitivity constrained.
+- `evals/dp-scenarios/tests/test_runner_checkpoint.py` and
+  `evals/dp-scenarios/tests/test_runner_tier.py` — provider-neutral native
+  continuation remains bound to the exact execution identity.
+- `evals/dp-scenarios/tests/test_run_local_claude.py` and
+  `evals/dp-scenarios/tests/test_runner_report.py` — authentication preflight
+  and secret-safe abort/usage diagnostics.

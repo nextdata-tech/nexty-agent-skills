@@ -12,6 +12,7 @@ from dp_scenarios.runner.checkpoint import (
     CheckpointState,
     CheckpointStore,
     ClaudeSessionIdentity,
+    is_valid_provider_session_id,
     checkpoint_prefix_digest,
     redact_json,
 )
@@ -480,9 +481,18 @@ def test_native_session_identity_persists_only_uuid_and_execution_digest(tmp_pat
     assert set(persisted["native_session"]) == {"session_id", "execution_identity_digest"}
 
 
-def test_native_session_identity_rejects_non_uuid_or_mismatched_execution_digest() -> None:
-    with pytest.raises(CheckpointError, match="UUID"):
-        ClaudeSessionIdentity("not-a-session", "0" * 64)
+def test_provider_session_identity_accepts_opaque_provider_ids() -> None:
+    identity = ClaudeSessionIdentity("thread_codex_01ABC.def:123", "0" * 64)
+    assert identity.session_id == "thread_codex_01ABC.def:123"
+    assert is_valid_provider_session_id(identity.session_id)
+
+
+def test_provider_session_identity_rejects_unsafe_or_mismatched_values() -> None:
+    assert not is_valid_provider_session_id("")
+    assert not is_valid_provider_session_id("contains whitespace")
+    assert not is_valid_provider_session_id("../outside")
+    with pytest.raises(CheckpointError, match="safe identifier"):
+        ClaudeSessionIdentity("not a safe session", "0" * 64)
     with pytest.raises(CheckpointError, match="execution identity"):
         ClaudeSessionIdentity("00000000-0000-4000-8000-000000000001", "not-a-digest")
 

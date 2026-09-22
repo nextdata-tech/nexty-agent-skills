@@ -334,6 +334,7 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
     capture.mkdir()
     (capture / "build-record.json").write_text('{"status":"ok"}\n')
     (capture / ".env").write_text("TOKEN=must-not-be-read\n")
+    (capture / ".env.local").write_text("TOKEN=must-not-be-read\n")
     blueprint = tmp_path / "blueprint.md"
     blueprint.write_text("# Approved blueprint\n")
     session = ds.DesktopStdioSession(
@@ -414,6 +415,7 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
         )
         assert "build-record.json" in listing["result"]["content"][0]["text"]
         assert ".env" not in listing["result"]["content"][0]["text"]
+        assert ".env.local" not in listing["result"]["content"][0]["text"]
         outside = call(
             {
                 "jsonrpc": "2.0",
@@ -447,6 +449,13 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             proxy.kill()
             proxy.wait()
         session.cleanup()
+
+
+def test_review_reader_is_not_advertised_without_a_live_allowlist(tmp_path):
+    message = {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
+    assert ds._augment_tools_list(
+        message, allowlist_path=tmp_path / "missing-review-allowlist.json"
+    ) == message
 
 
 def test_review_allowlist_is_cleared_after_review_report(tmp_path):

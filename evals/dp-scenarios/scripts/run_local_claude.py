@@ -40,7 +40,7 @@ from dp_scenarios.runner.local import (
     staged_job_helper_dir,
     temporary_plugin,
 )
-from dp_scenarios.runner.report import write_report
+from dp_scenarios.runner.report import write_abort_report, write_report
 from dp_scenarios.runner.review_guard import (
     DEFAULT_REVIEW_TIMEOUT_SECONDS,
     validate_review_timeout_seconds,
@@ -96,6 +96,55 @@ def _resolve_executable(explicit: Path | None, name: str) -> Path:
     if not candidate.is_file() or not candidate.stat().st_mode & 0o111:
         raise TierError(f"{name} is not an executable file: {candidate}")
     return candidate
+
+
+def _run_claude_provider_preflight(
+    claude: Path,
+    *,
+    oauth_token: str | None = None,
+    config_dir: Path | None = None,
+) -> None:
+    """Verify Claude authentication before starting an expensive tier run.
+
+    ``claude auth status`` is the only supported local authentication probe;
+    the CLI exposes no usage/quota endpoint.  Keep its JSON output in memory,
+    inspect only the boolean login result, and never copy provider diagnostics
+    into a report or exception.  This catches expired/missing authentication
+    without pretending that a provider session limit can be predicted locally.
+    """
+
+    child_environment = os.environ.copy()
+    if oauth_token is not None:
+        child_environment[CLAUDE_OAUTH_TOKEN] = oauth_token
+    if config_dir is not None:
+        child_environment["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    try:
+        completed = subprocess.run(
+            [str(claude), "auth", "status", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=child_environment,
+            timeout=15.0,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TierError("Claude provider authentication preflight timed out") from exc
+    except OSError as exc:
+        raise TierError("Claude provider authentication preflight could not start") from exc
+    if completed.returncode != 0:
+        raise TierError("Claude provider authentication preflight failed")
+    try:
+        status = json.loads(completed.stdout)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise TierError("Claude provider authentication preflight returned invalid status") from exc
+    if not isinstance(status, Mapping) or status.get("loggedIn") is not True:
+        raise TierError("Claude provider authentication preflight found no active login")
+
+
+def _needs_provider_preflight(scenarios: Sequence[Scenario]) -> bool:
+    """Return whether selected scenarios can spend provider-backed turns."""
+
+    return any(getattr(scenario, "tier", None) in {"core", "full", "live"} for scenario in scenarios)
 
 
 def _resolve_codex_executable(explicit: Path | None) -> Path:
@@ -440,7 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--native-continuation",
         action="store_true",
         help=(
-            "explicitly opt into persisted Claude sessions and native-resume "
+            "explicitly opt into persisted provider sessions and native-resume "
             "checkpoints; requires --native-run-root and --checkpoint-dir "
             "for a fresh run"
         ),
@@ -575,11 +624,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--allow-host-home is not supported by the Codex backend: "
             "the live Codex session must retain the disposable run HOME"
         )
-    if args.agent_backend == "codex" and args.native_continuation:
-        raise TierError(
-            "--native-continuation is not yet supported by the Codex backend; "
-            "Codex app-server continuity is kept within one live runner process"
-        )
     if args.codex_multi_agent_v2 and args.agent_backend != "codex":
         raise TierError("--codex-multi-agent-v2 requires --agent-backend codex")
     agent_model = args.model or ("sonnet" if args.agent_backend == "claude" else "gpt-5.6-luna")
@@ -710,7 +754,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     def supervisor_reader(scenario: Scenario, environment: Any, epoch: int) -> FileSupervisorRecordReader:
         return FileSupervisorRecordReader(environment.base_dir / "artifacts" / "supervisor-facts.json")
 
+    result = None
+    conversations: tuple[Path, ...] = ()
     try:
+        if args.agent_backend == "claude" and _needs_provider_preflight(scenarios):
+            assert claude is not None
+            _run_claude_provider_preflight(
+                claude,
+                oauth_token=claude_oauth_token,
+                config_dir=claude_config_dir,
+            )
         result = TierRunner(
             scenarios,
             pins=pins,
@@ -760,6 +813,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         _, _, conversations = write_report(
             result, json_path=report_dir / "report.json", summary_path=report_dir / "summary.txt"
         )
+    except (TierError, DriverConfigError, LocalRunnerError) as exc:
+        # Keep an operator-visible, secret-safe artifact even when TierRunner
+        # aborts before it can construct a TierResult. The normal outer error
+        # path still returns a non-success exit status.
+        write_abort_report(
+            exc,
+            json_path=report_dir / "report.json",
+            summary_path=report_dir / "summary.txt",
+        )
+        print(f"report: {report_dir / 'report.json'}")
+        print(f"summary: {report_dir / 'summary.txt'}")
+        raise
     finally:
         plugin_owner.cleanup()
 

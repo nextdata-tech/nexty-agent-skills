@@ -7,7 +7,9 @@ and query rows are never recovered from an operator's prose.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -17,6 +19,9 @@ from dp_scenarios.ledger import read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding
 from dp_scenarios.ledger.lint import LintReport
 from dp_scenarios.ledger.schema import ACTION_KINDS
+
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1411,7 +1416,11 @@ def _review_claim_text(value: object) -> tuple[str, ...]:
 
 
 def _completed_report_safe_review(
-    observation: object, position: EventPosition, *, workflow: str | None = None
+    observation: object,
+    position: EventPosition,
+    *,
+    prompt: object = None,
+    workflow: str | None = None,
 ) -> ReviewDispatch | None:
     """Read adapter-derived review evidence without trusting redacted prompts.
 
@@ -1440,6 +1449,15 @@ def _completed_report_safe_review(
         )
     ) or observation.get("subagent_type") != "general-purpose":
         return None
+    prompt_hash = observation.get("review_prompt_sha256")
+    if not isinstance(prompt_hash, str) or _SHA256_HEX_RE.fullmatch(prompt_hash) is None:
+        return None
+    # Live prompts are redacted before the report is persisted. When a replay
+    # still carries the original prompt, verify the hash rather than trusting
+    # a detached boolean observation; the hash itself never reveals the path.
+    if isinstance(prompt, str) and prompt != "[redacted]":
+        if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != prompt_hash:
+            return None
     if workflow is not None and observation.get("workflow") != workflow:
         return None
     closure_path = _normalized_closure_path(observation.get("closure_path"))
@@ -1473,7 +1491,10 @@ def _completed_review_delegation(
     if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
         return None
     report_safe = _completed_report_safe_review(
-        call.get("observation"), position, workflow=workflow
+        call.get("observation"),
+        position,
+        prompt=arguments.get("prompt"),
+        workflow=workflow,
     )
     if report_safe is not None:
         return report_safe

@@ -24,7 +24,6 @@ import subprocess
 import time
 from types import MappingProxyType
 from typing import Any, Protocol
-import uuid
 
 from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
 from dp_scenarios.failure_reasons import (
@@ -32,7 +31,7 @@ from dp_scenarios.failure_reasons import (
     CHILD_NO_TERMINAL_RESULT,
     classify_failure_reason,
 )
-from dp_scenarios.runner.checkpoint import redact_json
+from dp_scenarios.runner.checkpoint import is_valid_provider_session_id, redact_json
 from dp_scenarios.operator.transport import (
     Attachment,
     OperatorMessage,
@@ -171,6 +170,9 @@ def turn_result_to_dict(result: TurnResult) -> dict[str, object]:
         "terminal_result_count": result.terminal_result_count,
         "terminal_result_subtype": result.terminal_result_subtype,
         "terminal_result_is_error": result.terminal_result_is_error,
+        "provider_model_calls": result.provider_model_calls,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
     }
 
 
@@ -691,12 +693,8 @@ class NativeResumeSession:
         source_root: str | Path | None = None,
         source_snapshot: Mapping[tuple[int, int], tuple[str, bytes]] | None = None,
     ) -> None:
-        try:
-            parsed = uuid.UUID(session_id)
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise SessionError("native resume session id must be a UUID") from exc
-        if str(parsed) != session_id:
-            raise SessionError("native resume session id must use canonical UUID spelling")
+        if not is_valid_provider_session_id(session_id):
+            raise SessionError("native resume session id must be safe identifier text")
         self.prefix = prefix if isinstance(prefix, ReplayRecording) else ReplayRecording.read(prefix)
         self.prefix = _hydrate_report_safe_recording(self.prefix, source_root, source_snapshot)
         self._replay = ReplaySession(self.prefix, artifact_root=artifact_root)
@@ -717,7 +715,7 @@ class NativeResumeSession:
             raise SessionError("native resume session was started more than once")
         resumed = self.transport.resume_session(self.session_id)
         if resumed != self.session_id:
-            raise SessionError("native transport did not accept the checkpoint Claude session id")
+            raise SessionError("native transport did not accept the checkpoint provider session id")
         self._started = True
         return self.session_id
 
@@ -848,12 +846,8 @@ class LiveSession:
             raise SessionError("native resume requires an explicit resume command builder")
         if not isinstance(session_id, str) or not session_id:
             raise SessionError("native resume requires a session id")
-        try:
-            parsed = uuid.UUID(session_id)
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise SessionError("native resume session id must be a UUID") from exc
-        if str(parsed) != session_id:
-            raise SessionError("native resume session id must use canonical UUID spelling")
+        if not is_valid_provider_session_id(session_id):
+            raise SessionError("native resume session id must be safe identifier text")
         if self._process is not None:
             raise SessionError("native resume cannot replace an active live process")
         command = tuple(self.resume_command_builder(session_id))

@@ -430,6 +430,23 @@ def _item_result(item: Mapping[str, object]) -> object:
     return item.get("content")
 
 
+def _provider_usage(value: object) -> tuple[int | None, int | None]:
+    """Read bounded provider token counters without retaining raw responses."""
+
+    usage = value.get("usage") if isinstance(value, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return None, None
+    values: list[int | None] = []
+    for key in ("input_tokens", "output_tokens"):
+        candidate = usage.get(key)
+        values.append(
+            candidate
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate >= 0
+            else None
+        )
+    return values[0], values[1]
+
+
 def _collab_agent_result(item: Mapping[str, object]) -> Mapping[str, object]:
     """Project a completed Codex child state into the shared Agent shape."""
 
@@ -524,6 +541,7 @@ def _collab_debug_label(item: Mapping[str, object]) -> str:
     child_statuses, _ = _collab_states(item)
     if child_statuses:
         parts.append("child_status=" + ",".join(child_statuses))
+    parts.append("keys=" + ",".join(sorted(str(key) for key in item)))
     parts.append(f"receiver_count={len(_collab_receiver_ids(item))}")
     return ",".join(parts) if parts else "state=unknown"
 
@@ -621,10 +639,11 @@ def _reviewer_wait_without_target(
 ) -> bool:
     """Whether a reviewer wait was issued without a child target.
 
-    A one-shot reviewer must be waited on by the receiver thread id returned by
-    ``spawnAgent``.  A zero-target wait cannot prove that this parent owns or
-    observed the reviewer and, on the app-server, can remain pending until the
-    parent turn deadline.  Treat it as an incomplete handoff immediately.
+    A one-shot reviewer should be waited on by the receiver thread id returned
+    by ``spawnAgent``.  App-server versions have emitted intermediate completed
+    wait items before that target or the child terminal state was attached;
+    those are diagnosed at the turn boundary instead of being treated as an
+    immediate provider failure.  An explicit failed wait remains fatal.
     """
 
     if event.get("type") != "item.completed":
@@ -635,10 +654,18 @@ def _reviewer_wait_without_target(
         "collab_agent_tool_call",
     }:
         return False
-    return (
-        item.get("tool") == "wait"
-        and reviewer_started
-        and not _collab_receiver_ids(item)
+    if item.get("tool") != "wait" or not reviewer_started:
+        return False
+    child_statuses, _ = _collab_states(item)
+    status = item.get("status")
+    return bool(
+        not _collab_receiver_ids(item)
+        and (
+            item.get("is_error") is True
+            or bool(item.get("error"))
+            or status in _COLLAB_FAILURE_STATUSES
+            or any(child in _COLLAB_FAILURE_STATUSES for child in child_statuses)
+        )
     )
 
 
@@ -657,6 +684,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         turn = params.get("turn")
         turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         status = turn.get("status") if isinstance(turn, Mapping) else None
+        usage = turn.get("usage") if isinstance(turn, Mapping) else params.get("usage")
         event_type = {
             "completed": "turn.completed",
             "interrupted": "turn.interrupted",
@@ -666,6 +694,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             "turn_id": turn_id,
             "is_error": status != "completed",
             "error": turn.get("error") if isinstance(turn, Mapping) else None,
+            "usage": usage,
         }
     if method == "turn/started":
         return {"type": "turn.started"}
@@ -793,6 +822,9 @@ def parse_codex_events(
     terminal_count = 0
     terminal_subtype: str | None = None
     terminal_is_error: bool | None = None
+    input_tokens_total = 0
+    output_tokens_total = 0
+    token_usage_seen = False
     thread_id = session_id
     build_failures = 0
     environment_details: list[str] = []
@@ -858,6 +890,13 @@ def parse_codex_events(
             terminal_subtype = "success"
             raw_error = event.get("is_error")
             terminal_is_error = raw_error if isinstance(raw_error, bool) else False
+            input_tokens, output_tokens = _provider_usage(event)
+            if input_tokens is not None:
+                input_tokens_total += input_tokens
+                token_usage_seen = True
+            if output_tokens is not None:
+                output_tokens_total += output_tokens
+                token_usage_seen = True
             continue
         if event_type == "mcp_server_failed":
             environment_details.append(
@@ -1040,6 +1079,9 @@ def parse_codex_events(
         terminal_result_count=terminal_count,
         terminal_result_subtype=terminal_subtype,
         terminal_result_is_error=terminal_is_error,
+        provider_model_calls=terminal_count,
+        input_tokens=input_tokens_total if token_usage_seen else None,
+        output_tokens=output_tokens_total if token_usage_seen else None,
     )
     return result, observations
 

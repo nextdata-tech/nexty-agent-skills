@@ -24,6 +24,54 @@ class ReportError(ValueError):
     """Raised when a report destination cannot be written safely."""
 
 
+def write_abort_report(
+    error: BaseException,
+    *,
+    json_path: str | Path,
+    summary_path: str | Path | None = None,
+) -> tuple[Path, Path | None]:
+    """Persist a minimal report when no ``TierResult`` could be produced.
+
+    Runner setup, transport construction, and early session failures happen
+    outside the normal tier-result path.  Keep those runs durable and honest
+    without serializing the exception text, which can contain provider paths
+    or accidental credential-shaped diagnostics.
+    """
+
+    machine_target = Path(json_path)
+    machine_target.parent.mkdir(parents=True, exist_ok=True)
+    report = {
+        "report_format_version": 1,
+        "state": "incomplete",
+        "verdict": "incomplete",
+        "failure_reason": "runner_abort",
+        "error_type": type(error).__name__,
+        "efficiency_is_reported_only": True,
+    }
+    try:
+        machine_target.write_text(
+            json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ReportError(f"could not write abort report {machine_target}: {exc}") from exc
+
+    summary_target: Path | None = None
+    if summary_path is not None:
+        summary_target = Path(summary_path)
+        summary_target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            summary_target.write_text(
+                "Tier verdict: INCOMPLETE\n"
+                "Run aborted before a complete TierResult was produced.\n"
+                f"Error type: {type(error).__name__}\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise ReportError(f"could not write abort summary {summary_target}: {exc}") from exc
+    return machine_target, summary_target
+
+
 def machine_report(result: TierResult) -> dict[str, object]:
     """Return the stable JSON-ready tier document."""
 
@@ -174,8 +222,18 @@ def human_summary(result: TierResult) -> str:
                     lines.append("  driver: authored every substitutable turn")
             lines.append(
                 f"  efficiency: turns={run.efficiency.turns!s}, "
-                f"model-calls={run.efficiency.model_calls!s}, wall-clock={run.efficiency.wall_clock!s}"
+                f"model-calls={run.efficiency.model_calls!s}, "
+                f"input-tokens={run.input_tokens!s}, output-tokens={run.output_tokens!s}, "
+                f"wall-clock={run.efficiency.wall_clock!s}"
             )
+            terminal_counts = tuple(
+                turn.result.terminal_result_count for turn in run.replay_recording.turns
+            )
+            if any(count != 1 for count in terminal_counts):
+                lines.append(
+                    "  terminal diagnostics: expected exactly one provider terminal "
+                    f"result per turn; counts={terminal_counts}"
+                )
             lines.append(f"  manifest: run_id={run.manifest.run_id}, fixture={run.manifest.fixture_dir_hash}")
         if summary.repeatability.demonstrated_once is not None:
             lines.append("- repeatability: demonstrated-once; no rate is rendered")
@@ -305,5 +363,6 @@ __all__ = [
     "render_human_summary",
     "render_machine_report",
     "write_report",
+    "write_abort_report",
     "write_conversations",
 ]

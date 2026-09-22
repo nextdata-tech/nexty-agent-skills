@@ -252,6 +252,14 @@ evidence directory; the report and transcript artifacts are retained under
 runs smoke by default; `--tier live` selects the current live package when no
 package is named.
 
+Before a selected `core`, `full`, or `live` Claude run starts its canary or
+scenario sessions, the entrypoint performs a non-generative
+`claude auth status --json` preflight and checks only `loggedIn`. Its captured
+provider response is never printed or persisted. Claude exposes no local
+usage/quota API, so a provider session-limit response can still occur after a
+successful authentication preflight; such a run remains incomplete evidence,
+not a pass.
+
 For long live runs, pass an explicit stable `--checkpoint-dir` to emit a
 credential-free, per-turn handoff checkpoint after each completed turn. The
 checkpoint identity binds the scenario, script, skill/model, supervisor,
@@ -259,16 +267,17 @@ fixture, and grading pins; it fails closed on drift and never overwrites a
 checkpoint payload. This is durable handoff evidence, not native Claude
 continuation, and it does not claim that B1 passes.
 
-Native Claude continuation is a separate, explicit opt-in seam. Add
+Native provider continuation is a separate, explicit opt-in seam. Add
 `--native-continuation --native-run-root <persistent-root>` to a fresh run
 (alongside `--checkpoint-dir`). The native checkpoint stores only a canonical
-Claude session UUID and the SHA-256 execution-identity digest. To resume one
+provider session/thread identifier and the SHA-256 execution-identity digest. To resume one
 committed prefix, pass `--native-resume-checkpoint` together with the same
 persistent run root; the runner replays the committed operator prefix locally,
-verifies each message, and starts Claude at the next operator turn with
-`--resume <session-id>`, continuing through the remaining declared turns in
-that provider session. It never sends the committed prefix to Claude again or
-injects a synthetic opening prompt.
+verifies each message, and asks the selected provider adapter to continue at
+the next operator turn in that provider session. Claude uses `--resume
+<session-id>`; Codex uses its app-server thread/resume operation. The runner
+never sends the committed prefix to the provider again or injects a synthetic
+opening prompt.
 Redacted touched-file observations are rehydrated only from the retained
 workspace and must match their committed hash and size; changed or missing
 files reject the resume.
@@ -507,9 +516,10 @@ run. This keeps the runner-owned MCP connection and opaque provider thread
 identity across operator turns; a fresh Codex process is not started for each
 turn. The adapter stages a disposable Codex home and symlinks only the
 host-owned auth handle, so host MCP configuration and plugin state do not
-enter the run. Native continuation across a process restart is not currently
-supported by this backend; use the ordinary credential-free handoff
-checkpoints, then start a new Codex run. Claude-only flags such as
+enter the run. Codex can also use the explicit native-continuation checkpoint
+seam: its provider thread identity is persisted in the credential-free
+checkpoint and resumed through the app-server when the same persistent run
+root and execution identity are supplied. Claude-only flags such as
 `--max-budget-usd` and Claude tool-grant flags are rejected or ignored for
 this backend. Codex's workspace sandbox is provider-owned, so tool-restricted
 scenarios are not directly comparable with Claude runs that enforce a

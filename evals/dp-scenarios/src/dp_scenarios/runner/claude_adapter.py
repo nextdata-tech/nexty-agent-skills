@@ -13,6 +13,7 @@ import argparse
 import base64
 import contextlib
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -757,6 +758,11 @@ def _review_observation(
     arguments = use.get("input")
     prompt = arguments.get("prompt") if isinstance(arguments, Mapping) else None
     marker = _parse_review_marker(prompt)
+    prompt_sha256 = (
+        hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        if isinstance(prompt, str)
+        else None
+    )
     claims = _review_claim_text(_payload_from_call(paired)) if paired is not None else []
     result_ok = (
         paired is not None
@@ -786,6 +792,11 @@ def _review_observation(
         "review_skill_instruction": skill_instruction,
         "claims_returned": claims_returned,
         "result_ok": result_ok,
+        # Prompts are redacted from report-safe artifacts because they contain
+        # retained paths.  Keep a credential-free integrity handle so replay
+        # consumers can distinguish adapter-derived evidence from a hand-made
+        # boolean observation.
+        "review_prompt_sha256": prompt_sha256,
         "workflow": review_workflow,
     }
     if marker is not None:
@@ -800,6 +811,7 @@ def _review_observation(
             skill_instruction,
             claims_returned,
             result_ok,
+            prompt_sha256 is not None,
             review_workflow is not None,
         )
     )
@@ -858,6 +870,23 @@ def _changed_files(before: Mapping[str, bytes], after: Mapping[str, bytes]) -> t
     )
 
 
+def _provider_usage(value: object) -> tuple[int | None, int | None]:
+    """Read bounded provider token counters without retaining raw responses."""
+
+    usage = value.get("usage") if isinstance(value, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return None, None
+    values: list[int | None] = []
+    for key in ("input_tokens", "output_tokens"):
+        candidate = usage.get(key)
+        values.append(
+            candidate
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate >= 0
+            else None
+        )
+    return values[0], values[1]
+
+
 def parse_claude_events(
     events: Sequence[Mapping[str, object]],
     *,
@@ -884,6 +913,9 @@ def parse_claude_events(
     terminal_result_count = 0
     terminal_result_subtype: str | None = None
     terminal_result_is_error: bool | None = None
+    input_tokens_total = 0
+    output_tokens_total = 0
+    token_usage_seen = False
 
     for event in events:
         event_type = event.get("type")
@@ -931,6 +963,13 @@ def parse_claude_events(
                 transcript.append("[tool_result] " + redact_text(json.dumps(record["content"], default=str)))
         elif event_type == "result":
             terminal_result_count += 1
+            input_tokens, output_tokens = _provider_usage(event)
+            if input_tokens is not None:
+                input_tokens_total += input_tokens
+                token_usage_seen = True
+            if output_tokens is not None:
+                output_tokens_total += output_tokens
+                token_usage_seen = True
             raw_answer = event.get("result", "")
             final_answer = redact_text(raw_answer if isinstance(raw_answer, str) else str(raw_answer))
             raw_is_error = event.get("is_error")
@@ -1050,6 +1089,9 @@ def parse_claude_events(
             terminal_result_count=terminal_result_count,
             terminal_result_subtype=terminal_result_subtype,
             terminal_result_is_error=terminal_result_is_error,
+            provider_model_calls=terminal_result_count,
+            input_tokens=input_tokens_total if token_usage_seen else None,
+            output_tokens=output_tokens_total if token_usage_seen else None,
         ),
         mcp_observations,
     )

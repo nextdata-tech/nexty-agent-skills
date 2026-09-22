@@ -184,7 +184,7 @@ DP_RAW_RUN_FIELDS = frozenset({
     "scenario_id", "epoch", "terminal_state", "stop_condition", "failure_modes",
     "ungraded_criteria", "score", "efficiency", "manifest", "replay_recording",
     "bundle_digest", "replay_verification", "qualification", "interruption",
-    "route_fidelity",
+    "route_fidelity", "terminal_diagnostics",
 })
 DP_COMPACT_RUN_FIELDS = frozenset({
     "skill_set", "scenario_id", "result", "epoch", "terminal_state",
@@ -223,7 +223,11 @@ DP_TURN_RESULT_FIELDS = frozenset({
     "approval_artifact", "build_failed", "build_failure_count", "reported",
     "environment_wedged", "turn_timed_out", "environment_detail", "failure_reason",
     "last_mcp_call", "session_id", "terminal_result_count", "terminal_result_subtype",
-    "terminal_result_is_error",
+    "terminal_result_is_error", "provider_model_calls", "input_tokens", "output_tokens",
+})
+DP_TERMINAL_DIAGNOSTICS_FIELDS = frozenset({"root_turns", "exactly_one_terminal_result_per_turn"})
+DP_TERMINAL_DIAGNOSTIC_TURN_FIELDS = frozenset({
+    "turn", "terminal_result_count", "terminal_result_subtype", "terminal_result_is_error",
 })
 DP_TOOL_CALL_FIELDS = frozenset({"name", "arguments", "result"})
 DP_TOUCHED_FILE_FIELDS = frozenset({"path", "content"})
@@ -1022,13 +1026,22 @@ def _validate_score(value: Any, path: str, *, compact: bool) -> None:
 
 
 def _validate_efficiency(value: Any, path: str) -> None:
-    expected = {"turns", "model_calls", "observed_turns", "observed_calls"}
-    raw = _exact_keys(value, expected, path, required=expected)
+    expected = {
+        "turns", "model_calls", "observed_turns", "observed_calls",
+        "provider_model_calls", "input_tokens", "output_tokens",
+    }
+    required = {"turns", "model_calls", "observed_turns", "observed_calls"}
+    raw = _exact_keys(value, expected, path, required=required)
     _number(raw["turns"], f"{path}.turns", minimum=0)
     if raw["model_calls"] is not None:
         _number(raw["model_calls"], f"{path}.model_calls", minimum=0)
     _integer(raw["observed_turns"], f"{path}.observed_turns", minimum=0)
     _integer(raw["observed_calls"], f"{path}.observed_calls", minimum=0)
+    if "provider_model_calls" in raw:
+        _integer(raw["provider_model_calls"], f"{path}.provider_model_calls", minimum=0)
+    for field in ("input_tokens", "output_tokens"):
+        if field in raw and raw[field] is not None:
+            _integer(raw[field], f"{path}.{field}", minimum=0)
 
 
 def _validate_qualification(value: Any, path: str) -> None:
@@ -1105,7 +1118,8 @@ def _validate_replay_recording(value: Any, path: str) -> None:
 
 
 def _validate_turn_result(value: Any, path: str) -> None:
-    raw = _exact_keys(value, DP_TURN_RESULT_FIELDS, path, required=DP_TURN_RESULT_FIELDS)
+    legacy_fields = DP_TURN_RESULT_FIELDS - {"provider_model_calls", "input_tokens", "output_tokens"}
+    raw = _exact_keys(value, DP_TURN_RESULT_FIELDS, path, required=legacy_fields)
     _encoded_bytes(raw["transcript_delta"], f"{path}.transcript_delta")
     _encoded_bytes(raw["agent_message"], f"{path}.agent_message")
     if raw["approval_artifact"] is not None:
@@ -1137,6 +1151,40 @@ def _validate_turn_result(value: Any, path: str) -> None:
     _nullable_code(raw["last_mcp_call"], f"{path}.last_mcp_call")
     if raw["terminal_result_is_error"] is not None:
         _boolean(raw["terminal_result_is_error"], f"{path}.terminal_result_is_error")
+    if "provider_model_calls" in raw:
+        _integer(raw["provider_model_calls"], f"{path}.provider_model_calls", minimum=0)
+    for field in ("input_tokens", "output_tokens"):
+        if field in raw and raw[field] is not None:
+            _integer(raw[field], f"{path}.{field}", minimum=0)
+
+
+def _validate_terminal_diagnostics(value: Any, path: str) -> None:
+    raw = _exact_keys(
+        value,
+        DP_TERMINAL_DIAGNOSTICS_FIELDS,
+        path,
+        required=DP_TERMINAL_DIAGNOSTICS_FIELDS,
+    )
+    _boolean(
+        raw["exactly_one_terminal_result_per_turn"],
+        f"{path}.exactly_one_terminal_result_per_turn",
+    )
+    turns = raw["root_turns"]
+    if not isinstance(turns, list):
+        raise BenchmarkError(f"{path}.root_turns must be an array")
+    for index, turn_value in enumerate(turns):
+        turn_path = f"{path}.root_turns[{index}]"
+        turn = _exact_keys(
+            turn_value,
+            DP_TERMINAL_DIAGNOSTIC_TURN_FIELDS,
+            turn_path,
+            required=DP_TERMINAL_DIAGNOSTIC_TURN_FIELDS,
+        )
+        _integer(turn["turn"], f"{turn_path}.turn", minimum=1)
+        _integer(turn["terminal_result_count"], f"{turn_path}.terminal_result_count", minimum=0)
+        _nullable_text(turn["terminal_result_subtype"], f"{turn_path}.terminal_result_subtype")
+        if turn["terminal_result_is_error"] is not None:
+            _boolean(turn["terminal_result_is_error"], f"{turn_path}.terminal_result_is_error")
 
 
 def _validate_replay_verification(value: Any, path: str) -> None:
@@ -1287,7 +1335,8 @@ def _validate_canary(value: Any, path: str) -> None:
 
 def _validate_run(value: Any, path: str, scenario_id: str, *, compact: bool) -> dict[str, Any]:
     expected = DP_COMPACT_RUN_FIELDS if compact else DP_RAW_RUN_FIELDS
-    raw = _exact_keys(value, expected, path, required=expected)
+    required = expected if compact else expected - {"terminal_diagnostics"}
+    raw = _exact_keys(value, expected, path, required=required)
     if raw["scenario_id"] != scenario_id:
         raise BenchmarkError(f"{path}.scenario_id does not match {scenario_id!r}")
     _integer(raw["epoch"], f"{path}.epoch", minimum=1)
@@ -1299,6 +1348,8 @@ def _validate_run(value: Any, path: str, scenario_id: str, *, compact: bool) -> 
     _validate_qualification(raw["qualification"], f"{path}.qualification")
     _validate_interruption(raw["interruption"], f"{path}.interruption", compact=compact)
     _validate_route_fidelity(raw["route_fidelity"], f"{path}.route_fidelity", compact=compact)
+    if not compact and "terminal_diagnostics" in raw:
+        _validate_terminal_diagnostics(raw["terminal_diagnostics"], f"{path}.terminal_diagnostics")
     if compact:
         if raw["skill_set"] != "dp-scenarios":
             raise BenchmarkError(f"{path}.skill_set must be 'dp-scenarios'")
