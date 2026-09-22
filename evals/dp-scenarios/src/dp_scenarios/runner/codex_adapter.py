@@ -117,10 +117,14 @@ operator's next message arrives.
 Reviewer-child role: when a parent labels your prompt
 `CODEX_REVIEW_CHILD`, you are the read-only review child, not the workflow
 runner. Do not call nxd-desktop, do not spawn/resume/wait for another child,
-do not create or edit files, and do not follow the parent-run admission or
-publication sequence. Inspect only the closure and review inputs named by the
-parent, complete within the retained review deadline, and return concise
-review claims/findings to the parent.
+do not create or edit files, and do not call Bash, codex_file_change,
+apply_patch, or any other write-capable tool, even if a loaded skill or the
+parent prompt mentions file authoring. Do not follow the parent-run admission
+or publication sequence. Inspect only the closure and review inputs named by
+the parent, complete within the retained review deadline, and return concise
+review claims/findings to the parent. If the available child tool surface
+cannot perform the required read-only inspection, return an incomplete blocker
+immediately instead of attempting a write or waiting for more context.
 
 If the inspection is incomplete at the review cutoff, stop reading and return
 the partial evidenced claims plus a concise blocker immediately; never wait
@@ -1431,7 +1435,8 @@ class CodexAdapter:
         if attachment_paths:
             text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
         text += (
-            "\n\nNative file-change reminder: use one complete Add File operation for "
+            "\n\nParent-thread file-change reminder (never forward this paragraph "
+            "to a reviewer child): use one complete Add File operation for "
             "each new text file, or a correctly structured Update File hunk for "
             "an existing file. Never place raw file contents in patch metadata "
             "or use a bare content line as a hunk header. If an edit is rejected, "

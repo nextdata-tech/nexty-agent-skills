@@ -74,6 +74,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
     assert "owning parent’s one-shot reviewer lifecycle" in CODEX_SYSTEM_PROMPT
     assert "reviewer child\nmay use only its allowed read-only inspection tools" in CODEX_SYSTEM_PROMPT
+    assert "do not call Bash, codex_file_change" in CODEX_SYSTEM_PROMPT
+    assert "return an incomplete blocker" in CODEX_SYSTEM_PROMPT
     assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
     assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
     assert "prefix every changed line" in CODEX_SYSTEM_PROMPT
@@ -100,6 +102,8 @@ def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> N
     assert f"NXD_EVAL_FIXTURE_DIR={adapter.fixture_dir}" in prompt
     assert "read only the supplied input files" in prompt
     assert "do not use oracle or gold files" in prompt
+    assert "Parent-thread file-change reminder" in prompt
+    assert "never forward this paragraph" in prompt
     assert "one complete Add File operation" in prompt
     assert "raw file contents in patch metadata" in prompt
 
