@@ -10,7 +10,7 @@ fixture:
 coverage:
   variant: campaign-name-drift-safe-attribution
   untested: This package grades deterministic source matching and declared CPA policy; it does not claim a live ad platform, conversion API, or authenticated agent run.
-turn_budget: 8
+turn_budget: 10
 repeatability:
   tier: deterministic
   epochs: 5
@@ -25,10 +25,12 @@ phase_map:
   2: 2
   3: 3
   4: 4
-  5: 5
-  6: 6
-  7: 7
+  5: 7
+  6: 3
+  7: 5
   8: 7
+  9: 7
+  10: 7
 required_plants:
   - marketing_attribution_unmatched_cpa
 gates:

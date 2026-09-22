@@ -7,7 +7,10 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-22 | preserve reviewer evidence when Agent prompts are redacted | NO_EVAL | — | [`2026-09-22-redacted-review-evidence`](entries/2026-09-22-redacted-review-evidence.md) |
 | 2026-09-21 | nxd-generate-data-product: harden copied source and ratio contracts | NO_EVAL | — | [`2026-09-21-source-contract-hardening`](entries/2026-09-21-source-contract-hardening.md) |
+| 2026-09-21 | nxd-generate-data-product: reject reduced row-level ratios | NO_EVAL | — | [`2026-09-21-ratio-metric-reduction-guidance`](entries/2026-09-21-ratio-metric-reduction-guidance.md) |
+| 2026-09-21 | fix Codex root-turn terminal accounting | NO_EVAL | — | [`2026-09-21-codex-root-turn-accounting`](entries/2026-09-21-codex-root-turn-accounting.md) |
 | 2026-09-20 | add a persistent Codex live-runner backend | NO_EVAL | — | [`2026-09-20-codex-live-runner`](entries/2026-09-20-codex-live-runner.md) |
 | 2026-09-19 | workflow-v2: pin empty open questions and typed transform operations | NO_EVAL | — | [`2026-09-19-workflow-v2-typed-authoring-guidance`](entries/2026-09-19-workflow-v2-typed-authoring-guidance.md) |
 | 2026-09-19 | add an explicit opt-in native Claude continuation seam | NO_EVAL | — | [`2026-09-19-native-claude-continuation-seam`](entries/2026-09-19-native-claude-continuation-seam.md) |

@@ -1039,6 +1039,17 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
     assert "hard absolute 600-second budget" in review_rule
     assert "review_time_budget_seconds: 120" not in review_rule
 
+    crm = next(
+        scenario
+        for scenario in load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
+        if scenario.id == "crm-pipeline"
+    )
+    crm_contract = _evidence_contract(crm)
+    assert crm_contract is not None
+    assert "object with at least the required" in crm_contract["required_fields"]["surfaces"]
+    assert "governed_output" in crm_contract["required_fields"]["surfaces"]
+    assert "raw_internal" in crm_contract["required_fields"]["surfaces"]
+
 
 def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
     """The prompt is harness mechanics; conduct travels with the scenario."""
@@ -1106,6 +1117,7 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
     ) in review_rule
     for phrase in (
         "dispatch exactly one general-purpose Agent or Task conversation child",
+        'set its subagent_type argument exactly to "general-purpose"',
         "supervisor-provided review_input",
         "reviewer must run inline (run_in_background=false)",
         "review_time_budget_seconds: 300",

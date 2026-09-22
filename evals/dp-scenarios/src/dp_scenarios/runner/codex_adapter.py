@@ -43,7 +43,10 @@ from dp_scenarios.runner.claude_adapter import (
     _update_machine_artifacts,
     _write_supervisor_facts,
 )
-from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
+from dp_scenarios.runner.review_guard import (
+    REVIEW_DEADLINE_MS,
+    validate_review_timeout_seconds,
+)
 
 
 class CodexAdapterError(RuntimeError):
@@ -54,24 +57,47 @@ class CodexAdapterError(RuntimeError):
         self.reason = reason
 
 
+CODEX_FILE_CHANGE_FAILURE = "codex_file_change_failed"
+_FILE_CHANGE_FAILURE_STATUSES = frozenset(
+    {"failed", "error", "rejected", "cancelled", "canceled"}
+)
+
+
 CODEX_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
 
 Work only in the current workspace. Read scenario-evidence-contract.json,
 infra-profile.yaml when present, and the relevant skill files under the
 provided skill-pack directory before acting. Use the runner-owned nxd-desktop
 MCP server for supervisor operations; do not invent supervisor results from
-your own prose. Keep the authored closure in closure/ and do not create or
-edit artifacts/ files. Follow every conduct rule in the evidence contract.
+your own prose. The generated fixture is the supplied source export for a
+file-backed scenario and is available at the path in `NXD_EVAL_FIXTURE_DIR`;
+read those source files only to wire the closure's file connector or derived
+transform, then use the governed workflow/query for user-facing results. A
+file-backed scenario is not expected to have an `infra-profile.yaml` before
+the closure authors one. For an API-backed scenario, use the supplied
+infra-profile and generated connector runtime instead. Keep the authored
+closure in closure/ and do not create or edit artifacts/ files. Follow every
+conduct rule in the evidence contract.
 Do not use Bash, curl, WebFetch, or another direct HTTP/client probe to inspect
-the scenario source or its credentials; source observations must come from the
-generated connector runtime and the supervisor MCP workflow. Bash is for local
-closure authoring or reading the supplied skill files only, and must never
-print credential values or environment-file contents. If a shell command is
+an API scenario or its credentials; API source observations must come from the
+generated connector runtime and the supervisor MCP workflow. For a
+file-backed scenario, read only the exact supplied CSV/file inputs under
+`NXD_EVAL_FIXTURE_DIR`; never read oracle/gold files or use a raw fixture row
+as a substitute for the governed query. Bash is for local closure authoring,
+reading the exact fixture path, or reading the supplied skill files only, and
+must never print credential values or environment-file contents. If a shell command is
 rejected, do not retry the same command shape; return to the declared MCP and
 skill flow or report the blocker.
-Complete closure authoring in this parent turn. Prefer the file-edit/apply-patch
-tool for text changes and keep Bash to simple workspace-relative inspection or
-setup commands; do not use destructive commands such as `rm`/`rm -f`, shell
+Complete closure authoring in this parent turn. Use the native file-change tool
+for text changes and keep Bash to simple workspace-relative inspection or
+setup commands; do not invoke or simulate a shell `apply_patch` command. For a
+new text file, submit one complete Add File operation with every content line
+encoded as an added line; for an existing file, use a valid Update File
+operation with an `@@` hunk and explicit context/add/remove prefixes. Never
+submit a bare dependency, YAML, or JSON line as a patch header. If the native
+file-change tool rejects an edit, stop closure authoring and report the exact
+blocker instead of retrying malformed patch syntax; do not use destructive
+commands such as `rm`/`rm -f`, shell
 command chains, pipelines, redirects, or a custom working directory. If a
 command cannot start or is rejected, stop issuing that command shape and switch
 to the file tool or report the blocker; do not spend the turn retrying it.
@@ -96,6 +122,33 @@ publication sequence. Inspect only the closure and review inputs named by the
 parent, complete within the retained review deadline, and return concise
 review claims/findings to the parent.
 
+If the inspection is incomplete at the review cutoff, stop reading and return
+the partial evidenced claims plus a concise blocker immediately; never wait
+for more context or leave the child running past the deadline.
+
+Collaboration tool argument discipline: for `spawnAgent`, send the complete
+review request in exactly one `message` string; do not also send `items`.
+Never send both `message` and `items` in one collaboration call. For the
+owning parent’s one-shot reviewer lifecycle, use only `spawnAgent`, `wait`,
+and `closeAgent`; pass the returned receiver thread id as `target` to
+`closeAgent`, and never use `sendInput` or `resumeAgent`. The reviewer child
+may use only its allowed read-only inspection tools, but may not call another
+collaboration or supervisor tool. If a collaboration call is rejected, do
+not repeat the rejected argument shape; report an incomplete handoff. If
+`spawnAgent` returns no receiver thread id or leaves the child in
+`pendingInit`, do not call `wait` with an empty id set; report an incomplete
+handoff immediately.
+
+File-edit discipline: use the file-change tool for edits. If an apply-patch
+operation is used, every patch must have the exact `*** Begin Patch`, file
+operation, hunk, and `*** End Patch` structure; never combine JSON, prose, or
+another patch format inside it. If the patch is rejected, do not retry the
+same malformed patch; use the file-change tool or report the blocker. In an
+update hunk, start with an `@@` header and prefix every changed line with `+`
+or `-` and every context line with a space; never paste raw YAML/JSON lines
+into a patch hunk. Prefer one file per change call and validate the exact
+patch envelope before submitting it.
+
 Workflow-v2 control: treat every supervisor response as authoritative. After
 each response, use only its current revision, invalidation_epoch, and
 next_actions. Once a successful capture returns a report_requirement action
@@ -109,8 +162,15 @@ required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id; do not make
 another Bash/MCP call or produce a final answer before that wait completes.
+If `wait` reports the child as completed but returns no non-empty message, do
+not treat that as terminal claims: issue `wait` once more with the same target.
+If the repeated wait is still empty, leave the review incomplete and report
+the missing child claims rather than closing the child or fabricating a result.
+Do not call `sendInput` or `resumeAgent` for this one-shot reviewer: its spawn
+prompt is final, and the only follow-up operations are `wait` and `closeAgent`.
 After the wait returns terminal claims, close that same child with
-`closeAgent` using its receiver thread id before reporting; completed child
+`closeAgent`, passing the exact receiver thread id in its `target` argument
+(not `receiverThreadId`), before reporting; completed child
 threads remain allocated to the app-server until explicitly closed. Then pass
 the child's returned claims and the exact review_input fields to
 report_requirement. Copy every field from the current review_input as a
@@ -142,9 +202,11 @@ pre-admission prepare_workflow response returned a prepare_recovery_id.
 After capture, never edit the retained closure or blueprint before reporting
 the child review; the captured inputs are immutable. If the supervisor returns
 a report verdict of `findings`, `rejected`, or `indeterminate`, relay it to the
-operator and stop for adjudication. Do not reset, edit, recapture, validate,
-admit, or start a run for a non-clear report; only a clear report authorizes
-the returned next actions.
+operator and stop for adjudication. When a finding changes behavior or requires
+operator authority, end that turn with a direct question asking for the
+specific authorization; do not merely report that you are blocked and wait
+silently. Do not reset, edit, recapture, validate, admit, or start a run for a
+non-clear report; only a clear report authorizes the returned next actions.
 After a non-clear or indeterminate `report_requirement` result, end the
 current turn immediately and wait for the next operator message; do not reset
 or make another supervisor call in that same turn.
@@ -341,6 +403,23 @@ def _collab_result_ready(item: Mapping[str, object]) -> bool:
     return bool(child_statuses) and all(value in _COLLAB_SUCCESS_STATUSES for value in child_statuses) and bool(messages)
 
 
+def _collab_debug_label(item: Mapping[str, object]) -> str:
+    """Return value-free lifecycle state for interruption diagnostics."""
+
+    parts: list[str] = []
+    tool = item.get("tool")
+    if isinstance(tool, str) and tool:
+        parts.append(f"tool={tool}")
+    status = item.get("status")
+    if isinstance(status, str) and status:
+        parts.append(f"status={status}")
+    child_statuses, _ = _collab_states(item)
+    if child_statuses:
+        parts.append("child_status=" + ",".join(child_statuses))
+    parts.append(f"receiver_count={len(_collab_receiver_ids(item))}")
+    return ",".join(parts) if parts else "state=unknown"
+
+
 def _merge_collab_item(
     base: Mapping[str, object], update: Mapping[str, object]
 ) -> dict[str, object]:
@@ -370,8 +449,9 @@ def _update_reviewer_deadline(
     deadline_at: float | None,
     *,
     now: float,
+    review_deadline_ms: float = REVIEW_DEADLINE_MS,
 ) -> tuple[set[str], float | None]:
-    """Arm the bounded reviewer clock and clear it after ``closeAgent``."""
+    """Arm the bounded reviewer clock for the current parent turn."""
 
     if event.get("type") not in {"item.started", "item.completed"}:
         return receiver_ids, deadline_at
@@ -383,16 +463,47 @@ def _update_reviewer_deadline(
         return receiver_ids, deadline_at
     tool = item.get("tool")
     ids = _collab_receiver_ids(item)
-    if tool == "spawnAgent" and event.get("type") == "item.completed" and ids:
+    if tool == "spawnAgent":
+        # App-server runs can report the spawn as started or completed before
+        # they know the receiver thread id (for example, child_status=pendingInit).
+        # Arm the absolute deadline for either lifecycle event, then merge any
+        # ids that arrive later without extending the deadline.
+        receiver_ids |= ids
         if deadline_at is None:
-            return ids, now + REVIEW_DEADLINE_MS / 1000.0
+            deadline_at = now + review_deadline_ms / 1000.0
         return receiver_ids, deadline_at
-    if (
-        tool == "closeAgent"
-        and event.get("type") == "item.completed"
-        and receiver_ids & ids
-    ):
-        return set(), None
+    # ``closeAgent`` only reports that the collaboration handle was closed;
+    # it does not prove that the child returned terminal claims. Keep the
+    # absolute per-turn deadline armed until the parent turn terminates. The
+    # state is recreated for every turn, so no explicit cleanup is needed.
+    return receiver_ids, deadline_at
+
+
+def _update_reviewer_deadline_from_events(
+    events: Sequence[Mapping[str, object]],
+    receiver_ids: set[str],
+    deadline_at: float | None,
+    *,
+    now: float,
+    review_deadline_ms: float = REVIEW_DEADLINE_MS,
+) -> tuple[set[str], float | None]:
+    """Apply reviewer-deadline detection to already-buffered app-server events.
+
+    ``turn/start`` can return notifications alongside its response.  Those
+    notifications are handed to ``_collect_turn`` as ``before_turn`` events;
+    ignoring them leaves a retained reviewer without its 300-second deadline
+    and lets the outer turn timeout wait the full 90% budget instead.
+    """
+
+    for event in events:
+        normalized = _normalise_app_server_event(event)
+        receiver_ids, deadline_at = _update_reviewer_deadline(
+            normalized,
+            receiver_ids,
+            deadline_at,
+            now=now,
+            review_deadline_ms=review_deadline_ms,
+        )
     return receiver_ids, deadline_at
 
 
@@ -409,6 +520,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         return {"type": "thread.started", "thread_id": thread_id}
     if method == "turn/completed":
         turn = params.get("turn")
+        turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         status = turn.get("status") if isinstance(turn, Mapping) else None
         event_type = {
             "completed": "turn.completed",
@@ -416,6 +528,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         }.get(status, "turn.failed")
         return {
             "type": event_type,
+            "turn_id": turn_id,
             "is_error": status != "completed",
             "error": turn.get("error") if isinstance(turn, Mapping) else None,
         }
@@ -455,6 +568,11 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         if item_type == "fileChange":
             normalized = dict(item)
             normalized["type"] = "file_change"
+            normalized["is_error"] = bool(
+                item.get("is_error")
+                or item.get("error")
+                or item.get("status") in _FILE_CHANGE_FAILURE_STATUSES
+            )
             return {"type": method.replace("/", "."), "item": normalized}
         if item_type in {"collabAgentToolCall", "collab_tool_call"}:
             normalized = dict(item)
@@ -478,6 +596,17 @@ def _event_debug_tail(events: Sequence[Mapping[str, object]], *, limit: int = 12
     """Return a bounded, value-free event tail for timeout diagnostics."""
 
     labels: list[str] = []
+    reviewer_labels: list[str] = []
+    for event in events:
+        normalized = _normalise_app_server_event(event)
+        if normalized.get("type") not in {"item.started", "item.completed"}:
+            continue
+        item = normalized.get("item")
+        if isinstance(item, Mapping) and item.get("type") in {
+            "collabAgentToolCall",
+            "collab_agent_tool_call",
+        }:
+            reviewer_labels.append(_collab_debug_label(item))
     for event in events[-limit:]:
         method = event.get("method")
         if not isinstance(method, str):
@@ -504,6 +633,8 @@ def _event_debug_tail(events: Sequence[Mapping[str, object]], *, limit: int = 12
                 if isinstance(status, str):
                     method += f"={status}"
         labels.append(method)
+    if reviewer_labels:
+        labels.append("reviewer=" + ";".join(reviewer_labels[-3:]))
     return ", ".join(labels) if labels else None
 
 
@@ -513,6 +644,7 @@ def parse_codex_events(
     redact_json_rpc: Any,
     redact_text: Any,
     session_id: str | None,
+    root_turn_id: str | None = None,
 ) -> tuple[TurnResult, list[dict[str, object]]]:
     """Convert one Codex JSONL turn into structured harness observations."""
 
@@ -564,6 +696,8 @@ def parse_codex_events(
                 thread_id = value
             continue
         if event_type == "turn.failed":
+            if root_turn_id is not None and event.get("turn_id") != root_turn_id:
+                continue
             terminal_count += 1
             terminal_subtype = "failed"
             terminal_is_error = True
@@ -572,11 +706,15 @@ def parse_codex_events(
             environment_details.append(detail)
             continue
         if event_type == "turn.interrupted":
+            if root_turn_id is not None and event.get("turn_id") != root_turn_id:
+                continue
             terminal_count += 1
             terminal_subtype = "interrupted"
             terminal_is_error = True
             continue
         if event_type == "turn.completed":
+            if root_turn_id is not None and event.get("turn_id") != root_turn_id:
+                continue
             terminal_count += 1
             # The shared operator contract uses Claude's terminal vocabulary:
             # a normal provider completion is a successful turn. Keeping
@@ -616,8 +754,25 @@ def parse_codex_events(
             transcript.append("[tool_result] " + redact_text(str(result)[:1500]))
             continue
         if item_type in {"file_change", "patch", "apply_patch"} and event_type == "item.completed":
-            calls.append(ToolCall("codex_file_change", redact_json_rpc(dict(item)), None))
-            transcript.append("[tool_use:file_change] " + redact_text(json.dumps(dict(item), default=str)[:600]))
+            is_error = bool(
+                item.get("is_error")
+                or item.get("error")
+                or item.get("status") in _FILE_CHANGE_FAILURE_STATUSES
+            )
+            result = {
+                "status": item.get("status"),
+                "is_error": is_error,
+            }
+            calls.append(
+                ToolCall("codex_file_change", redact_json_rpc(dict(item)), result)
+            )
+            transcript.append(
+                "[tool_use:file_change] "
+                + redact_text(json.dumps(dict(item), default=str)[:600])
+            )
+            if is_error:
+                environment_details.append(CODEX_FILE_CHANGE_FAILURE)
+                transcript.append("[tool_result:file_change] " + CODEX_FILE_CHANGE_FAILURE)
             continue
         if item_type == "collab_agent_tool_call":
             tool = item.get("tool")
@@ -719,7 +874,11 @@ def parse_codex_events(
                 {"is_error": True, "content": []},
             )
         )
-        environment_details.append("Codex reviewer child had no matching completion")
+        environment_details.append(
+            "Codex reviewer child had no matching completion ("
+            + _collab_debug_label(item)
+            + ")"
+        )
 
     if not final_answer and partial_answer:
         final_answer = "".join(partial_answer)
@@ -770,6 +929,8 @@ class CodexAdapter:
         strict_mcp_config: bool = False,
         allowed_tools: str | None = None,
         supervisor_data_dir: Path | None = None,
+        multi_agent_v2: bool = False,
+        review_timeout_seconds: float | None = None,
         native_continuation: bool = False,
         resume_session_id: str | None = None,
     ) -> None:
@@ -788,8 +949,16 @@ class CodexAdapter:
         self.strict_mcp_config = strict_mcp_config
         self.allowed_tools = allowed_tools
         self.supervisor_data_dir = supervisor_data_dir
+        self.multi_agent_v2 = bool(multi_agent_v2)
+        self.review_timeout_seconds = validate_review_timeout_seconds(
+            REVIEW_DEADLINE_MS / 1000.0
+            if review_timeout_seconds is None
+            else review_timeout_seconds
+        )
+        self._review_deadline_ms = self.review_timeout_seconds * 1000.0
         self.native_continuation = bool(native_continuation)
         self._thread_id = resume_session_id
+        self._active_turn_id: str | None = None
         self._started = False
         self._before: dict[str, bytes] = {}
         self._facts: dict[str, object] = {}
@@ -909,6 +1078,8 @@ class CodexAdapter:
             "-c",
             f"model_reasoning_effort={_toml_string(self.effort)}",
         ]
+        if self.multi_agent_v2:
+            command[3:3] = ["--enable", "multi_agent_v2"]
         command.extend(
             (
                 "-c",
@@ -1178,7 +1349,6 @@ class CodexAdapter:
         response, before_turn = self._read_until_response(
             request_id,
             time.monotonic() + self.timeout_s,
-            collected=events,
         )
         if "error" in response:
             raise CodexAdapterError(f"Codex app-server turn/start failed: {response['error']}")
@@ -1188,14 +1358,38 @@ class CodexAdapter:
         turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         if not isinstance(turn_id, str) or not turn_id:
             raise CodexAdapterError("Codex app-server turn/start returned no turn identity")
+        self._active_turn_id = turn_id
         deadline = time.monotonic() + self.timeout_s
+        review_deadline_ms = getattr(self, "_review_deadline_ms", float(REVIEW_DEADLINE_MS))
+        review_timeout_seconds = getattr(
+            self, "review_timeout_seconds", review_deadline_ms / 1000.0
+        )
         reviewer_receiver_ids: set[str] = set()
         reviewer_deadline_at: float | None = None
+        if before_turn:
+            reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline_from_events(
+                before_turn,
+                reviewer_receiver_ids,
+                reviewer_deadline_at,
+                now=time.monotonic(),
+                review_deadline_ms=review_deadline_ms,
+            )
         while True:
             read_deadline = deadline
             if reviewer_deadline_at is not None:
                 read_deadline = min(read_deadline, reviewer_deadline_at)
-            event = self._read_streams(read_deadline)
+            try:
+                event = self._read_streams(read_deadline)
+            except TimeoutError as exc:
+                if (
+                    reviewer_deadline_at is not None
+                    and time.monotonic() >= reviewer_deadline_at
+                ):
+                    raise TimeoutError(
+                        "Codex reviewer child did not complete before the "
+                        f"{review_timeout_seconds:.1f}-second reviewer deadline"
+                    ) from exc
+                raise
             if self._is_server_request(event):
                 self._reject_server_request(event)
                 continue
@@ -1206,12 +1400,15 @@ class CodexAdapter:
                 reviewer_receiver_ids,
                 reviewer_deadline_at,
                 now=time.monotonic(),
+                review_deadline_ms=review_deadline_ms,
             )
             if reviewer_deadline_at is not None and time.monotonic() >= reviewer_deadline_at:
                 raise TimeoutError(
                     "Codex reviewer child did not complete before the "
-                    f"{REVIEW_DEADLINE_MS / 1000:.1f}-second reviewer deadline"
+                    f"{review_timeout_seconds:.1f}-second reviewer deadline"
                 )
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Codex app-server turn deadline expired")
             if normalized.get("type") in {"turn.completed", "turn.interrupted", "turn.failed"}:
                 params = event.get("params")
                 completed_turn = params.get("turn") if isinstance(params, Mapping) else None
@@ -1222,8 +1419,24 @@ class CodexAdapter:
         return events
 
     def _prompt(self, text: str, attachment_paths: Sequence[str]) -> str:
+        text += (
+            "\n\nRun-local source handoff:\n"
+            f"- NXD_EVAL_FIXTURE_DIR={self.fixture_dir}\n"
+            "- For a file-backed source, read only the supplied input files under "
+            "that directory and wire them into the closure; do not use oracle or "
+            "gold files as source data.\n"
+            "- For an API-backed source, use the workspace infra-profile.yaml and "
+            "the generated connector runtime.\n"
+        )
         if attachment_paths:
             text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
+        text += (
+            "\n\nNative file-change reminder: use one complete Add File operation for "
+            "each new text file, or a correctly structured Update File hunk for "
+            "an existing file. Never place raw file contents in patch metadata "
+            "or use a bare content line as a hunk header. If an edit is rejected, "
+            "report the blocker rather than retrying malformed patch syntax."
+        )
         return text
 
     def _terminate(self, process: subprocess.Popen[bytes]) -> None:
@@ -1244,37 +1457,41 @@ class CodexAdapter:
         environment_detail: str | None = None,
         turn_timed_out: bool = False,
         failure_reason: str | None = None,
+        lightweight: bool = False,
     ) -> TurnResult:
         parsed, observations = parse_codex_events(
             events,
             redact_json_rpc=self._redact_json_rpc,
             redact_text=self._redact_text,
             session_id=self._thread_id,
+            root_turn_id=self._active_turn_id,
         )
         if parsed.session_id:
             self._thread_id = parsed.session_id
         if parsed.last_mcp_call:
             self._last_mcp_call = parsed.last_mcp_call
-        after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
-        changed = _changed_files(self._before, after)
-        self._before = after
-        _update_machine_artifacts(
-            observations,
-            artifact_dir=self.artifact_dir,
-            facts=self._facts,
-            build_context=self._build_context,
-            lifecycles=self._lifecycles,
-            built_runs=self._built_runs,
-            query_history=self._query_history,
-        )
-        workflow = self._build_context.get("workflow")
-        _update_from_state_dir(
-            self.supervisor_data_dir,
-            facts=self._facts,
-            built_runs=self._built_runs,
-            workflow=workflow if isinstance(workflow, str) and workflow else None,
-        )
-        _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
+        changed: tuple[TouchedFile, ...] = ()
+        if not lightweight:
+            after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
+            changed = _changed_files(self._before, after)
+            self._before = after
+            _update_machine_artifacts(
+                observations,
+                artifact_dir=self.artifact_dir,
+                facts=self._facts,
+                build_context=self._build_context,
+                lifecycles=self._lifecycles,
+                built_runs=self._built_runs,
+                query_history=self._query_history,
+            )
+            workflow = self._build_context.get("workflow")
+            _update_from_state_dir(
+                self.supervisor_data_dir,
+                facts=self._facts,
+                built_runs=self._built_runs,
+                workflow=workflow if isinstance(workflow, str) and workflow else None,
+            )
+            _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
         details = [value for value in (parsed.environment_detail, environment_detail) if value]
         safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
         return TurnResult(
@@ -1323,6 +1540,7 @@ class CodexAdapter:
                 target.write_bytes(content)
                 attachment_paths.append(target.relative_to(Path.cwd()).as_posix())
         prompt = self._prompt(text, attachment_paths)
+        self._active_turn_id = None
         process = self._process
         if process is None:
             raise CodexAdapterError("Codex app-server is not running")
@@ -1365,6 +1583,7 @@ class CodexAdapter:
                 ),
                 turn_timed_out=True,
                 failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_NO_TERMINAL_RESULT,
+                lightweight=True,
             )
         except (CodexAdapterError, OSError, ValueError) as exc:
             detail = "\n".join(self._stderr_tail)[-2000:]
@@ -1414,9 +1633,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--desktop-supervisor", type=Path, required=True)
     parser.add_argument("--desktop-python", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--review-timeout",
+        type=float,
+        default=None,
+        help="maximum seconds for the retained-capture reviewer",
+    )
     parser.add_argument("--mcp-config", type=Path, required=True)
     parser.add_argument("--strict-mcp-config", action="store_true")
     parser.add_argument("--supervisor-data-dir", type=Path, required=True)
+    parser.add_argument(
+        "--multi-agent-v2",
+        action="store_true",
+        help="enable Codex's experimental multi-agent-v2 collaboration backend",
+    )
     parser.add_argument("--allowedTools")
     parser.add_argument("--native-continuation", action="store_true")
     parser.add_argument("--resume-session-id")
@@ -1442,6 +1672,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         strict_mcp_config=args.strict_mcp_config,
         allowed_tools=args.allowedTools,
         supervisor_data_dir=args.supervisor_data_dir.expanduser().resolve(),
+        multi_agent_v2=args.multi_agent_v2,
+        review_timeout_seconds=args.review_timeout,
         native_continuation=args.native_continuation,
         resume_session_id=args.resume_session_id,
     )

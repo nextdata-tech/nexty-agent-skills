@@ -15,10 +15,13 @@ from _repo_paths import REPO_ROOT
 
 from dp_scenarios.runner.codex_adapter import (
     CODEX_SYSTEM_PROMPT,
+    CODEX_FILE_CHANGE_FAILURE,
     CodexAdapter,
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
+    _event_debug_tail,
     _update_reviewer_deadline,
+    _update_reviewer_deadline_from_events,
     _load_mcp_server,
     parse_codex_events,
 )
@@ -54,17 +57,51 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not edit the closure, blueprint, or review record" in CODEX_SYSTEM_PROMPT
     assert "stale subject or dependency" in CODEX_SYSTEM_PROMPT
     assert "close that same child with" in CODEX_SYSTEM_PROMPT
+    assert "exact receiver thread id in its `target` argument" in CODEX_SYSTEM_PROMPT
+    assert "wait` reports the child as completed but returns no non-empty message" in CODEX_SYSTEM_PROMPT
+    assert "issue `wait` once more with the same target" in CODEX_SYSTEM_PROMPT
+    assert "missing child claims" in CODEX_SYSTEM_PROMPT
     assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
+    assert "end that turn with a direct question" in CODEX_SYSTEM_PROMPT
+    assert "specific authorization" in CODEX_SYSTEM_PROMPT
     assert "end the" in CODEX_SYSTEM_PROMPT
     assert "same turn" in CODEX_SYSTEM_PROMPT
     assert "immediately using the returned receiver thread id" in CODEX_SYSTEM_PROMPT
+    assert "Do not call `sendInput` or `resumeAgent`" in CODEX_SYSTEM_PROMPT
+    assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
+    assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
+    assert "owning parent’s one-shot reviewer lifecycle" in CODEX_SYSTEM_PROMPT
+    assert "reviewer child\nmay use only its allowed read-only inspection tools" in CODEX_SYSTEM_PROMPT
+    assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
+    assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
+    assert "prefix every changed line" in CODEX_SYSTEM_PROMPT
+    assert "`+`" in CODEX_SYSTEM_PROMPT and "`-`" in CODEX_SYSTEM_PROMPT
     assert "Only use\ninspect_prepare_recovery" in CODEX_SYSTEM_PROMPT
     assert "the next supervisor action must be that report" in CODEX_SYSTEM_PROMPT
     assert "Do not call reset_workflow, list_data_products, inspect_workflow," in CODEX_SYSTEM_PROMPT
     assert '"workflow already exists" and active-workflow' in CODEX_SYSTEM_PROMPT
     assert "errors are non-retryable" in CODEX_SYSTEM_PROMPT
+    assert "supplied source export for a\nfile-backed scenario" in CODEX_SYSTEM_PROMPT
+    assert "NXD_EVAL_FIXTURE_DIR" in CODEX_SYSTEM_PROMPT
+    assert "file-backed scenario is not expected to have an `infra-profile.yaml`" in CODEX_SYSTEM_PROMPT
+    assert "do not invoke or simulate a shell `apply_patch` command" in CODEX_SYSTEM_PROMPT
+    assert "bare dependency, YAML, or JSON line as a patch header" in CODEX_SYSTEM_PROMPT
+    assert "stop closure authoring and report the exact" in CODEX_SYSTEM_PROMPT
+
+
+def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.fixture_dir = tmp_path / "fixture"
+
+    prompt = adapter._prompt("Inspect the supplied source.", ())
+
+    assert f"NXD_EVAL_FIXTURE_DIR={adapter.fixture_dir}" in prompt
+    assert "read only the supplied input files" in prompt
+    assert "do not use oracle or gold files" in prompt
+    assert "one complete Add File operation" in prompt
+    assert "raw file contents in patch metadata" in prompt
 
 
 def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> None:
@@ -77,9 +114,9 @@ def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> 
     } <= _COLLAB_FAILURE_STATUSES
 
 
-def test_codex_reviewer_deadline_is_armed_and_cleared_by_close() -> None:
+def test_codex_reviewer_deadline_is_armed_on_spawn_start_with_receiver_id() -> None:
     spawn = {
-        "type": "item.completed",
+        "type": "item.started",
         "item": {
             "type": "collab_agent_tool_call",
             "tool": "spawnAgent",
@@ -92,6 +129,105 @@ def test_codex_reviewer_deadline_is_armed_and_cleared_by_close() -> None:
     assert receiver_ids == {"child-1"}
     assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
 
+
+def test_codex_reviewer_deadline_started_without_ids_merges_completion_ids() -> None:
+    started = {
+        "type": "item.started",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+        },
+    }
+    receiver_ids, deadline = _update_reviewer_deadline(
+        started, set(), None, now=10.0
+    )
+    assert receiver_ids == set()
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
+
+    completed = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "receiverThreadIds": ["child-1"],
+        },
+    }
+    receiver_ids, completed_deadline = _update_reviewer_deadline(
+        completed, receiver_ids, deadline, now=20.0
+    )
+    assert receiver_ids == {"child-1"}
+    assert completed_deadline == deadline
+
+
+def test_codex_reviewer_deadline_uses_configured_timeout() -> None:
+    spawn = {
+        "type": "item.started",
+        "item": {
+            "type": "collabAgentToolCall",
+            "tool": "spawnAgent",
+            "receiverThreadIds": ["child-1"],
+        },
+    }
+
+    receiver_ids, deadline = _update_reviewer_deadline(
+        spawn,
+        set(),
+        None,
+        now=10.0,
+        review_deadline_ms=2_500.0,
+    )
+
+    assert receiver_ids == {"child-1"}
+    assert deadline == pytest.approx(12.5)
+
+
+def test_codex_reviewer_deadline_arms_on_pending_init_without_receiver_id() -> None:
+    completed = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "spawnAgent",
+            "status": "completed",
+            "agentsStates": {"pending": {"status": "pendingInit"}},
+        },
+    }
+
+    receiver_ids, deadline = _update_reviewer_deadline(
+        completed, set(), None, now=10.0
+    )
+
+    assert receiver_ids == set()
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
+
+
+def test_codex_reviewer_deadline_processes_events_buffered_with_turn_start() -> None:
+    events = [
+        {
+            "method": "item/started",
+            "params": {
+                "item": {
+                    "type": "collabAgentToolCall",
+                    "tool": "spawnAgent",
+                    "receiverThreadIds": ["child-1"],
+                }
+            },
+        }
+    ]
+
+    receiver_ids, deadline = _update_reviewer_deadline_from_events(
+        events,
+        set(),
+        None,
+        now=10.0,
+    )
+
+    assert receiver_ids == {"child-1"}
+    assert deadline == pytest.approx(10.0 + REVIEW_DEADLINE_MS / 1000.0)
+
+
+def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> None:
+    receiver_ids = {"child-1"}
+    deadline = 10.0 + REVIEW_DEADLINE_MS / 1000.0
     close = {
         "type": "item.completed",
         "item": {
@@ -100,9 +236,100 @@ def test_codex_reviewer_deadline_is_armed_and_cleared_by_close() -> None:
             "receiverThreadId": "child-1",
         },
     }
-    assert _update_reviewer_deadline(
-        close, receiver_ids, deadline, now=20.0
-    ) == (set(), None)
+    assert _update_reviewer_deadline(close, receiver_ids, deadline, now=20.0) == (
+        receiver_ids,
+        deadline,
+    )
+
+
+def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.timeout_s = 1000.0
+    adapter._read_until_response = lambda *_args, **_kwargs: (
+        {"result": {"turn": {"id": "root-turn"}}},
+        [],
+    )
+    adapter._is_server_request = lambda _event: False
+
+    spawn_started = {
+        "method": "item/started",
+        "params": {
+            "item": {
+                "type": "collabAgentToolCall",
+                "tool": "spawnAgent",
+                "receiverThreadIds": ["child-1"],
+            }
+        },
+    }
+    reads = iter((spawn_started, TimeoutError("stream deadline")))
+
+    def read_streams(_deadline):
+        value = next(reads)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    adapter._read_streams = read_streams
+    clock = iter((0.0, 0.0, 0.0, REVIEW_DEADLINE_MS / 1000.0 + 1.0))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(TimeoutError, match="reviewer deadline"):
+        adapter._collect_turn(1, "", [])
+
+
+def test_codex_reviewer_deadline_wins_for_spawn_buffered_with_turn_start(monkeypatch) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.timeout_s = 1000.0
+    spawn_started = {
+        "method": "item/started",
+        "params": {
+            "item": {
+                "type": "collabAgentToolCall",
+                "tool": "spawnAgent",
+                "receiverThreadIds": ["child-1"],
+            }
+        },
+    }
+    adapter._read_until_response = lambda *_args, **_kwargs: (
+        {"result": {"turn": {"id": "root-turn"}}},
+        [spawn_started],
+    )
+    adapter._is_server_request = lambda _event: False
+
+    def read_streams(_deadline):
+        raise TimeoutError("stream deadline")
+
+    adapter._read_streams = read_streams
+    clock = iter((0.0, 0.0, 0.0, REVIEW_DEADLINE_MS / 1000.0 + 1.0))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(TimeoutError, match="reviewer deadline"):
+        adapter._collect_turn(1, "", [])
+
+
+def test_codex_turn_deadline_wins_when_nonterminal_events_keep_arriving(monkeypatch) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter.timeout_s = 1.0
+    adapter._read_until_response = lambda *_args, **_kwargs: (
+        {"result": {"turn": {"id": "root-turn"}}},
+        [],
+    )
+    adapter._is_server_request = lambda _event: False
+    adapter._read_streams = lambda _deadline: {
+        "method": "thread/tokenUsage/updated",
+        "params": {},
+    }
+    clock = iter((0.0, 0.0, 2.0, 2.0, 2.0))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(clock)
+    )
+
+    with pytest.raises(TimeoutError, match="turn deadline"):
+        adapter._collect_turn(1, "", [])
 
 
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
@@ -150,6 +377,56 @@ def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     assert result.tool_calls[0].name == "mcp__nxd-desktop__advance_workflow"
     assert observations[0]["tool"] == "advance_workflow"
     assert observations[0]["result"] == {"admission": {"run_id": "run-1"}}
+
+
+def test_parse_codex_events_surfaces_failed_file_change_without_raw_error() -> None:
+    result, observations = parse_codex_events(
+        [
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "file_change",
+                    "status": "failed",
+                    "error": "raw patch content must not become a diagnostic",
+                },
+            },
+            {"type": "turn.completed", "turn_id": "root-turn", "is_error": False},
+        ],
+        redact_json_rpc=_identity,
+        redact_text=_identity,
+        session_id="session-1",
+        root_turn_id="root-turn",
+    )
+
+    assert observations == []
+    assert result.environment_wedged is True
+    assert result.environment_detail == CODEX_FILE_CHANGE_FAILURE
+    assert CODEX_FILE_CHANGE_FAILURE in result.transcript_delta
+    assert "raw patch content" not in result.environment_detail
+    assert result.tool_calls[0].result == {"status": "failed", "is_error": True}
+
+
+def test_parse_codex_events_counts_only_root_turn_completion() -> None:
+    result, _ = parse_codex_events(
+        [
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "child-turn", "status": "completed"}},
+            },
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "root-turn", "status": "completed"}},
+            },
+        ],
+        redact_json_rpc=_identity,
+        redact_text=lambda value: value,
+        session_id="thread-1",
+        root_turn_id="root-turn",
+    )
+
+    assert result.terminal_result_count == 1
+    assert result.terminal_result_subtype == "success"
+    assert result.terminal_result_is_error is False
 
 
 def test_parse_codex_events_marks_unanswered_mcp_call_as_wedged() -> None:
@@ -325,6 +602,36 @@ def test_parse_codex_events_does_not_credit_spawn_without_child_completion() -> 
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].name == "Agent"
     assert result.tool_calls[0].result == {"is_error": True, "content": []}
+    assert "status=completed" in (result.environment_detail or "")
+    assert "child_status=running" in (result.environment_detail or "")
+
+
+def test_event_debug_tail_keeps_reviewer_lifecycle_when_tail_has_later_events() -> None:
+    detail = _event_debug_tail(
+        [
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "collabAgentToolCall",
+                        "tool": "spawnAgent",
+                        "status": "completed",
+                        "agentsStates": {
+                            "child-1": {"status": "running", "message": None}
+                        },
+                    }
+                },
+            },
+            *[
+                {"method": "thread/tokenUsage/updated", "params": {}}
+                for _ in range(12)
+            ],
+        ],
+        limit=3,
+    )
+
+    assert detail is not None
+    assert "reviewer=tool=spawnAgent,status=completed,child_status=running" in detail
 
 
 def test_parse_codex_events_keeps_completed_mcp_error_answered() -> None:
@@ -399,6 +706,7 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
     assert params["config"]["mcp_servers"]["nxd-desktop"]["command"] == "/bin/echo"
     assert params["config"]["mcp_servers"]["nxd-desktop"]["required"] is True
     assert params["config"]["mcp_servers"]["nxd-desktop"]["startup_timeout_sec"] == 30
+    assert adapter.review_timeout_seconds == pytest.approx(REVIEW_DEADLINE_MS / 1000.0)
 
     app_command = adapter._app_server_command()
     assert app_command[:3] == ["/bin/true", "app-server", "--stdio"]
@@ -408,6 +716,26 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
     assert 'mcp_servers.nxd-desktop.default_tools_approval_mode="approve"' in app_command
     assert "mcp_servers.nxd-desktop.required=true" in app_command
     assert "mcp_servers.nxd-desktop.startup_timeout_sec=30" in app_command
+
+    v2_adapter = CodexAdapter(
+        codex=Path("/bin/true"),
+        model="gpt-5.6-sol",
+        effort="ultra",
+        skill_pack_root=REPO_ROOT,
+        repo_root=REPO_ROOT,
+        fixture_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts-v2",
+        desktop_supervisor=Path("/bin/true"),
+        desktop_python=Path("/bin/true"),
+        timeout_s=5,
+        append_system_prompt="test",
+        mcp_config=config_path,
+        strict_mcp_config=True,
+        supervisor_data_dir=tmp_path,
+        multi_agent_v2=True,
+    )
+    v2_command = v2_adapter._app_server_command()
+    assert v2_command[3:7] == ["--enable", "multi_agent_v2", "--enable", "multi_agent"]
 
 
 def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
@@ -491,7 +819,8 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
     assert thread_params["baseInstructions"].startswith("test")
     assert thread_params["runtimeWorkspaceRoots"] == [str(tmp_path), str(REPO_ROOT)]
     turn_params = requests[5]["params"]
-    assert turn_params["input"] == [{"type": "text", "text": "hello"}]
+    assert turn_params["input"][0]["type"] == "text"
+    assert turn_params["input"][0]["text"].startswith("hello\n\nRun-local source handoff:")
     assert turn_params["sandboxPolicy"] == {
         "type": "workspaceWrite",
         "writableRoots": [str(tmp_path), str(REPO_ROOT)],
@@ -654,6 +983,20 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         mcp_config=config_path,
         supervisor_data_dir=tmp_path,
     )
+
+    import dp_scenarios.runner.codex_adapter as codex_adapter_module
+
+    original_snapshot = codex_adapter_module._snapshot_workspace
+    snapshot_calls = 0
+
+    def snapshot_once(*args, **kwargs):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls > 1:
+            raise AssertionError("timeout finalization performed an unbounded workspace scan")
+        return original_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(codex_adapter_module, "_snapshot_workspace", snapshot_once)
 
     result = adapter.send({"message": {"text": "one", "attachments": []}})
     adapter.close()

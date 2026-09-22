@@ -21,6 +21,17 @@ def _validate_settings(settings: Mapping[str, object]) -> None:
         raise ScenarioError("follow-up.stage_enum must be a non-empty list")
     if any(not isinstance(stage, str) or not stage.strip() for stage in stages):
         raise ScenarioError("follow-up.stage_enum must contain non-empty strings")
+    surface_names = settings.get("surface_names")
+    if (
+        not isinstance(surface_names, Sequence)
+        or isinstance(surface_names, (str, bytes, bytearray))
+        or not surface_names
+    ):
+        raise ScenarioError("follow-up.surface_names must be a non-empty list")
+    if any(not isinstance(name, str) or not name.strip() for name in surface_names):
+        raise ScenarioError("follow-up.surface_names must contain non-empty strings")
+    if len(set(surface_names)) != len(surface_names):
+        raise ScenarioError("follow-up.surface_names must contain unique names")
 
 
 #: Timestamp columns that a governed query renders in the database's own text
@@ -168,6 +179,10 @@ def check(
                 findings.append(f"output_contract_pii_policy_missing:{field}")
 
     marker = _string(settings.get("pii_sentinel"), "follow-up.pii_sentinel").casefold().encode()
+    required_surface_names = tuple(settings["surface_names"])
+    for name in required_surface_names:
+        if name not in surfaces:
+            findings.append(f"pii_surface_missing:{name}")
     for name, value in surfaces.items():
         if isinstance(value, bytes):
             haystack = value.casefold()
@@ -212,7 +227,12 @@ KIND = register(
                 "object with deal_id, stage, amount, updated_at set to included "
                 "and owner, email set to excluded"
             ),
-            "surfaces": "named product-surface text or bytes to scan for the PII marker",
+            "surfaces": (
+                "object with at least the required governed_output and raw_internal "
+                "keys, plus any additional product-surface names, each mapped to "
+                "text or bytes to scan for the PII marker; owner and email must be "
+                "absent from every supplied surface"
+            ),
         },
         validate_settings=_validate_settings,
         gold_reproducible_from_fixture=False,

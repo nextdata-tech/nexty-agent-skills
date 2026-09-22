@@ -319,6 +319,30 @@ def test_local_runner_selects_codex_backend_without_claude_tool_grants() -> None
     assert module._tool_grant_arguments(args, oauth_token_present=True) == []
 
 
+def test_local_runner_omits_disabled_codex_optional_flags() -> None:
+    module = _load_runner_module()
+
+    assert module._adapter_command(
+        "dp_scenarios.runner.codex_adapter",
+        {"multi-agent-v2": None, "review-timeout": "300", "native-continuation": ""},
+    ) == [
+        module.sys.executable,
+        "-m",
+        "dp_scenarios.runner.codex_adapter",
+        "--review-timeout",
+        "300",
+        "--native-continuation",
+    ]
+
+
+def test_local_runner_rejects_codex_v2_flag_for_claude_backend() -> None:
+    module = _load_runner_module()
+
+    args = module.build_parser().parse_args(["--codex-multi-agent-v2"])
+
+    assert args.codex_multi_agent_v2 is True
+
+
 def test_codex_home_is_validated_without_reading_auth_files(tmp_path: Path) -> None:
     module = _load_runner_module()
     codex_home = tmp_path / "codex-home"

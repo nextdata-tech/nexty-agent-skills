@@ -209,6 +209,19 @@ def test_a_truncated_passing_run_is_observed_even_when_repeatability_is_certifie
     assert record.reasons == ("turn_timeout_truncated",)
 
 
+def test_script_exhaustion_is_not_reported_as_a_timeout() -> None:
+    record = qualify_run(
+        _passing_score(),
+        replay_status="verified",
+        generated_operator=False,
+        repeatability_certified=True,
+        truncation_reason="script_exhausted",
+    )
+
+    assert record.disposition is QualificationDisposition.OBSERVED
+    assert record.reasons == ("script_exhausted",)
+
+
 def test_a_truncated_ungraded_run_puts_timeout_first_and_keeps_gate_reason() -> None:
     score = _score(
         GateResult(

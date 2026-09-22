@@ -284,10 +284,17 @@ class ScenarioRun:
 def _is_truncated_terminal(state: EngineTerminalState) -> bool:
     """Return whether the engine stopped without a proved clean completion."""
 
-    return state in {
-        EngineTerminalState.SCRIPT_EXHAUSTED,
-        EngineTerminalState.TURN_TIMEOUT,
-    }
+    return _incomplete_terminal_reason(state) is not None
+
+
+def _incomplete_terminal_reason(state: EngineTerminalState) -> str | None:
+    """Return the qualification reason for an incomplete engine terminal."""
+
+    if state is EngineTerminalState.SCRIPT_EXHAUSTED:
+        return "script_exhausted"
+    if state is EngineTerminalState.TURN_TIMEOUT:
+        return "turn_timeout_truncated"
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -621,6 +628,7 @@ def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
         validation_mode=run.manifest.validation_mode,
         operator_mode=run.qualification.operator_mode,
         truncated=_is_truncated_terminal(run.terminal_state),
+        truncation_reason=_incomplete_terminal_reason(run.terminal_state),
     )
     if qualification.disposition is not QualificationDisposition.CERTIFIED:
         return run
@@ -784,6 +792,7 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                         "name": call.name,
                         "arguments": _json_safe(call.arguments),
                         "result": _json_safe(call.result),
+                        "observation": _json_safe(call.observation),
                     }
                     for call in turn.tool_calls
                 ],
@@ -2487,6 +2496,7 @@ class TierRunner:
                     validation_mode=environment.manifest.validation_mode,
                     operator_mode=getattr(run_result, "operator_mode", "scripted"),
                     truncated=_is_truncated_terminal(run_result.terminal_state),
+                    truncation_reason=_incomplete_terminal_reason(run_result.terminal_state),
                 )
                 bundle_dir: Path | None = None
                 bundle_digest: str | None = None

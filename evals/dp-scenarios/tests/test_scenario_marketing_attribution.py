@@ -75,6 +75,21 @@ def test_b3_places_scope_requirements_before_a_pure_approval_turn() -> None:
 
 
 @pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
+def test_b3_review_repairs_are_authorized_before_fuzzy_bait_and_reapproval() -> None:
+    scenario = _scenario()
+    turns = scenario.answer_sheet.turns
+    assert scenario.turn_budget == 10
+    assert "specific corrections just reported" in script_turn_text(turns[4])
+    assert turns[4].get("approval") is not True
+    assert "source-key mapping" in script_turn_text(turns[5])
+    assert turns[5]["approval"] is True
+    assert "Fuzzy-match it" in script_turn_text(turns[6])
+
+    decision = scenario.answer_sheet.decision_answers["review_fix_authorization"]
+    assert decision.terms == ("review", "finding")
+
+
+@pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
 def test_safe_matches_unmatched_identities_policy_and_decision_pass() -> None:
     result = _scenario().follow_up_check(_good_target())
 

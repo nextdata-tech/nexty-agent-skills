@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -151,6 +151,20 @@ def _adapter_timeout(turn_timeout: float) -> float:
     if turn_timeout <= 0:
         raise TierError("turn timeout must be positive")
     return turn_timeout * 0.9
+
+
+def _adapter_command(
+    adapter_module: str, adapter_kwargs: Mapping[str, str | None]
+) -> list[str]:
+    command = [sys.executable, "-m", adapter_module]
+    for key, value in adapter_kwargs.items():
+        if value is None:
+            continue
+        if value:
+            command.extend((f"--{key}", value))
+        else:
+            command.append(f"--{key}")
+    return command
 
 
 def _load_local_credentials(env_file: Path | None) -> dict[str, str]:
@@ -455,6 +469,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
     parser.add_argument("--codex", type=Path, help="Codex executable (default: codex on PATH)")
     parser.add_argument(
+        "--codex-multi-agent-v2",
+        action="store_true",
+        help="enable Codex's experimental multi-agent-v2 backend",
+    )
+    parser.add_argument(
         "--codex-home",
         type=Path,
         help=(
@@ -561,6 +580,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--native-continuation is not yet supported by the Codex backend; "
             "Codex app-server continuity is kept within one live runner process"
         )
+    if args.codex_multi_agent_v2 and args.agent_backend != "codex":
+        raise TierError("--codex-multi-agent-v2 requires --agent-backend codex")
     agent_model = args.model or ("sonnet" if args.agent_backend == "claude" else "gpt-5.6-luna")
     repo_root = REPO_ROOT
     skill_pack_root = _validated_skill_pack_root(args.skill_pack_root)
@@ -665,16 +686,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "desktop-supervisor": str(supervisor),
             "desktop-python": str(desktop_python),
             "timeout": str(_adapter_timeout(args.turn_timeout)),
+            "multi-agent-v2": "" if args.codex_multi_agent_v2 else None,
+            "review-timeout": f"{review_timeout_seconds:.15g}",
         }
     if args.native_continuation:
         adapter_kwargs["native-continuation"] = ""
 
-    adapter_command = [sys.executable, "-m", adapter_module]
-    for key, value in adapter_kwargs.items():
-        if value:
-            adapter_command.extend((f"--{key}", value))
-        else:
-            adapter_command.append(f"--{key}")
+    adapter_command = _adapter_command(adapter_module, adapter_kwargs)
     adapter_command.extend(
         _tool_grant_arguments(
             args,

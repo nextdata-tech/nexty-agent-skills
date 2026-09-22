@@ -23,10 +23,10 @@ details.
 
 ## Conversation
 
-The answer sheet drives a fourteen-turn arc through source review, approval,
+The answer sheet drives a twenty-one-turn arc through source review, approval,
 build, redaction, tombstone handling, review adjudication, and final evidence
-collection. The final two phase-7 turns leave room for a fresh review round to
-ask for adjudication; they do not authorize remediation on their own.
+collection. The phase-7 tail leaves room for fresh review rounds to ask for
+adjudication; it does not authorize remediation on its own.
 
 - **Turn 3** confirms the current-snapshot scope, is a verbatim approval, and
   carries the required `crm_pipeline_pagination` plant. The plant requires

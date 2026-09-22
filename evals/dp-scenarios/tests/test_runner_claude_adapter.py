@@ -80,6 +80,88 @@ def test_parse_stream_events_keeps_tool_observations_structured() -> None:
     assert result.reported is False
 
 
+def test_parse_stream_events_derives_report_safe_review_observation() -> None:
+    review_prompt = (
+        "Load and follow nxd-review-closure.\n"
+        "retained_capture_root: /captured/root\n"
+        "retained_blueprint_path: /captured/blueprint.md\n"
+        "Sanitized original request: fixture request\n"
+        'NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":'
+        '"sanitized_original_request","return":"claims_only","review_round_index":0}'
+    )
+    events = [
+        {
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "capture-1",
+                "name": "mcp__nxd-desktop__advance_workflow",
+                "input": {"workflow": "workflow", "action": {"type": "capture"}},
+            }, {
+                "type": "tool_use",
+                "id": "agent-1",
+                "name": "Agent",
+                "input": {"subagent_type": "general-purpose", "prompt": review_prompt},
+            }]},
+        },
+        {
+            "type": "user",
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "capture-1", "content": [{
+                    "type": "text",
+                    "text": json.dumps({"requirements": [{
+                        "id": "review",
+                        "status": "pending",
+                        "review_input": {
+                            "retained_capture_root": "/captured/root",
+                            "retained_blueprint_path": "/captured/blueprint.md",
+                        },
+                    }]}),
+                }]},
+                {"type": "tool_result", "tool_use_id": "agent-1", "content": [{
+                    "type": "text", "text": "one evidenced claim",
+                }]},
+            ]},
+        },
+        {"type": "result", "result": "done", "is_error": False},
+    ]
+
+    def redact(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                str(key): "[redacted]" if key == "prompt" else redact(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        return value
+
+    result, _ = parse_claude_events(
+        events,
+        redact_json_rpc=redact,
+        redact_text=lambda value: value,
+        session_id="claude-session",
+    )
+
+    review_call = result.tool_calls[1]
+    assert review_call.arguments["prompt"] == "[redacted]"  # type: ignore[index]
+    assert review_call.observation == {
+        "schema": "nxd-review-observation-v1",
+        "subagent_type": "general-purpose",
+        "inline": True,
+        "marker_valid": True,
+        "review_input_bound": True,
+        "request_contract_valid": True,
+        "review_skill_instruction": True,
+        "claims_returned": True,
+        "result_ok": True,
+        "workflow": "workflow",
+        "closure_path": "closure",
+        "review_round_index": 0,
+        "eligible": True,
+    }
+
+
 def test_parse_stream_events_preserves_exact_terminal_completion_facts() -> None:
     result, _ = parse_claude_events(
         [{"type": "result", "result": "done", "subtype": "success", "is_error": False}],

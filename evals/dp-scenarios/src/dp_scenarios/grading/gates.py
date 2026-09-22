@@ -1410,12 +1410,56 @@ def _review_claim_text(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _completed_report_safe_review(
+    observation: object, position: EventPosition, *, workflow: str | None = None
+) -> ReviewDispatch | None:
+    """Read adapter-derived review evidence without trusting redacted prompts.
+
+    Claude report artifacts intentionally redact Agent prompts because they can
+    contain retained supervisor paths and source material.  The live adapter
+    therefore emits this narrow, runner-owned observation before redaction.
+    It is accepted only when every required predicate was true in memory; no
+    prompt text or retained path is recovered from the report.
+    """
+
+    if not isinstance(observation, Mapping):
+        return None
+    if observation.get("schema") != "nxd-review-observation-v1":
+        return None
+    if any(
+        observation.get(key) is not True
+        for key in (
+            "eligible",
+            "inline",
+            "marker_valid",
+            "review_input_bound",
+            "request_contract_valid",
+            "review_skill_instruction",
+            "claims_returned",
+            "result_ok",
+        )
+    ) or observation.get("subagent_type") != "general-purpose":
+        return None
+    if workflow is not None and observation.get("workflow") != workflow:
+        return None
+    closure_path = _normalized_closure_path(observation.get("closure_path"))
+    review_round_index = observation.get("review_round_index")
+    if (
+        closure_path is None
+        or not _is_int(review_round_index)
+        or review_round_index < 0
+    ):
+        return None
+    return ReviewDispatch(position, closure_path, review_round_index)
+
+
 def _completed_review_delegation(
     call: Mapping[str, object],
     position: EventPosition,
     *,
     review_input: tuple[tuple[str, str], ...] | None = None,
     review_inputs: Sequence[tuple[tuple[str, str], ...]] | None = None,
+    workflow: str | None = None,
 ) -> ReviewDispatch | None:
     """Return the marked closure when a reviewer completed inline.
 
@@ -1428,6 +1472,11 @@ def _completed_review_delegation(
     result = call.get("result")
     if not isinstance(arguments, Mapping) or not isinstance(result, Mapping):
         return None
+    report_safe = _completed_report_safe_review(
+        call.get("observation"), position, workflow=workflow
+    )
+    if report_safe is not None:
+        return report_safe
     # The shipped workflow requires one built-in general-purpose conversation
     # child.  The reviewer identity belongs in the prompt, not in a custom
     # ``subagent_type``: the plugin does not register an nxd-review-closure
@@ -1450,7 +1499,18 @@ def _completed_review_delegation(
     if arguments.get("run_in_background") is True:
         return None
     marker = _review_dispatch_marker(arguments.get("prompt"))
-    if marker is None or result.get("is_error") is not False:
+    # Claude's successful Agent result carries ``is_error: null`` rather than
+    # the Codex adapter's explicit ``False``.  A non-error result is therefore
+    # either false or absent/null; only an explicit true is a failure.  The
+    # non-empty claims check below still keeps launch-only acknowledgements out.
+    if (
+        marker is None
+        or "is_error" not in result
+        or (
+            result.get("is_error") is not False
+            and result.get("is_error") is not None
+        )
+    ):
         return None
     content = result.get("content")
     claims = _review_claim_text(content)
@@ -1555,6 +1615,55 @@ def _review_inputs_from_captures(
     return tuple(collected)
 
 
+def _review_input_from_capture_call(
+    call: Mapping[str, object],
+    *,
+    expected_advance: str,
+    workflow: str | None,
+) -> tuple[tuple[str, str], ...] | None:
+    """Return the review input issued by one capture in event order."""
+
+    if call.get("name") != expected_advance:
+        return None
+    arguments = call.get("arguments")
+    result = call.get("result")
+    if (
+        not isinstance(arguments, Mapping)
+        or not isinstance(result, Mapping)
+        or result.get("is_error") is not False
+        or (
+            workflow is not None
+            and _normalized_workflow(arguments.get("workflow")) != workflow
+        )
+    ):
+        return None
+    action = arguments.get("action")
+    if not isinstance(action, Mapping) or action.get("type") != "capture":
+        return None
+    content = result.get("content")
+    requirements = content.get("requirements") if isinstance(content, Mapping) else None
+    if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes, bytearray)):
+        return None
+    for requirement in requirements:
+        if (
+            not isinstance(requirement, Mapping)
+            or requirement.get("id") != "review"
+            or str(requirement.get("status", "")).casefold() != "pending"
+        ):
+            continue
+        review_input = requirement.get("review_input")
+        if not isinstance(review_input, Mapping):
+            return None
+        values: list[tuple[str, str]] = []
+        for key in ("retained_capture_root", "retained_blueprint_path"):
+            value = review_input.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append((key, value))
+        return tuple(values)
+    return None
+
+
 def _review_dispatches(
     observations: object,
     *,
@@ -1580,19 +1689,32 @@ def _review_dispatches(
     expected_reset = desktop_prefix + "reset_workflow"
     marker_found: list[ReviewDispatch] = []
     workflow_reports: list[tuple[EventPosition, str, int, str, str]] = []
+    current_review_inputs: tuple[tuple[str, str], ...] = ()
     for position, call in _positioned_calls(observations):
         name = call.get("name")
         if not isinstance(name, str):
             continue
         if name.casefold() in {"task", "agent"}:
+            scoped_review_inputs = current_review_inputs or (
+                (review_input,) if review_input is not None else ()
+            )
             dispatch = _completed_review_delegation(
                 call,
                 position,
                 review_input=review_input,
-                review_inputs=review_inputs,
+                review_inputs=scoped_review_inputs or review_inputs,
+                workflow=workflow,
             )
             if dispatch is not None:
                 marker_found.append(dispatch)
+            continue
+        capture_input = _review_input_from_capture_call(
+            call,
+            expected_advance=expected_advance,
+            workflow=workflow,
+        )
+        if capture_input is not None:
+            current_review_inputs = (capture_input,)
             continue
         # The workflow-v2 supervisor owns these events.  In particular, the
         # first report can have operation.status=failed when it records
