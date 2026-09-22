@@ -58,6 +58,9 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "stale subject or dependency" in CODEX_SYSTEM_PROMPT
     assert "close that same child with" in CODEX_SYSTEM_PROMPT
     assert "exact receiver thread id in its `target` argument" in CODEX_SYSTEM_PROMPT
+    assert "wait` reports the child as completed but returns no non-empty message" in CODEX_SYSTEM_PROMPT
+    assert "issue `wait` once more with the same target" in CODEX_SYSTEM_PROMPT
+    assert "missing child claims" in CODEX_SYSTEM_PROMPT
     assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
