@@ -1164,6 +1164,7 @@ def test_construction_accepts_runner_owned_review_observation_after_prompt_redac
         "review_skill_instruction": True,
         "claims_returned": True,
         "result_ok": True,
+        "review_prompt_sha256": "0" * 64,
         "workflow": "workflow",
         "eligible": True,
         "closure_path": "closure",
@@ -1197,6 +1198,7 @@ def test_construction_rejects_incomplete_runner_owned_review_observation() -> No
         "review_skill_instruction": True,
         "claims_returned": True,
         "result_ok": True,
+        "review_prompt_sha256": "0" * 64,
         "workflow": "workflow",
         "eligible": False,
         "closure_path": "closure",
@@ -1910,6 +1912,11 @@ def test_construction_accepts_supervisor_bound_workflow_review_sequence() -> Non
         attestations=(
             _review_attestation("corrected", closure=closure, review_round_index=0),
             _review_attestation("clear", closure=closure, review_round_index=1),
+            # A long-lived run may retain a prior workflow's attestation. It
+            # must not be counted against the published workflow's rounds.
+            _review_attestation(
+                "old", closure="nxd-jobs/old-workflow/closure", review_round_index=0
+            ),
         ),
         review_rounds={
             closure: [

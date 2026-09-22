@@ -380,6 +380,9 @@ class TurnRecord:
     terminal_result_count: int = 0
     terminal_result_subtype: str | None = None
     terminal_result_is_error: bool | None = None
+    provider_model_calls: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1506,7 +1509,7 @@ class OperatorEngine:
                 sentinel_tripped = True
             if result.last_mcp_call:
                 last_mcp_call = result.last_mcp_call
-            if result.environment_wedged:
+            if result.environment_wedged and not result.turn_timed_out:
                 self.failure_modes.append("environment_wedge")
                 environment_wedged = True
             if result.turn_timed_out:
@@ -1620,6 +1623,9 @@ class OperatorEngine:
                 terminal_result_count=result.terminal_result_count,
                 terminal_result_subtype=result.terminal_result_subtype,
                 terminal_result_is_error=result.terminal_result_is_error,
+                provider_model_calls=result.provider_model_calls,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
             )
             records.append(turn_record)
             self._append_row(
@@ -1661,7 +1667,7 @@ class OperatorEngine:
             if sentinel_tripped or environment_wedged or turn_timed_out:
                 break
 
-        if environment_wedged:
+        if environment_wedged and not turn_timed_out:
             terminal_state = TerminalState.ENVIRONMENT_WEDGE
             reason = "environment_wedge"
         elif sentinel_tripped:

@@ -77,6 +77,20 @@ _REVIEW_PENDING_BLOCKED_OPERATIONS = frozenset(
         "get_workflow_capabilities",
     }
 )
+_REVIEW_READER_TOOL = "read_review_input"
+_REVIEW_READER_MAX_BYTES = 128 * 1024
+_REVIEW_READER_MAX_LINES = 500
+_REVIEW_READER_DENIED_NAMES = frozenset(
+    {
+        ".env",
+        "credentials",
+        "credential",
+        "secrets",
+        "secret",
+        "sensitive",
+        "id_rsa",
+    }
+)
 
 
 def _safe_trusted_credential_mappings(
@@ -160,15 +174,23 @@ _TRACE_LOCK = threading.Lock()
 def _write_private_text(path: Path, text: str) -> None:
     """Atomically create/truncate a runner-owned file with mode 0600."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
     finally:
         if fd != -1:
             os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            temporary_path.unlink()
 
 
 def redact_json_rpc(value: Any, *, key: str = "") -> Any:
@@ -193,6 +215,239 @@ def redact_json_rpc(value: Any, *, key: str = "") -> Any:
 def redact_text(value: str) -> str:
     """Redact free-form diagnostics without retaining raw server output."""
     return str(redact_json_rpc(value))
+
+
+def _review_allowlist_payload(state: Mapping[str, Any] | None) -> dict[str, str]:
+    """Extract only the two supervisor-bound paths used by a review child."""
+
+    review_input = state.get("review_input") if isinstance(state, Mapping) else None
+    if not isinstance(review_input, Mapping):
+        return {}
+    paths: dict[str, str] = {}
+    for key in ("retained_capture_root", "retained_blueprint_path"):
+        value = review_input.get(key)
+        if isinstance(value, str) and value.strip():
+            paths[key] = value
+    return paths
+
+
+def _review_reader_tool_definition() -> dict[str, Any]:
+    """Describe the runner-owned bounded reader exposed to a Codex child."""
+
+    return {
+        "name": _REVIEW_READER_TOOL,
+        "description": (
+            "Runner-owned, read-only access to the exact current supervisor "
+            "review_input paths. Use only for the CODEX_REVIEW_CHILD review; "
+            "writes, execution, network access, and other paths are rejected."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "operation": {"type": "string", "enum": ["read", "list"]},
+                "max_lines": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _REVIEW_READER_MAX_LINES,
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _REVIEW_READER_MAX_BYTES,
+                },
+            },
+            "required": ["path", "operation"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _review_reader_error(message: str) -> dict[str, Any]:
+    payload = {"error": message}
+    return {
+        "isError": True,
+        "structuredContent": payload,
+        "content": [{"type": "text", "text": json.dumps(payload, sort_keys=True)}],
+    }
+
+
+def _review_entry_is_sensitive(name: str) -> bool:
+    """Return whether a review-reader path component is credential-shaped."""
+
+    lowered = name.casefold()
+    return (
+        lowered in _REVIEW_READER_DENIED_NAMES
+        or lowered.startswith(".env.")
+        or lowered.endswith((".pem", ".key", ".p12", ".pfx"))
+    )
+
+
+def _review_reader_roots(
+    allowlist_path: Path,
+) -> tuple[list[tuple[Path, bool]], str | None]:
+    """Load and validate the current review roots without exposing values."""
+
+    try:
+        raw = json.loads(allowlist_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return [], "review input allowlist is unavailable"
+    if not isinstance(raw, Mapping):
+        return [], "review input allowlist is malformed"
+    roots: list[tuple[Path, bool]] = []
+    for key, is_directory in (
+        ("retained_capture_root", True),
+        ("retained_blueprint_path", False),
+    ):
+        value = raw.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        root = Path(value)
+        if not root.is_absolute():
+            return [], "review input allowlist contains a non-absolute path"
+        try:
+            resolved_root = root.resolve(strict=True)
+        except OSError:
+            return [], "review input root is unavailable"
+        if is_directory and not resolved_root.is_dir():
+            return [], "retained capture root is not a directory"
+        if not is_directory and not resolved_root.is_file():
+            return [], "retained blueprint path is not a regular file"
+        roots.append((resolved_root, is_directory))
+    if not roots:
+        return [], "review input allowlist is empty"
+    return roots, None
+
+
+def _review_reader_available(allowlist_path: Path) -> bool:
+    """Whether the synthetic reader can be safely advertised right now."""
+
+    roots, error = _review_reader_roots(allowlist_path)
+    return error is None and bool(roots)
+
+
+def _review_reader_path(
+    path_value: object, allowlist_path: Path
+) -> tuple[Path, str | None]:
+    """Resolve a requested review path against the current private allowlist."""
+
+    if not isinstance(path_value, str) or not path_value.strip():
+        return Path(), "path must be a non-empty absolute path"
+    requested = Path(path_value)
+    if not requested.is_absolute():
+        return Path(), "path must be absolute"
+    roots, error = _review_reader_roots(allowlist_path)
+    if error is not None:
+        return Path(), error
+    try:
+        resolved = requested.resolve(strict=True)
+    except OSError:
+        return Path(), "requested review path is unavailable"
+    if any(
+        _review_entry_is_sensitive(part)
+        for part in resolved.parts
+    ):
+        return Path(), "requested review path is sensitive"
+    for root, is_directory in roots:
+        if resolved == root or (is_directory and root in resolved.parents):
+            return resolved, None
+    return Path(), "requested review path is outside the current review_input"
+
+
+def _review_reader_result(
+    request: Mapping[str, Any], allowlist_path: Path
+) -> dict[str, Any]:
+    """Serve one bounded, read-only review-input request."""
+
+    params = request.get("params")
+    arguments = params.get("arguments") if isinstance(params, Mapping) else None
+    if not isinstance(arguments, Mapping):
+        return _review_reader_error("arguments must be an object")
+    path, error = _review_reader_path(arguments.get("path"), allowlist_path)
+    if error:
+        return _review_reader_error(error)
+    operation = arguments.get("operation")
+    if operation not in {"read", "list"}:
+        return _review_reader_error("operation must be read or list")
+    max_lines = arguments.get("max_lines", _REVIEW_READER_MAX_LINES)
+    max_bytes = arguments.get("max_bytes", _REVIEW_READER_MAX_BYTES)
+    if (
+        isinstance(max_lines, bool)
+        or not isinstance(max_lines, int)
+        or not 1 <= max_lines <= _REVIEW_READER_MAX_LINES
+        or isinstance(max_bytes, bool)
+        or not isinstance(max_bytes, int)
+        or not 1 <= max_bytes <= _REVIEW_READER_MAX_BYTES
+    ):
+        return _review_reader_error("read bounds are outside the permitted limits")
+    try:
+        if operation == "list":
+            if not path.is_dir():
+                return _review_reader_error("list requires a directory")
+            entries = []
+            for entry in sorted(path.iterdir(), key=lambda item: item.name):
+                if len(entries) >= max_lines:
+                    break
+                if _review_entry_is_sensitive(entry.name):
+                    continue
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "kind": "directory" if entry.is_dir() else "file",
+                    }
+                )
+            text = json.dumps(entries, sort_keys=True)
+        else:
+            if not path.is_file():
+                return _review_reader_error("read requires a regular file")
+            text = path.read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines(keepends=True)
+            text = "".join(lines[:max_lines])
+        encoded = text.encode("utf-8")
+        if len(encoded) > max_bytes:
+            text = encoded[:max_bytes].decode("utf-8", errors="ignore")
+            text += "\n[runner output truncated]\n"
+        text = redact_text(text)
+    except (OSError, UnicodeError) as exc:
+        return _review_reader_error(f"review input read failed: {redact_text(str(exc))}")
+    return {
+        "isError": False,
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+def _augment_tools_list(
+    message: Mapping[str, Any], *, allowlist_path: Path
+) -> dict[str, Any]:
+    """Keep the reader in the catalog while the allowlist gates every call.
+
+    Codex app-server caches the MCP tool catalog for the parent thread, and
+    clients that do consult that catalog need the name before capture. Waiting
+    to advertise this synthetic tool until after capture therefore makes it
+    invisible to those clients: the allowlist is valid by the time the child
+    runs, but the client received the earlier catalog. Advertising the name
+    from startup fixes that discovery path; some app-server versions still do
+    not propagate MCP tools into collaboration children, so the Codex adapter
+    has a strictly read-only fallback for that boundary. The
+    ``_review_reader_result`` still fails closed until the runner publishes the
+    exact current review paths, so catalog visibility does not grant access to
+    any path.
+    """
+
+    augmented = dict(message)
+    result = message.get("result")
+    if not isinstance(result, Mapping) or not isinstance(result.get("tools"), list):
+        return augmented
+    result_copy = dict(result)
+    tools = list(result["tools"])
+    if not any(
+        isinstance(tool, Mapping) and tool.get("name") == _REVIEW_READER_TOOL
+        for tool in tools
+    ):
+        tools.append(_review_reader_tool_definition())
+    result_copy["tools"] = tools
+    augmented["result"] = result_copy
+    return augmented
 
 
 @dataclasses.dataclass(frozen=True)
@@ -436,8 +691,15 @@ def _review_guard_snapshot(response: Mapping[str, Any]) -> dict[str, Any]:
             "dependency_evidence_sha256",
             "review_input",
         ):
-            if key in value and key not in snapshot:
-                snapshot[key] = value[key]
+            if key not in value or key in snapshot:
+                continue
+            candidate = value[key]
+            # Workflow-v2 returns one RequirementView per requirement. Views
+            # unrelated to the review carry ``review_input: null``; keep
+            # looking until the matching review view supplies the bound paths.
+            if key == "review_input" and not isinstance(candidate, Mapping):
+                continue
+            snapshot[key] = candidate
     return snapshot
 
 
@@ -522,6 +784,10 @@ class DesktopStdioSession:
         return self.root / "mcp-trace.jsonl"
 
     @property
+    def review_allowlist_path(self) -> Path:
+        return self.root / "review-allowlist.json"
+
+    @property
     def server_result_path(self) -> Path:
         return self.root / "server-result.json"
 
@@ -540,6 +806,14 @@ class DesktopStdioSession:
     @property
     def allowed_tools_csv(self) -> str:
         return ",".join(self.allowed_tools)
+
+    def _write_review_allowlist(self, state: Mapping[str, Any] | None) -> None:
+        """Publish only the current supervisor-bound review paths to the proxy."""
+
+        _write_private_text(
+            self.review_allowlist_path,
+            json.dumps(_review_allowlist_payload(state), sort_keys=True),
+        )
 
     def start(self) -> "DesktopStdioSession":
         if self._started:
@@ -579,6 +853,7 @@ class DesktopStdioSession:
                 "server_process_result_path": str(self.server_process_result_path),
                 "trace_path": str(self.trace_path),
                 "result_path": str(self.server_result_path),
+                "review_allowlist_path": str(self.review_allowlist_path),
                 "shutdown_timeout_s": self.shutdown_timeout_s,
                 "request_timeout_faults": self.request_timeout_faults,
             }
@@ -604,6 +879,7 @@ class DesktopStdioSession:
             _write_private_text(self.trace_path, "")
             _write_private_text(self.server_result_path, "{}")
             _write_private_text(self.server_process_result_path, "{}")
+            self._write_review_allowlist(None)
             self._bridge_thread = threading.Thread(
                 target=self._serve_bridge,
                 name="dp-scenarios-desktop-bridge",
@@ -753,12 +1029,14 @@ class DesktopStdioSession:
                         state["workflow"] = workflow
                     with self._bridge_state_lock:
                         self._review_guard_state = state
+                    self._write_review_allowlist(state)
                 elif (
                     action_type == "report_requirement"
                     and _response_satisfies_review(response)
                 ):
                     with self._bridge_state_lock:
                         self._review_guard_state = None
+                    self._write_review_allowlist(None)
 
         try:
             self._bridge_connection = connection
@@ -1004,6 +1282,7 @@ class DesktopStdioSession:
                 "server-process-result.json",
                 "mcp-trace.jsonl",
                 "server-result.json",
+                "review-allowlist.json",
             ):
                 with contextlib.suppress(OSError):
                     (self.root / name).unlink()
@@ -1058,6 +1337,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
         server_process_result_path = Path(spec["server_process_result_path"])
         trace_path = Path(spec["trace_path"])
         result_path = Path(spec["result_path"])
+        review_allowlist_path = Path(spec["review_allowlist_path"])
         timeout_faults = _timeout_faults(spec.get("request_timeout_faults"))
         # The proxy is part of the evaluated agent's process lineage. It gets
         # only a private socket endpoint; the parent runner owns the other end
@@ -1080,6 +1360,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
 
         state_lock = threading.Lock()
         pending: dict[str, _PendingRequest] = {}
+        request_methods: dict[str, str] = {}
         fault_lock = threading.Lock()
         timers_lock = threading.Lock()
         active_timers: set[threading.Timer] = set()
@@ -1108,6 +1389,23 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 return True
             except (BrokenPipeError, OSError):
                 return False
+
+        def write_review_reader_response(request: Mapping[str, Any]) -> None:
+            response = {
+                "jsonrpc": "2.0",
+                "id": request.get("id"),
+                "result": _review_reader_result(request, review_allowlist_path),
+            }
+            line = json.dumps(response, separators=(",", ":")).encode() + b"\n"
+            _trace_line(
+                trace_path,
+                "response",
+                line,
+                forwarded=False,
+                synthetic=True,
+                review_reader=True,
+            )
+            write_client(line)
 
         def cancel_timers() -> None:
             with timers_lock:
@@ -1228,6 +1526,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
             assert bridge_reader is not None
             for line in bridge_reader:
                 state: _PendingRequest | None = None
+                response_operation: str | None = None
                 message: Any = None
                 try:
                     message = json.loads(line.decode("utf-8"))
@@ -1238,6 +1537,7 @@ def run_stdio_proxy(spec_path: Path) -> int:
                     if request_key is not None:
                         with state_lock:
                             state = pending.pop(request_key, None)
+                            response_operation = request_methods.pop(request_key, None)
                         if state is not None and state.timer is not None:
                             state.timer.cancel()
                             with timers_lock:
@@ -1252,7 +1552,28 @@ def run_stdio_proxy(spec_path: Path) -> int:
                     )
                 if state is not None and state.timed_out:
                     continue
-                if not write_client(line):
+                output_line = line
+                if (
+                    isinstance(message, Mapping)
+                    and not (state is not None and state.timed_out)
+                    and response_operation == "tools/list"
+                ):
+                    output_message = _augment_tools_list(
+                        message, allowlist_path=review_allowlist_path
+                    )
+                    if output_message != message:
+                        output_line = (
+                            json.dumps(output_message, separators=(",", ":")).encode()
+                            + b"\n"
+                        )
+                        _trace_line(
+                            trace_path,
+                            "response",
+                            output_line,
+                            forwarded=True,
+                            injected_review_reader=True,
+                        )
+                if not write_client(output_line):
                     return
 
         reader = threading.Thread(target=forward_responses, daemon=True)
@@ -1266,6 +1587,13 @@ def run_stdio_proxy(spec_path: Path) -> int:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
             if isinstance(request, Mapping):
+                if (
+                    request.get("method") == "tools/call"
+                    and isinstance(request.get("params"), Mapping)
+                    and request["params"].get("name") == _REVIEW_READER_TOOL
+                ):
+                    write_review_reader_response(request)
+                    continue
                 operation = _request_operation(request)
                 request_key = (
                     _rpc_id_key(request.get("id"))
@@ -1287,6 +1615,8 @@ def run_stdio_proxy(spec_path: Path) -> int:
                     if duplicate:
                         reject_duplicate(request)
                         continue
+                    with state_lock:
+                        request_methods[request_key] = operation
                     timeout_ms = next_timeout_ms(operation, request)
                     if timeout_ms is not None:
                         state = _PendingRequest(
@@ -1318,6 +1648,12 @@ def run_stdio_proxy(spec_path: Path) -> int:
         with contextlib.suppress(OSError):
             bridge.shutdown(socket.SHUT_WR)
         reader.join(timeout=5)
+        # The child may close its bridge without answering every forwarded
+        # request. Drop correlation state before returning so a long-lived
+        # proxy cannot retain request metadata past the child lifecycle.
+        with state_lock:
+            pending.clear()
+            request_methods.clear()
         try:
             server_result = json.loads(
                 server_process_result_path.read_text(encoding="utf-8")

@@ -1,6 +1,6 @@
 """Durable, secret-safe checkpoints for resumable scenario runs.
 
-This module deliberately does not know about Claude sessions, supervisor
+This module deliberately does not know about provider sessions, supervisor
 state, replay recordings, or the operator engine.  It stores the smallest
 contract needed by a future runner integration: an immutable execution
 identity, an immutable committed-turn state, and an explicit decision about
@@ -26,7 +26,6 @@ from pathlib import PurePosixPath
 import re
 import tempfile
 from typing import Literal
-import uuid
 
 
 class CheckpointError(RuntimeError):
@@ -86,6 +85,7 @@ _SECRET_COMPOUND_WORDS = frozenset(
 _SEMVER_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _CHECKPOINT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_PROVIDER_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -104,6 +104,9 @@ def _canonical_json(value: object) -> bytes:
 
 
 def _is_secret_key(key: str) -> bool:
+    if key.casefold() in {"input_tokens", "output_tokens", "provider_model_calls"}:
+        # These are bounded provider-usage counters, not credential values.
+        return False
     words = tuple(part.casefold() for part in _SECRET_KEY_RE.findall(key))
     if not words:
         return False
@@ -480,28 +483,24 @@ class CheckpointIdentity:
         )
 
 
-@dataclass(frozen=True)
-class ClaudeSessionIdentity:
-    """Credential-free Claude continuation identity.
+def is_valid_provider_session_id(value: object) -> bool:
+    """Return whether an opaque provider session/thread id is safe to persist."""
 
-    Claude session ids are opaque provider identifiers, so the checkpoint
-    contract accepts only their canonical UUID spelling.  The execution
-    digest binds the provider session to the exact runner identity that
-    created it; a UUID from another run is never enough to resume.
-    """
+    return isinstance(value, str) and _PROVIDER_SESSION_ID_RE.fullmatch(value) is not None
+
+
+@dataclass(frozen=True)
+class ProviderSessionIdentity:
+    """Credential-free continuation identity for any supported provider."""
 
     session_id: str
     execution_identity_digest: str
 
     def __post_init__(self) -> None:
-        try:
-            parsed = uuid.UUID(self.session_id)
-        except (AttributeError, ValueError, TypeError) as exc:
-            raise CheckpointError("Claude session id must be a UUID") from exc
-        if str(parsed) != self.session_id:
-            raise CheckpointError("Claude session id must use canonical UUID spelling")
+        if not is_valid_provider_session_id(self.session_id):
+            raise CheckpointError("provider session id must be non-empty safe identifier text")
         if not _SHA256_RE.fullmatch(self.execution_identity_digest):
-            raise CheckpointError("Claude session execution identity must be a sha256 hex digest")
+            raise CheckpointError("provider session execution identity must be a sha256 hex digest")
 
     def to_dict(self) -> dict[str, object]:
         """Return the only session facts allowed in a checkpoint."""
@@ -512,18 +511,22 @@ class ClaudeSessionIdentity:
         }
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> "ClaudeSessionIdentity":
-        payload = _require_mapping(value, "Claude session identity")
+    def from_dict(cls, value: Mapping[str, object]) -> "ProviderSessionIdentity":
+        payload = _require_mapping(value, "provider session identity")
         _require_exact_keys(
             payload,
             {"session_id", "execution_identity_digest"},
-            "Claude session identity",
+            "provider session identity",
         )
         if not isinstance(payload["session_id"], str) or not isinstance(
             payload["execution_identity_digest"], str
         ):
-            raise CheckpointError("Claude session identity fields are invalid")
+            raise CheckpointError("provider session identity fields are invalid")
         return cls(payload["session_id"], payload["execution_identity_digest"])
+
+
+# Backward-compatible public name for existing Claude checkpoint consumers.
+ClaudeSessionIdentity = ProviderSessionIdentity
 
 
 @dataclass(frozen=True)
@@ -541,7 +544,7 @@ class CheckpointState:
     identity_digest: str
     payload_ref: str | None = None
     payload_digest: str | None = None
-    native_session: ClaudeSessionIdentity | None = None
+    native_session: ProviderSessionIdentity | None = None
 
     def __post_init__(self) -> None:
         if not _CHECKPOINT_ID_RE.fullmatch(self.checkpoint_id):
@@ -559,11 +562,11 @@ class CheckpointState:
         if self.continuity_mode not in {"native-resume", "handoff"}:
             raise CheckpointError("continuity_mode is invalid")
         if self.continuity_mode == "native-resume" and self.native_session is None:
-            raise CheckpointError("native-resume checkpoints require a Claude session identity")
+            raise CheckpointError("native-resume checkpoints require a provider session identity")
         if self.continuity_mode == "handoff" and self.native_session is not None:
-            raise CheckpointError("handoff checkpoints must not contain a Claude session identity")
+            raise CheckpointError("handoff checkpoints must not contain a provider session identity")
         if self.native_session is not None and self.native_session.execution_identity_digest != self.identity_digest:
-            raise CheckpointError("Claude session identity does not match checkpoint execution identity")
+            raise CheckpointError("provider session identity does not match checkpoint execution identity")
         for field_name, value in (
             ("turn_prefix_digest", self.turn_prefix_digest),
             ("identity_digest", self.identity_digest),
@@ -623,7 +626,7 @@ class CheckpointState:
                 raise CheckpointError(f"{key} must be a string")
         raw_native_session = fields.get("native_session")
         native_session = (
-            ClaudeSessionIdentity.from_dict(raw_native_session)
+            ProviderSessionIdentity.from_dict(raw_native_session)
             if isinstance(raw_native_session, Mapping)
             else None
         )
@@ -1169,6 +1172,8 @@ __all__ = [
     "canonical_digest",
     "checkpoint_prefix_digest",
     "ClaudeSessionIdentity",
+    "ProviderSessionIdentity",
+    "is_valid_provider_session_id",
     "CheckpointError",
     "CheckpointIdentity",
     "CheckpointState",

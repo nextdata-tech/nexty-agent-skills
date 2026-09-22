@@ -26,6 +26,8 @@ from collections.abc import Iterable
 PROVIDER_SESSION_LIMIT = "provider_session_limit"
 #: The child stayed alive but produced no terminal ``result`` before the deadline.
 CHILD_NO_TERMINAL_RESULT = "child_no_terminal_result"
+#: The Codex app-server root turn stayed alive but produced no terminal result.
+CODEX_ROOT_TURN_NO_TERMINAL_RESULT = "codex_root_turn_no_terminal_result"
 #: The child exited before emitting a terminal ``result``.
 CHILD_EXITED_EARLY = "child_exited_early"
 #: Two runs contended on shared runtime state (locked store, busy resource).
@@ -40,6 +42,7 @@ FAILURE_REASONS = frozenset(
     {
         PROVIDER_SESSION_LIMIT,
         CHILD_NO_TERMINAL_RESULT,
+        CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
         CHILD_EXITED_EARLY,
         SHARED_RUNTIME_CONTENTION,
         INTERRUPTED_UNCLASSIFIED,
@@ -106,6 +109,7 @@ __all__ = [
     "CHILD_EXITED_EARLY",
     "INTERRUPTED_UNCLASSIFIED",
     "CHILD_NO_TERMINAL_RESULT",
+    "CODEX_ROOT_TURN_NO_TERMINAL_RESULT",
     "FAILURE_REASONS",
     "PROVIDER_SESSION_LIMIT",
     "SHARED_RUNTIME_CONTENTION",

@@ -71,7 +71,7 @@ from .checkpoint import (
     CheckpointIdentity,
     CheckpointState,
     CheckpointStore,
-    ClaudeSessionIdentity,
+    ProviderSessionIdentity,
     checkpoint_prefix_digest,
 )
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
@@ -188,6 +188,9 @@ class ScenarioRun:
     failure_reason: str | None = None
     failure_detail: str | None = None
     last_mcp_call: str | None = None
+    provider_model_calls: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
     @property
     def invalid(self) -> bool:
@@ -254,6 +257,9 @@ class ScenarioRun:
             "wall_clock": self.efficiency.wall_clock,
             "observed_turns": self.transcript_turns,
             "observed_calls": self.calls,
+            "provider_model_calls": self.provider_model_calls,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
             "observed_wall_clock_seconds": self.wall_clock_seconds,
         }
         result["manifest"] = self.manifest.to_dict()
@@ -262,6 +268,22 @@ class ScenarioRun:
             if report_safe
             else self.replay_recording.to_dict()
         )
+        result["terminal_diagnostics"] = {
+            "root_turns": [
+                {
+                    "turn": index,
+                    "terminal_result_count": turn.result.terminal_result_count,
+                    "terminal_result_subtype": turn.result.terminal_result_subtype,
+                    "terminal_result_is_error": turn.result.terminal_result_is_error,
+                }
+                for index, turn in enumerate(self.replay_recording.turns, start=1)
+            ],
+            "exactly_one_terminal_result_per_turn": all(
+                turn.result.terminal_result_count == 1
+                and turn.result.terminal_result_is_error is False
+                for turn in self.replay_recording.turns
+            ),
+        }
         result["ledger_path"] = self.ledger_path
         result["fixture_dir"] = self.fixture_dir
         result["evidence_bundle_dir"] = self.evidence_bundle_dir
@@ -820,6 +842,9 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 "terminal_result_count": getattr(turn, "terminal_result_count", 0),
                 "terminal_result_subtype": getattr(turn, "terminal_result_subtype", None),
                 "terminal_result_is_error": getattr(turn, "terminal_result_is_error", None),
+                "provider_model_calls": getattr(turn, "provider_model_calls", 0),
+                "input_tokens": getattr(turn, "input_tokens", None),
+                "output_tokens": getattr(turn, "output_tokens", None),
             }
         )
     identity = getattr(run_result, "driver_identity", None)
@@ -1631,12 +1656,17 @@ def _efficiency(
     *,
     turns: int,
     calls: int,
+    provider_calls: int | None = None,
     wall_clock: float,
     budgets: RunBudgets,
 ) -> EfficiencyReport:
     return EfficiencyReport(
         turns=turns / scenario.turn_budget,
-        model_calls=(calls / budgets.model_calls) if budgets.model_calls is not None else None,
+        model_calls=(
+            (provider_calls if provider_calls is not None else calls) / budgets.model_calls
+            if budgets.model_calls is not None
+            else (provider_calls if provider_calls is not None else calls)
+        ),
         wall_clock=(wall_clock / budgets.wall_clock_seconds) if budgets.wall_clock_seconds is not None else None,
     )
 
@@ -1982,9 +2012,9 @@ class TierRunner:
                 session_id = snapshot.turns[-1].result.session_id if snapshot.turns else None
                 if not isinstance(session_id, str):
                     raise TierError(
-                        "native continuation turn did not return a Claude session UUID"
+                        "native continuation turn did not return a provider session id"
                     )
-                native_session = ClaudeSessionIdentity(
+                native_session = ProviderSessionIdentity(
                     session_id=session_id,
                     execution_identity_digest=identity.digest,
                 )
@@ -2046,7 +2076,7 @@ class TierRunner:
             raise TierError(f"native resume rejected: {decision.reason}")
         checkpoint = decision.checkpoint
         if checkpoint.native_session is None:
-            raise TierError("native resume checkpoint has no Claude session identity")
+            raise TierError("native resume checkpoint has no provider session identity")
         if checkpoint.native_session.execution_identity_digest != identity.digest:
             raise TierError("native resume checkpoint execution identity does not match the current run")
         if checkpoint.committed_turn >= len(scenario.script.turns):
@@ -2477,6 +2507,10 @@ class TierRunner:
                     scenario,
                     turns=len(run_result.turns),
                     calls=calls,
+                    provider_calls=sum(
+                        getattr(turn, "provider_model_calls", 0)
+                        for turn in run_result.turns
+                    ),
                     wall_clock=elapsed,
                     budgets=self.budgets,
                 )
@@ -2537,6 +2571,28 @@ class TierRunner:
                         failure_reason=getattr(run_result, "failure_reason", None),
                         failure_detail=getattr(run_result, "failure_detail", None),
                         last_mcp_call=getattr(run_result, "last_mcp_call", None),
+                        provider_model_calls=sum(
+                            getattr(turn, "provider_model_calls", 0)
+                            for turn in run_result.turns
+                        ),
+                        input_tokens=(
+                            sum(
+                                turn.input_tokens
+                                for turn in run_result.turns
+                                if turn.input_tokens is not None
+                            )
+                            if any(turn.input_tokens is not None for turn in run_result.turns)
+                            else None
+                        ),
+                        output_tokens=(
+                            sum(
+                                turn.output_tokens
+                                for turn in run_result.turns
+                                if turn.output_tokens is not None
+                            )
+                            if any(turn.output_tokens is not None for turn in run_result.turns)
+                            else None
+                        ),
                     )
                 )
         return tuple(runs)
@@ -2779,10 +2835,19 @@ class TierRunner:
         calls = int(calls_value) if isinstance(calls_value, int) and calls_value >= 0 else 0
         turns_value = observations.get("turns", ())
         turns = len(turns_value) if isinstance(turns_value, Sequence) and not isinstance(turns_value, (str, bytes)) else 0
+        provider_calls = sum(
+            int(turn.get("provider_model_calls", 0))
+            for turn in turns_value
+            if isinstance(turn, Mapping)
+            and isinstance(turn.get("provider_model_calls", 0), int)
+            and not isinstance(turn.get("provider_model_calls", 0), bool)
+            and turn.get("provider_model_calls", 0) >= 0
+        ) if isinstance(turns_value, Sequence) and not isinstance(turns_value, (str, bytes)) else 0
         efficiency = _efficiency(
             scenario,
             turns=turns,
             calls=calls,
+            provider_calls=provider_calls,
             wall_clock=0.0,
             budgets=self.budgets,
         )

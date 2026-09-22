@@ -20,10 +20,18 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
     _event_debug_tail,
+    _codex_timeout_failure_reason,
+    _review_pending_after_observations,
+    _reviewer_wait_without_target,
+    _turn_sandbox_policy,
     _update_reviewer_deadline,
     _update_reviewer_deadline_from_events,
     _load_mcp_server,
     parse_codex_events,
+)
+from dp_scenarios.failure_reasons import (
+    CHILD_NO_TERMINAL_RESULT,
+    CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
 )
 from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
 
@@ -72,8 +80,16 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not call `sendInput` or `resumeAgent`" in CODEX_SYSTEM_PROMPT
     assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
     assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
+    assert "same supervisor response under" in CODEX_SYSTEM_PROMPT
+    assert "Do not call `list_mcp_resources`" in CODEX_SYSTEM_PROMPT
     assert "owning parent’s one-shot reviewer lifecycle" in CODEX_SYSTEM_PROMPT
     assert "reviewer child\nmay use only its allowed read-only inspection tools" in CODEX_SYSTEM_PROMPT
+    assert "mcp__nxd-desktop__read_review_input" in CODEX_SYSTEM_PROMPT
+    assert "bounded read/list surface" in CODEX_SYSTEM_PROMPT
+    assert "sensitive files" in CODEX_SYSTEM_PROMPT
+    assert "return an incomplete blocker" in CODEX_SYSTEM_PROMPT
+    assert "Review-repair discipline" in CODEX_SYSTEM_PROMPT
+    assert "an unchanged closure for another review" in CODEX_SYSTEM_PROMPT
     assert "exact `*** Begin Patch`" in CODEX_SYSTEM_PROMPT
     assert "partial evidenced claims" in CODEX_SYSTEM_PROMPT
     assert "prefix every changed line" in CODEX_SYSTEM_PROMPT
@@ -88,7 +104,58 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "file-backed scenario is not expected to have an `infra-profile.yaml`" in CODEX_SYSTEM_PROMPT
     assert "do not invoke or simulate a shell `apply_patch` command" in CODEX_SYSTEM_PROMPT
     assert "bare dependency, YAML, or JSON line as a patch header" in CODEX_SYSTEM_PROMPT
-    assert "stop closure authoring and report the exact" in CODEX_SYSTEM_PROMPT
+    assert "treat that as an edit-syntax failure" in CODEX_SYSTEM_PROMPT
+    assert "retry once with a complete valid file-change operation" in CODEX_SYSTEM_PROMPT
+    assert "do not report an environment" in CODEX_SYSTEM_PROMPT
+    assert "corrected operation is rejected too" in CODEX_SYSTEM_PROMPT
+
+
+def test_review_child_prompt_describes_the_runtime_read_only_boundary() -> None:
+    assert "enforced read-only sandbox" in CODEX_SYSTEM_PROMPT
+    assert "network access disabled" in CODEX_SYSTEM_PROMPT
+
+
+def test_capture_review_pending_switches_the_next_turn_to_read_only() -> None:
+    capture = {
+        "tool": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {"action": {"type": "capture"}},
+        "result": {
+            "requirements": [
+                {"id": "review", "status": "pending", "review_input": {}},
+            ]
+        },
+        "is_error": False,
+    }
+    assert _review_pending_after_observations((capture,), False) is True
+    assert _turn_sandbox_policy(True, ("/workspace",)) == {"type": "readOnly"}
+
+
+def test_successful_review_report_restores_workspace_write_for_follow_up_turn() -> None:
+    report = {
+        "tool": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {
+            "action": {"type": "report_requirement", "requirement_id": "review"}
+        },
+        "result": {"status": "clear"},
+        "is_error": False,
+    }
+    assert _review_pending_after_observations((report,), True) is False
+    assert _turn_sandbox_policy(False, ("/workspace", "/skills")) == {
+        "type": "workspaceWrite",
+        "writableRoots": ["/workspace", "/skills"],
+    }
+
+
+def test_non_review_requirement_report_does_not_clear_review_lock() -> None:
+    report = {
+        "tool": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {
+            "action": {"type": "report_requirement", "requirement_id": "capture"}
+        },
+        "result": {"status": "complete"},
+        "is_error": False,
+    }
+    assert _review_pending_after_observations((report,), True) is True
 
 
 def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> None:
@@ -100,8 +167,13 @@ def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> N
     assert f"NXD_EVAL_FIXTURE_DIR={adapter.fixture_dir}" in prompt
     assert "read only the supplied input files" in prompt
     assert "do not use oracle or gold files" in prompt
+    assert "Parent-thread file-change reminder" in prompt
+    assert "never forward this paragraph" in prompt
     assert "one complete Add File operation" in prompt
     assert "raw file contents in patch metadata" in prompt
+    assert "correct the patch envelope" in prompt
+    assert "corrected operation is rejected too" in prompt
+    assert "report the blocker rather than retrying malformed patch syntax" not in prompt
 
 
 def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> None:
@@ -242,6 +314,33 @@ def test_codex_reviewer_deadline_stays_armed_when_close_precedes_claims() -> Non
     )
 
 
+def test_reviewer_wait_without_target_is_fail_closed() -> None:
+    wait = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "wait",
+        },
+    }
+    # A completed wait item can be an intermediate app-server spelling that
+    # has not yet carried the child target or terminal state.  The turn-level
+    # pending-child check remains fail-closed at the actual turn boundary.
+    assert _reviewer_wait_without_target(wait, True) is False
+    assert _reviewer_wait_without_target(wait, False) is False
+
+
+def test_reviewer_wait_without_target_is_fatal_only_with_explicit_failure() -> None:
+    wait = {
+        "type": "item.completed",
+        "item": {
+            "type": "collab_agent_tool_call",
+            "tool": "wait",
+            "status": "failed",
+        },
+    }
+    assert _reviewer_wait_without_target(wait, True) is True
+
+
 def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
     adapter.timeout_s = 1000.0
@@ -332,6 +431,28 @@ def test_codex_turn_deadline_wins_when_nonterminal_events_keep_arriving(monkeypa
         adapter._collect_turn(1, "", [])
 
 
+def test_codex_root_turn_timeout_is_not_reported_as_a_child_timeout() -> None:
+    assert (
+        _codex_timeout_failure_reason(
+            TimeoutError("Codex app-server turn deadline expired"),
+            "",
+            root_turn_id="root-turn",
+        )
+        == CODEX_ROOT_TURN_NO_TERMINAL_RESULT
+    )
+
+
+def test_codex_reviewer_timeout_keeps_the_child_timeout_reason() -> None:
+    assert (
+        _codex_timeout_failure_reason(
+            TimeoutError("Codex reviewer child did not complete before the 300.0-second reviewer deadline"),
+            "",
+            root_turn_id="root-turn",
+        )
+        == CHILD_NO_TERMINAL_RESULT
+    )
+
+
 def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     result, observations = parse_codex_events(
         [
@@ -373,13 +494,16 @@ def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     assert result.terminal_result_count == 1
     assert result.terminal_result_subtype == "success"
     assert result.terminal_result_is_error is False
+    assert result.provider_model_calls == 1
+    assert result.input_tokens == 3
+    assert result.output_tokens == 2
     assert result.last_mcp_call == "advance_workflow:ok"
     assert result.tool_calls[0].name == "mcp__nxd-desktop__advance_workflow"
     assert observations[0]["tool"] == "advance_workflow"
     assert observations[0]["result"] == {"admission": {"run_id": "run-1"}}
 
 
-def test_parse_codex_events_surfaces_failed_file_change_without_raw_error() -> None:
+def test_parse_codex_file_change_rejection_is_recoverable_without_raw_error() -> None:
     result, observations = parse_codex_events(
         [
             {
@@ -399,10 +523,9 @@ def test_parse_codex_events_surfaces_failed_file_change_without_raw_error() -> N
     )
 
     assert observations == []
-    assert result.environment_wedged is True
-    assert result.environment_detail == CODEX_FILE_CHANGE_FAILURE
+    assert result.environment_wedged is False
+    assert result.environment_detail is None
     assert CODEX_FILE_CHANGE_FAILURE in result.transcript_delta
-    assert "raw patch content" not in result.environment_detail
     assert result.tool_calls[0].result == {"status": "failed", "is_error": True}
 
 
@@ -1002,6 +1125,7 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     adapter.close()
 
     assert result.turn_timed_out is True
+    assert result.failure_reason == CODEX_ROOT_TURN_NO_TERMINAL_RESULT
     assert result.session_id == "00000000-0000-4000-8000-000000000020"
     assert result.agent_message == "partial"
     assert result.last_mcp_call == "inspect_run:unanswered"

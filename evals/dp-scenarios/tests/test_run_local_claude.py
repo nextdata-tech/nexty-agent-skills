@@ -81,6 +81,53 @@ def test_local_runner_leaves_timeout_budget_for_the_adapter() -> None:
     assert module._adapter_timeout(0.1) < 0.1
 
 
+def test_claude_provider_preflight_checks_login_without_exposing_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_runner_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"command": command, **kwargs})
+        return SimpleNamespace(returncode=0, stdout='{"loggedIn":true,"email":"private@example.test"}')
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module._run_claude_provider_preflight(
+        Path("/usr/local/bin/claude"),
+        oauth_token="token-value",
+        config_dir=tmp_path,
+    )
+
+    assert calls[0]["command"] == ["/usr/local/bin/claude", "auth", "status", "--json"]
+    assert calls[0]["capture_output"] is True
+    assert calls[0]["text"] is True
+    assert calls[0]["timeout"] == 15.0
+    assert calls[0]["env"][module.CLAUDE_OAUTH_TOKEN] == "token-value"
+
+
+def test_claude_provider_preflight_fails_closed_without_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_runner_module()
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='{"loggedIn":false}'),
+    )
+
+    with pytest.raises(TierError, match="no active login"):
+        module._run_claude_provider_preflight(Path("/usr/local/bin/claude"))
+
+
+def test_provider_preflight_is_reserved_for_provider_backed_tiers() -> None:
+    module = _load_runner_module()
+
+    assert module._needs_provider_preflight((SimpleNamespace(tier="core"),)) is True
+    assert module._needs_provider_preflight((SimpleNamespace(tier="full"),)) is True
+    assert module._needs_provider_preflight((SimpleNamespace(tier="smoke"),)) is False
+
+
 def test_local_runner_defaults_and_validates_the_review_timeout() -> None:
     module = _load_runner_module()
 

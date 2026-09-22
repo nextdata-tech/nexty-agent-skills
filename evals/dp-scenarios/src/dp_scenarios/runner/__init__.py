@@ -13,10 +13,19 @@ from .checkpoint import (
     CheckpointState,
     CheckpointStore,
     ClaudeSessionIdentity,
+    ProviderSessionIdentity,
+    is_valid_provider_session_id,
     ResumeDecision,
     canonical_digest,
 )
-from .report import ReportError, emit_report, human_summary, machine_report, write_report
+from .report import (
+    ReportError,
+    emit_report,
+    human_summary,
+    machine_report,
+    write_abort_report,
+    write_report,
+)
 from .qualification import QualificationDisposition, QualificationRecord, qualify_run
 from .session import (
     LiveSession,
@@ -52,6 +61,8 @@ __all__ = [
     "CheckpointState",
     "CheckpointStore",
     "ClaudeSessionIdentity",
+    "ProviderSessionIdentity",
+    "is_valid_provider_session_id",
     "canonical_digest",
     "Environment",
     "LiveSession",
@@ -89,4 +100,5 @@ __all__ = [
     "run_tier",
     "qualify_run",
     "write_report",
+    "write_abort_report",
 ]

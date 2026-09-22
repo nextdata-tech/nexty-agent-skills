@@ -1,6 +1,7 @@
 """Contract tests for the local Claude Code transport bridge."""
 
 import io
+import hashlib
 import json
 import dataclasses
 import os
@@ -123,7 +124,12 @@ def test_parse_stream_events_derives_report_safe_review_observation() -> None:
                 }]},
             ]},
         },
-        {"type": "result", "result": "done", "is_error": False},
+        {
+            "type": "result",
+            "result": "done",
+            "is_error": False,
+            "usage": {"input_tokens": 11, "output_tokens": 7},
+        },
     ]
 
     def redact(value: object) -> object:
@@ -155,6 +161,7 @@ def test_parse_stream_events_derives_report_safe_review_observation() -> None:
         "review_skill_instruction": True,
         "claims_returned": True,
         "result_ok": True,
+        "review_prompt_sha256": hashlib.sha256(review_prompt.encode()).hexdigest(),
         "workflow": "workflow",
         "closure_path": "closure",
         "review_round_index": 0,
@@ -164,7 +171,13 @@ def test_parse_stream_events_derives_report_safe_review_observation() -> None:
 
 def test_parse_stream_events_preserves_exact_terminal_completion_facts() -> None:
     result, _ = parse_claude_events(
-        [{"type": "result", "result": "done", "subtype": "success", "is_error": False}],
+        [{
+            "type": "result",
+            "result": "done",
+            "subtype": "success",
+            "is_error": False,
+            "usage": {"input_tokens": 11, "output_tokens": 7},
+        }],
         redact_json_rpc=_identity,
         redact_text=lambda value: value,
         session_id="claude-session",
@@ -173,6 +186,9 @@ def test_parse_stream_events_preserves_exact_terminal_completion_facts() -> None
     assert result.terminal_result_count == 1
     assert result.terminal_result_subtype == "success"
     assert result.terminal_result_is_error is False
+    assert result.provider_model_calls == 1
+    assert result.input_tokens == 11
+    assert result.output_tokens == 7
     assert result.agent_message == "done"
 
 
@@ -284,8 +300,9 @@ def test_default_prompt_describes_channels_and_review_dispatch_mechanics_not_sce
     assert prompt.splitlines().count(canonical_marker) == 1
     assert (
         "Replace only closure_path and review_round_index: use a relative closure path "
-        "and the next zero-based index; keep the other constants unchanged."
+        "and the next zero-based index within that workflow"
     ) in collapsed
+    assert "reset the index to 0 for a new workflow id" in collapsed
     assert "ask the operator for explicit approval" not in collapsed
     assert "do not report numeric or status results" not in collapsed
     assert "must not invoke Skill(nxd-review-closure)" not in collapsed

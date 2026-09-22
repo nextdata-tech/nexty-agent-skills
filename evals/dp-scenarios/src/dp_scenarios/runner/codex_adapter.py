@@ -28,12 +28,14 @@ from typing import Any
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
+    CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
     classify_failure_reason,
     first_reason,
 )
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
 from dp_scenarios.runner.claude_adapter import (
     _advance_action_type,
+    _advance_requirement_id,
     _changed_files,
     _load_desktop_stdio,
     _mcp_name,
@@ -61,6 +63,24 @@ CODEX_FILE_CHANGE_FAILURE = "codex_file_change_failed"
 _FILE_CHANGE_FAILURE_STATUSES = frozenset(
     {"failed", "error", "rejected", "cancelled", "canceled"}
 )
+
+
+def _codex_timeout_failure_reason(
+    error: TimeoutError,
+    detail: str,
+    *,
+    root_turn_id: str | None,
+) -> str:
+    """Classify a Codex timeout without changing provider-neutral fallbacks."""
+
+    classified = classify_failure_reason(str(error) + detail)
+    if classified is not None:
+        return classified
+    if "Codex reviewer child did not complete" in str(error):
+        return CHILD_NO_TERMINAL_RESULT
+    if root_turn_id is not None:
+        return CODEX_ROOT_TURN_NO_TERMINAL_RESULT
+    return CHILD_NO_TERMINAL_RESULT
 
 
 CODEX_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
@@ -95,8 +115,11 @@ new text file, submit one complete Add File operation with every content line
 encoded as an added line; for an existing file, use a valid Update File
 operation with an `@@` hunk and explicit context/add/remove prefixes. Never
 submit a bare dependency, YAML, or JSON line as a patch header. If the native
-file-change tool rejects an edit, stop closure authoring and report the exact
-blocker instead of retrying malformed patch syntax; do not use destructive
+file-change tool rejects an edit, treat that as an edit-syntax failure: correct
+the patch envelope and retry once with a complete valid file-change operation.
+Do not make the guidance scenario-specific.
+Do not resend the same malformed payload, and do not report an environment
+blocker unless the corrected operation is also rejected; do not use destructive
 commands such as `rm`/`rm -f`, shell
 command chains, pipelines, redirects, or a custom working directory. If a
 command cannot start or is rejected, stop issuing that command shape and switch
@@ -117,14 +140,31 @@ operator's next message arrives.
 Reviewer-child role: when a parent labels your prompt
 `CODEX_REVIEW_CHILD`, you are the read-only review child, not the workflow
 runner. Do not call nxd-desktop, do not spawn/resume/wait for another child,
-do not create or edit files, and do not follow the parent-run admission or
-publication sequence. Inspect only the closure and review inputs named by the
-parent, complete within the retained review deadline, and return concise
-review claims/findings to the parent.
+do not create or edit files, and do not call codex_file_change, apply_patch,
+or any other write-capable tool, even if a loaded skill or the parent prompt
+mentions file authoring. Use only the runner-owned
+`mcp__nxd-desktop__read_review_input` tool for the exact retained capture root
+and blueprint path named by the matching supervisor `review_input`. It is a
+bounded read/list surface; it rejects other paths, writes, execution, network
+access, sensitive files, and credential values. The runner starts the review
+turn in an enforced read-only sandbox with network access disabled; do not try
+to change that boundary. Do not follow the parent-run admission or publication
+sequence. Inspect only the closure and review inputs named by the parent,
+complete within the retained review deadline, and return concise review
+claims/findings to the parent. If the named paths or reader tool are genuinely
+unavailable, return an incomplete blocker immediately instead of waiting or
+inventing evidence.
 
 If the inspection is incomplete at the review cutoff, stop reading and return
 the partial evidenced claims plus a concise blocker immediately; never wait
 for more context or leave the child running past the deadline.
+
+Review-repair discipline: after a non-clear review report, wait for the next
+operator message and then repair the parent-owned closure itself before any
+reset or recapture. Address every blocking finding that the operator
+authorized, and verify that the relevant files actually changed. Never submit
+an unchanged closure for another review; if no authorized repair is possible,
+report that blocker instead of repeating reset/capture.
 
 Collaboration tool argument discipline: for `spawnAgent`, send the complete
 review request in exactly one `message` string; do not also send `items`.
@@ -143,7 +183,8 @@ File-edit discipline: use the file-change tool for edits. If an apply-patch
 operation is used, every patch must have the exact `*** Begin Patch`, file
 operation, hunk, and `*** End Patch` structure; never combine JSON, prose, or
 another patch format inside it. If the patch is rejected, do not retry the
-same malformed patch; use the file-change tool or report the blocker. In an
+same malformed patch: correct its envelope and use the file-change tool once
+more. Report a blocker only if the corrected operation is rejected too. In an
 update hunk, start with an `@@` header and prefix every changed line with `+`
 or `-` and every context line with a space; never paste raw YAML/JSON lines
 into a patch hunk. Prefer one file per change call and validate the exact
@@ -158,6 +199,13 @@ read-only reviewer using that matching review_input. In this backend, that
 means the built-in Codex collaboration child via spawnAgent, followed by
 waiting for the child to complete; do not substitute an inline self-review,
 an authored review-record.json/agent-attestations.json, or an OS process. The
+matching review_input is in the same supervisor response under
+`requirements` for the `id` `review`, even when `next_actions` names only the
+`report_requirement` action; extract those exact fields from that response and
+dispatch the child immediately. Do not call `list_mcp_resources` or any other
+resource-discovery tool to locate retained inputs. The owning parent must not
+call `mcp__nxd-desktop__read_review_input`; that runner-owned reader is exposed
+only for the `CODEX_REVIEW_CHILD` handoff. The
 required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id; do not make
@@ -297,6 +345,85 @@ def _decode_mcp_value(value: object) -> object:
     return value
 
 
+def _walk_json_values(value: object) -> list[object]:
+    """Flatten nested MCP values, decoding embedded JSON text once."""
+
+    values = [value]
+    if isinstance(value, Mapping):
+        for child in value.values():
+            values.extend(_walk_json_values(child))
+    elif isinstance(value, list):
+        for child in value:
+            values.extend(_walk_json_values(child))
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            with contextlib.suppress(json.JSONDecodeError):
+                decoded = json.loads(stripped)
+                if decoded != value:
+                    values.extend(_walk_json_values(decoded))
+    return values
+
+
+def _response_requires_review(value: object) -> bool:
+    """Return whether a supervisor response leaves the review requirement pending."""
+
+    for item in _walk_json_values(value):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("code") == "workflow/review_pending":
+            return True
+        if (
+            item.get("type", item.get("action")) == "report_requirement"
+            and item.get("requirement_id") == "review"
+        ):
+            return True
+        requirements = item.get("requirements")
+        if isinstance(requirements, Mapping):
+            review = requirements.get("review")
+            if isinstance(review, Mapping) and review.get("status") == "pending":
+                return True
+        elif isinstance(requirements, list) and any(
+            isinstance(review, Mapping)
+            and review.get("id") == "review"
+            and review.get("status") == "pending"
+            for review in requirements
+        ):
+            return True
+    return False
+
+
+def _review_pending_after_observations(
+    observations: Sequence[Mapping[str, object]], previous: bool
+) -> bool:
+    """Track the supervisor review state across operator turns."""
+
+    pending = previous
+    for observation in observations:
+        if observation.get("tool") != "mcp__nxd-desktop__advance_workflow":
+            continue
+        arguments = observation.get("arguments")
+        action = _advance_action_type(arguments)
+        if observation.get("is_error") is True:
+            continue
+        result = observation.get("result")
+        if action == "capture" and _response_requires_review(result):
+            pending = True
+        elif action == "report_requirement" and _advance_requirement_id(arguments) == "review":
+            pending = False
+    return pending
+
+
+def _turn_sandbox_policy(
+    review_pending: bool, writable_roots: Sequence[str]
+) -> dict[str, object]:
+    """Select the enforced policy for the next parent/reviewer turn."""
+
+    if review_pending:
+        return {"type": "readOnly"}
+    return {"type": "workspaceWrite", "writableRoots": list(writable_roots)}
+
+
 def _codex_mcp_name(item: Mapping[str, object]) -> str | None:
     """Normalize Codex's server/tool fields to the harness MCP vocabulary."""
 
@@ -320,6 +447,23 @@ def _item_result(item: Mapping[str, object]) -> object:
     if "output" in item:
         return item.get("output")
     return item.get("content")
+
+
+def _provider_usage(value: object) -> tuple[int | None, int | None]:
+    """Read bounded provider token counters without retaining raw responses."""
+
+    usage = value.get("usage") if isinstance(value, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return None, None
+    values: list[int | None] = []
+    for key in ("input_tokens", "output_tokens"):
+        candidate = usage.get(key)
+        values.append(
+            candidate
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate >= 0
+            else None
+        )
+    return values[0], values[1]
 
 
 def _collab_agent_result(item: Mapping[str, object]) -> Mapping[str, object]:
@@ -416,6 +560,7 @@ def _collab_debug_label(item: Mapping[str, object]) -> str:
     child_statuses, _ = _collab_states(item)
     if child_statuses:
         parts.append("child_status=" + ",".join(child_statuses))
+    parts.append("keys=" + ",".join(sorted(str(key) for key in item)))
     parts.append(f"receiver_count={len(_collab_receiver_ids(item))}")
     return ",".join(parts) if parts else "state=unknown"
 
@@ -507,6 +652,42 @@ def _update_reviewer_deadline_from_events(
     return receiver_ids, deadline_at
 
 
+def _reviewer_wait_without_target(
+    event: Mapping[str, object],
+    reviewer_started: bool,
+) -> bool:
+    """Whether a reviewer wait was issued without a child target.
+
+    A one-shot reviewer should be waited on by the receiver thread id returned
+    by ``spawnAgent``.  App-server versions have emitted intermediate completed
+    wait items before that target or the child terminal state was attached;
+    those are diagnosed at the turn boundary instead of being treated as an
+    immediate provider failure.  An explicit failed wait remains fatal.
+    """
+
+    if event.get("type") != "item.completed":
+        return False
+    item = event.get("item")
+    if not isinstance(item, Mapping) or item.get("type") not in {
+        "collabAgentToolCall",
+        "collab_agent_tool_call",
+    }:
+        return False
+    if item.get("tool") != "wait" or not reviewer_started:
+        return False
+    child_statuses, _ = _collab_states(item)
+    status = item.get("status")
+    return bool(
+        not _collab_receiver_ids(item)
+        and (
+            item.get("is_error") is True
+            or bool(item.get("error"))
+            or status in _COLLAB_FAILURE_STATUSES
+            or any(child in _COLLAB_FAILURE_STATUSES for child in child_statuses)
+        )
+    )
+
+
 def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, object]:
     """Map one app-server notification to the adapter's event vocabulary."""
 
@@ -522,6 +703,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         turn = params.get("turn")
         turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         status = turn.get("status") if isinstance(turn, Mapping) else None
+        usage = turn.get("usage") if isinstance(turn, Mapping) else params.get("usage")
         event_type = {
             "completed": "turn.completed",
             "interrupted": "turn.interrupted",
@@ -531,6 +713,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             "turn_id": turn_id,
             "is_error": status != "completed",
             "error": turn.get("error") if isinstance(turn, Mapping) else None,
+            "usage": usage,
         }
     if method == "turn/started":
         return {"type": "turn.started"}
@@ -658,6 +841,9 @@ def parse_codex_events(
     terminal_count = 0
     terminal_subtype: str | None = None
     terminal_is_error: bool | None = None
+    input_tokens_total = 0
+    output_tokens_total = 0
+    token_usage_seen = False
     thread_id = session_id
     build_failures = 0
     environment_details: list[str] = []
@@ -723,6 +909,13 @@ def parse_codex_events(
             terminal_subtype = "success"
             raw_error = event.get("is_error")
             terminal_is_error = raw_error if isinstance(raw_error, bool) else False
+            input_tokens, output_tokens = _provider_usage(event)
+            if input_tokens is not None:
+                input_tokens_total += input_tokens
+                token_usage_seen = True
+            if output_tokens is not None:
+                output_tokens_total += output_tokens
+                token_usage_seen = True
             continue
         if event_type == "mcp_server_failed":
             environment_details.append(
@@ -771,7 +964,10 @@ def parse_codex_events(
                 + redact_text(json.dumps(dict(item), default=str)[:600])
             )
             if is_error:
-                environment_details.append(CODEX_FILE_CHANGE_FAILURE)
+                # A rejected patch is an agent/tool result, not proof that the
+                # app-server or supervisor wedged. Keep the turn alive so the
+                # parent can correct the operation; if it never recovers, the
+                # normal turn deadline classifies the incomplete turn.
                 transcript.append("[tool_result:file_change] " + CODEX_FILE_CHANGE_FAILURE)
             continue
         if item_type == "collab_agent_tool_call":
@@ -902,6 +1098,9 @@ def parse_codex_events(
         terminal_result_count=terminal_count,
         terminal_result_subtype=terminal_subtype,
         terminal_result_is_error=terminal_is_error,
+        provider_model_calls=terminal_count,
+        input_tokens=input_tokens_total if token_usage_seen else None,
+        output_tokens=output_tokens_total if token_usage_seen else None,
     )
     return result, observations
 
@@ -967,6 +1166,7 @@ class CodexAdapter:
         self._built_runs: set[str] = set()
         self._query_history: list[dict[str, object]] = []
         self._last_mcp_call: str | None = None
+        self._review_pending = False
         self._redact_json_rpc, self._redact_text = self._load_redactors()
         self._process: subprocess.Popen[bytes] | None = None
         self._rpc_id = 0
@@ -1395,6 +1595,14 @@ class CodexAdapter:
                 continue
             events.append(event)
             normalized = _normalise_app_server_event(event)
+            if _reviewer_wait_without_target(
+                normalized, reviewer_deadline_at is not None
+            ):
+                raise CodexAdapterError(
+                    "Codex reviewer wait had no receiver target after a reviewer "
+                    "was started; ending the turn with an incomplete handoff",
+                    reason=CHILD_NO_TERMINAL_RESULT,
+                )
             reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline(
                 normalized,
                 reviewer_receiver_ids,
@@ -1431,11 +1639,15 @@ class CodexAdapter:
         if attachment_paths:
             text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
         text += (
-            "\n\nNative file-change reminder: use one complete Add File operation for "
+            "\n\nParent-thread file-change reminder (never forward this paragraph "
+            "to a reviewer child): use one complete Add File operation for "
             "each new text file, or a correctly structured Update File hunk for "
             "an existing file. Never place raw file contents in patch metadata "
             "or use a bare content line as a hunk header. If an edit is rejected, "
-            "report the blocker rather than retrying malformed patch syntax."
+            "treat it as an edit-syntax failure: correct the patch envelope and "
+            "retry once with a complete valid file-change operation. Do not resend "
+            "the same malformed payload or report an environment blocker unless "
+            "the corrected operation is rejected too."
         )
         return text
 
@@ -1470,6 +1682,9 @@ class CodexAdapter:
             self._thread_id = parsed.session_id
         if parsed.last_mcp_call:
             self._last_mcp_call = parsed.last_mcp_call
+        self._review_pending = _review_pending_after_observations(
+            observations, self._review_pending
+        )
         changed: tuple[TouchedFile, ...] = ()
         if not lightweight:
             after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
@@ -1548,6 +1763,10 @@ class CodexAdapter:
         events: list[Mapping[str, object]] = list(self._startup_events)
         self._startup_events.clear()
         try:
+            sandbox_policy = _turn_sandbox_policy(
+                self._review_pending,
+                [str(Path.cwd()), str(self.skill_pack_root)],
+            )
             self._write_rpc(
                 "turn/start",
                 {
@@ -1557,13 +1776,7 @@ class CodexAdapter:
                     "model": self.model,
                     "approvalPolicy": "never",
                     "effort": self.effort,
-                    "sandboxPolicy": {
-                        "type": "workspaceWrite",
-                        # The second root is a disposable staged plugin, not
-                        # the source checkout. App-server 0.153 exposes only
-                        # writable roots for workspaceWrite turns.
-                        "writableRoots": [str(Path.cwd()), str(self.skill_pack_root)],
-                    },
+                    "sandboxPolicy": sandbox_policy,
                 },
                 request_id=request_id,
             )
@@ -1582,7 +1795,11 @@ class CodexAdapter:
                     + (f"; event_tail={event_tail}" if event_tail else "")
                 ),
                 turn_timed_out=True,
-                failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_NO_TERMINAL_RESULT,
+                failure_reason=_codex_timeout_failure_reason(
+                    exc,
+                    detail,
+                    root_turn_id=self._active_turn_id,
+                ),
                 lightweight=True,
             )
         except (CodexAdapterError, OSError, ValueError) as exc:
@@ -1592,7 +1809,13 @@ class CodexAdapter:
             return self._finish(
                 events,
                 environment_detail=f"Codex app-server turn failed: {exc}" + (f"; stderr={detail}" if detail else ""),
-                failure_reason=classify_failure_reason(str(exc) + detail) or CHILD_EXITED_EARLY,
+                failure_reason=first_reason(
+                    (
+                        getattr(exc, "reason", None),
+                        classify_failure_reason(str(exc) + detail),
+                        CHILD_EXITED_EARLY,
+                    )
+                ),
             )
         return self._finish(events)
 

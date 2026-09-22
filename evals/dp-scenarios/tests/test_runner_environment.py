@@ -1106,8 +1106,9 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
     ]
     assert (
         "Replace only closure_path and review_round_index: use the relative "
-        "closure path and the next zero-based index"
+        "closure path and the next zero-based index within that workflow"
     ) in rules
+    assert "reset the index to 0 for a new workflow id" in rules
     assert (
         "The main thread must not invoke Skill(nxd-review-closure) or inspect the retained "
         "capture itself; after the child returns, treat that result as the complete review, "
@@ -1118,6 +1119,7 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
     for phrase in (
         "dispatch exactly one general-purpose Agent or Task conversation child",
         'set its subagent_type argument exactly to "general-purpose"',
+        "If any later reset, workflow switch, or behavior change occurs, the earlier evidence is stale",
         "supervisor-provided review_input",
         "reviewer must run inline (run_in_background=false)",
         "review_time_budget_seconds: 300",

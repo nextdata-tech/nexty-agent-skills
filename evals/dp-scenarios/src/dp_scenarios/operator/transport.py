@@ -89,6 +89,11 @@ class TurnResult:
     terminal_result_count: int = 0
     terminal_result_subtype: str | None = None
     terminal_result_is_error: bool | None = None
+    #: Provider-reported usage for this turn. These are diagnostics only and
+    #: never influence scenario scoring.
+    provider_model_calls: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tool_calls", tuple(self.tool_calls))
@@ -110,6 +115,18 @@ class TurnResult:
             self.terminal_result_is_error, bool
         ):
             raise TypeError("terminal_result_is_error must be a boolean or None")
+        if not isinstance(self.provider_model_calls, int) or isinstance(
+            self.provider_model_calls, bool
+        ):
+            raise TypeError("provider_model_calls must be an integer")
+        if self.provider_model_calls < 0:
+            raise ValueError("provider_model_calls must be non-negative")
+        for name in ("input_tokens", "output_tokens"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative integer or None")
 
 
 class Transport(Protocol):

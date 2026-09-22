@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-22 | preserve reviewer evidence when Agent prompts are redacted | NO_EVAL | — | [`2026-09-22-redacted-review-evidence`](entries/2026-09-22-redacted-review-evidence.md) |
+| 2026-09-22 | keep Codex file-change recovery and review state honest | NO_EVAL | — | [`2026-09-22-codex-file-change-recovery`](entries/2026-09-22-codex-file-change-recovery.md) |
 | 2026-09-21 | nxd-generate-data-product: harden copied source and ratio contracts | NO_EVAL | — | [`2026-09-21-source-contract-hardening`](entries/2026-09-21-source-contract-hardening.md) |
 | 2026-09-21 | nxd-generate-data-product: reject reduced row-level ratios | NO_EVAL | — | [`2026-09-21-ratio-metric-reduction-guidance`](entries/2026-09-21-ratio-metric-reduction-guidance.md) |
 | 2026-09-21 | fix Codex root-turn terminal accounting | NO_EVAL | — | [`2026-09-21-codex-root-turn-accounting`](entries/2026-09-21-codex-root-turn-accounting.md) |

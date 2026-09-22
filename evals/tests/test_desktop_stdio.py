@@ -117,6 +117,20 @@ for raw in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": request.get("id"), "result": result}), flush=True)
 """
 
+REVIEW_READER_SERVER = r"""
+import json, sys
+
+for raw in sys.stdin:
+    request = json.loads(raw)
+    if request.get("method") == "tools/list":
+        result = {"tools": [{"name": "supervisor_tool", "inputSchema": {}}]}
+    elif request.get("method") == "tools/call":
+        result = {"forwarded_tool": request.get("params", {}).get("name")}
+    else:
+        result = {"method": request.get("method")}
+    print(json.dumps({"jsonrpc": "2.0", "id": request.get("id"), "result": result}), flush=True)
+"""
+
 
 def _script(path: Path, body: str) -> Path:
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
@@ -314,6 +328,235 @@ def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
         session.cleanup()
 
 
+def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
+    child = _script(tmp_path / "review-reader-server.py", REVIEW_READER_SERVER)
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "build-record.json").write_text('{"status":"ok"}\n')
+    (capture / ".env").write_text("TOKEN=must-not-be-read\n")
+    (capture / ".env.local").write_text("TOKEN=must-not-be-read\n")
+    blueprint = tmp_path / "blueprint.md"
+    blueprint.write_text("# Approved blueprint\n")
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+    ).start()
+    session._write_review_allowlist(
+        {
+            "review_input": {
+                "retained_capture_root": str(capture),
+                "retained_blueprint_path": str(blueprint),
+            }
+        }
+    )
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+
+    def call(request):
+        assert proxy.stdin is not None and proxy.stdout is not None
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        return json.loads(proxy.stdout.readline())
+
+    try:
+        listed = call({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert any(
+            tool.get("name") == ds._REVIEW_READER_TOOL
+            for tool in listed["result"]["tools"]
+        )
+        read = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": ds._REVIEW_READER_TOOL,
+                    "arguments": {
+                        "path": str(blueprint),
+                        "operation": "read",
+                    },
+                },
+            }
+        )
+        assert read["result"]["isError"] is False
+        assert "Approved blueprint" in read["result"]["content"][0]["text"]
+        bounded_read = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 2.5,
+                "method": "tools/call",
+                "params": {
+                    "name": ds._REVIEW_READER_TOOL,
+                    "arguments": {
+                        "path": str(blueprint),
+                        "operation": "read",
+                        "max_lines": 250,
+                        "max_bytes": 20000,
+                    },
+                },
+            }
+        )
+        assert bounded_read["result"]["isError"] is False
+        listing = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": ds._REVIEW_READER_TOOL,
+                    "arguments": {"path": str(capture), "operation": "list"},
+                },
+            }
+        )
+        assert "build-record.json" in listing["result"]["content"][0]["text"]
+        assert ".env" not in listing["result"]["content"][0]["text"]
+        assert ".env.local" not in listing["result"]["content"][0]["text"]
+        outside = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": ds._REVIEW_READER_TOOL,
+                    "arguments": {"path": str(tmp_path), "operation": "list"},
+                },
+            }
+        )
+        assert outside["result"]["isError"] is True
+        forwarded = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "supervisor_tool",
+                    "arguments": {},
+                },
+            }
+        )
+        assert forwarded["result"]["forwarded_tool"] == "supervisor_tool"
+        assert "must-not-be-read" not in session.trace_path.read_text()
+        if proxy.stdin is not None:
+            proxy.stdin.close()
+        assert proxy.wait(timeout=10) == 0
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_review_reader_is_advertised_but_fails_closed_without_a_live_allowlist(tmp_path):
+    message = {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
+    listed = ds._augment_tools_list(
+        message, allowlist_path=tmp_path / "missing-review-allowlist.json"
+    )
+    assert any(
+        tool.get("name") == ds._REVIEW_READER_TOOL
+        for tool in listed["result"]["tools"]
+    )
+    response = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {
+                    "path": str(tmp_path / "capture"),
+                    "operation": "list",
+                }
+            }
+        },
+        tmp_path / "missing-review-allowlist.json",
+    )
+    assert response["isError"] is True
+
+
+def test_review_reader_discovered_before_capture_works_after_allowlist_publish(tmp_path):
+    child = _script(tmp_path / "review-reader-catalog-server.py", REVIEW_READER_SERVER)
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "build-record.json").write_text('{"status":"ok"}\n')
+    blueprint = tmp_path / "blueprint.md"
+    blueprint.write_text("# Approved blueprint\n")
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+    ).start()
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+
+    def call(request):
+        assert proxy.stdin is not None and proxy.stdout is not None
+        proxy.stdin.write(json.dumps(request) + "\n")
+        proxy.stdin.flush()
+        return json.loads(proxy.stdout.readline())
+
+    try:
+        listed = call({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert any(
+            tool.get("name") == ds._REVIEW_READER_TOOL
+            for tool in listed["result"]["tools"]
+        )
+        session._write_review_allowlist(
+            {
+                "review_input": {
+                    "retained_capture_root": str(capture),
+                    "retained_blueprint_path": str(blueprint),
+                }
+            }
+        )
+        read = call(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": ds._REVIEW_READER_TOOL,
+                    "arguments": {
+                        "path": str(blueprint),
+                        "operation": "read",
+                    },
+                },
+            }
+        )
+        assert read["result"]["isError"] is False
+        assert "Approved blueprint" in read["result"]["content"][0]["text"]
+    finally:
+        if proxy.stdin is not None:
+            proxy.stdin.close()
+        if proxy.poll() is None:
+            proxy.kill()
+        proxy.wait()
+        session.cleanup()
+
+
+def test_review_allowlist_is_cleared_after_review_report(tmp_path):
+    session = ds.DesktopStdioSession(
+        [sys.executable, "/tmp/fake-server.py"], root=tmp_path / "session"
+    ).start()
+    try:
+        state = {
+            "review_input": {
+                "retained_capture_root": str(tmp_path / "capture"),
+                "retained_blueprint_path": str(tmp_path / "blueprint.md"),
+            }
+        }
+        session._write_review_allowlist(state)
+        assert json.loads(session.review_allowlist_path.read_text())
+        session._write_review_allowlist(None)
+        assert json.loads(session.review_allowlist_path.read_text()) == {}
+    finally:
+        session.cleanup()
+
+
 def test_review_guard_recognizes_workflow_v2_action_shape():
     capture = {
         "result": {
@@ -339,6 +582,28 @@ def test_review_guard_recognizes_workflow_v2_action_shape():
     }
     assert ds._response_requires_review(capture)
     assert ds._response_satisfies_review(report)
+
+
+def test_review_guard_uses_non_null_review_input_view():
+    response = {
+        "result": {
+            "requirements": [
+                {"id": "capture", "review_input": None},
+                {
+                    "id": "review",
+                    "review_input": {
+                        "retained_capture_root": "/capture",
+                        "retained_blueprint_path": "/blueprint.md",
+                    },
+                },
+            ]
+        }
+    }
+    snapshot = ds._review_guard_snapshot(response)
+    assert ds._review_allowlist_payload(snapshot) == {
+        "retained_capture_root": "/capture",
+        "retained_blueprint_path": "/blueprint.md",
+    }
 
 
 def test_review_guard_allows_reset_after_findings_report():

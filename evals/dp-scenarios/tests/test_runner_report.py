@@ -11,7 +11,13 @@ from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.operator.transport import OperatorMessage, TouchedFile, TurnResult
 from dp_scenarios.runner import CanaryResult, ReplayRecording, TierError, TierRunner
-from dp_scenarios.runner.report import _stable_document, human_summary, machine_report, write_report
+from dp_scenarios.runner.report import (
+    _stable_document,
+    human_summary,
+    machine_report,
+    write_abort_report,
+    write_report,
+)
 from dp_scenarios.runner.cli import _canary_from_mapping
 from dp_scenarios.runner import cli as cli_module
 from dp_scenarios.runner.session import RecordedTurn
@@ -78,6 +84,22 @@ def test_efficiency_is_sibling_to_scored_fields_and_never_inside_score(tmp_path:
     machine_path, summary_path, _ = write_report(result, json_path=tmp_path / "tier.json", summary_path=tmp_path / "tier.txt")
     assert json.loads(machine_path.read_text(encoding="utf-8"))["efficiency_is_reported_only"] is True
     assert summary_path is not None and summary_path.read_text(encoding="utf-8")
+
+
+def test_abort_report_is_durable_without_serializing_exception_text(tmp_path: Path) -> None:
+    machine_path, summary_path = write_abort_report(
+        TierError("provider token=must-not-be-written"),
+        json_path=tmp_path / "report.json",
+        summary_path=tmp_path / "summary.txt",
+    )
+
+    report = json.loads(machine_path.read_text(encoding="utf-8"))
+    assert report["state"] == "incomplete"
+    assert report["verdict"] == "incomplete"
+    assert report["failure_reason"] == "runner_abort"
+    assert "must-not-be-written" not in machine_path.read_text(encoding="utf-8")
+    assert summary_path is not None
+    assert "Error type: TierError" in summary_path.read_text(encoding="utf-8")
 
 
 def test_report_redacts_touched_file_contents_but_replay_stays_byte_faithful() -> None:
