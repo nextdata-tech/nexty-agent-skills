@@ -324,8 +324,6 @@ def _review_reader_available(allowlist_path: Path) -> bool:
 
     roots, error = _review_reader_roots(allowlist_path)
     return error is None and bool(roots)
-
-
 def _review_reader_path(
     path_value: object, allowlist_path: Path
 ) -> tuple[Path, str | None]:
