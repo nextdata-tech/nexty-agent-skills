@@ -95,8 +95,10 @@ new text file, submit one complete Add File operation with every content line
 encoded as an added line; for an existing file, use a valid Update File
 operation with an `@@` hunk and explicit context/add/remove prefixes. Never
 submit a bare dependency, YAML, or JSON line as a patch header. If the native
-file-change tool rejects an edit, stop closure authoring and report the exact
-blocker instead of retrying malformed patch syntax; do not use destructive
+file-change tool rejects an edit, treat that as an edit-syntax failure: correct
+the patch envelope and retry once with a complete valid file-change operation.
+Do not resend the same malformed payload, and do not report an environment
+blocker unless the corrected operation is also rejected; do not use destructive
 commands such as `rm`/`rm -f`, shell
 command chains, pipelines, redirects, or a custom working directory. If a
 command cannot start or is rejected, stop issuing that command shape and switch
@@ -147,7 +149,8 @@ File-edit discipline: use the file-change tool for edits. If an apply-patch
 operation is used, every patch must have the exact `*** Begin Patch`, file
 operation, hunk, and `*** End Patch` structure; never combine JSON, prose, or
 another patch format inside it. If the patch is rejected, do not retry the
-same malformed patch; use the file-change tool or report the blocker. In an
+same malformed patch: correct its envelope and use the file-change tool once
+more. Report a blocker only if the corrected operation is rejected too. In an
 update hunk, start with an `@@` header and prefix every changed line with `+`
 or `-` and every context line with a space; never paste raw YAML/JSON lines
 into a patch hunk. Prefer one file per change call and validate the exact
@@ -162,6 +165,11 @@ read-only reviewer using that matching review_input. In this backend, that
 means the built-in Codex collaboration child via spawnAgent, followed by
 waiting for the child to complete; do not substitute an inline self-review,
 an authored review-record.json/agent-attestations.json, or an OS process. The
+matching review_input is in the same supervisor response under
+`requirements` for the `id` `review`, even when `next_actions` names only the
+`report_requirement` action; extract those exact fields from that response and
+dispatch the child immediately. Do not call `list_mcp_resources` or any other
+resource-discovery tool to locate retained inputs. The
 required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id; do not make

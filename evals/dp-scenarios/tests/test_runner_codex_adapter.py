@@ -72,6 +72,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not call `sendInput` or `resumeAgent`" in CODEX_SYSTEM_PROMPT
     assert "exactly one `message` string" in CODEX_SYSTEM_PROMPT
     assert "Never send both `message` and `items`" in CODEX_SYSTEM_PROMPT
+    assert "same supervisor response under" in CODEX_SYSTEM_PROMPT
+    assert "Do not call `list_mcp_resources`" in CODEX_SYSTEM_PROMPT
     assert "owning parent’s one-shot reviewer lifecycle" in CODEX_SYSTEM_PROMPT
     assert "reviewer child\nmay use only its allowed read-only inspection tools" in CODEX_SYSTEM_PROMPT
     assert "do not call Bash, codex_file_change" in CODEX_SYSTEM_PROMPT
@@ -90,7 +92,10 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "file-backed scenario is not expected to have an `infra-profile.yaml`" in CODEX_SYSTEM_PROMPT
     assert "do not invoke or simulate a shell `apply_patch` command" in CODEX_SYSTEM_PROMPT
     assert "bare dependency, YAML, or JSON line as a patch header" in CODEX_SYSTEM_PROMPT
-    assert "stop closure authoring and report the exact" in CODEX_SYSTEM_PROMPT
+    assert "treat that as an edit-syntax failure" in CODEX_SYSTEM_PROMPT
+    assert "retry once with a complete valid file-change operation" in CODEX_SYSTEM_PROMPT
+    assert "do not report an environment" in CODEX_SYSTEM_PROMPT
+    assert "corrected operation is rejected too" in CODEX_SYSTEM_PROMPT
 
 
 def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> None:
