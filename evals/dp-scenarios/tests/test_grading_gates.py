@@ -1910,6 +1910,11 @@ def test_construction_accepts_supervisor_bound_workflow_review_sequence() -> Non
         attestations=(
             _review_attestation("corrected", closure=closure, review_round_index=0),
             _review_attestation("clear", closure=closure, review_round_index=1),
+            # A long-lived run may retain a prior workflow's attestation. It
+            # must not be counted against the published workflow's rounds.
+            _review_attestation(
+                "old", closure="nxd-jobs/old-workflow/closure", review_round_index=0
+            ),
         ),
         review_rounds={
             closure: [

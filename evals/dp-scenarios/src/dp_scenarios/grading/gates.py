@@ -2677,11 +2677,28 @@ def gate_construction(
         review_inputs=review_inputs or None,
         require_dispatch=True,
     )
-    review_attestations = tuple(
-        value
-        for value in attestation_values
-        if value.get("action_kind") == "adversarial_review"
-    )
+    # A long-lived run may carry attestations from several workflow ids while
+    # repairing a product.  The review ledger below is scoped to the closure
+    # bound to the published build, so attestations must use that same scope
+    # before they are paired.  Counting older workflow attestations made a
+    # valid final review fail as soon as the run retained its earlier history.
+    if build is None:
+        review_attestations = tuple(
+            value
+            for value in attestation_values
+            if value.get("action_kind") == "adversarial_review"
+        )
+    else:
+        review_path = (
+            PurePosixPath(build.closure_path).parent / "review-record.json"
+        ).as_posix()
+        review_attestations = tuple(
+            value
+            for value in attestation_values
+            if value.get("action_kind") == "adversarial_review"
+            and isinstance(value.get("evidence_ref"), str)
+            and value["evidence_ref"].partition("#")[0] == review_path
+        )
     review_observed = False
     unresolved = False
     final_dispatch: EventPosition | None = None

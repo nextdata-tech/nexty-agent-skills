@@ -330,6 +330,7 @@ natural-language translation is yours to do. For each question:
    ambiguous, ask; with no user, materialize. Never re-aggregate agent-side, and
    never silently drop the constraint.
 4. **Run the governed query.** Call `mcp__nxd-desktop__run_semantic_query` with the endpoint/token plus the selected measures/dimensions — don't bypass it with raw SQL or a local aggregation. For ranked questions, pass endpoint-native `order_by: [{"name": "<selected measure or dimension>", "dir": "desc"}]` and integer `limit`; never sort or truncate rows agent-side.
+   For row-level outputs, select numeric values as dimensions; never substitute a `total_<field>` aggregate for a promised record field.
 5. **Quantify the review bucket before presenting a classified total.** If the
    selection's model carries a classification dimension with a review bucket
    (`needs_review`, `unmapped`, `other`), a single headline number hides how much
@@ -495,6 +496,5 @@ current v2
   own resolved runtime path, not a defect. If a served closure is wrong, fix
   **your** source dir and re-`serve` — the supervisor re-pins.
 - **Bearer only as a tool parameter** — keep it out of narration, never persist or print it. **Never present a preview or truncated result as verified data**, and never stall silently.
-
 ## Reference docs (this skill)
 Use [dp-blueprint](reference/dp-blueprint.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [user-facing language](reference/user-facing-language.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.

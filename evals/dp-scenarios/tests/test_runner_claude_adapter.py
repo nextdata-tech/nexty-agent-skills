@@ -284,8 +284,9 @@ def test_default_prompt_describes_channels_and_review_dispatch_mechanics_not_sce
     assert prompt.splitlines().count(canonical_marker) == 1
     assert (
         "Replace only closure_path and review_round_index: use a relative closure path "
-        "and the next zero-based index; keep the other constants unchanged."
+        "and the next zero-based index within that workflow"
     ) in collapsed
+    assert "reset the index to 0 for a new workflow id" in collapsed
     assert "ask the operator for explicit approval" not in collapsed
     assert "do not report numeric or status results" not in collapsed
     assert "must not invoke Skill(nxd-review-closure)" not in collapsed

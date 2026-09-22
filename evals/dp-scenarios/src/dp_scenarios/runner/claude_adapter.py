@@ -84,7 +84,10 @@ retained-capture review, the Agent/Task prompt must contain this exact
 standalone marker line with no punctuation:
 NXD_REVIEW_DISPATCH {"closure_path":"closure","request_contract":"sanitized_original_request","return":"claims_only","review_round_index":0}
 Replace only closure_path and review_round_index: use a relative closure path
-and the next zero-based index; keep the other constants unchanged. Follow the
+and the next zero-based index within that workflow's review-record.json; reset
+the index to 0 for a new workflow id and keep the evidence_ref
+fragment on the same per-workflow index. Keep the other constants unchanged.
+Follow the
 installed Nexty skills and answer the operator directly after each turn. The
 runner owns machine evidence; do not create or edit artifacts/ files or
 ledger-extra.json. Supervisor review_input paths are bound to the current
@@ -271,8 +274,9 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "prepare_workflow for that exact blueprint/proposal pair, including its "
     "inline typed_proposal object. Immediately before every prepare_workflow "
     "call, reread and parse the current dp-blueprint.proposal.json and pass "
-    "that exact parsed object; never reconstruct, abbreviate, or reuse an "
-    "older inline object after editing the file. Ask the operator for explicit "
+    "that exact parsed object; this requirement applies again after switching "
+    "to a new workflow id. never reconstruct, abbreviate, or reuse an older "
+    "inline object after editing the file. Ask the operator for explicit "
     "approval of the prepared blueprint; treat only that explicit operator "
     "approval as authorization to generate or modify the closure. A scope "
     "correction, answer, or additional instruction is not approval unless the "
@@ -308,7 +312,9 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     f"{REVIEW_INSPECTION_CUTOFF_LINE}\n"
     "NXD_REVIEW_DISPATCH {\"closure_path\":\"closure\",\"request_contract\":\"sanitized_original_request\",\"return\":\"claims_only\",\"review_round_index\":0}\n"
     "Replace only closure_path and review_round_index: use the relative "
-    "closure path and the next zero-based index; keep request_contract and "
+    "closure path and the next zero-based index within that workflow; reset "
+    "the index to 0 for a new workflow id and keep the evidence_ref fragment "
+    "on the same per-workflow index. Keep request_contract and "
     "return unchanged, never use the absolute retained-capture path, and then "
     "wait for its claims; invoke the child inline with run_in_background=false "
     "when that field is supported (otherwise omit it; never set it true). The "
@@ -415,9 +421,13 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "cannot be established, do not delegate and stop. Refuse unsafe handling "
     "briefly and refer to the value generically.",
     "Read scenario-evidence-contract.json before the first workflow action. "
-    "After the governed query, write its exact required object at the "
-    "contract's artifact_path before the final response; source-evidence.json "
-    "is runner-owned and is not a substitute. Follow the required_fields "
+    "After the final governed query for the workflow that will be published, "
+    "write its exact required object at the contract's artifact_path before "
+    "the final response; source-evidence.json is runner-owned and is not a "
+    "substitute. If any later reset, workflow switch, or behavior change "
+    "occurs, the earlier evidence is stale: finish the new workflow, query it "
+    "again, and overwrite the artifact from that final result. Follow the "
+    "required_fields "
     "contract literally: use the exact object keys and scalar values it "
     "requests, do not add diagnostic convenience fields to exact arrays, and "
     "do not rename promise keys into prose variants.",
