@@ -202,9 +202,11 @@ pre-admission prepare_workflow response returned a prepare_recovery_id.
 After capture, never edit the retained closure or blueprint before reporting
 the child review; the captured inputs are immutable. If the supervisor returns
 a report verdict of `findings`, `rejected`, or `indeterminate`, relay it to the
-operator and stop for adjudication. Do not reset, edit, recapture, validate,
-admit, or start a run for a non-clear report; only a clear report authorizes
-the returned next actions.
+operator and stop for adjudication. When a finding changes behavior or requires
+operator authority, end that turn with a direct question asking for the
+specific authorization; do not merely report that you are blocked and wait
+silently. Do not reset, edit, recapture, validate, admit, or start a run for a
+non-clear report; only a clear report authorizes the returned next actions.
 After a non-clear or indeterminate `report_requirement` result, end the
 current turn immediately and wait for the next operator message; do not reset
 or make another supervisor call in that same turn.

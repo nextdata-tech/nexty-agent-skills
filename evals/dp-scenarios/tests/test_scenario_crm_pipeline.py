@@ -134,10 +134,11 @@ def test_b1_script_resolves_the_internal_status_projection_choice() -> None:
     assert "Re-approve the revised blueprint" in script_turn_text(revised_approval)
 
     assert script_turn_text(SCENARIO.answer_sheet.turns[7]) == (
-        "The source uses status deleted for tombstoned records; exclude those rows "
-        "and proceed to the final pipeline output. Choose option 1: amend the "
-        "approved blueprint to state that status is an internal-only landed column "
-        "used solely to verify deleted-row exclusion, keep it roleless and absent "
+        "The source uses status deleted for tombstoned records; exclude deleted rows, "
+        "and exclude rows with missing or unknown status rather than treating them as "
+        "current. Choose option 1: amend the approved blueprint to state that status "
+        "is an internal-only landed column used solely to verify current-row and "
+        "deleted-row filtering, keep it roleless and absent "
         "from the governed output, then re-approve the amended plan, recapture, "
         "run a fresh independent review, validate, publish, query, and write the "
         "required evidence. Do not add owner or email details."
@@ -218,6 +219,8 @@ def test_b1_answers_amount_precision_as_an_explicit_data_contract() -> None:
     answer = SCENARIO.answer_sheet.decision_answers["amount_precision"]
     assert answer.terms == ("amount", "truncat")
     assert answer.answer.startswith("Choose exact-decimal semantics for amount.")
+    assert "landed four-field model" in answer.answer
+    assert "governed totals" not in answer.answer
     matcher = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
     for question in (
         "The independent review found that non-integral source amounts are silently "

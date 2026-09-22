@@ -64,6 +64,8 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "threads remain allocated to the app-server" in CODEX_SYSTEM_PROMPT
     assert "captured inputs are immutable" in CODEX_SYSTEM_PROMPT
     assert "only a clear report authorizes" in CODEX_SYSTEM_PROMPT
+    assert "end that turn with a direct question" in CODEX_SYSTEM_PROMPT
+    assert "specific authorization" in CODEX_SYSTEM_PROMPT
     assert "end the" in CODEX_SYSTEM_PROMPT
     assert "same turn" in CODEX_SYSTEM_PROMPT
     assert "immediately using the returned receiver thread id" in CODEX_SYSTEM_PROMPT
