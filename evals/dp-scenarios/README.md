@@ -538,6 +538,17 @@ this backend. Codex's workspace sandbox is provider-owned, so tool-restricted
 scenarios are not directly comparable with Claude runs that enforce a
 per-tool allowlist.
 
+For Codex live runs, each successful workflow-v2 capture that returns a
+supervisor-issued `retained_capture_root` also receives a runner-owned checker
+observation. The harness compares the raw bytes of the staged
+`nxd-run-job-loop/scripts/self_check.py` with the retained capture's
+`self_check.py`: a digest mismatch invalidates the run, while an unreadable or
+malformed comparison makes it ungraded. A successful Codex capture with review
+input but no marker is also ungraded; this requirement applies only to fresh
+Codex live runs. This guard covers only `self_check.py`; skew in other embedded
+helpers is not detected. Captures without that path and legacy replays without
+checker markers retain their prior grading behavior.
+
 ### When a live run stops without being graded
 
 A live run can end for reasons that say nothing about the agent: the provider

@@ -385,6 +385,7 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
         )
         assert read["result"]["isError"] is False
         assert "Approved blueprint" in read["result"]["content"][0]["text"]
+        assert read["result"]["structuredContent"]["path"] == str(blueprint)
         bounded_read = call(
             {
                 "jsonrpc": "2.0",
@@ -414,6 +415,12 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             }
         )
         assert "build-record.json" in listing["result"]["content"][0]["text"]
+        assert listing["result"]["structuredContent"]["path"] == str(capture)
+        listed_paths = {
+            entry["path"]
+            for entry in listing["result"]["structuredContent"]["entries"]
+        }
+        assert str(capture / "build-record.json") in listed_paths
         assert ".env" not in listing["result"]["content"][0]["text"]
         assert ".env.local" not in listing["result"]["content"][0]["text"]
         outside = call(
@@ -471,6 +478,602 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             proxy.kill()
             proxy.wait()
         session.cleanup()
+
+
+def test_review_reader_preserves_allowlisted_root_spelling_and_rejects_unsafe_paths(
+    tmp_path,
+):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "notes.txt").write_text("safe notes\n")
+    (capture / ".env.private").write_text("not a credential\n")
+    alias = tmp_path / "capture-alias"
+    alias.symlink_to(capture, target_is_directory=True)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n")
+    (capture / "escape.txt").symlink_to(outside)
+    (capture / "sensitive-alias.txt").symlink_to(capture / ".env.private")
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(alias)}))
+
+    read = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {"path": str(alias / "notes.txt"), "operation": "read"}
+            }
+        },
+        allowlist,
+    )
+    assert read["isError"] is False
+    assert read["structuredContent"]["path"] == str(alias / "notes.txt")
+
+    listing = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {"path": str(alias), "operation": "list"}
+            }
+        },
+        allowlist,
+    )
+    listed_paths = {
+        entry["path"] for entry in listing["structuredContent"]["entries"]
+    }
+    assert str(alias / "notes.txt") in listed_paths
+    assert str(outside) not in listed_paths
+    assert str(alias / "escape.txt") not in listed_paths
+    assert str(alias / "sensitive-alias.txt") not in listed_paths
+
+    for unsafe in (
+        str(alias / ".." / "outside.txt"),
+        str(alias / ".env.private"),
+        str(alias / "notes.txt") + "\x00suffix",
+    ):
+        result = ds._review_reader_result(
+            {"params": {"arguments": {"path": unsafe, "operation": "read"}}},
+            allowlist,
+        )
+        assert result["isError"] is True
+
+
+def _review_reader_call(allowlist, path, operation, **arguments):
+    return ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {
+                    "path": str(path),
+                    "operation": operation,
+                    **arguments,
+                }
+            }
+        },
+        allowlist,
+    )
+
+
+def _review_reader_list_fixture(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / ".env").write_text("not a credential\n")
+    for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
+        (capture / name).write_text(f"{name}\n")
+    clean = capture / "clean"
+    clean.mkdir()
+    (clean / "one.txt").write_text("one\n")
+    token_dir = capture / "token is"
+    token_dir.mkdir()
+    (token_dir / "child-sentinel.txt").write_text("SENTINEL-BODY\n")
+    (capture / "zz.pem").write_text("not a credential\n")
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+    return capture, allowlist
+
+
+def test_review_reader_rejects_symlink_whose_display_path_redacts(tmp_path):
+    capture = tmp_path / "capture"
+    secret_dir = capture / "token is"
+    nested = secret_dir / "inner"
+    nested.mkdir(parents=True)
+    (secret_dir / "child-sentinel.txt").write_text("SENTINEL-BODY\n")
+    (nested / "inner-sentinel.txt").write_text("INNER-SENTINEL-BODY\n")
+    alias = capture / "alias"
+    alias.symlink_to("token is", target_is_directory=True)
+    (capture / "link").symlink_to("token is/child-sentinel.txt")
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+
+    request_paths = (
+        capture,
+        alias,
+        alias / "child-sentinel.txt",
+        alias / "inner",
+        capture / "link",
+    )
+    for request_path in request_paths:
+        assert ds.redact_text(str(request_path)) == str(request_path)
+    # The list-entry symlink itself is safe to name, but its resolved display
+    # path is not; the root listing below must withhold it.
+    assert ds.redact_text(str(capture / "link")) == str(capture / "link")
+    assert ds.redact_text(str(secret_dir / "child-sentinel.txt")) != str(
+        secret_dir / "child-sentinel.txt"
+    )
+    assert ds.redact_text(str(nested)) != str(nested)
+
+    read_alias = _review_reader_call(
+        allowlist, alias / "child-sentinel.txt", "read"
+    )
+    list_alias_inner = _review_reader_call(allowlist, alias / "inner", "list")
+    expected_error = {"error": "requested review path cannot be shown verbatim"}
+    for response in (read_alias, list_alias_inner):
+        assert response["isError"] is True
+        assert response["structuredContent"] == expected_error
+        assert json.loads(response["content"][0]["text"]) == expected_error
+
+    list_alias = _review_reader_call(allowlist, alias, "list")
+    assert list_alias["isError"] is False
+    assert list_alias["structuredContent"]["path"] == str(secret_dir)
+    assert list_alias["structuredContent"]["entries"] == []
+    assert list_alias["structuredContent"]["omitted"] == {
+        "total": 2,
+        "withheld": 2,
+        "max_lines": 0,
+        "max_bytes": 0,
+    }
+
+    # A visible symlink name is not sufficient: the emitted target path must
+    # also pass the same verbatim check as a direct request.
+    list_capture = _review_reader_call(allowlist, capture, "list")
+    assert list_capture["isError"] is False
+    entries = list_capture["structuredContent"]["entries"]
+    assert {entry["name"] for entry in entries} == {"alias", "token is"}
+    assert list_capture["structuredContent"]["omitted"] == {
+        "total": 1,
+        "withheld": 1,
+        "max_lines": 0,
+        "max_bytes": 0,
+    }
+    for response in (read_alias, list_alias_inner, list_alias, list_capture):
+        channels = response["content"][0]["text"] + json.dumps(
+            response["structuredContent"], sort_keys=True
+        )
+        assert "child-sentinel" not in channels
+        assert "inner-sentinel" not in channels
+        assert "SENTINEL-BODY" not in channels
+
+
+def test_review_reader_trace_metadata_uses_reader_validation_order(tmp_path):
+    capture = tmp_path / "capture"
+    sensitive_parent = capture / "token is"
+    inner = sensitive_parent / "inner"
+    inner.mkdir(parents=True)
+    (sensitive_parent / "child-sentinel.txt").write_text("SENTINEL-BODY")
+    (inner / "inner-sentinel.txt").write_text("INNER-SENTINEL")
+    alias = capture / "alias"
+    alias.symlink_to("token is", target_is_directory=True)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+
+    cases = (
+        (str(capture / "bad\x00path"), "invalid", "path_invalid_character"),
+        ("relative\x00path", "invalid", "path_invalid_character"),
+        ("relative/path", "relative", "relative_path"),
+        (str(capture / ".." / "outside"), "invalid", "path_parent_traversal"),
+        (
+            str(sensitive_parent / "child-sentinel.txt"),
+            "invalid",
+            "path_not_verbatim",
+        ),
+        (
+            str(alias / "child-sentinel.txt"),
+            "invalid",
+            "path_not_verbatim",
+        ),
+    )
+    for path, expected_class, expected_code in cases:
+        request = {"params": {"arguments": {"path": path, "operation": "read"}}}
+        result = ds._review_reader_result(request, allowlist)
+        summary = ds._review_reader_trace_metadata(
+            request, result, allowlist, elapsed_ms=0.25
+        )
+        assert (summary["path_class"], summary["error_code"]) == (
+            expected_class,
+            expected_code,
+        )
+        assert str(capture) not in json.dumps(summary, sort_keys=True)
+        assert "SENTINEL" not in json.dumps(summary, sort_keys=True)
+
+
+def test_review_reader_symlink_loop_returns_structured_error_and_recovers(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    safe_file = capture / "safe.txt"
+    safe_file.write_text("still available\n")
+    loop = capture / "loop"
+    loop.symlink_to(loop)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+    loop_request = {
+        "params": {
+            "arguments": {"path": str(loop / "notes.txt"), "operation": "read"}
+        }
+    }
+
+    error = ds._review_reader_result(loop_request, allowlist)
+    trace = ds._review_reader_trace_metadata(
+        loop_request, error, allowlist, elapsed_ms=0
+    )
+    valid = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {"path": str(safe_file), "operation": "read"}
+            }
+        },
+        allowlist,
+    )
+
+    assert error["isError"] is True
+    assert error["structuredContent"]["error"] == (
+        "requested review path is unavailable"
+    )
+    assert trace["path_class"] == "unavailable"
+    assert trace["error_code"] == "path_unavailable"
+    assert valid["isError"] is False
+
+    root_loop = tmp_path / "root-loop"
+    root_loop.symlink_to(root_loop)
+    root_loop_allowlist = tmp_path / "root-loop-allowlist.json"
+    root_loop_allowlist.write_text(
+        json.dumps({"retained_capture_root": str(root_loop)})
+    )
+    root_error = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {"path": str(safe_file), "operation": "read"}
+            }
+        },
+        root_loop_allowlist,
+    )
+    root_trace = ds._review_reader_trace_metadata(
+        {
+            "params": {
+                "arguments": {"path": str(safe_file), "operation": "read"}
+            }
+        },
+        root_error,
+        root_loop_allowlist,
+        elapsed_ms=0,
+    )
+
+    assert root_error["isError"] is True
+    assert root_error["structuredContent"]["error"] == (
+        "review input root is unavailable"
+    )
+    assert root_trace["error_code"] == "allowlist_root_unavailable"
+
+
+def test_review_reader_trace_distinguishes_unavailable_sources(tmp_path):
+    request_path = tmp_path / "capture" / "missing.txt"
+    request = {
+        "params": {
+            "arguments": {"path": str(request_path), "operation": "read"}
+        }
+    }
+
+    missing_allowlist = tmp_path / "missing-allowlist.json"
+    unavailable_allowlist_result = ds._review_reader_result(request, missing_allowlist)
+    unavailable_allowlist = ds._review_reader_trace_metadata(
+        request, unavailable_allowlist_result, missing_allowlist, elapsed_ms=0
+    )
+    assert unavailable_allowlist["path_class"] == "invalid_allowlist"
+    assert unavailable_allowlist["error_code"] == "allowlist_unavailable"
+
+    unavailable_root_allowlist = tmp_path / "unavailable-root.json"
+    unavailable_root_allowlist.write_text(
+        json.dumps({"retained_capture_root": str(tmp_path / "gone")})
+    )
+    unavailable_root_result = ds._review_reader_result(
+        request, unavailable_root_allowlist
+    )
+    unavailable_root = ds._review_reader_trace_metadata(
+        request, unavailable_root_result, unavailable_root_allowlist, elapsed_ms=0
+    )
+    assert unavailable_root["path_class"] == "unavailable"
+    assert unavailable_root["error_code"] == "allowlist_root_unavailable"
+
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    request_allowlist = tmp_path / "request-allowlist.json"
+    request_allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+    unavailable_path_result = ds._review_reader_result(request, request_allowlist)
+    unavailable_path = ds._review_reader_trace_metadata(
+        request, unavailable_path_result, request_allowlist, elapsed_ms=0
+    )
+    assert unavailable_path["path_class"] == "unavailable"
+    assert unavailable_path["error_code"] == "path_unavailable"
+
+
+def test_review_reader_read_stays_within_max_bytes_in_every_channel(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    source = capture / "notes.txt"
+    source.write_text("api_key=super-secret-value\n" + "é" * 300)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+    max_bytes = 256
+
+    response = _review_reader_call(
+        allowlist, source, "read", max_bytes=max_bytes
+    )
+    assert response["isError"] is False
+    content_text = response["content"][0]["text"]
+    structured = response["structuredContent"]
+    assert len(content_text.encode("utf-8")) <= max_bytes
+    assert len(structured["text"].encode("utf-8")) <= max_bytes
+    assert len(structured["path"].encode("utf-8")) <= max_bytes
+    assert structured["truncated"] is True
+    assert content_text.endswith(ds._REVIEW_READER_TRUNCATION_MARKER)
+    assert "super-secret-value" not in content_text
+    assert "super-secret-value" not in structured["text"]
+    assert "api_key=<redacted>" in content_text
+    assert "api_key=<redacted>" in structured["text"]
+
+
+def test_review_reader_bounds_raw_source_and_drops_partial_secret_line(
+    tmp_path, monkeypatch
+):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    source = capture / "notes.txt"
+    source.write_bytes(
+        b"safe heading\nhttps://user:"
+        + b"sensitive-value-" * 100_000
+        + b"@example.com\n"
+    )
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+
+    original_open = Path.open
+    read_sizes = []
+
+    class ReadSpy:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def read(self, size=-1):
+            read_sizes.append(size)
+            return self.stream.read(size)
+
+    def observed_open(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        return ReadSpy(stream) if path == source.resolve() and mode == "rb" else stream
+
+    monkeypatch.setattr(Path, "open", observed_open)
+    response = _review_reader_call(allowlist, source, "read", max_bytes=2048)
+
+    assert response["isError"] is False
+    assert read_sizes == [ds._REVIEW_READER_MAX_SOURCE_BYTES + 1]
+    structured = response["structuredContent"]
+    assert structured["truncated"] is True
+    assert structured["text"].startswith("safe heading\n")
+    assert "sensitive-value" not in response["content"][0]["text"]
+    assert "user:" not in response["content"][0]["text"]
+    assert response["content"][0]["text"].endswith(ds._REVIEW_READER_TRUNCATION_MARKER)
+    assert len(response["content"][0]["text"].encode("utf-8")) <= 2048
+
+    source.write_bytes(b"x\n" * (ds._REVIEW_READER_MAX_SOURCE_BYTES // 2 + 1))
+    read_sizes.clear()
+    dense_response = _review_reader_call(allowlist, source, "read", max_bytes=2048)
+    assert read_sizes == [ds._REVIEW_READER_MAX_SOURCE_BYTES + 1]
+    dense_text = dense_response["structuredContent"]["text"]
+    assert dense_response["structuredContent"]["truncated"] is True
+    assert dense_text.count("x\n") <= ds._REVIEW_READER_MAX_LINES
+    assert len(dense_text.encode("utf-8")) <= 2048
+
+
+def test_review_reader_redacts_before_applying_the_byte_budget(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    source = capture / "notes.txt"
+    raw_body = "api_key=x\n" + "x" * 100
+    source.write_text(raw_body)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+    prefix_bytes = len(f"Path: {source}\n".encode("utf-8"))
+    # The raw body fits, but redaction expands it. The output still has to
+    # reserve the truncation marker and remain within the requested bytes.
+    max_bytes = prefix_bytes + len(raw_body.encode("utf-8")) + 4
+
+    response = _review_reader_call(
+        allowlist, source, "read", max_bytes=max_bytes
+    )
+    assert response["isError"] is False
+    assert response["structuredContent"]["truncated"] is True
+    assert len(response["content"][0]["text"].encode("utf-8")) <= max_bytes
+    assert len(response["structuredContent"]["text"].encode("utf-8")) <= max_bytes
+    assert response["content"][0]["text"].endswith(
+        ds._REVIEW_READER_TRUNCATION_MARKER
+    )
+    assert "api_key=<redacted>" in response["structuredContent"]["text"]
+    assert "api_key=x" not in response["structuredContent"]["text"]
+
+
+def test_review_reader_read_exact_fit_and_small_path_budget(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    source = capture / "notes.txt"
+    body = "x" * 40
+    source.write_text(body)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(json.dumps({"retained_capture_root": str(capture)}))
+    prefix = f"Path: {source}\n"
+    prefix_bytes = len(prefix.encode("utf-8"))
+
+    exact = _review_reader_call(
+        allowlist,
+        source,
+        "read",
+        max_bytes=prefix_bytes + len(body.encode("utf-8")),
+    )
+    assert exact["isError"] is False
+    assert exact["content"][0]["text"] == prefix + body
+    assert exact["structuredContent"]["truncated"] is False
+
+    truncated_without_body_room = _review_reader_call(
+        allowlist,
+        source,
+        "read",
+        max_bytes=prefix_bytes
+        + len(ds._REVIEW_READER_TRUNCATION_MARKER.encode("utf-8")),
+    )
+    assert truncated_without_body_room["isError"] is True
+    assert truncated_without_body_room["structuredContent"] == {
+        "error": "max_bytes too small for review path"
+    }
+
+    too_small = _review_reader_call(allowlist, source, "read", max_bytes=1)
+    assert too_small["isError"] is True
+    assert too_small["structuredContent"] == {
+        "error": "max_bytes too small for review path"
+    }
+
+
+def test_review_reader_loads_roots_once_per_list(tmp_path, monkeypatch):
+    capture, allowlist = _review_reader_list_fixture(tmp_path)
+    original = ds._review_reader_roots
+    calls = 0
+
+    def counted(path):
+        nonlocal calls
+        calls += 1
+        return original(path)
+
+    monkeypatch.setattr(ds, "_review_reader_roots", counted)
+    response = _review_reader_call(allowlist, capture, "list", max_lines=2)
+    assert response["isError"] is False
+    assert calls == 1
+
+
+def test_review_reader_list_withholds_parent_context_children(tmp_path):
+    capture, allowlist = _review_reader_list_fixture(tmp_path)
+    token_dir = capture / "token is"
+    response = _review_reader_call(allowlist, token_dir, "list")
+    assert response["isError"] is False
+    assert response["structuredContent"]["entries"] == []
+    assert response["structuredContent"]["omitted"] == {
+        "total": 1,
+        "withheld": 1,
+        "max_lines": 0,
+        "max_bytes": 0,
+    }
+    assert response["content"][0]["text"] == (
+        "[]\n[1 entries omitted: withheld=1 max_lines=0 max_bytes=0]"
+    )
+    assert "child-sentinel" not in json.dumps(response, sort_keys=True)
+
+
+def test_review_reader_list_counts_entries_past_max_lines_once(tmp_path):
+    capture, allowlist = _review_reader_list_fixture(tmp_path)
+    response = _review_reader_call(
+        allowlist, capture, "list", max_lines=2
+    )
+    assert response["isError"] is False
+    structured = response["structuredContent"]
+    assert [entry["name"] for entry in structured["entries"]] == ["a.txt", "b.txt"]
+    assert structured["omitted"] == {
+        "total": 6,
+        "withheld": 2,
+        "max_lines": 4,
+        "max_bytes": 0,
+    }
+    assert len(structured["entries"]) + structured["omitted"]["total"] == 8
+    assert ".env" not in response["content"][0]["text"]
+    assert "zz.pem" not in response["content"][0]["text"]
+
+
+def test_review_reader_list_byte_cut_is_exact_and_one_byte_short(tmp_path):
+    capture, allowlist = _review_reader_list_fixture(tmp_path)
+    all_candidates = [
+        {"kind": "file", "name": name, "path": str(capture / name)}
+        for name in ("a.txt", "b.txt")
+    ]
+    encoded_two = json.dumps(all_candidates, sort_keys=True)
+    reserve = len(
+        ds._review_list_trailer(total=8, withheld=8, max_lines=8, max_bytes=8).encode(
+            "utf-8"
+        )
+    )
+    exact_budget = len(encoded_two.encode("utf-8")) + reserve
+
+    exact = _review_reader_call(
+        allowlist,
+        capture,
+        "list",
+        max_lines=ds._REVIEW_READER_MAX_LINES,
+        max_bytes=exact_budget,
+    )
+    assert exact["isError"] is False
+    assert exact["structuredContent"]["entries"] == all_candidates
+    assert exact["structuredContent"]["omitted"] == {
+        "total": 6,
+        "withheld": 2,
+        "max_lines": 0,
+        "max_bytes": 4,
+    }
+    assert len(exact["content"][0]["text"].encode("utf-8")) == exact_budget
+    actual_trailer = ds._review_list_trailer(
+        total=6, withheld=2, max_lines=0, max_bytes=4
+    )
+    assert len(
+        json.dumps(
+            exact["structuredContent"]["entries"], sort_keys=True
+        ).encode("utf-8")
+    ) + len(actual_trailer.encode("utf-8")) <= exact_budget
+
+    short = _review_reader_call(
+        allowlist,
+        capture,
+        "list",
+        max_lines=ds._REVIEW_READER_MAX_LINES,
+        max_bytes=exact_budget - 1,
+    )
+    assert short["isError"] is False
+    assert [entry["name"] for entry in short["structuredContent"]["entries"]] == [
+        "a.txt"
+    ]
+    assert short["structuredContent"]["omitted"] == {
+        "total": 7,
+        "withheld": 2,
+        "max_lines": 0,
+        "max_bytes": 5,
+    }
+
+
+def test_review_reader_list_rejects_max_bytes_below_worst_case_trailer(tmp_path):
+    capture, allowlist = _review_reader_list_fixture(tmp_path)
+    response = _review_reader_call(allowlist, capture, "list", max_bytes=1)
+    assert response["isError"] is True
+    assert response["structuredContent"] == {
+        "error": "max_bytes too small to list review directory"
+    }
+
+
+def test_review_reader_list_without_omissions_keeps_legacy_shape(tmp_path):
+    capture, allowlist = _review_reader_list_fixture(tmp_path)
+    clean = capture / "clean"
+    response = _review_reader_call(allowlist, clean, "list")
+    assert response["isError"] is False
+    assert response["content"][0]["text"] == json.dumps(
+        response["structuredContent"]["entries"], sort_keys=True
+    )
+    assert "omitted" not in response["structuredContent"]
+    assert response["structuredContent"]["entries"] == [
+        {"kind": "file", "name": "one.txt", "path": str(clean / "one.txt")}
+    ]
 
 
 def test_review_reader_is_advertised_but_fails_closed_without_a_live_allowlist(tmp_path):

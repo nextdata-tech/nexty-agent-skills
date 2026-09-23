@@ -380,6 +380,7 @@ class TurnRecord:
     terminal_result_count: int = 0
     terminal_result_subtype: str | None = None
     terminal_result_is_error: bool | None = None
+    backend: str | None = None
     provider_model_calls: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -1623,6 +1624,7 @@ class OperatorEngine:
                 terminal_result_count=result.terminal_result_count,
                 terminal_result_subtype=result.terminal_result_subtype,
                 terminal_result_is_error=result.terminal_result_is_error,
+                backend=result.backend,
                 provider_model_calls=result.provider_model_calls,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,

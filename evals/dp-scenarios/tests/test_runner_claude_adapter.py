@@ -802,7 +802,9 @@ def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstructi
         environment_detail="timeout detail",
         session_id="session-1",
     )
-    assert {field.name for field in dataclasses.fields(TurnResult)} <= set(turn_result_to_dict(TurnResult()))
+    assert {field.name for field in dataclasses.fields(TurnResult)} - {"backend"} <= set(
+        turn_result_to_dict(TurnResult())
+    )
 
     adapter = object.__new__(ClaudeCodeAdapter)
     adapter.artifact_dir = tmp_path / "artifacts"
@@ -826,6 +828,12 @@ def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstructi
     monkeypatch.setattr(adapter, "_approval_artifact", lambda _snapshot: source.approval_artifact)
 
     assert adapter._finish_turn([{"type": "result"}]) == source
+
+
+def test_claude_adapter_result_identifies_its_backend(capsys: pytest.CaptureFixture[str]) -> None:
+    adapter_module._write_result(TurnResult(agent_message="ready"), backend="claude")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"]["backend"] == "claude"
 
 
 def test_adapter_signal_cleanup_reaps_its_claude_child(tmp_path: Path) -> None:

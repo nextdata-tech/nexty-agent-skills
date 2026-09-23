@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,133 @@ GUIDANCE = (
     REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "pre-capture-audit.md",
     REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "derived-models.md",
 )
+DESCRIPTION_GUIDANCE = (
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "nxd-spec-api.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "pre-capture-audit.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "models-example.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "derived-models.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "llm-judgments.md",
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "derivation-plan.md",
+)
+_FENCE_RE = re.compile(r"(?ms)^```[^\n]*\n(.*?)^```\s*(?:\n|$)")
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
+
+
+def _role_description_calls(tree: ast.AST) -> list[str]:
+    """Return semantic role calls that put description on the role itself."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else None
+        if name in {"dimension", "metric"} and any(
+            keyword.arg == "description" for keyword in node.keywords
+        ):
+            found.append(name)
+    return found
+
+
+def _fenced_role_description_errors(text: str) -> list[str]:
+    errors = []
+    for index, match in enumerate(_FENCE_RE.finditer(text), start=1):
+        body = match.group(1)
+        if "# DEPRECATED" in body or not re.search(
+            r"\b(?:dimension|metric)\s*\(|\bdescription\s*=", body
+        ):
+            continue
+        parsed = None
+        for candidate in (body, "{\n" + body + "\n}"):
+            try:
+                parsed = ast.parse(candidate)
+                break
+            except SyntaxError:
+                continue
+        if parsed is None:
+            errors.append(f"fence {index}: relevant example is not parseable")
+            continue
+        roles = _role_description_calls(parsed)
+        if roles:
+            errors.append(f"fence {index}: {', '.join(roles)} carries description=")
+    return errors
+
+
+def _markdown_prose_blocks(text: str) -> list[tuple[str, str]]:
+    """Collect inline Markdown prose, joining soft wraps but not code fences."""
+    text = _FENCE_RE.sub("", text)
+    blocks: list[tuple[str, str]] = []
+    current: list[str] = []
+    kind = "paragraph"
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            blocks.append((kind, " ".join(line.strip() for line in current)))
+            current = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            flush()
+        elif stripped.startswith("|"):
+            flush()
+            blocks.append(("table", stripped))
+        elif _LIST_ITEM_RE.match(line):
+            flush()
+            kind = "list"
+            current = [line]
+        elif current and kind == "list" and line[:1].isspace():
+            current.append(line)
+        else:
+            if current and kind == "list":
+                flush()
+            kind = "paragraph"
+            current.append(line)
+    flush()
+    return blocks
+
+
+def _inline_role_description(span: str) -> bool:
+    """Find description= at argument depth one inside dimension()/metric()."""
+    for call in re.finditer(r"\b(dimension|metric)\s*\(", span):
+        depth = 1
+        quote = None
+        escaped = False
+        index = call.end()
+        while index < len(span) and depth:
+            char = span[index]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                index += 1
+                continue
+            if char in {"'", '"'}:
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif depth == 1 and re.match(r"description\s*=", span[index:]):
+                return True
+            index += 1
+    return False
+
+
+def _inline_role_description_errors(text: str) -> list[str]:
+    errors = []
+    for kind, block in _markdown_prose_blocks(text):
+        if kind == "table" and "deprecated" in block.lower():
+            continue
+        if kind == "list" and "`description=` is **deprecated**" in block:
+            continue
+        for span in re.findall(r"`([^`]+)`", block):
+            if _inline_role_description(span):
+                errors.append(f"{kind}: {span}")
+    return errors
 
 
 def _recipe():
@@ -39,6 +168,80 @@ def test_ratio_guidance_bans_reducing_row_level_metrics() -> None:
         assert "any other reduction" in text, f"{path} weakened the reduction ban"
         assert "additive numerator" in text, f"{path} lost aggregate ratio guidance"
         assert "assert_row_ratios" in text, f"{path} lost the row-grain alternative"
+
+
+def test_description_guidance_uses_field_level_inheritance() -> None:
+    texts = {path: path.read_text(encoding="utf-8") for path in DESCRIPTION_GUIDANCE}
+    prose = "\n".join(_FENCE_RE.sub("", text) for text in texts.values())
+    forbidden = (
+        "write it on the semantic role",
+        "put the semantic description on",
+        "wrapper-only text is not reachable",
+        "wrapper-only text does not make a semantic role description reachable",
+        "struct.description_unreachable",
+    )
+    for phrase in forbidden:
+        assert phrase not in prose.lower(), f"stale description rule remains: {phrase}"
+
+    skill = texts[DESCRIPTION_GUIDANCE[0]]
+    api = texts[DESCRIPTION_GUIDANCE[1]]
+    audit = texts[DESCRIPTION_GUIDANCE[2]]
+    skill_flat = re.sub(r"\s+", " ", skill)
+    api_flat = re.sub(r"\s+", " ", api)
+    audit_flat = re.sub(r"\s+", " ", audit)
+    assert "the role inherits it" in skill_flat
+    assert "description=` is accepted there too, and it is the placement to prefer" in api_flat
+    assert "Both reach the querying agent" in api
+    assert "`metric_field(description=...)`" in api
+    assert "Place descriptions on the enclosing `field()` / `metric_field()`" in audit_flat
+
+
+def test_fenced_examples_put_descriptions_on_wrappers_or_mark_deprecated() -> None:
+    text = "".join(path.read_text(encoding="utf-8") for path in DESCRIPTION_GUIDANCE)
+    errors = _fenced_role_description_errors(text)
+    assert errors == []
+
+
+def test_fenced_checker_parses_dict_entries_and_allows_deprecated_example() -> None:
+    current = '''```python
+"amount": field(number(), dimension(name="amount", description="Total.")),
+```'''
+    deprecated = '''```python
+# DEPRECATED — compatibility example only
+"amount": field(number(), dimension(name="amount", description="Total.")),
+```'''
+    assert _fenced_role_description_errors(current) == [
+        "fence 1: dimension carries description=",
+    ]
+    assert _fenced_role_description_errors(deprecated) == []
+
+
+def test_inline_checker_joins_soft_wraps_and_limits_exemptions() -> None:
+    text = '''Paragraph with `dimension(name="x",
+description="bad")` split across lines.
+
+- List example `metric(Agg.SUM,
+  description="bad")` split across lines.
+
+| old declaration | `dimension(description="bad")` |
+| note | deprecated |
+
+- `description=` is **deprecated** on a role: `metric(description="legacy")`.
+'''
+    errors = _inline_role_description_errors(text)
+    assert len(errors) == 3
+    assert [error.split(":", 1)[0] for error in errors] == [
+        "paragraph",
+        "list",
+        "table",
+    ]
+
+
+def test_live_inline_guidance_has_no_role_level_descriptions() -> None:
+    for path in DESCRIPTION_GUIDANCE:
+        text = path.read_text(encoding="utf-8")
+        errors = _inline_role_description_errors(text)
+        assert errors == [], f"{path} has stale inline guidance: {errors}"
 
 
 def test_read_csv_rows_checks_required_and_duplicate_headers(tmp_path: Path):

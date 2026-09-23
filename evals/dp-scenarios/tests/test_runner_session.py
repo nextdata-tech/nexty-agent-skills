@@ -41,6 +41,7 @@ def test_turn_result_rejects_non_integer_terminal_result_counts(count: object) -
         ("terminal_result_count", -1),
         ("terminal_result_subtype", []),
         ("terminal_result_is_error", 0),
+        ("backend", []),
     ],
 )
 def test_replay_rejects_malformed_terminal_result_facts(field: str, value: object) -> None:
@@ -49,6 +50,15 @@ def test_replay_rejects_malformed_terminal_result_facts(field: str, value: objec
 
     with pytest.raises(SessionError, match=field):
         turn_result_from_dict(encoded)
+
+
+def test_turn_result_backend_is_omitted_when_none_and_round_trips() -> None:
+    unlabelled = turn_result_to_dict(TurnResult())
+    assert "backend" not in unlabelled
+
+    encoded = turn_result_to_dict(TurnResult(backend="claude"))
+    assert encoded["backend"] == "claude"
+    assert turn_result_from_dict(encoded).backend == "claude"
 
 
 def test_replay_missing_terminal_facts_remains_completion_incapable() -> None:

@@ -294,7 +294,7 @@ def _review_entry_is_sensitive(name: str) -> bool:
 
 def _review_reader_roots(
     allowlist_path: Path,
-) -> tuple[list[tuple[Path, bool]], str | None]:
+) -> tuple[list[tuple[Path, Path, bool]], str | None]:
     """Load and validate the current review roots without exposing values."""
 
     try:
@@ -303,7 +303,7 @@ def _review_reader_roots(
         return [], "review input allowlist is unavailable"
     if not isinstance(raw, Mapping):
         return [], "review input allowlist is malformed"
-    roots: list[tuple[Path, bool]] = []
+    roots: list[tuple[Path, Path, bool]] = []
     for key, is_directory in (
         ("retained_capture_root", True),
         ("retained_blueprint_path", False),
@@ -311,7 +311,11 @@ def _review_reader_roots(
         value = raw.get(key)
         if not isinstance(value, str) or not value.strip():
             continue
+        if "\x00" in value:
+            return [], "review input allowlist contains an invalid path"
         root = Path(value)
+        if ".." in root.parts:
+            return [], "review input allowlist contains parent traversal"
         if not root.is_absolute():
             return [], "review input allowlist contains a non-absolute path"
         try:
@@ -322,7 +326,7 @@ def _review_reader_roots(
             return [], "retained capture root is not a directory"
         if not is_directory and not resolved_root.is_file():
             return [], "retained blueprint path is not a regular file"
-        roots.append((resolved_root, is_directory))
+        roots.append((root, resolved_root, is_directory))
     if not roots:
         return [], "review input allowlist is empty"
     return roots, None
@@ -334,13 +338,38 @@ def _review_reader_path(
     """Resolve a requested review path against the current private allowlist."""
 
     if not isinstance(path_value, str) or not path_value.strip():
-        return Path(), "path must be a non-empty absolute path"
+        return "path must be a non-empty absolute path"
+    if "\x00" in path_value:
+        return "path contains an invalid character"
     requested = Path(path_value)
     if not requested.is_absolute():
-        return Path(), "path must be absolute"
-    roots, error = _review_reader_roots(allowlist_path)
-    if error is not None:
-        return Path(), error
+        return "path must be absolute"
+    if ".." in requested.parts:
+        return "path must not contain parent traversal"
+    if any(_review_entry_is_sensitive(part) for part in requested.parts):
+        return "requested review path is sensitive"
+    if redact_text(path_value) != path_value:
+        return "requested review path cannot be shown verbatim"
+    return None
+
+
+def _review_reader_path(
+    path_value: object,
+    allowlist_path: Path,
+    *,
+    roots: list[tuple[Path, Path, bool]] | None = None,
+) -> tuple[_ReviewReaderPath | None, str | None]:
+    """Resolve a requested review path against the current private allowlist."""
+
+    request_error = _review_request_path_error(path_value)
+    if request_error is not None:
+        return None, request_error
+    assert isinstance(path_value, str)
+    requested = Path(path_value)
+    if roots is None:
+        roots, error = _review_reader_roots(allowlist_path)
+        if error is not None:
+            return None, error
     try:
         resolved = requested.resolve(strict=True)
     except (OSError, RuntimeError, ValueError):
@@ -365,9 +394,20 @@ def _review_reader_result(
     arguments = params.get("arguments") if isinstance(params, Mapping) else None
     if not isinstance(arguments, Mapping):
         return _review_reader_error("arguments must be an object")
-    path, error = _review_reader_path(arguments.get("path"), allowlist_path)
-    if error:
+    path_value = arguments.get("path")
+    request_error = _review_request_path_error(path_value)
+    if request_error is not None:
+        return _review_reader_error(request_error)
+    roots, error = _review_reader_roots(allowlist_path)
+    if error is not None:
         return _review_reader_error(error)
+    reader_path, error = _review_reader_path(
+        path_value, allowlist_path, roots=roots
+    )
+    if error is not None:
+        return _review_reader_error(error)
+    assert reader_path is not None
+
     operation = arguments.get("operation")
     if not isinstance(operation, str) or operation not in {"read", "list"}:
         return _review_reader_error("operation must be read or list")
@@ -382,25 +422,25 @@ def _review_reader_result(
         or not 1 <= max_bytes <= _REVIEW_READER_MAX_BYTES
     ):
         return _review_reader_error("read bounds are outside the permitted limits")
+
+    path = str(reader_path.display)
     try:
         if operation == "list":
-            if not path.is_dir():
-                return _review_reader_error("list requires a directory")
-            entries = []
-            for entry in sorted(path.iterdir(), key=lambda item: item.name):
-                if len(entries) >= max_lines:
-                    break
-                if _review_entry_is_sensitive(entry.name):
-                    continue
-                entries.append(
-                    {
-                        "name": entry.name,
-                        "kind": "directory" if entry.is_dir() else "file",
-                    }
-                )
-            text = json.dumps(entries, sort_keys=True)
+            result, error = _review_reader_list(
+                reader_path,
+                roots=roots,
+                allowlist_path=allowlist_path,
+                max_lines=max_lines,
+                max_bytes=max_bytes,
+            )
+            if error is not None:
+                return _review_reader_error(error)
+            assert result is not None
+            text = result.pop("text")
+            structured = result
         else:
-            if not path.is_file():
+            resolved_file = reader_path.resolved
+            if not resolved_file.is_file():
                 return _review_reader_error("read requires a regular file")
             with path.open("rb") as source_file:
                 raw_bytes = source_file.read(_REVIEW_READER_MAX_SOURCE_BYTES + 1)
@@ -453,6 +493,7 @@ def _review_reader_result(
         return _review_reader_error(f"review input read failed: {redact_text(str(exc))}")
     return {
         "isError": False,
+        "structuredContent": structured,
         "content": [{"type": "text", "text": text}],
     }
 
@@ -1774,12 +1815,16 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 request = json.loads(line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
+            is_review_reader_call = (
+                isinstance(request, Mapping)
+                and request.get("method") == "tools/call"
+                and isinstance(request.get("params"), Mapping)
+                and request["params"].get("name") == _REVIEW_READER_TOOL
+            )
+            if not is_review_reader_call:
+                _trace_line(trace_path, "request", line)
             if isinstance(request, Mapping):
-                if (
-                    request.get("method") == "tools/call"
-                    and isinstance(request.get("params"), Mapping)
-                    and request["params"].get("name") == _REVIEW_READER_TOOL
-                ):
+                if is_review_reader_call:
                     write_review_reader_response(request)
                     continue
             _trace_line(trace_path, "request", line)

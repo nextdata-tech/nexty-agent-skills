@@ -842,6 +842,11 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 "terminal_result_count": getattr(turn, "terminal_result_count", 0),
                 "terminal_result_subtype": getattr(turn, "terminal_result_subtype", None),
                 "terminal_result_is_error": getattr(turn, "terminal_result_is_error", None),
+                **(
+                    {"backend": turn.backend}
+                    if isinstance(getattr(turn, "backend", None), str)
+                    else {}
+                ),
                 "provider_model_calls": getattr(turn, "provider_model_calls", 0),
                 "input_tokens": getattr(turn, "input_tokens", None),
                 "output_tokens": getattr(turn, "output_tokens", None),
@@ -1544,6 +1549,141 @@ def _leakable_turn_surfaces(turns: Sequence[object]) -> list[object]:
 
 _OPERATOR_OBSERVATIONS_NAME = "operator-observations.json"
 _SESSION_REPLAY_NAME = "session-replay.json"
+_CHECKER_SKEW_KIND = "checker_skew"
+_CHECKER_SKEW_SCHEMA = "nxd-checker-skew-v1"
+_SHA256_HEX = frozenset("0123456789abcdef")
+
+
+def _is_checker_skew_capture(call: Mapping[str, object]) -> bool:
+    """Bind a checker marker to the supervisor's successful capture response."""
+
+    name = call.get("name")
+    arguments = call.get("arguments")
+    action = arguments.get("action") if isinstance(arguments, Mapping) else None
+    if (
+        not isinstance(name, str)
+        or not name.startswith("mcp__")
+        or not name.endswith("__advance_workflow")
+        or not isinstance(action, Mapping)
+        or action.get("type") != "capture"
+    ):
+        return False
+    result = call.get("result")
+    requirements = result.get("requirements") if isinstance(result, Mapping) else None
+    if not isinstance(requirements, Sequence) or isinstance(
+        requirements, (str, bytes, bytearray)
+    ):
+        return False
+    return any(
+        isinstance(requirement, Mapping)
+        and requirement.get("id") == "review"
+        and isinstance(requirement.get("review_input"), Mapping)
+        and "retained_capture_root" in requirement["review_input"]
+        for requirement in requirements
+    )
+
+
+def _checker_skew_outcome(
+    observations: object,
+    *,
+    require_markers: bool = False,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Strictly classify runner-owned checker markers across applicable captures."""
+
+    turns = observations.get("turns") if isinstance(observations, Mapping) else None
+    if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes, bytearray)):
+        return None, ()
+    observed_backends = {
+        turn.get("backend")
+        for turn in turns
+        if isinstance(turn, Mapping) and isinstance(turn.get("backend"), str)
+    }
+    statuses: list[str] = []
+    malformed = False
+    missing = False
+    for turn in turns:
+        calls = turn.get("tool_calls") if isinstance(turn, Mapping) else None
+        if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
+            continue
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            marker = call.get("observation")
+            applicable = _is_checker_skew_capture(call)
+            if marker is None:
+                backend = turn.get("backend") if isinstance(turn, Mapping) else None
+                claude_only_turn = (
+                    backend == "claude" and observed_backends == {"claude"}
+                )
+                missing = missing or (
+                    require_markers and applicable and not claude_only_turn
+                )
+                continue
+            if not isinstance(marker, Mapping):
+                malformed = malformed or applicable
+                continue
+            if marker.get("kind") != _CHECKER_SKEW_KIND:
+                if (
+                    marker.get("schema") == _CHECKER_SKEW_SCHEMA
+                    or "source_sha256" in marker
+                    or "retained_sha256" in marker
+                ):
+                    malformed = True
+                continue
+            status = marker.get("status")
+            base_keys = {"kind", "schema", "status"}
+            valid = (
+                marker.get("schema") == _CHECKER_SKEW_SCHEMA
+                and _is_checker_skew_capture(call)
+            )
+            if isinstance(status, str) and status in {"match", "mismatch"}:
+                valid = valid and set(marker) == base_keys | {
+                    "source_sha256",
+                    "retained_sha256",
+                }
+                source_digest = marker.get("source_sha256")
+                retained_digest = marker.get("retained_sha256")
+                digests_valid = all(
+                    isinstance(value, str)
+                    and len(value) == 64
+                    and all(char in _SHA256_HEX for char in value)
+                    for value in (source_digest, retained_digest)
+                )
+                valid = valid and digests_valid
+                if valid and status == "match":
+                    valid = source_digest == retained_digest
+                elif valid and status == "mismatch":
+                    valid = source_digest != retained_digest
+            elif isinstance(status, str) and status in {"unreadable", "malformed"}:
+                valid = valid and set(marker) == base_keys
+            else:
+                valid = False
+            if not valid:
+                malformed = True
+                continue
+            statuses.append(str(status))
+
+    if "mismatch" in statuses:
+        codes = ["checker_skew_mismatch"]
+        if "unreadable" in statuses:
+            codes.append("checker_skew_unreadable")
+        if malformed or "malformed" in statuses:
+            codes.append("checker_skew_malformed")
+        if missing:
+            codes.append("checker_skew_missing")
+        return "mismatch", tuple(codes)
+    if malformed or missing or "unreadable" in statuses or "malformed" in statuses:
+        codes = []
+        if malformed or "malformed" in statuses:
+            codes.append("checker_skew_malformed")
+        if "unreadable" in statuses:
+            codes.append("checker_skew_unreadable")
+        if missing:
+            codes.append("checker_skew_missing")
+        return "ungraded", tuple(codes)
+    if statuses:
+        return "match", ()
+    return None, ()
 
 
 def _turns_from_operator_observations(payload: Mapping[str, object]) -> Sequence[object] | None:
@@ -2486,6 +2626,7 @@ class TierRunner:
                         environment,
                         artifact_root,
                         supervisor_facts=facts,
+                        checker_skew_required=recording is None,
                     )
                     elapsed = time.monotonic() - started
                 except BaseException as error:
@@ -2604,6 +2745,7 @@ class TierRunner:
         artifact_root: Path,
         *,
         supervisor_facts: SupervisorFacts | None = None,
+        checker_skew_required: bool = False,
     ) -> tuple[ScoreVector, SupervisorFacts | None, int, str, str]:
         """Grade only artifacts that have been persisted before this call."""
 
@@ -2830,7 +2972,14 @@ class TierRunner:
         terminal_state = observations.get("terminal_state")
         sentinel_observation = _sentinel_trip(environment, artifact_root)
         sentinel = True if terminal_state == EngineTerminalState.SENTINEL_TRIP.value else sentinel_observation
-        invalid = terminal_state == EngineTerminalState.ENVIRONMENT_WEDGE.value
+        checker_state, checker_codes = _checker_skew_outcome(
+            observations,
+            require_markers=checker_skew_required,
+        )
+        invalid = (
+            terminal_state == EngineTerminalState.ENVIRONMENT_WEDGE.value
+            or checker_state == "mismatch"
+        )
         calls_value = observations.get("tool_call_count", 0)
         calls = int(calls_value) if isinstance(calls_value, int) and calls_value >= 0 else 0
         turns_value = observations.get("turns", ())
@@ -2860,6 +3009,17 @@ class TierRunner:
             invalid=invalid,
             efficiency=efficiency,
         )
+        if checker_codes:
+            score = replace(
+                score,
+                findings=score.findings
+                + tuple(Finding(code) for code in checker_codes),
+            )
+        if checker_state == "ungraded" and score.state in {
+            ScoreTerminalState.PASSED,
+            ScoreTerminalState.FAILED,
+        }:
+            score = replace(score, state=ScoreTerminalState.UNGRADED)
         if (
             terminal_state != EngineTerminalState.COMPLETED.value
             and score.state not in {

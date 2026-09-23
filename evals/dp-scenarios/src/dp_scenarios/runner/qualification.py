@@ -50,14 +50,20 @@ def _ungraded_reasons(score: ScoreVector) -> tuple[str, ...]:
     reason is now read off the ungraded gates' own findings.
     """
 
-    codes = tuple(
-        dict.fromkeys(
-            code
-            for result in score.gates.values()
-            if result.ungraded
-            for code in result.codes
-        )
+    gate_codes = tuple(
+        code
+        for result in score.gates.values()
+        if result.ungraded
+        for code in result.codes
     )
+    gate_code_set = set(gate_codes)
+    extra_codes = tuple(
+        finding.code
+        for finding in score.findings
+        if finding.code not in gate_code_set
+        and finding.code.startswith("checker_skew_")
+    )
+    codes = tuple(dict.fromkeys((*gate_codes, *extra_codes)))
     return codes or ("run_ungraded",)
 
 

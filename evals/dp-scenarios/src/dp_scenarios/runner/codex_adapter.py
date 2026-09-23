@@ -12,12 +12,14 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import select
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,7 @@ import time
 import tomllib
 from collections import deque
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from dp_scenarios.failure_reasons import (
@@ -81,6 +84,8 @@ _CODEX_PROVIDER_FAILURE_REASONS = frozenset(
 _FILE_CHANGE_FAILURE_STATUSES = frozenset(
     {"failed", "error", "rejected", "cancelled", "canceled"}
 )
+_CHECKER_SKEW_SCHEMA = "nxd-checker-skew-v1"
+_CHECKER_SKEW_MAX_BYTES = 1024 * 1024
 
 
 def _codex_timeout_failure_reason(
@@ -441,6 +446,210 @@ def _turn_sandbox_policy(
     if review_pending:
         return {"type": "readOnly"}
     return {"type": "workspaceWrite", "writableRoots": list(writable_roots)}
+
+
+def _read_regular_file_beneath(root: Path, parts: Sequence[str]) -> bytes | None:
+    """Read one regular file through no-follow descriptors, with a hard cap."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory_flag is None or not parts:
+        return None
+    if any(
+        not isinstance(part, str)
+        or not part
+        or part in {".", ".."}
+        or "/" in part
+        or "\x00" in part
+        for part in parts
+    ):
+        return None
+
+    directory_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        if not root.is_absolute():
+            return None
+        directory_flags = os.O_RDONLY | directory_flag | nofollow
+        # The supplied root is trusted and already canonicalized by the caller.
+        # Keep its final component under O_NOFOLLOW too; resolving it here would
+        # silently accept a symlinked captures directory.
+        directory_fd = os.open(root, directory_flags)
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(
+            parts[-1],
+            os.O_RDONLY
+            | nofollow
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory_fd,
+        )
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            return None
+        remaining = _CHECKER_SKEW_MAX_BYTES + 1
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(file_fd, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        return data if len(data) <= _CHECKER_SKEW_MAX_BYTES else None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _checker_skew_marker(
+    observation: Mapping[str, object],
+    *,
+    skill_pack_root: Path,
+    supervisor_data_dir: Path | None,
+) -> dict[str, object] | None:
+    """Hash trusted and retained checkers for one successful capture response."""
+
+    if (
+        observation.get("tool") != "advance_workflow"
+        or observation.get("is_error") is not False
+        or not observation.get("answered")
+        or _advance_action_type(observation.get("arguments")) != "capture"
+    ):
+        return None
+    result = observation.get("result")
+    requirements = result.get("requirements") if isinstance(result, Mapping) else None
+    if not isinstance(requirements, Sequence) or isinstance(
+        requirements, (str, bytes, bytearray)
+    ):
+        return None
+    retained_root: object = None
+    present = False
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping) or requirement.get("id") != "review":
+            continue
+        review_input = requirement.get("review_input")
+        if isinstance(review_input, Mapping) and "retained_capture_root" in review_input:
+            retained_root = review_input["retained_capture_root"]
+            present = True
+            break
+    if not present:
+        return None
+
+    def marker(
+        status: str,
+        source_digest: str | None = None,
+        retained_digest: str | None = None,
+    ) -> dict[str, object]:
+        value: dict[str, object] = {
+            "kind": "checker_skew",
+            "schema": _CHECKER_SKEW_SCHEMA,
+            "status": status,
+        }
+        if source_digest is not None and retained_digest is not None:
+            value["source_sha256"] = source_digest
+            value["retained_sha256"] = retained_digest
+        return value
+
+    if (
+        not isinstance(retained_root, str)
+        or not retained_root
+        or "\x00" in retained_root
+    ):
+        return marker("malformed")
+    capture_path = Path(retained_root)
+    if not capture_path.is_absolute() or ".." in capture_path.parts:
+        return marker("malformed")
+    if supervisor_data_dir is None:
+        return marker("unreadable")
+    try:
+        trusted_data_root = supervisor_data_dir.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return marker("unreadable")
+    captures_root = trusted_data_root / "captures"
+    try:
+        # Keep the supervisor-provided spelling and walk every component with
+        # O_NOFOLLOW below. Resolving the candidate first would mask symlinks.
+        relative_capture = capture_path.relative_to(captures_root)
+    except ValueError:
+        # On macOS, the supervisor may report the same data directory through
+        # /var while the runner has canonicalized it to /private/var. Accept
+        # only the supervisor's fixed captures/sha256/<digest> suffix, and
+        # prove that its parent resolves to the trusted root. The suffix stays
+        # unresolved and is still walked with O_NOFOLLOW below.
+        capture_parts = capture_path.parts
+        suffix = capture_parts[-3:]
+        if (
+            len(capture_parts) < 4
+            or suffix[:2] != ("captures", "sha256")
+            or len(suffix[2]) != 64
+            or any(character not in "0123456789abcdef" for character in suffix[2])
+        ):
+            return marker("malformed")
+        try:
+            reported_data_root = Path(*capture_parts[:-3]).resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return marker("unreadable")
+        if reported_data_root != trusted_data_root:
+            return marker("malformed")
+        relative_capture = Path(*suffix[1:])
+    if not relative_capture.parts:
+        return marker("malformed")
+
+    source_root = skill_pack_root
+    source_parts = ("src", "nxd-run-job-loop", "scripts", "self_check.py")
+    retained_parts = (*relative_capture.parts, "self_check.py")
+    source_bytes = _read_regular_file_beneath(source_root, source_parts)
+    retained_bytes = _read_regular_file_beneath(captures_root, retained_parts)
+    if source_bytes is None or retained_bytes is None:
+        return marker("unreadable")
+    source_digest = hashlib.sha256(source_bytes).hexdigest()
+    retained_digest = hashlib.sha256(retained_bytes).hexdigest()
+    return marker(
+        "match" if source_digest == retained_digest else "mismatch",
+        source_digest,
+        retained_digest,
+    )
+
+
+def _attach_checker_skew_markers(
+    tool_calls: Sequence[ToolCall],
+    observations: Sequence[Mapping[str, object]],
+    *,
+    skill_pack_root: Path,
+    supervisor_data_dir: Path | None,
+) -> tuple[ToolCall, ...]:
+    """Attach automatic checker observations to successful capture calls."""
+
+    captures = iter(
+        observation
+        for observation in observations
+        if observation.get("tool") == "advance_workflow"
+        and _advance_action_type(observation.get("arguments")) == "capture"
+    )
+    result: list[ToolCall] = []
+    for call in tool_calls:
+        if (
+            _mcp_name(call.name) == "advance_workflow"
+            and _advance_action_type(call.arguments) == "capture"
+        ):
+            observation = next(captures, None)
+            if observation is not None:
+                marker = _checker_skew_marker(
+                    observation,
+                    skill_pack_root=skill_pack_root,
+                    supervisor_data_dir=supervisor_data_dir,
+                )
+                if marker is not None:
+                    call = replace(call, observation=marker)
+        result.append(call)
+    return tuple(result)
 
 
 def _codex_mcp_name(item: Mapping[str, object]) -> str | None:
@@ -2720,10 +2929,16 @@ class CodexAdapter:
             _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
         details = [value for value in (parsed.environment_detail, environment_detail) if value]
         safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
+        tool_calls = _attach_checker_skew_markers(
+            parsed.tool_calls,
+            observations,
+            skill_pack_root=self.skill_pack_root,
+            supervisor_data_dir=self.supervisor_data_dir,
+        )
         return TurnResult(
             transcript_delta=parsed.transcript_delta,
             agent_message=parsed.agent_message,
-            tool_calls=parsed.tool_calls,
+            tool_calls=tool_calls,
             tool_results=parsed.tool_results,
             files_touched=changed,
             approval_artifact=None,
@@ -2893,9 +3108,11 @@ class CodexAdapter:
         self._started = False
 
 
-def _write_result(value: TurnResult) -> None:
+def _write_result(value: TurnResult, *, backend: str | None = None) -> None:
     from dp_scenarios.runner.session import turn_result_to_dict
 
+    if backend is not None:
+        value = replace(value, backend=backend)
     sys.stdout.write(json.dumps({"result": turn_result_to_dict(value)}, ensure_ascii=False, sort_keys=True) + "\n")
     sys.stdout.flush()
 
@@ -2997,7 +3214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 request = json.loads(line)
                 if not isinstance(request, Mapping):
                     raise CodexAdapterError("request must be a JSON object")
-                _write_result(adapter.send(request))
+                _write_result(adapter.send(request), backend="codex")
             except (CodexAdapterError, OSError, ValueError) as exc:
                 _write_result(
                     TurnResult(
@@ -3011,7 +3228,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                         last_mcp_call=adapter.last_mcp_call,
                         session_id=adapter._thread_id,
-                    )
+                    ),
+                    backend="codex",
                 )
     finally:
         adapter.close()

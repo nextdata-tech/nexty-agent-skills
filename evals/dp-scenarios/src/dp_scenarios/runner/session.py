@@ -166,6 +166,7 @@ def turn_result_to_dict(result: TurnResult) -> dict[str, object]:
         "environment_detail": result.environment_detail,
         "failure_reason": result.failure_reason,
         "last_mcp_call": result.last_mcp_call,
+        **({"backend": result.backend} if result.backend is not None else {}),
         "session_id": result.session_id,
         "terminal_result_count": result.terminal_result_count,
         "terminal_result_subtype": result.terminal_result_subtype,
@@ -197,6 +198,10 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
         value["terminal_result_is_error"], bool
     ):
         raise SessionError("terminal_result_is_error must be a boolean or null")
+    if "backend" in value and value["backend"] is not None and not isinstance(
+        value["backend"], str
+    ):
+        raise SessionError("backend must be a string or null")
     raw_calls = value.get("tool_calls", [])
     raw_files = value.get("files_touched", [])
     if not isinstance(raw_calls, Sequence) or isinstance(raw_calls, (str, bytes)):
@@ -241,6 +246,7 @@ def turn_result_from_dict(value: Mapping[str, object]) -> TurnResult:
         environment_detail=value.get("environment_detail") if isinstance(value.get("environment_detail"), str) else None,
         failure_reason=value.get("failure_reason") if isinstance(value.get("failure_reason"), str) else None,
         last_mcp_call=value.get("last_mcp_call") if isinstance(value.get("last_mcp_call"), str) else None,
+        backend=value.get("backend") if isinstance(value.get("backend"), str) else None,
         session_id=value.get("session_id") if isinstance(value.get("session_id"), str) else None,
         terminal_result_count=value.get("terminal_result_count", 0),
         terminal_result_subtype=(
