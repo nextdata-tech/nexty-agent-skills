@@ -37,13 +37,6 @@ this skill treats as unrecoverable.
 
 **Connector types at a glance** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 
-| Type | Service | `secrets[...]` key | Companion artifact |
-|---|---|---|---|
-| CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
-| Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
-| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |
-| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |
-
 For `api-source`, additionally require the closure-local `connectivity_check.py` probe; only its endpoint-map companion is absent. For `api-source`, the endpoint-map companion is absent because its map is carried by `endpoint_<model>` profile attributes; the connectivity probe is still required, and the `connectivity_check.py` for `api-source` must pass before authoring.
 Specialized API profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape. The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
 It runs the transform, verifies staging, and stands up the semantic MCP endpoint.

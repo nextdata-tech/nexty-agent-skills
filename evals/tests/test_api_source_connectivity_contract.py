@@ -15,6 +15,7 @@ API_SOURCE = (Path(__file__).parents[1] / ".." / "src" /
               "nxd-generate-data-product" / "reference" / "api-source.md").resolve()
 SKILL_SOURCE = API_SOURCE.parents[1] / "SKILL.md"
 MULTI_SOURCE = API_SOURCE.parents[1] / "reference" / "multi-source.md"
+SOURCE_TYPES = API_SOURCE.parents[1] / "reference" / "source-types.md"
 
 
 def _doc() -> str:
@@ -106,17 +107,21 @@ def test_every_api_inventory_requires_probe_and_names_missing_endpoint_companion
     skill = _normalized(SKILL_SOURCE.read_text(encoding="utf-8"))
     api = _normalized(_doc())
     multi = _normalized(MULTI_SOURCE.read_text(encoding="utf-8"))
+    source_types = _normalized(SOURCE_TYPES.read_text(encoding="utf-8"))
 
-    # The overview, closure inventory, and Python-only inventory are separate
-    # authoritative lists; each must carry the probe rather than implying the
-    # API connector has no companion artifact at all.
-    assert "| rest api — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion" in skill
+    # The source-types index owns the connector matrix; the generator skill
+    # links to it instead of duplicating the table.
+    assert "[source types index](reference/source-types.md) for the canonical source matrix" in skill
+    assert "**connector types at a glance**" not in skill
+    assert "| csv (proven, fully-inlined default below) | `csv-source` |" not in skill
+    assert "| source type | service | companion artifact | detailed recipe |" in source_types
+    assert "| rest api | `api-source` | `connectivity_check.py`; endpoint attributes | [api source](api-source.md) |" in source_types
     assert "for `api-source`, additionally require the closure-local `connectivity_check.py` probe; only its endpoint-map companion is absent" in skill
     assert "`connectivity_check.py` for `api-source`" in skill
     assert "for `api-source`, the endpoint-map companion is absent because its map is carried by `endpoint_<model>` profile attributes; the connectivity probe is still required" in skill
 
-    # The connector reference and the multi-source projection must agree with
-    # the overview for both the single and labeled API shapes.
+    # The source recipe and multi-source projection must agree for both the
+    # single and labeled API shapes.
     assert "**required probe; no endpoint-map companion** — every api-source closure" in api
     assert "includes the closure-local `connectivity_check.py` probe" in api
     assert "one api (unchanged) | `api-source` | the attribute keys — `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion" in multi
