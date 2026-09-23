@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-23 | restore #298 field-level semantic descriptions | NO_EVAL | — | [`2026-09-23-description-guidance-298-restore`](entries/2026-09-23-description-guidance-298-restore.md) |
 | 2026-09-23 | Codex reviewer deadlines and timeout diagnostics reflect observed state | NO_EVAL | — | [`2026-09-23-codex-reviewer-diagnostics`](entries/2026-09-23-codex-reviewer-diagnostics.md) |
 | 2026-09-23 | Codex native continuation preserves private app-server state | NO_EVAL | — | [`2026-09-23-codex-native-state-retention`](entries/2026-09-23-codex-native-state-retention.md) |
 | 2026-09-22 | preserve reviewer evidence when Agent prompts are redacted | NO_EVAL | — | [`2026-09-22-redacted-review-evidence`](entries/2026-09-22-redacted-review-evidence.md) |

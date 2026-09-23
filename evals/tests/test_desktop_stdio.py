@@ -1246,7 +1246,11 @@ def test_review_reader_bounds_raw_source_and_drops_partial_credential_line(
     output = response["content"][0]["text"]
     assert response["isError"] is False
     assert read_sizes == [ds._REVIEW_READER_MAX_SOURCE_BYTES + 1]
-    assert output == "safe line\n" + ds._REVIEW_READER_TRUNCATION_MARKER
+    assert output == (
+        f"Path: {source}\n"
+        + "safe line\n"
+        + ds._REVIEW_READER_TRUNCATION_MARKER
+    )
     assert "reviewer" not in output
     assert "secret" not in output
     assert "xxxx" not in output

@@ -175,8 +175,10 @@ network access, sensitive files, and credential values. The runner starts the
 review turn in an enforced read-only sandbox with network access disabled; do
 not try to change that boundary. Do not follow the parent-run admission or
 publication sequence. Inspect only the closure and review inputs named by the
-parent, complete within the retained review deadline, and return concise review
-claims/findings to the parent. If the named paths or reader tool are genuinely
+parent, and use exact `path` values returned by the reader verbatim for every
+later read/list call; do not reconstruct or normalize them (including `/var`
+versus `/private/var` spellings). Complete within the retained review deadline
+and return concise review claims/findings to the parent. If the named paths or reader tool are genuinely
 unavailable, return an incomplete blocker immediately instead of waiting or
 inventing evidence.
 

@@ -24,6 +24,8 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAdapter,
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
+    _attach_checker_skew_markers,
+    _checker_skew_marker,
     _codex_timeout_detail,
     _event_debug_tail,
     _codex_timeout_failure_reason,
@@ -3360,7 +3362,11 @@ def test_main_suppresses_private_startup_exception_text(
             pass
 
     monkeypatch.setattr(codex_adapter_module, "CodexAdapter", StartupFailure)
-    monkeypatch.setattr(codex_adapter_module, "_write_result", written.append)
+    monkeypatch.setattr(
+        codex_adapter_module,
+        "_write_result",
+        lambda result, **_kwargs: written.append(result),
+    )
     monkeypatch.setattr(sys, "stdin", StringIO('{"message":{"text":"test"}}\n'))
     monkeypatch.setattr(codex_adapter_module.signal, "signal", lambda *_args: None)
 
