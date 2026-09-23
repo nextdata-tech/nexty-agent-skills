@@ -35,7 +35,7 @@ vocabulary — the Workflow's **policy read-back gate** runs before any file is
 written. A closure whose scoring policy the user never saw is the one failure
 this skill treats as unrecoverable.
 
-**Connector types at a glance** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
+**Connector types** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 
 For `api-source`, additionally require the closure-local `connectivity_check.py` probe; only its endpoint-map companion is absent. For `api-source`, the endpoint-map companion is absent because its map is carried by `endpoint_<model>` profile attributes; the connectivity probe is still required, and the `connectivity_check.py` for `api-source` must pass before authoring.
 Specialized API profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape. The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
