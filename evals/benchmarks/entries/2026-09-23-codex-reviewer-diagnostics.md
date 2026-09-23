@@ -2,7 +2,7 @@
 id: 2026-09-23-codex-reviewer-diagnostics
 date: 2026-09-23
 label: "Codex reviewer deadlines and timeout diagnostics reflect observed state"
-plugin_version: 0.52.1
+plugin_version: 0.52.2
 status: NO_EVAL
 scenarios: []
 record: null

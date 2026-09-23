@@ -588,6 +588,94 @@ def test_review_reader_discovered_before_capture_works_after_allowlist_publish(t
         session.cleanup()
 
 
+def test_review_reader_bounds_raw_source_and_drops_partial_credential_line(
+    tmp_path, monkeypatch
+):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    source = capture / "evidence.txt"
+    source.write_bytes(
+        b"safe line\nhttps://reviewer:secret-"
+        + b"x" * (ds._REVIEW_READER_MAX_SOURCE_BYTES + 32)
+        + b"@example.invalid/path\n"
+    )
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(
+        json.dumps({"retained_capture_root": str(capture)}), encoding="utf-8"
+    )
+    real_open = Path.open
+    read_sizes = []
+
+    class ReadSpy:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def read(self, size=-1):
+            read_sizes.append(size)
+            return self.stream.read(size)
+
+    def tracking_open(path, mode="r", *args, **kwargs):
+        stream = real_open(path, mode, *args, **kwargs)
+        if path == source and mode == "rb":
+            return ReadSpy(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+    response = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {
+                    "path": str(source),
+                    "operation": "read",
+                    "max_bytes": 2048,
+                }
+            }
+        },
+        allowlist,
+    )
+
+    output = response["content"][0]["text"]
+    assert response["isError"] is False
+    assert read_sizes == [ds._REVIEW_READER_MAX_SOURCE_BYTES + 1]
+    assert output == "safe line\n" + ds._REVIEW_READER_TRUNCATION_MARKER
+    assert "reviewer" not in output
+    assert "secret" not in output
+    assert "xxxx" not in output
+    assert len(output.encode("utf-8")) <= 2048
+
+
+def test_review_reader_symlink_loops_fail_closed(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    loop = capture / "loop"
+    loop.symlink_to(loop)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(
+        json.dumps({"retained_capture_root": str(capture)}), encoding="utf-8"
+    )
+
+    response = ds._review_reader_result(
+        {
+            "params": {
+                "arguments": {"path": str(loop), "operation": "list"}
+            }
+        },
+        allowlist,
+    )
+
+    assert response["isError"] is True
+    assert (
+        response["structuredContent"]["error"]
+        == "requested review path is unavailable"
+    )
+
+
 def test_review_allowlist_is_cleared_after_review_report(tmp_path):
     session = ds.DesktopStdioSession(
         [sys.executable, "/tmp/fake-server.py"], root=tmp_path / "session"

@@ -15,6 +15,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime as _dt
+import io
 import json
 import math
 import os
@@ -80,6 +81,8 @@ _REVIEW_PENDING_BLOCKED_OPERATIONS = frozenset(
 _REVIEW_READER_TOOL = "read_review_input"
 _REVIEW_READER_MAX_BYTES = 128 * 1024
 _REVIEW_READER_MAX_LINES = 500
+_REVIEW_READER_MAX_SOURCE_BYTES = 1024 * 1024
+_REVIEW_READER_TRUNCATION_MARKER = "\n[runner output truncated]\n"
 _REVIEW_READER_DENIED_NAMES = frozenset(
     {
         ".env",
@@ -272,6 +275,12 @@ def _review_reader_error(message: str) -> dict[str, Any]:
     }
 
 
+def _utf8_prefix(value: str, max_bytes: int) -> str:
+    """Return a UTF-8-safe prefix bounded by its encoded byte length."""
+
+    return value.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def _review_entry_is_sensitive(name: str) -> bool:
     """Return whether a review-reader path component is credential-shaped."""
 
@@ -307,7 +316,7 @@ def _review_reader_roots(
             return [], "review input allowlist contains a non-absolute path"
         try:
             resolved_root = root.resolve(strict=True)
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             return [], "review input root is unavailable"
         if is_directory and not resolved_root.is_dir():
             return [], "retained capture root is not a directory"
@@ -334,7 +343,7 @@ def _review_reader_path(
         return Path(), error
     try:
         resolved = requested.resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError, ValueError):
         return Path(), "requested review path is unavailable"
     if any(
         _review_entry_is_sensitive(part)
@@ -393,14 +402,53 @@ def _review_reader_result(
         else:
             if not path.is_file():
                 return _review_reader_error("read requires a regular file")
-            text = path.read_text(encoding="utf-8", errors="replace")
-            lines = text.splitlines(keepends=True)
-            text = "".join(lines[:max_lines])
-        encoded = text.encode("utf-8")
-        if len(encoded) > max_bytes:
-            text = encoded[:max_bytes].decode("utf-8", errors="ignore")
-            text += "\n[runner output truncated]\n"
-        text = redact_text(text)
+            with path.open("rb") as source_file:
+                raw_bytes = source_file.read(_REVIEW_READER_MAX_SOURCE_BYTES + 1)
+            source_truncated = len(raw_bytes) > _REVIEW_READER_MAX_SOURCE_BYTES
+            if source_truncated:
+                raw_bytes = raw_bytes[:_REVIEW_READER_MAX_SOURCE_BYTES]
+                # Redaction patterns may need a line-ending delimiter. Never
+                # expose a byte-budget-cut suffix that could contain a partial
+                # credential or URL userinfo value.
+                if not raw_bytes.endswith(b"\n"):
+                    last_newline = raw_bytes.rfind(b"\n")
+                    raw_bytes = raw_bytes[: last_newline + 1] if last_newline >= 0 else b""
+            raw_text = raw_bytes.decode("utf-8", errors="replace")
+            selected_lines: list[str] = []
+            line_truncated = False
+            for line_number, line in enumerate(io.StringIO(raw_text, newline="")):
+                if line_number >= max_lines:
+                    line_truncated = True
+                    break
+                selected_lines.append(line)
+            text = redact_text("".join(selected_lines))
+            truncated = source_truncated or line_truncated
+            if len(text.encode("utf-8")) > max_bytes:
+                truncated = True
+            if truncated:
+                marker = _REVIEW_READER_TRUNCATION_MARKER
+                marker_bytes = len(marker.encode("utf-8"))
+                if max_bytes < marker_bytes:
+                    return _review_reader_error(
+                        "max_bytes too small for truncation marker"
+                    )
+                text = _utf8_prefix(text, max_bytes - marker_bytes) + marker
+        if operation == "list":
+            text = json.dumps(entries, sort_keys=True)
+            encoded = text.encode("utf-8")
+            if len(encoded) > max_bytes:
+                marker = _REVIEW_READER_TRUNCATION_MARKER
+                marker_bytes = len(marker.encode("utf-8"))
+                if max_bytes >= marker_bytes:
+                    text = _utf8_prefix(
+                        encoded.decode("utf-8", errors="replace"),
+                        max_bytes - marker_bytes,
+                    ) + marker
+                else:
+                    text = _utf8_prefix(
+                        encoded.decode("utf-8", errors="replace"), max_bytes
+                    )
+            text = redact_text(text)
     except (OSError, UnicodeError) as exc:
         return _review_reader_error(f"review input read failed: {redact_text(str(exc))}")
     return {
@@ -484,6 +532,7 @@ def _review_reader_trace_metadata(
         "requested review path is outside the current review_input": "path_outside_allowlist",
         "operation must be read or list": "invalid_operation",
         "read bounds are outside the permitted limits": "invalid_bounds",
+        "max_bytes too small for truncation marker": "invalid_bounds",
         "list requires a directory": "not_directory",
         "read requires a regular file": "not_file",
     }
