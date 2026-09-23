@@ -271,26 +271,38 @@ LiveCommandBuilder = Callable[[Path, bool, str], Sequence[str]]
 def _desktop_command_builder(
     command: Sequence[str] | LiveCommandBuilder,
     supervisor_data_dir: Path | None = None,
+    native_codex_home: Path | None = None,
 ) -> LiveCommandBuilder:
     """Adapt the legacy base argv to the shared substrate's command seam."""
 
-    if callable(command):
-        return command
-    base = tuple(str(argument) for argument in command)
-    if not base:
+    builder = command if callable(command) else None
+    base = () if builder is not None else tuple(str(argument) for argument in command)
+    if builder is None and not base:
         raise EnvironmentError("live desktop command must not be empty")
 
     def build(config_path: Path, strict_mcp_config: bool, allowed_tools_csv: str) -> Sequence[str]:
-        result = [*base, "--mcp-config", str(config_path)]
-        if supervisor_data_dir is not None:
-            # The adapter reads the supervisor's own release records to grade
-            # the build, and on this path it does not start the server, so it
-            # cannot infer where that state lives. Without this the reader is
-            # silently inert on every live run.
-            result.extend(("--supervisor-data-dir", str(supervisor_data_dir)))
-        if strict_mcp_config:
-            result.append("--strict-mcp-config")
-        result.extend(("--allowedTools", allowed_tools_csv))
+        if builder is not None:
+            result = [str(argument) for argument in builder(config_path, strict_mcp_config, allowed_tools_csv)]
+        else:
+            result = [*base, "--mcp-config", str(config_path)]
+            if supervisor_data_dir is not None:
+                # The adapter reads the supervisor's own release records to grade
+                # the build, and on this path it does not start the server, so it
+                # cannot infer where that state lives. Without this the reader is
+                # silently inert on every live run.
+                result.extend(("--supervisor-data-dir", str(supervisor_data_dir)))
+            if strict_mcp_config:
+                result.append("--strict-mcp-config")
+            result.extend(("--allowedTools", allowed_tools_csv))
+        is_codex_adapter = any("dp_scenarios.runner.codex_adapter" in argument for argument in result)
+        if is_codex_adapter and "--native-continuation" in result:
+            if native_codex_home is None:
+                raise EnvironmentError(
+                    "native Codex continuation requires a private persistent Codex home"
+                )
+            if "--native-state-dir" in result:
+                raise EnvironmentError("native Codex state directory is runner-owned")
+            result.extend(("--native-state-dir", str(native_codex_home)))
         return result
 
     return build
@@ -1403,7 +1415,15 @@ class RunEnvironment:
                             agent_transport_environment.pop(key, None)
 
                 transport = DesktopStdioTransport.create(
-                    _desktop_command_builder(self.live_command, supervisor_data_dir),
+                    _desktop_command_builder(
+                        self.live_command,
+                        supervisor_data_dir,
+                        (
+                            base / "provider-state" / "codex-home"
+                            if self.native_continuation
+                            else None
+                        ),
+                    ),
                     environment=agent_transport_environment,
                     cwd=self.live_cwd or (base / "agent"),
                     server_command=self.supervisor_command,

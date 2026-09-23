@@ -440,7 +440,29 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             }
         )
         assert forwarded["result"]["forwarded_tool"] == "supervisor_tool"
-        assert "must-not-be-read" not in session.trace_path.read_text()
+        trace_text = session.trace_path.read_text()
+        assert "must-not-be-read" not in trace_text
+        assert "Approved blueprint" not in trace_text
+        assert str(blueprint) not in trace_text
+        assert str(capture) not in trace_text
+        reader_summaries = [
+            json.loads(line)["review_reader_summary"]
+            for line in trace_text.splitlines()
+            if '"review_reader_summary"' in line
+        ]
+        assert len(reader_summaries) == 4
+        assert any(
+            summary["operation"] == "read"
+            and summary["path_class"] == "blueprint"
+            and summary["error_code"] == "ok"
+            and summary["output_bytes"] > 0
+            for summary in reader_summaries
+        )
+        assert any(
+            summary["path_class"] == "outside_allowlist"
+            and summary["error_code"] == "path_outside_allowlist"
+            for summary in reader_summaries
+        )
         if proxy.stdin is not None:
             proxy.stdin.close()
         assert proxy.wait(timeout=10) == 0
@@ -472,6 +494,34 @@ def test_review_reader_is_advertised_but_fails_closed_without_a_live_allowlist(t
         tmp_path / "missing-review-allowlist.json",
     )
     assert response["isError"] is True
+
+
+def test_review_reader_summarizes_malformed_calls_without_retaining_input(tmp_path):
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text(
+        json.dumps({"retained_capture_root": str(capture)}), encoding="utf-8"
+    )
+    request = {
+        "params": {
+            "arguments": {
+                "path": str(capture),
+                "operation": [],
+            }
+        }
+    }
+
+    result = ds._review_reader_result(request, allowlist)
+    summary = ds._review_reader_trace_metadata(
+        request, result, allowlist, elapsed_ms=1.25
+    )
+
+    assert result["isError"] is True
+    assert summary["operation"] == "invalid"
+    assert summary["path_class"] == "capture_root"
+    assert summary["error_code"] == "invalid_operation"
+    assert summary["elapsed_ms"] == 1.25
 
 
 def test_review_reader_discovered_before_capture_works_after_allowlist_publish(tmp_path):

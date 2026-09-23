@@ -15,12 +15,14 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -28,7 +30,10 @@ from typing import Any
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
+    CODEX_PROVIDER_ERROR,
+    CODEX_PROVIDER_RETRY_PENDING,
     CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
+    PROVIDER_SESSION_LIMIT,
     classify_failure_reason,
     first_reason,
 )
@@ -39,7 +44,6 @@ from dp_scenarios.runner.claude_adapter import (
     _changed_files,
     _load_desktop_stdio,
     _mcp_name,
-    _payload_from_call,
     _snapshot_workspace,
     _update_from_state_dir,
     _update_machine_artifacts,
@@ -54,12 +58,26 @@ from dp_scenarios.runner.review_guard import (
 class CodexAdapterError(RuntimeError):
     """The Codex bridge could not satisfy one turn."""
 
-    def __init__(self, message: str, *, reason: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str | None = None,
+        safe_diagnostic: bool = False,
+    ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.safe_diagnostic = safe_diagnostic
+
+
+class CodexAppServerEOF(CodexAdapterError):
+    """The app-server process closed stdout before returning another event."""
 
 
 CODEX_FILE_CHANGE_FAILURE = "codex_file_change_failed"
+_CODEX_PROVIDER_FAILURE_REASONS = frozenset(
+    {CODEX_PROVIDER_ERROR, CODEX_PROVIDER_RETRY_PENDING, PROVIDER_SESSION_LIMIT}
+)
 _FILE_CHANGE_FAILURE_STATUSES = frozenset(
     {"failed", "error", "rejected", "cancelled", "canceled"}
 )
@@ -73,6 +91,8 @@ def _codex_timeout_failure_reason(
 ) -> str:
     """Classify a Codex timeout without changing provider-neutral fallbacks."""
 
+    if CODEX_PROVIDER_RETRY_PENDING in str(error):
+        return CODEX_PROVIDER_RETRY_PENDING
     classified = classify_failure_reason(str(error) + detail)
     if classified is not None:
         return classified
@@ -213,7 +233,7 @@ collaboration argument shapes are strict: call `wait` as
 array key, never `target` or `ids`, and never an empty array). Do not make
 another Bash/MCP call or produce a final answer before that wait completes.
 If `wait` reports the child as completed but returns no non-empty message, do
-not treat that as terminal claims: issue `wait` once more with the same target.
+not treat that as terminal claims: issue `wait` once more with the same `targets` array.
 If the repeated wait is still empty, leave the review incomplete and report
 the missing child claims rather than closing the child or fabricating a result.
 Do not call `sendInput`, `resumeAgent`, or `closeAgent` for this one-shot
@@ -565,14 +585,68 @@ def _collab_debug_label(item: Mapping[str, object]) -> str:
 
 
 def _merge_collab_item(
-    base: Mapping[str, object], update: Mapping[str, object]
+    base: Mapping[str, object],
+    update: Mapping[str, object],
+    *,
+    receiver_ids: set[str] | None = None,
 ) -> dict[str, object]:
-    """Merge a later wait/update snapshot into its original spawn item."""
+    """Merge only one spawn's child state from a later wait snapshot."""
 
+    receiver_scoped = receiver_ids is not None
     merged = dict(base)
-    for key in ("status", "agentsStates", "receiverThreadIds"):
-        if key in update:
-            merged[key] = update[key]
+    # A wait item's status is aggregate across all of its targets. Copying it
+    # onto each spawn can turn a still-running child into a failure (or mark a
+    # successful child failed because a sibling failed).
+    if receiver_ids is None and "status" in update:
+        merged["status"] = update["status"]
+
+    if receiver_ids is None:
+        receiver_ids = _collab_receiver_ids(base) | _collab_receiver_ids(update)
+    base_states = base.get("agentsStates")
+    update_states = update.get("agentsStates")
+    if isinstance(base_states, Mapping) or isinstance(update_states, Mapping):
+        if receiver_ids:
+            states = {
+                receiver_id: base_states[receiver_id]
+                for receiver_id in receiver_ids
+                if isinstance(base_states, Mapping) and receiver_id in base_states
+            }
+            if isinstance(update_states, Mapping):
+                states.update(
+                    {
+                        receiver_id: update_states[receiver_id]
+                        for receiver_id in receiver_ids
+                        if receiver_id in update_states
+                    }
+                )
+        else:
+            # Some spawn completions provide child state before a receiver id
+            # is available. Preserve that one spawn's own snapshot until a
+            # later singleton wait can bind it safely.
+            states = dict(base_states) if isinstance(base_states, Mapping) else {}
+            if isinstance(update_states, Mapping):
+                states.update(update_states)
+        merged["agentsStates"] = states
+        if receiver_scoped and states:
+            child_statuses = [
+                state.get("status")
+                for state in states.values()
+                if isinstance(state, Mapping) and isinstance(state.get("status"), str)
+            ]
+            if any(status in _COLLAB_FAILURE_STATUSES for status in child_statuses):
+                merged["status"] = "failed"
+            elif child_statuses and all(
+                status in _COLLAB_SUCCESS_STATUSES for status in child_statuses
+            ):
+                merged["status"] = "completed"
+            elif child_statuses:
+                merged["status"] = "inProgress"
+
+    merged.pop("receiverThreadId", None)
+    if receiver_ids:
+        merged["receiverThreadIds"] = sorted(receiver_ids)
+    else:
+        merged.pop("receiverThreadIds", None)
     return merged
 
 
@@ -587,6 +661,69 @@ def _collab_receiver_ids(item: Mapping[str, object]) -> set[str]:
     return result
 
 
+def _collab_status_label(item: Mapping[str, object]) -> str:
+    """Return only allow-listed child lifecycle labels, never ids or messages."""
+
+    states = item.get("agentsStates", item.get("agents_states"))
+    if not isinstance(states, Mapping):
+        return "unreported"
+    allowed = {
+        "pendingInit",
+        "running",
+        "completed",
+        "failed",
+        "errored",
+        "stopped",
+        "cancelled",
+        "canceled",
+    }
+    labels: set[str] = set()
+    for state in states.values():
+        if not isinstance(state, Mapping):
+            labels.add("other")
+            continue
+        status = state.get("status")
+        labels.add(status if isinstance(status, str) and status in allowed else "other")
+    return ",".join(sorted(labels)) if labels else "unreported"
+
+
+def _completed_reviewer_wait_ids(
+    event: Mapping[str, object], receiver_ids: set[str]
+) -> set[str]:
+    """Return only tracked reviewers with their own terminal wait result."""
+
+    if event.get("type") != "item.completed":
+        return set()
+    item = event.get("item")
+    if (
+        not isinstance(item, Mapping)
+        or item.get("type") not in {"collabAgentToolCall", "collab_agent_tool_call"}
+        or item.get("tool") != "wait"
+    ):
+        return set()
+    matched_ids = receiver_ids & _collab_receiver_ids(item)
+    states = item.get("agentsStates")
+    if not isinstance(states, Mapping):
+        return set()
+    completed: set[str] = set()
+    for receiver_id in matched_ids:
+        state = states.get(receiver_id)
+        if not isinstance(state, Mapping):
+            continue
+        status = state.get("status")
+        if status in _COLLAB_FAILURE_STATUSES:
+            completed.add(receiver_id)
+            continue
+        message = state.get("message")
+        if (
+            status in _COLLAB_SUCCESS_STATUSES
+            and isinstance(message, str)
+            and message.strip()
+        ):
+            completed.add(receiver_id)
+    return completed
+
+
 def _update_reviewer_deadline(
     event: Mapping[str, object],
     receiver_ids: set[str],
@@ -595,7 +732,7 @@ def _update_reviewer_deadline(
     now: float,
     review_deadline_ms: float = REVIEW_DEADLINE_MS,
 ) -> tuple[set[str], float | None]:
-    """Arm the bounded reviewer clock for the current parent turn."""
+    """Arm reviewer time at spawn and clear it after matching terminal claims."""
 
     if event.get("type") not in {"item.started", "item.completed"}:
         return receiver_ids, deadline_at
@@ -616,10 +753,13 @@ def _update_reviewer_deadline(
         if deadline_at is None:
             deadline_at = now + review_deadline_ms / 1000.0
         return receiver_ids, deadline_at
+    completed_ids = _completed_reviewer_wait_ids(event, receiver_ids)
+    if completed_ids:
+        receiver_ids.difference_update(completed_ids)
+        if not receiver_ids:
+            deadline_at = None
     # ``closeAgent`` only reports that the collaboration handle was closed;
-    # it does not prove that the child returned terminal claims. Keep the
-    # absolute per-turn deadline armed until the parent turn terminates. The
-    # state is recreated for every turn, so no explicit cleanup is needed.
+    # it does not prove that the child returned terminal claims.
     return receiver_ids, deadline_at
 
 
@@ -649,6 +789,109 @@ def _update_reviewer_deadline_from_events(
             review_deadline_ms=review_deadline_ms,
         )
     return receiver_ids, deadline_at
+
+
+def _codex_timeout_detail(error: TimeoutError, *, parent_turn_limit_s: float) -> str:
+    """Report the deadline that actually fired, while preserving the parent limit."""
+
+    message = str(error).strip() or "Codex app-server operation deadline expired"
+    return f"{message}; parent_turn_limit={parent_turn_limit_s:.1f}s"
+
+
+def _codex_turn_progress_detail(
+    *,
+    turn_started_at: float,
+    now: float,
+    last_event_at: float,
+    last_event_label: str,
+    reviewer_spawned_at: float | None,
+    reviewer_wait_started_at: float | None,
+    reviewer_completed_at: float | None,
+    reviewer_result_ready: bool,
+    reviewer_deadline_at: float | None,
+    reviewer_wait_count: int,
+    reviewer_wait_target: str,
+    reviewer_child_status: str,
+    reviewer_child_started: bool,
+) -> str:
+    """Summarize timeout timing without including event arguments or results."""
+
+    elapsed = max(0.0, now - turn_started_at)
+    idle = max(0.0, now - last_event_at)
+    last_event_offset = max(0.0, last_event_at - turn_started_at)
+    if reviewer_completed_at is not None:
+        phase = "completed"
+    elif reviewer_wait_started_at is not None:
+        phase = "waiting"
+    elif reviewer_spawned_at is not None:
+        phase = "spawned"
+    else:
+        phase = "not_started"
+    reviewer = [f"phase={phase}"]
+    if reviewer_spawned_at is not None:
+        reviewer.append(f"spawn_at=+{max(0.0, reviewer_spawned_at - turn_started_at):.1f}s")
+    if reviewer_wait_started_at is not None:
+        reviewer.append(
+            f"wait_at=+{max(0.0, reviewer_wait_started_at - turn_started_at):.1f}s"
+        )
+    if reviewer_completed_at is not None:
+        reviewer.append(
+            f"complete_at=+{max(0.0, reviewer_completed_at - turn_started_at):.1f}s"
+        )
+        reviewer.append(f"result_ready={str(reviewer_result_ready).lower()}")
+    if reviewer_deadline_at is None:
+        reviewer.append("deadline=cleared" if reviewer_completed_at is not None else "deadline=not_armed")
+    else:
+        reviewer.append(
+            f"deadline_at=+{max(0.0, reviewer_deadline_at - turn_started_at):.1f}s"
+        )
+    reviewer.extend(
+        (
+            f"wait_calls={reviewer_wait_count}",
+            f"wait_target={reviewer_wait_target}",
+            f"child_status={reviewer_child_status}",
+            f"child_started={str(reviewer_child_started).lower()}",
+        )
+    )
+    return (
+        f"turn_elapsed={elapsed:.1f}s; idle_for={idle:.1f}s; "
+        f"last_event={last_event_label}@+{last_event_offset:.1f}s; "
+        "reviewer=" + ",".join(reviewer)
+    )
+
+
+def _validate_persistent_codex_config(
+    config_path: Path, *, workspace: Path
+) -> None:
+    """Allow only Codex's local trust marker in a persisted native home."""
+
+    try:
+        payload = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        raise CodexAdapterError(
+            "native Codex continuation config is unreadable or invalid"
+        ) from exc
+    if set(payload) - {"projects"}:
+        raise CodexAdapterError(
+            "native Codex continuation config contains unexpected settings"
+        )
+    projects = payload.get("projects", {})
+    if not isinstance(projects, Mapping):
+        raise CodexAdapterError(
+            "native Codex continuation project trust config is malformed"
+        )
+    allowed_projects = {str(workspace.resolve())}
+    for project, settings in projects.items():
+        if project not in allowed_projects:
+            raise CodexAdapterError(
+                "native Codex continuation config contains an unapproved project"
+            )
+        if not isinstance(settings, Mapping) or dict(settings) != {
+            "trust_level": "trusted"
+        }:
+            raise CodexAdapterError(
+                "native Codex continuation project trust config is unexpected"
+            )
 
 
 def _reviewer_wait_without_target(
@@ -687,6 +930,239 @@ def _reviewer_wait_without_target(
     )
 
 
+_CODEX_ERROR_VARIANTS = frozenset(
+    {
+        "usageLimitExceeded",
+        "sessionBudgetExceeded",
+        "rateLimitExceeded",
+        "serverOverloaded",
+        "unauthorized",
+        "badRequest",
+        "contextWindowExceeded",
+        "internalError",
+    }
+)
+_CODEX_LIMIT_VARIANTS = frozenset(
+    {"usageLimitExceeded", "sessionBudgetExceeded", "rateLimitExceeded"}
+)
+_CODEX_PROVIDER_ERROR_GRACE_S = 1.0
+
+
+def _safe_http_status(value: object) -> int | None:
+    if type(value) is int and 100 <= value <= 599:
+        return value
+    return None
+
+
+def _codex_error_payload(error: Mapping[str, object]) -> dict[str, object]:
+    """Extract only recognized variant/status metadata from a Codex error."""
+
+    info = error.get("codexErrorInfo")
+    variant = "unknown"
+    status_containers: list[Mapping[str, object]] = []
+    if isinstance(info, str) and info in _CODEX_ERROR_VARIANTS:
+        variant = info
+    elif isinstance(info, Mapping):
+        status_containers.append(info)
+        for key in ("kind", "type", "code"):
+            candidate = info.get(key)
+            if isinstance(candidate, str) and candidate in _CODEX_ERROR_VARIANTS:
+                variant = candidate
+                break
+        if variant == "unknown":
+            for key, value in info.items():
+                if key in _CODEX_ERROR_VARIANTS:
+                    variant = key
+                    if isinstance(value, Mapping):
+                        status_containers.append(value)
+                    break
+                if isinstance(value, Mapping):
+                    status_containers.append(value)
+    status_containers.append(error)
+    status = next(
+        (
+            safe_status
+            for container in status_containers
+            if (safe_status := _safe_http_status(container.get("httpStatusCode")))
+            is not None
+        ),
+        None,
+    )
+    if variant == "unknown" and status is not None:
+        variant = "http_error"
+    return {
+        "variant": variant,
+        "http_status": status,
+        "details_present": "additionalDetails" in error,
+        "misalignment_present": "misalignment" in error,
+    }
+
+
+def _codex_provider_error(event: Mapping[str, object]) -> dict[str, object] | None:
+    """Project an app-server error notification onto safe, allow-listed fields.
+
+    Thread and turn identities are returned only for an in-memory equality
+    check in ``_collect_turn``. Provider prose, details and misalignment data
+    are never copied into the projection.
+    """
+
+    if event.get("method") != "error":
+        return None
+    params = event.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    error = params.get("error")
+    if not isinstance(error, Mapping):
+        error = {}
+    return {
+        "thread_id": params.get("threadId") if isinstance(params.get("threadId"), str) else None,
+        "turn_id": params.get("turnId") if isinstance(params.get("turnId"), str) else None,
+        "will_retry": params.get("willRetry") if isinstance(params.get("willRetry"), bool) else None,
+        **_codex_error_payload(error),
+    }
+
+
+def _codex_provider_error_matches_root(
+    error: Mapping[str, object], *, thread_id: str | None, turn_id: str
+) -> bool:
+    """Require both app-server identities to match before affecting the root."""
+
+    return bool(
+        isinstance(thread_id, str)
+        and error.get("thread_id") == thread_id
+        and error.get("turn_id") == turn_id
+    )
+
+
+def _codex_root_progress_event(
+    event: Mapping[str, object], *, thread_id: str | None, turn_id: str
+) -> bool:
+    """Whether a notification is progress on the active root turn."""
+
+    if event.get("method") not in {
+        "turn/started",
+        "item/started",
+        "item/completed",
+        "item/agentMessage/delta",
+        "item/reasoning/textDelta",
+        "item/reasoning/summaryTextDelta",
+        "item/reasoning/summaryPartAdded",
+        "item/commandExecution/outputDelta",
+        "item/mcpToolCall/progress",
+        "thread/tokenUsage/updated",
+        "turn/diff/updated",
+        "turn/plan/updated",
+    }:
+        return False
+    params = event.get("params")
+    if not isinstance(params, Mapping):
+        return False
+    reported_thread = params.get("threadId")
+    if event.get("method") == "turn/started":
+        turn = params.get("turn")
+        reported_turn = turn.get("id") if isinstance(turn, Mapping) else None
+    else:
+        reported_turn = params.get("turnId")
+    return bool(
+        isinstance(thread_id, str)
+        and reported_thread == thread_id
+        and reported_turn == turn_id
+    )
+
+
+def _codex_event_matches_root_turn(
+    event: Mapping[str, object], *, thread_id: str | None, turn_id: str
+) -> bool:
+    """Reject raw app-server events not scoped to the active root thread/turn."""
+
+    method = event.get("method")
+    if method == "error":
+        error = _codex_provider_error(event)
+        return error is not None and _codex_provider_error_matches_root(
+            error, thread_id=thread_id, turn_id=turn_id
+        )
+    if method == "turn/completed":
+        params = event.get("params")
+        turn = params.get("turn") if isinstance(params, Mapping) else None
+        return bool(
+            isinstance(thread_id, str)
+            and isinstance(params, Mapping)
+            and params.get("threadId") == thread_id
+            and isinstance(turn, Mapping)
+            and turn.get("id") == turn_id
+        )
+    if method in {
+        "turn/started",
+        "item/started",
+        "item/completed",
+        "item/agentMessage/delta",
+        "item/reasoning/textDelta",
+        "item/reasoning/summaryTextDelta",
+        "item/reasoning/summaryPartAdded",
+        "item/commandExecution/outputDelta",
+        "item/mcpToolCall/progress",
+        "thread/tokenUsage/updated",
+        "turn/diff/updated",
+        "turn/plan/updated",
+    }:
+        return _codex_root_progress_event(
+            event, thread_id=thread_id, turn_id=turn_id
+        )
+    # Startup notifications and legacy, already-normalized test events are not
+    # root-turn scoped and remain available to their existing handlers.
+    return True
+
+
+def _safe_turn_failure_detail(error: object) -> str | None:
+    """Keep only an exact adapter-generated provider diagnostic or a code."""
+
+    if not isinstance(error, str) or not error.strip():
+        return None
+    safe_variants = "|".join(
+        re.escape(value) for value in sorted(_CODEX_ERROR_VARIANTS | {"http_error", "unknown"})
+    )
+    pattern = (
+        r"(?:Codex app-server reported a non-retryable provider error "
+        r"|codex_provider_retry_pending )"
+        rf"\(variant=(?:{safe_variants}), http_status=(?:unknown|[1-5][0-9]{{2}}), "
+        r"details_present=(?:true|false), misalignment_present=(?:true|false)\)"
+    )
+    if re.fullmatch(pattern, error):
+        return error
+    reason = classify_failure_reason(error)
+    if reason is not None:
+        return f"Codex app-server turn failed ({reason})"
+    return "Codex app-server turn failed"
+
+
+def _codex_provider_error_reason(error: Mapping[str, object]) -> str:
+    if error.get("variant") in _CODEX_LIMIT_VARIANTS or error.get("http_status") == 429:
+        return PROVIDER_SESSION_LIMIT
+    return CODEX_PROVIDER_ERROR
+
+
+def _codex_provider_error_detail(
+    error: Mapping[str, object], *, retry_pending: bool = False
+) -> str:
+    variant = error.get("variant")
+    safe_variants = _CODEX_ERROR_VARIANTS | {"http_error", "unknown"}
+    safe_variant = (
+        variant if isinstance(variant, str) and variant in safe_variants else "unknown"
+    )
+    status = error.get("http_status")
+    status_text = str(status) if _safe_http_status(status) is not None else "unknown"
+    prefix = (
+        "codex_provider_retry_pending"
+        if retry_pending
+        else "Codex app-server reported a non-retryable provider error"
+    )
+    return (
+        f"{prefix} (variant={safe_variant}, http_status={status_text}, "
+        f"details_present={str(error.get('details_present') is True).lower()}, "
+        f"misalignment_present={str(error.get('misalignment_present') is True).lower()})"
+    )
+
+
 def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, object]:
     """Map one app-server notification to the adapter's event vocabulary."""
 
@@ -694,6 +1170,10 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
     params = event.get("params")
     if not isinstance(method, str) or not isinstance(params, Mapping):
         return event
+    if method == "error":
+        # Never pass provider messages, details, identifiers or misalignment
+        # payloads into transcript/report parsing.
+        return {"type": "provider_error"}
     if method == "thread/started":
         thread = params.get("thread")
         thread_id = thread.get("id") if isinstance(thread, Mapping) else None
@@ -703,6 +1183,15 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         status = turn.get("status") if isinstance(turn, Mapping) else None
         usage = turn.get("usage") if isinstance(turn, Mapping) else params.get("usage")
+        raw_error = turn.get("error") if isinstance(turn, Mapping) else None
+        safe_error = None
+        if raw_error is not None:
+            safe_payload = (
+                raw_error if isinstance(raw_error, Mapping) else {}
+            )
+            safe_error = _codex_provider_error_detail(
+                _codex_error_payload(safe_payload)
+            )
         event_type = {
             "completed": "turn.completed",
             "interrupted": "turn.interrupted",
@@ -711,7 +1200,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             "type": event_type,
             "turn_id": turn_id,
             "is_error": status != "completed",
-            "error": turn.get("error") if isinstance(turn, Mapping) else None,
+            "error": safe_error,
             "usage": usage,
         }
     if method == "turn/started":
@@ -723,8 +1212,7 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             return {"type": "mcp_server_status"}
         return {
             "type": "mcp_server_failed",
-            "server": params.get("name"),
-            "error": params.get("error") or params.get("failureReason") or "startup failed",
+            "error": "MCP server startup failed",
         }
     if method in {"item/started", "item/completed"}:
         item = params.get("item")
@@ -847,6 +1335,7 @@ def parse_codex_events(
     build_failures = 0
     environment_details: list[str] = []
     partial_answer: list[str] = []
+    seen_collab_receiver_ids: set[str] = set()
 
     def record_collab_call(
         started: Mapping[str, object], completed: Mapping[str, object]
@@ -873,11 +1362,15 @@ def parse_codex_events(
         )
 
     for event in events:
+        if root_turn_id is not None and not _codex_event_matches_root_turn(
+            event, thread_id=thread_id, turn_id=root_turn_id
+        ):
+            continue
         event = _normalise_app_server_event(event)
         event_type = event.get("type")
         if event_type == "thread.started":
             value = event.get("thread_id")
-            if isinstance(value, str) and value:
+            if isinstance(value, str) and value and not thread_id:
                 thread_id = value
             continue
         if event_type == "turn.failed":
@@ -887,8 +1380,9 @@ def parse_codex_events(
             terminal_subtype = "failed"
             terminal_is_error = True
             error = event.get("error")
-            detail = error if isinstance(error, str) else json.dumps(error, default=str)
-            environment_details.append(detail)
+            detail = _safe_turn_failure_detail(error)
+            if detail is not None:
+                environment_details.append(detail)
             continue
         if event_type == "turn.interrupted":
             if root_turn_id is not None and event.get("turn_id") != root_turn_id:
@@ -896,6 +1390,9 @@ def parse_codex_events(
             terminal_count += 1
             terminal_subtype = "interrupted"
             terminal_is_error = True
+            error = event.get("error")
+            if isinstance(error, str) and error.strip():
+                environment_details.append(redact_text(error))
             continue
         if event_type == "turn.completed":
             if root_turn_id is not None and event.get("turn_id") != root_turn_id:
@@ -917,9 +1414,7 @@ def parse_codex_events(
                 token_usage_seen = True
             continue
         if event_type == "mcp_server_failed":
-            environment_details.append(
-                f"MCP server {event.get('server', 'unknown')} failed: {event.get('error', 'startup failed')}"
-            )
+            environment_details.append("MCP server startup failed")
             continue
         if event_type == "agent_message_delta":
             delta = event.get("delta")
@@ -973,9 +1468,11 @@ def parse_codex_events(
             tool = item.get("tool")
             key = str(item.get("id") or f"Agent:{len(calls)}")
             if tool == "spawnAgent" and event_type == "item.started":
+                seen_collab_receiver_ids.update(_collab_receiver_ids(item))
                 pending_collab[key] = item
                 continue
             if tool == "spawnAgent" and event_type == "item.completed":
+                seen_collab_receiver_ids.update(_collab_receiver_ids(item))
                 started = pending_collab.get(key, item)
                 candidate = _merge_collab_item(started, item)
                 if not _collab_result_ready(candidate):
@@ -989,21 +1486,30 @@ def parse_codex_events(
                 continue
             if tool == "wait" and event_type == "item.completed":
                 wait_ids = _collab_receiver_ids(item)
-                matches = [
-                    pending_key
-                    for pending_key, pending_item in pending_collab.items()
-                    if wait_ids & _collab_receiver_ids(pending_item)
-                ]
-                if not matches and len(pending_collab) == 1:
-                    matches = [next(iter(pending_collab))]
-                for pending_key in matches:
+                fresh_wait_ids = wait_ids - seen_collab_receiver_ids
+                matches: dict[str, set[str]] = {}
+                unidentified: list[str] = []
+                for pending_key, pending_item in pending_collab.items():
+                    pending_ids = _collab_receiver_ids(pending_item)
+                    matched_ids = wait_ids & pending_ids
+                    if matched_ids:
+                        matches[pending_key] = matched_ids
+                    elif not pending_ids:
+                        unidentified.append(pending_key)
+                if len(unidentified) == 1 and len(fresh_wait_ids) == 1:
+                    matches[unidentified[0]] = set(fresh_wait_ids)
+                    seen_collab_receiver_ids.update(fresh_wait_ids)
+                for pending_key, matched_ids in matches.items():
                     started = pending_collab[pending_key]
-                    candidate = _merge_collab_item(started, item)
+                    candidate = _merge_collab_item(
+                        started, item, receiver_ids=matched_ids
+                    )
                     if not _collab_result_ready(candidate):
                         pending_collab[pending_key] = candidate
                         continue
                     pending_collab.pop(pending_key, None)
                     record_collab_call(started, candidate)
+                seen_collab_receiver_ids.update(wait_ids)
             continue
         if item_type not in {"mcp_tool_call", "mcp_tool_result"}:
             continue
@@ -1131,6 +1637,7 @@ class CodexAdapter:
         review_timeout_seconds: float | None = None,
         native_continuation: bool = False,
         resume_session_id: str | None = None,
+        native_state_dir: Path | None = None,
     ) -> None:
         self.codex = codex
         self.model = model
@@ -1155,6 +1662,7 @@ class CodexAdapter:
         )
         self._review_deadline_ms = self.review_timeout_seconds * 1000.0
         self.native_continuation = bool(native_continuation)
+        self.native_state_dir = native_state_dir
         self._thread_id = resume_session_id
         self._active_turn_id: str | None = None
         self._started = False
@@ -1181,6 +1689,10 @@ class CodexAdapter:
         if resume_session_id is not None:
             if not isinstance(resume_session_id, str) or not resume_session_id.strip():
                 raise CodexAdapterError("Codex session identity must be a non-empty opaque string")
+        if native_continuation and native_state_dir is None:
+            raise CodexAdapterError("native Codex continuation requires a private persistent state directory")
+        if native_state_dir is not None and not native_continuation:
+            raise CodexAdapterError("--native-state-dir requires native continuation mode")
 
     def _load_redactors(self) -> tuple[Any, Any]:
         _stdio_type, redact_json_rpc, redact_text = _load_desktop_stdio(self.repo_root)
@@ -1215,8 +1727,16 @@ class CodexAdapter:
             "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
         ):
             environment.pop(key, None)
-        self._codex_home_temp = self._isolated_codex_home(environment)
-        if self._codex_home_temp is not None:
+        if self.native_continuation:
+            assert self.native_state_dir is not None
+            codex_home = self._persistent_native_codex_home(
+                self.native_state_dir,
+                environment,
+                resuming=self._thread_id is not None,
+            )
+            environment["CODEX_HOME"] = str(codex_home)
+        else:
+            self._codex_home_temp = self._isolated_codex_home(environment)
             environment["CODEX_HOME"] = self._codex_home_temp.name
         try:
             self._process = subprocess.Popen(
@@ -1262,6 +1782,83 @@ class CodexAdapter:
                 os.symlink(auth, home / "auth.json")
         return temporary
 
+    def _persistent_native_codex_home(
+        self,
+        state_dir: Path,
+        environment: Mapping[str, str],
+        *,
+        resuming: bool,
+    ) -> Path:
+        """Open private app-server state that survives adapter process restarts.
+
+        This directory is a sibling of the agent workspace, scoped to one
+        persistent scenario/epoch root. The provider may keep transcripts and
+        tool results here, so the directory is private and is never bundled
+        with report evidence. Only the host-owned auth handle is symlinked.
+        """
+
+        workspace = Path.cwd().resolve()
+        run_root = workspace.parent
+        expected = run_root / "provider-state" / "codex-home"
+        selected = state_dir.expanduser().absolute()
+        if selected != expected or selected.is_relative_to(workspace):
+            raise CodexAdapterError(
+                "native Codex state must be the runner-owned private directory beside the agent workspace"
+            )
+        parent = expected.parent
+        if parent.is_symlink():
+            raise CodexAdapterError("native Codex state parent must not be a symlink")
+        if resuming:
+            if not parent.is_dir() or not expected.is_dir() or expected.is_symlink():
+                raise CodexAdapterError("native Codex continuation state directory is missing or unsafe")
+            if parent.stat().st_mode & 0o077 or expected.stat().st_mode & 0o077:
+                raise CodexAdapterError("native Codex continuation state must be owner-only")
+            project_config_dir = workspace / ".codex"
+            if project_config_dir.exists() or project_config_dir.is_symlink():
+                raise CodexAdapterError(
+                    "native Codex continuation refuses workspace-local Codex project config"
+                )
+            config = expected / "config.toml"
+            if config.is_symlink() or not config.is_file():
+                raise CodexAdapterError("native Codex continuation config is missing or unsafe")
+            if config.stat().st_mode & 0o077:
+                raise CodexAdapterError("native Codex continuation config must be owner-only")
+            _validate_persistent_codex_config(
+                config,
+                workspace=workspace,
+            )
+        else:
+            if expected.exists() or expected.is_symlink():
+                raise CodexAdapterError("native Codex state directory is already occupied")
+            if parent.exists() and (not parent.is_dir() or any(parent.iterdir())):
+                raise CodexAdapterError("native Codex state parent is occupied or unsafe")
+            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            parent.chmod(0o700)
+            expected.mkdir(mode=0o700)
+            config = expected / "config.toml"
+            config.write_text(
+                "# dp-scenarios app-server home; MCP is supplied by the runner.\n",
+                encoding="utf-8",
+            )
+            config.chmod(0o600)
+
+        source_value = environment.get("CODEX_HOME")
+        host_auth = (
+            Path(source_value).expanduser().absolute() / "auth.json"
+            if isinstance(source_value, str) and source_value
+            else None
+        )
+        auth_link = expected / "auth.json"
+        if host_auth is not None and host_auth.is_file():
+            if resuming:
+                if not auth_link.is_symlink() or os.readlink(auth_link) != str(host_auth):
+                    raise CodexAdapterError("native Codex auth handle differs from the host-owned link")
+            else:
+                auth_link.symlink_to(host_auth)
+        elif auth_link.is_symlink() or auth_link.exists():
+            raise CodexAdapterError("native Codex auth handle is unavailable or unsafe")
+        return expected
+
     def _app_server_command(self) -> list[str]:
         """Build the long-lived Codex app-server command."""
 
@@ -1274,6 +1871,10 @@ class CodexAdapter:
             "multi_agent",
             "-c",
             'approval_policy="never"',
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+            "-c",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
             "-c",
             f"model_reasoning_effort={_toml_string(self.effort)}",
         ]
@@ -1313,6 +1914,10 @@ class CodexAdapter:
         return {
             "approval_policy": "never",
             "model_reasoning_effort": self.effort,
+            "sandbox_workspace_write": {
+                "exclude_slash_tmp": True,
+                "exclude_tmpdir_env_var": True,
+            },
             "mcp_servers": {"nxd-desktop": self._mcp_server_config()},
         }
 
@@ -1381,11 +1986,11 @@ class CodexAdapter:
         if process is None or process.stdout is None or process.stderr is None:
             raise CodexAdapterError("Codex app-server streams are unavailable")
         while True:
+            if self._stdout_events:
+                return self._stdout_events.popleft()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Codex app-server response deadline expired")
-            if self._stdout_events:
-                return self._stdout_events.popleft()
             streams = [process.stdout]
             if self._stderr_open:
                 streams.append(process.stderr)
@@ -1406,10 +2011,9 @@ class CodexAdapter:
                     continue
                 chunk = os.read(process.stdout.fileno(), 65536)
                 if not chunk:
-                    detail = "\n".join(self._stderr_tail)[-2000:]
-                    raise CodexAdapterError(
-                        "Codex app-server exited before returning an event"
-                        + (f": {detail}" if detail else "")
+                    raise CodexAppServerEOF(
+                        "Codex app-server exited before returning an event",
+                        reason=CHILD_EXITED_EARLY,
                     )
                 self._stdout_buffer += chunk
                 while b"\n" in self._stdout_buffer:
@@ -1478,7 +2082,7 @@ class CodexAdapter:
         )
         response, events = self._read_until_response(initialize_id, time.monotonic() + self.timeout_s)
         if "error" in response:
-            raise CodexAdapterError(f"Codex app-server initialize failed: {response['error']}")
+            raise CodexAdapterError("Codex app-server initialize request failed")
         self._startup_events.extend(events)
         self._write_rpc("initialized", {})
         request_method = "thread/resume" if self._thread_id is not None else "thread/start"
@@ -1487,7 +2091,7 @@ class CodexAdapter:
         self._write_rpc(request_method, params, request_id=request_id)
         response, events = self._read_until_response(request_id, time.monotonic() + self.timeout_s)
         if "error" in response:
-            raise CodexAdapterError(f"Codex app-server {request_method} failed: {response['error']}")
+            raise CodexAdapterError(f"Codex app-server {request_method} request failed")
         self._startup_events.extend(events)
         result = response.get("result")
         thread = result.get("thread") if isinstance(result, Mapping) else None
@@ -1517,7 +2121,7 @@ class CodexAdapter:
             )
             self._startup_events.extend(events)
             if "error" in response:
-                raise CodexAdapterError(f"Codex app-server MCP status failed: {response['error']}")
+                raise CodexAdapterError("Codex app-server MCP status request failed")
             result = response.get("result")
             data = result.get("data") if isinstance(result, Mapping) else None
             if not isinstance(data, list):
@@ -1550,50 +2154,386 @@ class CodexAdapter:
             time.monotonic() + self.timeout_s,
         )
         if "error" in response:
-            raise CodexAdapterError(f"Codex app-server turn/start failed: {response['error']}")
-        events.extend(before_turn)
+            raise CodexAdapterError("Codex app-server turn/start request failed")
         result = response.get("result")
         turn = result.get("turn") if isinstance(result, Mapping) else None
         turn_id = turn.get("id") if isinstance(turn, Mapping) else None
         if not isinstance(turn_id, str) or not turn_id:
             raise CodexAdapterError("Codex app-server turn/start returned no turn identity")
         self._active_turn_id = turn_id
-        deadline = time.monotonic() + self.timeout_s
+        self._turn_failure_reason = None
+        root_thread_id = getattr(self, "_thread_id", None)
+
+        def is_root_event(event: Mapping[str, object]) -> bool:
+            # A successfully initialized production adapter always has a
+            # thread id. Keeping synthetic object.__new__ tests usable does
+            # not weaken the real app-server path.
+            return not isinstance(root_thread_id, str) or _codex_event_matches_root_turn(
+                event, thread_id=root_thread_id, turn_id=turn_id
+            )
+
+        turn_started_at = time.monotonic()
+        deadline = turn_started_at + self.timeout_s
         review_deadline_ms = getattr(self, "_review_deadline_ms", float(REVIEW_DEADLINE_MS))
         review_timeout_seconds = getattr(
             self, "review_timeout_seconds", review_deadline_ms / 1000.0
         )
         reviewer_receiver_ids: set[str] = set()
+        seen_reviewer_receiver_ids: set[str] = set()
+        unidentified_reviewer_spawn_ids: set[str] = set()
         reviewer_deadline_at: float | None = None
+        reviewer_spawned_at: float | None = None
+        reviewer_wait_started_at: float | None = None
+        reviewer_completed_at: float | None = None
+        reviewer_result_ready = False
+        reviewer_wait_count = 0
+        reviewer_wait_target = "unobserved"
+        reviewer_child_status = "unreported"
+        reviewer_child_started = False
+        retryable_provider_error: dict[str, object] | None = None
+        terminal_provider_error: dict[str, object] | None = None
+        provider_error_grace_deadline: float | None = None
+        last_event_at = turn_started_at
+        last_event_label = "turn/start"
+
+        def record_reviewer_lifecycle(
+            event: Mapping[str, object], event_at: float
+        ) -> None:
+            nonlocal reviewer_spawned_at
+            nonlocal reviewer_wait_started_at
+            nonlocal reviewer_completed_at
+            nonlocal reviewer_result_ready
+            nonlocal reviewer_wait_count
+            nonlocal reviewer_wait_target
+            nonlocal reviewer_child_status
+            nonlocal reviewer_child_started
+
+            item = event.get("item")
+            if not isinstance(item, Mapping) or item.get("type") not in {
+                "collabAgentToolCall",
+                "collab_agent_tool_call",
+            }:
+                return
+            tool = item.get("tool")
+            if tool == "spawnAgent":
+                seen_reviewer_receiver_ids.update(_collab_receiver_ids(item))
+                spawn_item_id = item.get("id")
+                if isinstance(spawn_item_id, str) and spawn_item_id:
+                    if _collab_receiver_ids(item):
+                        unidentified_reviewer_spawn_ids.discard(spawn_item_id)
+                    else:
+                        unidentified_reviewer_spawn_ids.add(spawn_item_id)
+            if tool == "spawnAgent" and reviewer_deadline_at is None:
+                # A later reviewer is a new bounded child lifecycle. Clear the
+                # prior review's timestamps and summary before recording this
+                # spawn, otherwise a previous completion masks its deadline.
+                reviewer_spawned_at = event_at
+                reviewer_wait_started_at = None
+                reviewer_completed_at = None
+                reviewer_result_ready = False
+                reviewer_wait_count = 0
+                reviewer_wait_target = "unobserved"
+                reviewer_child_status = "unreported"
+                reviewer_child_started = False
+            status_label = _collab_status_label(item)
+            if status_label != "unreported":
+                reviewer_child_status = status_label
+                reviewer_child_started = reviewer_child_started or bool(
+                    set(status_label.split(","))
+                    & {
+                        "running",
+                        "completed",
+                        "failed",
+                        "errored",
+                        "stopped",
+                        "cancelled",
+                        "canceled",
+                    }
+                )
+            if tool == "spawnAgent" and reviewer_spawned_at is None:
+                reviewer_spawned_at = event_at
+            elif tool == "wait":
+                if event.get("type") == "item.started":
+                    reviewer_wait_count += 1
+                targets = _collab_receiver_ids(item)
+                unassigned_targets = targets - reviewer_receiver_ids
+                fresh_targets = targets - seen_reviewer_receiver_ids
+                if (
+                    len(unidentified_reviewer_spawn_ids) == 1
+                    and len(unassigned_targets) == 1
+                    and len(fresh_targets) == 1
+                ):
+                    # A wait can reveal the receiver id omitted by one spawn.
+                    # Bind only a singleton-to-singleton case; multiple
+                    # candidates remain ungraded rather than cross-attributed.
+                    reviewer_receiver_ids.update(fresh_targets)
+                    seen_reviewer_receiver_ids.update(fresh_targets)
+                    unidentified_reviewer_spawn_ids.clear()
+                # Remember even unmatched targets so a stale wait cannot later
+                # be rebound to a new id-less spawn.
+                seen_reviewer_receiver_ids.update(targets)
+                if not targets:
+                    reviewer_wait_target = "missing"
+                elif not reviewer_receiver_ids:
+                    reviewer_wait_target = "unknown"
+                elif reviewer_receiver_ids <= targets:
+                    reviewer_wait_target = "matched"
+                elif reviewer_receiver_ids & targets:
+                    reviewer_wait_target = "partial"
+                else:
+                    reviewer_wait_target = "mismatched"
+                if (
+                    event.get("type") == "item.started"
+                    and reviewer_spawned_at is not None
+                    and reviewer_wait_started_at is None
+                ):
+                    reviewer_wait_started_at = event_at
+                completed_ids = _completed_reviewer_wait_ids(
+                    event, reviewer_receiver_ids
+                )
+                if completed_ids and completed_ids == reviewer_receiver_ids:
+                    reviewer_completed_at = event_at
+                    reviewer_result_ready = True
+
+        def record_provider_error(
+            event: Mapping[str, object], event_at: float
+        ) -> None:
+            nonlocal retryable_provider_error
+            nonlocal terminal_provider_error
+            nonlocal provider_error_grace_deadline
+
+            error = _codex_provider_error(event)
+            if error is None:
+                if _codex_root_progress_event(
+                    event, thread_id=getattr(self, "_thread_id", None), turn_id=turn_id
+                ):
+                    if terminal_provider_error is not None:
+                        # Keep the terminal provider diagnosis, but allow an
+                        # active root turn to finish its teardown/terminal
+                        # notification. The grace is an idle bound, capped by
+                        # the parent turn deadline.
+                        provider_error_grace_deadline = min(
+                            deadline, event_at + _CODEX_PROVIDER_ERROR_GRACE_S
+                        )
+                    elif retryable_provider_error is not None:
+                        retryable_provider_error = None
+                return
+            if not _codex_provider_error_matches_root(
+                error, thread_id=self._thread_id, turn_id=turn_id
+            ):
+                return
+            if terminal_provider_error is not None:
+                existing_reason = _codex_provider_error_reason(terminal_provider_error)
+                new_reason = _codex_provider_error_reason(error)
+                if error.get("will_retry") is False and (
+                    existing_reason != PROVIDER_SESSION_LIMIT
+                    or new_reason == PROVIDER_SESSION_LIMIT
+                ):
+                    terminal_provider_error = error
+                return
+            if error.get("will_retry") is True:
+                retryable_provider_error = error
+            elif error.get("will_retry") is False:
+                retryable_provider_error = None
+                terminal_provider_error = error
+                provider_error_grace_deadline = min(
+                    deadline, event_at + _CODEX_PROVIDER_ERROR_GRACE_S
+                )
+
+        def observed_provider_reason() -> str | None:
+            error = terminal_provider_error or retryable_provider_error
+            return _codex_provider_error_reason(error) if error is not None else None
+
+        def observed_provider_detail() -> str | None:
+            if terminal_provider_error is not None:
+                return _codex_provider_error_detail(terminal_provider_error)
+            if retryable_provider_error is not None:
+                return _codex_provider_error_detail(
+                    retryable_provider_error, retry_pending=True
+                )
+            return None
+
+        def failed_turn_reason(error: str) -> str:
+            classified = classify_failure_reason(error)
+            observed = observed_provider_reason()
+            if classified == CODEX_PROVIDER_ERROR and observed is not None:
+                return observed
+            return classified or observed or CODEX_PROVIDER_ERROR
+
         if before_turn:
-            reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline_from_events(
-                before_turn,
-                reviewer_receiver_ids,
-                reviewer_deadline_at,
-                now=time.monotonic(),
-                review_deadline_ms=review_deadline_ms,
-            )
+            for buffered_event in before_turn:
+                if not is_root_event(buffered_event):
+                    continue
+                normalized_buffered = _normalise_app_server_event(buffered_event)
+                record_provider_error(buffered_event, turn_started_at)
+                last_event_label = _event_debug_tail([buffered_event], limit=1) or "buffered_event"
+                record_reviewer_lifecycle(normalized_buffered, turn_started_at)
+                reviewer_receiver_ids, reviewer_deadline_at = _update_reviewer_deadline(
+                    normalized_buffered,
+                    reviewer_receiver_ids,
+                    reviewer_deadline_at,
+                    now=turn_started_at,
+                    review_deadline_ms=review_deadline_ms,
+                )
+                if (
+                    normalized_buffered.get("type") == "turn.failed"
+                    and normalized_buffered.get("turn_id") == turn_id
+                ):
+                    terminal_error = normalized_buffered.get("error")
+                    safe_terminal_error = (
+                        terminal_error if isinstance(terminal_error, str) else ""
+                    )
+                    self._turn_failure_reason = failed_turn_reason(safe_terminal_error)
+                    observed_detail = observed_provider_detail()
+                    if observed_detail is not None and (
+                        not safe_terminal_error
+                        or classify_failure_reason(safe_terminal_error)
+                        == CODEX_PROVIDER_ERROR
+                    ):
+                        normalized_buffered = {
+                            **normalized_buffered,
+                            "error": observed_detail,
+                        }
+                elif (
+                    normalized_buffered.get("type") == "turn.interrupted"
+                    and normalized_buffered.get("turn_id") == turn_id
+                ):
+                    self._turn_failure_reason = observed_provider_reason()
+                    observed_detail = observed_provider_detail()
+                    if observed_detail is not None:
+                        normalized_buffered = {
+                            **normalized_buffered,
+                            "error": observed_detail,
+                        }
+                elif (
+                    normalized_buffered.get("type") == "turn.completed"
+                    and normalized_buffered.get("turn_id") == turn_id
+                    and terminal_provider_error is not None
+                ):
+                    self._turn_failure_reason = observed_provider_reason()
+                events.append(
+                    normalized_buffered
+                    if normalized_buffered.get("type")
+                    in {"provider_error", "turn.completed", "turn.interrupted", "turn.failed"}
+                    else buffered_event
+                )
+                if normalized_buffered.get("type") in {
+                    "turn.completed",
+                    "turn.interrupted",
+                    "turn.failed",
+                } and normalized_buffered.get("turn_id") == turn_id:
+                    return events
         while True:
             read_deadline = deadline
             if reviewer_deadline_at is not None:
                 read_deadline = min(read_deadline, reviewer_deadline_at)
+            if provider_error_grace_deadline is not None:
+                read_deadline = min(read_deadline, provider_error_grace_deadline)
             try:
                 event = self._read_streams(read_deadline)
             except TimeoutError as exc:
+                now = time.monotonic()
+                progress = _codex_turn_progress_detail(
+                    turn_started_at=turn_started_at,
+                    now=now,
+                    last_event_at=last_event_at,
+                    last_event_label=last_event_label,
+                    reviewer_spawned_at=reviewer_spawned_at,
+                    reviewer_wait_started_at=reviewer_wait_started_at,
+                    reviewer_completed_at=reviewer_completed_at,
+                    reviewer_result_ready=reviewer_result_ready,
+                    reviewer_deadline_at=reviewer_deadline_at,
+                    reviewer_wait_count=reviewer_wait_count,
+                    reviewer_wait_target=reviewer_wait_target,
+                    reviewer_child_status=reviewer_child_status,
+                    reviewer_child_started=reviewer_child_started,
+                )
+                if terminal_provider_error is not None:
+                    raise CodexAdapterError(
+                        _codex_provider_error_detail(terminal_provider_error),
+                        reason=_codex_provider_error_reason(terminal_provider_error),
+                        safe_diagnostic=True,
+                    ) from exc
+                if retryable_provider_error is not None:
+                    raise TimeoutError(
+                        _codex_provider_error_detail(
+                            retryable_provider_error, retry_pending=True
+                        )
+                        + f"; {progress}"
+                    ) from exc
                 if (
                     reviewer_deadline_at is not None
-                    and time.monotonic() >= reviewer_deadline_at
+                    and now >= reviewer_deadline_at
                 ):
                     raise TimeoutError(
                         "Codex reviewer child did not complete before the "
-                        f"{review_timeout_seconds:.1f}-second reviewer deadline"
+                        f"{review_timeout_seconds:.1f}-second reviewer deadline; {progress}"
+                    ) from exc
+                raise TimeoutError(f"{exc}; {progress}") from exc
+            except CodexAdapterError as exc:
+                if terminal_provider_error is not None:
+                    raise CodexAdapterError(
+                        _codex_provider_error_detail(terminal_provider_error),
+                        reason=_codex_provider_error_reason(terminal_provider_error),
+                        safe_diagnostic=True,
+                    ) from exc
+                if (
+                    retryable_provider_error is not None
+                    and isinstance(exc, CodexAppServerEOF)
+                ):
+                    raise CodexAdapterError(
+                        "Codex app-server exited before a terminal result after "
+                        + _codex_provider_error_detail(
+                            retryable_provider_error, retry_pending=True
+                        ),
+                        reason=CHILD_EXITED_EARLY,
+                        safe_diagnostic=True,
                     ) from exc
                 raise
             if self._is_server_request(event):
                 self._reject_server_request(event)
                 continue
-            events.append(event)
+            if not is_root_event(event):
+                continue
             normalized = _normalise_app_server_event(event)
+            event_received_at = time.monotonic()
+            record_provider_error(event, event_received_at)
+            if (
+                normalized.get("type") == "turn.failed"
+                and normalized.get("turn_id") == turn_id
+            ):
+                terminal_error = normalized.get("error")
+                safe_terminal_error = (
+                    terminal_error if isinstance(terminal_error, str) else ""
+                )
+                self._turn_failure_reason = failed_turn_reason(safe_terminal_error)
+                observed_detail = observed_provider_detail()
+                if observed_detail is not None and (
+                    not safe_terminal_error
+                    or classify_failure_reason(safe_terminal_error)
+                    == CODEX_PROVIDER_ERROR
+                ):
+                    normalized = {
+                        **normalized,
+                        "error": observed_detail,
+                    }
+            elif (
+                normalized.get("type") == "turn.interrupted"
+                and normalized.get("turn_id") == turn_id
+            ):
+                self._turn_failure_reason = observed_provider_reason()
+                observed_detail = observed_provider_detail()
+                if observed_detail is not None:
+                    normalized = {**normalized, "error": observed_detail}
+            events.append(
+                normalized
+                if normalized.get("type")
+                in {"provider_error", "turn.completed", "turn.interrupted", "turn.failed"}
+                else event
+            )
+            last_event_at = event_received_at
+            last_event_label = _event_debug_tail([event], limit=1) or "unclassified_event"
+            record_reviewer_lifecycle(normalized, event_received_at)
             if _reviewer_wait_without_target(
                 normalized, reviewer_deadline_at is not None
             ):
@@ -1606,23 +2546,95 @@ class CodexAdapter:
                 normalized,
                 reviewer_receiver_ids,
                 reviewer_deadline_at,
-                now=time.monotonic(),
+                now=event_received_at,
                 review_deadline_ms=review_deadline_ms,
             )
-            if reviewer_deadline_at is not None and time.monotonic() >= reviewer_deadline_at:
+            if normalized.get("type") in {
+                "turn.completed",
+                "turn.interrupted",
+                "turn.failed",
+            }:
+                if normalized.get("turn_id") != turn_id:
+                    continue
+                if normalized.get("type") == "turn.failed":
+                    self._turn_failure_reason = (
+                        self._turn_failure_reason or CODEX_PROVIDER_ERROR
+                    )
+                elif (
+                    normalized.get("type") == "turn.completed"
+                    and terminal_provider_error is not None
+                ):
+                    # The authoritative terminal frame can still say
+                    # "completed" after a non-retryable provider notification.
+                    # Preserve that observed failure classification for reports.
+                    self._turn_failure_reason = observed_provider_reason()
+                break
+            if reviewer_deadline_at is not None and event_received_at >= reviewer_deadline_at:
+                progress = _codex_turn_progress_detail(
+                    turn_started_at=turn_started_at,
+                    now=event_received_at,
+                    last_event_at=last_event_at,
+                    last_event_label=last_event_label,
+                    reviewer_spawned_at=reviewer_spawned_at,
+                    reviewer_wait_started_at=reviewer_wait_started_at,
+                    reviewer_completed_at=reviewer_completed_at,
+                    reviewer_result_ready=reviewer_result_ready,
+                    reviewer_deadline_at=reviewer_deadline_at,
+                    reviewer_wait_count=reviewer_wait_count,
+                    reviewer_wait_target=reviewer_wait_target,
+                    reviewer_child_status=reviewer_child_status,
+                    reviewer_child_started=reviewer_child_started,
+                )
+                if terminal_provider_error is not None:
+                    raise CodexAdapterError(
+                        _codex_provider_error_detail(terminal_provider_error),
+                        reason=_codex_provider_error_reason(terminal_provider_error),
+                        safe_diagnostic=True,
+                    )
+                if retryable_provider_error is not None:
+                    raise TimeoutError(
+                        _codex_provider_error_detail(
+                            retryable_provider_error, retry_pending=True
+                        )
+                        + f"; {progress}"
+                    )
                 raise TimeoutError(
                     "Codex reviewer child did not complete before the "
-                    f"{review_timeout_seconds:.1f}-second reviewer deadline"
+                    f"{review_timeout_seconds:.1f}-second reviewer deadline; {progress}"
                 )
-            if time.monotonic() >= deadline:
-                raise TimeoutError("Codex app-server turn deadline expired")
-            if normalized.get("type") in {"turn.completed", "turn.interrupted", "turn.failed"}:
-                params = event.get("params")
-                completed_turn = params.get("turn") if isinstance(params, Mapping) else None
-                completed_id = completed_turn.get("id") if isinstance(completed_turn, Mapping) else None
-                if completed_id != turn_id:
-                    continue
-                break
+            if event_received_at >= deadline:
+                progress = _codex_turn_progress_detail(
+                    turn_started_at=turn_started_at,
+                    now=event_received_at,
+                    last_event_at=last_event_at,
+                    last_event_label=last_event_label,
+                    reviewer_spawned_at=reviewer_spawned_at,
+                    reviewer_wait_started_at=reviewer_wait_started_at,
+                    reviewer_completed_at=reviewer_completed_at,
+                    reviewer_result_ready=reviewer_result_ready,
+                    reviewer_deadline_at=reviewer_deadline_at,
+                    reviewer_wait_count=reviewer_wait_count,
+                    reviewer_wait_target=reviewer_wait_target,
+                    reviewer_child_status=reviewer_child_status,
+                    reviewer_child_started=reviewer_child_started,
+                )
+                if terminal_provider_error is not None:
+                    raise CodexAdapterError(
+                        _codex_provider_error_detail(terminal_provider_error),
+                        reason=_codex_provider_error_reason(terminal_provider_error),
+                        safe_diagnostic=True,
+                    )
+                if retryable_provider_error is not None:
+                    raise TimeoutError(
+                        _codex_provider_error_detail(
+                            retryable_provider_error, retry_pending=True
+                        )
+                        + f"; {progress}"
+                    )
+                raise TimeoutError(
+                    "Codex app-server turn deadline expired; "
+                    + progress
+                )
         return events
 
     def _prompt(self, text: str, attachment_paths: Sequence[str]) -> str:
@@ -1781,42 +2793,87 @@ class CodexAdapter:
             )
             events = self._collect_turn(request_id, prompt, events)
         except TimeoutError as exc:
-            detail = "\n".join(self._stderr_tail)[-2000:]
+            failure_reason = _codex_timeout_failure_reason(
+                exc,
+                "\n".join(self._stderr_tail)[-2000:],
+                root_turn_id=self._active_turn_id,
+            )
+            detail = (
+                ""
+                if failure_reason in _CODEX_PROVIDER_FAILURE_REASONS
+                else "\n".join(self._stderr_tail)[-2000:]
+            )
             event_tail = _event_debug_tail(events)
+            if failure_reason in _CODEX_PROVIDER_FAILURE_REASONS:
+                if (
+                    failure_reason == CODEX_PROVIDER_RETRY_PENDING
+                    and str(exc).startswith(f"{CODEX_PROVIDER_RETRY_PENDING} (")
+                ):
+                    timeout_summary = _codex_timeout_detail(
+                        exc, parent_turn_limit_s=self.timeout_s
+                    )
+                else:
+                    timeout_summary = (
+                        f"Codex provider failure ({failure_reason}); "
+                        f"parent_turn_limit={self.timeout_s:.1f}s"
+                    )
+            else:
+                timeout_summary = _codex_timeout_detail(
+                    exc, parent_turn_limit_s=self.timeout_s
+                )
             self._terminate(process)
             self._process = None
             return self._finish(
                 events,
                 environment_detail=(
-                    f"Codex did not complete the turn within {self.timeout_s:.1f}s"
-                    + (f" ({exc})" if str(exc) else "")
+                    timeout_summary
                     + (f"; stderr={detail}" if detail else "")
                     + (f"; event_tail={event_tail}" if event_tail else "")
                 ),
                 turn_timed_out=True,
-                failure_reason=_codex_timeout_failure_reason(
-                    exc,
-                    detail,
-                    root_turn_id=self._active_turn_id,
-                ),
+                failure_reason=failure_reason,
                 lightweight=True,
             )
         except (CodexAdapterError, OSError, ValueError) as exc:
-            detail = "\n".join(self._stderr_tail)[-2000:]
+            raw_stderr = "\n".join(self._stderr_tail)[-2000:]
+            safe_diagnostic = getattr(exc, "safe_diagnostic", False) is True
+            diagnostic_reason = (
+                None
+                if safe_diagnostic
+                else classify_failure_reason(str(exc), raw_stderr)
+            )
+            explicit_reason = getattr(exc, "reason", None)
+            if diagnostic_reason in _CODEX_PROVIDER_FAILURE_REASONS:
+                reason = diagnostic_reason
+            else:
+                reason = first_reason((explicit_reason, diagnostic_reason))
+            provider_failure = reason in _CODEX_PROVIDER_FAILURE_REASONS
+            detail = "" if provider_failure or safe_diagnostic else raw_stderr
+            if safe_diagnostic or (
+                provider_failure and explicit_reason in _CODEX_PROVIDER_FAILURE_REASONS
+            ):
+                error_summary = f"Codex app-server turn failed: {exc}"
+            elif provider_failure:
+                error_summary = f"Codex app-server turn failed ({reason})"
+            else:
+                error_summary = f"Codex app-server turn failed: {exc}"
             self._terminate(process)
             self._process = None
             return self._finish(
                 events,
-                environment_detail=f"Codex app-server turn failed: {exc}" + (f"; stderr={detail}" if detail else ""),
+                environment_detail=error_summary + (f"; stderr={detail}" if detail else ""),
                 failure_reason=first_reason(
                     (
-                        getattr(exc, "reason", None),
-                        classify_failure_reason(str(exc) + detail),
+                        reason,
+                        classify_failure_reason(str(exc), detail),
                         CHILD_EXITED_EARLY,
                     )
                 ),
             )
-        return self._finish(events)
+        return self._finish(
+            events,
+            failure_reason=getattr(self, "_turn_failure_reason", None),
+        )
 
     def resume_session(self, session_id: str | None = None) -> str:
         if not self.native_continuation:
@@ -1871,9 +2928,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--allowedTools")
     parser.add_argument("--native-continuation", action="store_true")
+    parser.add_argument("--native-state-dir", type=Path)
     parser.add_argument("--resume-session-id")
     parser.add_argument("--append-system-prompt", default=CODEX_SYSTEM_PROMPT)
     return parser
+
+
+def _safe_adapter_failure_detail(error: BaseException) -> str:
+    """Summarize startup failures without serializing stderr/provider text."""
+
+    if isinstance(error, CodexAppServerEOF):
+        summary = "Codex app-server exited before returning an event"
+    elif isinstance(error, TimeoutError):
+        summary = "Codex app-server operation deadline expired"
+    elif isinstance(error, OSError):
+        summary = "Codex app-server process or pipe operation failed"
+    elif isinstance(error, ValueError):
+        summary = "Codex adapter received invalid input"
+    else:
+        summary = "Codex adapter could not start or complete the turn"
+    reason = first_reason(
+        (getattr(error, "reason", None), classify_failure_reason(str(error)))
+    )
+    return f"{summary} ({reason})" if reason is not None else summary
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1898,6 +2975,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         review_timeout_seconds=args.review_timeout,
         native_continuation=args.native_continuation,
         resume_session_id=args.resume_session_id,
+        native_state_dir=(
+            args.native_state_dir.expanduser().resolve()
+            if args.native_state_dir is not None
+            else None
+        ),
     )
 
     def terminate_on_signal(signum: int, _frame: Any) -> None:
@@ -1920,8 +3002,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _write_result(
                     TurnResult(
                         environment_wedged=True,
-                        environment_detail=str(exc),
-                        failure_reason=first_reason((getattr(exc, "reason", None), classify_failure_reason(str(exc)))),
+                        environment_detail=_safe_adapter_failure_detail(exc),
+                        failure_reason=first_reason(
+                            (
+                                getattr(exc, "reason", None),
+                                classify_failure_reason(str(exc)),
+                            )
+                        ),
                         last_mcp_call=adapter.last_mcp_call,
                         session_id=adapter._thread_id,
                     )

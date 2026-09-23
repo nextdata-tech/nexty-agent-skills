@@ -360,7 +360,7 @@ def _review_reader_result(
     if error:
         return _review_reader_error(error)
     operation = arguments.get("operation")
-    if operation not in {"read", "list"}:
+    if not isinstance(operation, str) or operation not in {"read", "list"}:
         return _review_reader_error("operation must be read or list")
     max_lines = arguments.get("max_lines", _REVIEW_READER_MAX_LINES)
     max_bytes = arguments.get("max_bytes", _REVIEW_READER_MAX_BYTES)
@@ -407,6 +407,150 @@ def _review_reader_result(
         "isError": False,
         "content": [{"type": "text", "text": text}],
     }
+
+
+def _review_reader_trace_metadata(
+    request: Mapping[str, Any],
+    result: Mapping[str, Any],
+    allowlist_path: Path,
+    *,
+    elapsed_ms: float,
+) -> dict[str, Any]:
+    """Summarize a review-reader call without retaining paths or file text."""
+
+    params = request.get("params")
+    arguments = params.get("arguments") if isinstance(params, Mapping) else None
+    arguments = arguments if isinstance(arguments, Mapping) else {}
+    operation_value = arguments.get("operation")
+    operation = (
+        operation_value
+        if isinstance(operation_value, str) and operation_value in {"read", "list"}
+        else "invalid"
+    )
+    path_value = arguments.get("path")
+    path_class = "invalid"
+    path_depth: int | None = None
+    path_error: str | None = None
+    if isinstance(path_value, str) and path_value.strip():
+        requested = Path(path_value)
+        if not requested.is_absolute():
+            path_class = "relative"
+        else:
+            resolved, path_error = _review_reader_path(path_value, allowlist_path)
+            if path_error is None:
+                roots, _ = _review_reader_roots(allowlist_path)
+                for root, is_directory in roots:
+                    if resolved == root or (is_directory and root in resolved.parents):
+                        path_class = "capture_root" if is_directory else "blueprint"
+                        path_depth = len(resolved.relative_to(root).parts) if is_directory else 0
+                        break
+            elif path_error == "requested review path is outside the current review_input":
+                path_class = "outside_allowlist"
+            elif path_error == "requested review path is sensitive":
+                path_class = "sensitive"
+            elif path_error in {
+                "requested review path is unavailable",
+                "review input root is unavailable",
+            }:
+                path_class = "unavailable"
+            else:
+                path_class = "invalid_allowlist"
+
+    max_lines = arguments.get("max_lines", _REVIEW_READER_MAX_LINES)
+    max_bytes = arguments.get("max_bytes", _REVIEW_READER_MAX_BYTES)
+    limits_valid = (
+        isinstance(max_lines, int)
+        and not isinstance(max_lines, bool)
+        and 1 <= max_lines <= _REVIEW_READER_MAX_LINES
+        and isinstance(max_bytes, int)
+        and not isinstance(max_bytes, bool)
+        and 1 <= max_bytes <= _REVIEW_READER_MAX_BYTES
+    )
+    structured = result.get("structuredContent")
+    error_message = structured.get("error") if isinstance(structured, Mapping) else None
+    error_codes = {
+        "arguments must be an object": "invalid_arguments",
+        "path must be a non-empty absolute path": "invalid_path",
+        "path must be absolute": "relative_path",
+        "review input allowlist is unavailable": "allowlist_unavailable",
+        "review input allowlist is malformed": "allowlist_malformed",
+        "review input allowlist contains a non-absolute path": "allowlist_path_invalid",
+        "review input root is unavailable": "allowlist_root_unavailable",
+        "retained capture root is not a directory": "capture_root_invalid",
+        "retained blueprint path is not a regular file": "blueprint_invalid",
+        "review input allowlist is empty": "allowlist_empty",
+        "requested review path is unavailable": "path_unavailable",
+        "requested review path is sensitive": "sensitive_path",
+        "requested review path is outside the current review_input": "path_outside_allowlist",
+        "operation must be read or list": "invalid_operation",
+        "read bounds are outside the permitted limits": "invalid_bounds",
+        "list requires a directory": "not_directory",
+        "read requires a regular file": "not_file",
+    }
+    if result.get("isError") is True:
+        if isinstance(error_message, str) and error_message.startswith("review input read failed:"):
+            error_code = "read_failed"
+        else:
+            error_code = (
+                error_codes.get(error_message, "reader_error")
+                if isinstance(error_message, str)
+                else "reader_error"
+            )
+    else:
+        error_code = "ok"
+
+    content = result.get("content")
+    text_value = (
+        content[0].get("text")
+        if isinstance(content, list)
+        and content
+        and isinstance(content[0], Mapping)
+        and isinstance(content[0].get("text"), str)
+        else ""
+    )
+    returned_entries: int | None = None
+    if operation == "list" and error_code == "ok":
+        try:
+            decoded = json.loads(text_value)
+            returned_entries = len(decoded) if isinstance(decoded, list) else None
+        except json.JSONDecodeError:
+            returned_entries = None
+
+    summary: dict[str, Any] = {
+        "operation": operation,
+        "path_class": path_class,
+        "limits_valid": limits_valid,
+        "error_code": error_code,
+        "output_bytes": len(text_value.encode("utf-8")),
+        "truncated": "[runner output truncated]" in text_value,
+        "elapsed_ms": round(max(0.0, elapsed_ms), 3),
+    }
+    if path_depth is not None:
+        summary["path_depth"] = path_depth
+    if returned_entries is not None:
+        summary["returned_entries"] = returned_entries
+    return summary
+
+
+def _trace_review_reader_summary(path: Path, summary: Mapping[str, Any]) -> None:
+    """Write only safe metadata for a review-reader call to the MCP trace."""
+
+    record = {
+        "source": "runner",
+        "protocol": "mcp",
+        "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "direction": "summary",
+        "message": {
+            "method": "tools/call",
+            "params": {"name": _REVIEW_READER_TOOL},
+        },
+        "review_reader_summary": dict(summary),
+        "forwarded": False,
+        "synthetic": True,
+    }
+    with _TRACE_LOCK:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
 
 
 def _augment_tools_list(
@@ -1384,19 +1528,22 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 return False
 
         def write_review_reader_response(request: Mapping[str, Any]) -> None:
+            started_at = time.monotonic()
+            result = _review_reader_result(request, review_allowlist_path)
             response = {
                 "jsonrpc": "2.0",
                 "id": request.get("id"),
-                "result": _review_reader_result(request, review_allowlist_path),
+                "result": result,
             }
             line = json.dumps(response, separators=(",", ":")).encode() + b"\n"
-            _trace_line(
+            _trace_review_reader_summary(
                 trace_path,
-                "response",
-                line,
-                forwarded=False,
-                synthetic=True,
-                review_reader=True,
+                _review_reader_trace_metadata(
+                    request,
+                    result,
+                    review_allowlist_path,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000.0,
+                ),
             )
             write_client(line)
 
@@ -1573,7 +1720,6 @@ def run_stdio_proxy(spec_path: Path) -> int:
         reader.start()
         assert bridge_writer is not None
         for line in sys.stdin.buffer:
-            _trace_line(trace_path, "request", line)
             request: Any = None
             try:
                 request = json.loads(line.decode("utf-8"))
@@ -1587,6 +1733,8 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 ):
                     write_review_reader_response(request)
                     continue
+            _trace_line(trace_path, "request", line)
+            if isinstance(request, Mapping):
                 operation = _request_operation(request)
                 request_key = (
                     _rpc_id_key(request.get("id"))

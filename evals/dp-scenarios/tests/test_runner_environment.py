@@ -1285,6 +1285,16 @@ def test_the_live_adapter_is_told_where_the_supervisor_keeps_its_state() -> None
     )
     assert parsed.supervisor_data_dir == Path("/tmp/run/desktop-state")
 
+    codex_build = _desktop_command_builder(
+        ["python", "-m", "dp_scenarios.runner.codex_adapter", "--native-continuation"],
+        _supervisor_data_dir(supervisor_args),
+        Path("/tmp/run/provider-state/codex-home"),
+    )
+    codex_argv = list(codex_build(Path("/tmp/mcp-config.json"), True, "a,b"))
+    assert codex_argv[codex_argv.index("--native-state-dir") + 1] == (
+        "/tmp/run/provider-state/codex-home"
+    )
+
 
 def test_runner_owned_supervisor_state_prepares_only_retained_review_roots(
     tmp_path: Path,

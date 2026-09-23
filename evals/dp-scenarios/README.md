@@ -514,12 +514,25 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 Codex sessions use one long-lived `codex app-server --stdio` child per live
 run. This keeps the runner-owned MCP connection and opaque provider thread
 identity across operator turns; a fresh Codex process is not started for each
-turn. The adapter stages a disposable Codex home and symlinks only the
+turn. Ordinary runs use a disposable Codex home and symlink only the
 host-owned auth handle, so host MCP configuration and plugin state do not
-enter the run. Codex can also use the explicit native-continuation checkpoint
-seam: its provider thread identity is persisted in the credential-free
-checkpoint and resumed through the app-server when the same persistent run
-root and execution identity are supplied. Claude-only flags such as
+enter the run. Native continuation instead keeps the app-server home under
+`<native-run-root>/<scenario>/epoch-N/provider-state/codex-home` across runner
+processes. That private owner-only state can contain provider transcripts and
+tool results; it is outside the agent workspace and evidence bundle, but must
+still be treated as sensitive and retained only while a resume may be needed.
+The auth handle remains a symlink to the host-owned file; the harness never
+copies or reads its contents. Codex native continuation persists the provider
+thread identity in the credential-free checkpoint and resumes through the
+app-server when the same private run root and execution identity are supplied.
+On resume, the runner accepts only Codex's app-written `trust_level = "trusted"`
+marker for the run workspace; other project markers and persisted config
+changes are rejected. Since that marker can activate project-local Codex
+settings, resume also fails closed if the agent workspace contains a `.codex/`
+directory. The app-server also excludes `/tmp` and `$TMPDIR` from the
+workspace-write sandbox's default writable roots; only the scenario workspace
+and skill-pack roots are supplied as explicit writable roots.
+Claude-only flags such as
 `--max-budget-usd` and Claude tool-grant flags are rejected or ignored for
 this backend. Codex's workspace sandbox is provider-owned, so tool-restricted
 scenarios are not directly comparable with Claude runs that enforce a
@@ -547,7 +560,9 @@ carries the block whether or not it was interrupted:
 | `failure_reason` | What happened | What to do |
 | --- | --- | --- |
 | `provider_session_limit` | The provider refused another turn (usage, rate, or credit ceiling). | Wait for the reset; the scenario is untested, not failed. |
-| `child_no_terminal_result` | The child stayed alive past the turn deadline without emitting a `result`. | Reruns are worth trying; check `last_mcp_call` for where it stalled. |
+| `codex_provider_retry_pending` | Codex reported a retryable provider error, then the root turn produced no terminal result before its deadline. | Inspect the safe variant/status metadata and retry only after provider availability is confirmed; the run is incomplete. |
+| `codex_provider_error` | Codex reported a non-retryable app-server error, or a root turn failed without a more specific provider classification. | Inspect the allow-listed variant/status metadata; the run is incomplete. |
+| `child_no_terminal_result` | A delegated child did not return a terminal result before its configured reviewer deadline. A `pendingInit` snapshot is not proof that the child is inactive; a matching completed wait clears the deadline. | Check the parent app-server event tail, elapsed/idle timing, reviewer phase, and metadata-only reader summaries before deciding whether a rerun is useful. |
 | `codex_root_turn_no_terminal_result` | The Codex app-server root turn stayed alive past its deadline without emitting a root terminal result. | Check the app-server event tail; the run is incomplete and ungraded. |
 | `child_exited_early` | The child exited before emitting a `result`. | Read `failure_detail`; usually a startup or config fault. |
 | `shared_runtime_contention` | Two runs contended on shared runtime state (locked store, busy port). | Rerun; live canary closures are already copied per run. |

@@ -100,11 +100,11 @@
       "probe_id": "unsupported-c01ac5c27a958249"
     },
     {
-      "claim_id": "nxd-generate-data-product/SKILL.md:secret:d145d907512aad71",
+      "claim_id": "nxd-generate-data-product/SKILL.md:secret:a2b906518e5bb688",
       "skill_file": "nxd-generate-data-product/SKILL.md",
       "line": 426,
-      "quote": "**relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the",
-      "content_hash": "sha256:d145d907512aad71a88c27641126e836e561c80246f43e30d1b850877703b8ee",
+      "quote": "The `csv-source` service delivers the **relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the pinned snapshot and fails).",
+      "content_hash": "sha256:a2b906518e5bb6887222e2fb7abf828774b7e90c1e4c06cdc03e87514ed3b4ee",
       "expected_finding_code": "build/transform_import",
       "direction": "documented-supported",
       "category": "secret",
@@ -114,7 +114,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:unsupported:8231b08d4e9b9f2f",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 491,
+      "line": 490,
       "quote": "- **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.",
       "content_hash": "sha256:8231b08d4e9b9f2f376b1c28e2f6b5ee82642fc7c785b663dd4cbc8737bbe807",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -297,7 +297,7 @@
       "nxd-build-semantic-data-product/reference/scripts-bootstrap.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-debug-data-product/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-fix-policy-failures/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "nxd-generate-data-product/SKILL.md": "sha256:0d9b0ae4472340f88ffeccfbb2d5567282101988b02d8ec04959ee0a7a90bcfb",
+      "nxd-generate-data-product/SKILL.md": "sha256:b45185c12170b1c53a828415d43c9061833c1ef20261609fe39f9438fd4720e3",
       "nxd-generate-data-product/reference/adversarial-review.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/api-source.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/closure-record.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -356,14 +356,14 @@
       "nxd-setup-cli/reference/headless-device-flow.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-toggle-policies/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
-    "reviewer": "iduartgomez",
+    "reviewer": "codex",
     "review_date": "2026-09-22",
-    "approves_claims_hash": "sha256:43bbad5b64221224122305ed95a167283fce82af355ea981c72b57b186734ade"
+    "approves_claims_hash": "sha256:ebf9ec8a6a68f956e9c5a260b2c13f8fba1d275de737e2811737aed9196ad979"
   },
   "approval": {
-    "reviewer": "iduartgomez",
+    "reviewer": "codex",
     "review_date": "2026-09-22",
-    "old_claims_hash": "sha256:68fa58e2af8db3f901f2b66193fdfe625de08acc92b713026acce09dfd93df0b",
-    "new_claims_hash": "sha256:43bbad5b64221224122305ed95a167283fce82af355ea981c72b57b186734ade"
+    "old_claims_hash": "sha256:43bbad5b64221224122305ed95a167283fce82af355ea981c72b57b186734ade",
+    "new_claims_hash": "sha256:ebf9ec8a6a68f956e9c5a260b2c13f8fba1d275de737e2811737aed9196ad979"
   }
 }
