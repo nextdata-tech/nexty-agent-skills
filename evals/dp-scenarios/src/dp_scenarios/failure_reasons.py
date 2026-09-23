@@ -28,6 +28,10 @@ PROVIDER_SESSION_LIMIT = "provider_session_limit"
 CHILD_NO_TERMINAL_RESULT = "child_no_terminal_result"
 #: The Codex app-server root turn stayed alive but produced no terminal result.
 CODEX_ROOT_TURN_NO_TERMINAL_RESULT = "codex_root_turn_no_terminal_result"
+#: The Codex app-server reported a retryable provider error but did not finish.
+CODEX_PROVIDER_RETRY_PENDING = "codex_provider_retry_pending"
+#: The Codex app-server reported a non-retryable provider error.
+CODEX_PROVIDER_ERROR = "codex_provider_error"
 #: The child exited before emitting a terminal ``result``.
 CHILD_EXITED_EARLY = "child_exited_early"
 #: Two runs contended on shared runtime state (locked store, busy resource).
@@ -43,6 +47,8 @@ FAILURE_REASONS = frozenset(
         PROVIDER_SESSION_LIMIT,
         CHILD_NO_TERMINAL_RESULT,
         CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
+        CODEX_PROVIDER_RETRY_PENDING,
+        CODEX_PROVIDER_ERROR,
         CHILD_EXITED_EARLY,
         SHARED_RUNTIME_CONTENTION,
         INTERRUPTED_UNCLASSIFIED,
@@ -53,16 +59,28 @@ FAILURE_REASONS = frozenset(
 # limit even when the surrounding text also mentions a lock.
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
+        CODEX_PROVIDER_RETRY_PENDING,
+        re.compile(r"codex_provider_retry_pending|provider_retry_pending", re.IGNORECASE),
+    ),
+    (
         PROVIDER_SESSION_LIMIT,
         re.compile(
             r"(usage limit reached|session limit reached|"
             r"claude (ai )?usage limit|"
             r"you(?:'ve| have) (?:reached|hit) your .{0,40}limit|"
             r"limit (?:will )?reset(?:s)? at|"
+            r"usageLimitExceeded|sessionBudgetExceeded|rateLimitExceeded|"
             r"rate[_ -]?limit(?:ed|_error)?|"
-            r"\b(429|insufficient_quota|credit balance is too low)\b)",
+            r"(?:\bHTTP(?:/\d+(?:\.\d+)?)?\s+429\b|"
+            r"\b(?:http[_ -]?status|status(?:[_ -]?code)?)\s*[:=]\s*429\b|"
+            r"\bAPI Error:\s*429\b|"
+            r"\binsufficient_quota\b|\bcredit balance is too low\b))",
             re.IGNORECASE,
         ),
+    ),
+    (
+        CODEX_PROVIDER_ERROR,
+        re.compile(r"codex_provider_error", re.IGNORECASE),
     ),
     (
         SHARED_RUNTIME_CONTENTION,
@@ -110,6 +128,8 @@ __all__ = [
     "INTERRUPTED_UNCLASSIFIED",
     "CHILD_NO_TERMINAL_RESULT",
     "CODEX_ROOT_TURN_NO_TERMINAL_RESULT",
+    "CODEX_PROVIDER_ERROR",
+    "CODEX_PROVIDER_RETRY_PENDING",
     "FAILURE_REASONS",
     "PROVIDER_SESSION_LIMIT",
     "SHARED_RUNTIME_CONTENTION",

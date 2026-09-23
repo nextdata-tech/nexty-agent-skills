@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.52.0
+  version: 0.52.2
 ---
 
 # nxd-generate-data-product skill
@@ -35,7 +35,15 @@ vocabulary — the Workflow's **policy read-back gate** runs before any file is
 written. A closure whose scoring policy the user never saw is the one failure
 this skill treats as unrecoverable.
 
-**Connector types** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
+**Connector types at a glance** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
+| Type | Service | `secrets[...]` key | Companion artifact |
+|---|---|---|---|
+| CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
+| Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
+| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |
+| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |
+| Google Drive files | `api-source` with `source_kind: google_drive_files` | flat Drive API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform lists and downloads selected files |
+| Google Sheets | `api-source` with `source_kind: google_sheets` | flat Sheets API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform reads selected spreadsheet ranges |
 
 Specialized API profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape. The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
 It runs the transform, verifies staging, and stands up the semantic MCP endpoint.
@@ -413,6 +421,7 @@ The desktop closure ships its own infra profile declaring the three local
 services the spec references (`duckdb`, `python-compute`, `csv-source`). Emit it
 **verbatim** from [reference/infra-profile.md](reference/infra-profile.md);
 `metadata.name` is `desktop-local` and MUST match `infra_profile=` in `spec.py`.
+Copy the fixed driver ids exactly: `duckdb`=`nxd:local/duckdb/storage:0.1.0`, `python-compute`=`nxd:local/python/compute:0.1.0`, `csv-source`=`nxd:local/file/storage:0.1.0`; never shorten them to a bare local driver.
 The `csv-source` service (driver `nxd:local/file/storage:0.1.0`) delivers the
 **relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the
 pinned snapshot and fails).
