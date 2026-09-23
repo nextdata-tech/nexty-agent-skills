@@ -10,6 +10,7 @@ from dp_scenarios.failure_reasons import (
     CODEX_PROVIDER_RETRY_PENDING,
     CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
+    RUN_BUDGET_EXHAUSTED,
     SHARED_RUNTIME_CONTENTION,
     classify_failure_reason,
     first_reason,
@@ -27,6 +28,16 @@ from dp_scenarios.failure_reasons import (
 )
 def test_provider_ceilings_classify_as_a_session_limit(text: str) -> None:
     assert classify_failure_reason(text) == PROVIDER_SESSION_LIMIT
+
+
+def test_runner_budget_cap_is_distinct_from_provider_session_limit() -> None:
+    assert classify_failure_reason(
+        "usage limit reached", terminal_subtype=" ERROR_MAX_BUDGET_USD "
+    ) == RUN_BUDGET_EXHAUSTED
+
+
+def test_free_text_mention_of_runner_budget_subtype_is_not_classified() -> None:
+    assert classify_failure_reason("The agent mentioned error_max_budget_usd in prose.") is None
 
 
 def test_codex_retry_pending_has_its_own_failure_class() -> None:

@@ -30,6 +30,8 @@ from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
+    RUN_BUDGET_EXHAUSTED,
+    SHARED_RUNTIME_CONTENTION,
 )
 from dp_scenarios.runner.session import turn_result_to_dict
 from dp_scenarios.runner.local import FileSupervisorRecordReader, LocalRunnerError
@@ -190,6 +192,38 @@ def test_parse_stream_events_preserves_exact_terminal_completion_facts() -> None
     assert result.input_tokens == 11
     assert result.output_tokens == 7
     assert result.agent_message == "done"
+
+
+@pytest.mark.parametrize(
+    ("answer", "is_error"),
+    [("", True), ("usage limit reached", True), ("usage limit reached", False)],
+)
+def test_parse_stream_events_names_the_runner_budget_cap_from_result_subtype(
+    answer: str,
+    is_error: bool,
+) -> None:
+    result, _ = parse_claude_events(
+        [{
+            "type": "result",
+            "result": answer,
+            "subtype": "error_max_budget_usd",
+            "is_error": is_error,
+        }],
+        redact_json_rpc=_identity,
+        redact_text=lambda value: value,
+        session_id="claude-session",
+    )
+
+    assert result.failure_reason == RUN_BUDGET_EXHAUSTED
+    assert result.environment_wedged is True
+    assert result.environment_detail is not None
+    assert "error_max_budget_usd" in result.environment_detail
+    if answer:
+        assert "usage limit reached" in result.environment_detail
+    else:
+        assert result.environment_detail == (
+            "Claude returned an error result (error_max_budget_usd)"
+        )
 
 
 def test_multiple_terminal_results_are_retained_as_ambiguous_completion_evidence() -> None:
@@ -828,6 +862,108 @@ def test_turn_result_fields_are_serialized_and_preserved_by_adapter_reconstructi
     monkeypatch.setattr(adapter, "_approval_artifact", lambda _snapshot: source.approval_artifact)
 
     assert adapter._finish_turn([{"type": "result"}]) == source
+
+
+def _adapter_for_finish_turn_test(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: TurnResult,
+) -> ClaudeCodeAdapter:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    adapter = object.__new__(ClaudeCodeAdapter)
+    adapter.artifact_dir = artifact_dir
+    adapter._before = {}
+    adapter._facts = {}
+    adapter._build_context = {}
+    adapter._last_mcp_call = None
+    adapter._lifecycles = {}
+    adapter._built_runs = set()
+    adapter._query_history = []
+    adapter._state_dir = None
+    adapter._session_id = "session-1"
+    adapter._stdio = None
+    adapter._redact_json_rpc = _identity
+    adapter._redact_text = lambda value: value.replace("secret-value", "[redacted]")
+    monkeypatch.setattr(adapter_module, "parse_claude_events", lambda *args, **kwargs: (source, []))
+    monkeypatch.setattr(adapter_module, "_snapshot_workspace", lambda *args, **kwargs: {})
+    monkeypatch.setattr(adapter_module, "_changed_files", lambda *args, **kwargs: ())
+    monkeypatch.setattr(adapter_module, "_update_machine_artifacts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adapter, "_approval_artifact", lambda _snapshot: None)
+    return adapter
+
+
+def test_finish_turn_promotes_session_limit_from_redacted_interruption_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider_message = "You've hit your session limit · resets 9:50pm (Europe/Madrid)"
+    reviewer_timeout = "The retained-capture reviewer did not complete within 300.0s; exit_code=143"
+    adapter = _adapter_for_finish_turn_test(
+        tmp_path,
+        monkeypatch,
+        TurnResult(environment_wedged=True, environment_detail=provider_message),
+    )
+
+    result = adapter._finish_turn(
+        [],
+        environment_detail=reviewer_timeout,
+        turn_timed_out=True,
+        failure_reason=CHILD_NO_TERMINAL_RESULT,
+    )
+
+    assert result.failure_reason == PROVIDER_SESSION_LIMIT
+    assert result.environment_detail == f"{provider_message} | {reviewer_timeout}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        pytest.param(
+            TurnResult(agent_message="You've hit your session limit; try again later."),
+            id="ordinary-agent-prose",
+        ),
+        pytest.param(
+            TurnResult(
+                build_failed=True,
+                environment_wedged=True,
+                environment_detail="MCP build failed: database is locked",
+            ),
+            id="ordinary-mcp-build-failure",
+        ),
+    ),
+)
+def test_finish_turn_does_not_infer_infrastructure_reasons_without_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: TurnResult,
+) -> None:
+    adapter = _adapter_for_finish_turn_test(tmp_path, monkeypatch, source)
+
+    result = adapter._finish_turn([])
+
+    assert result.failure_reason is None
+
+
+def test_finish_turn_preserves_specific_transport_reason_over_weaker_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert adapter_module.classify_failure_reason("MCP build failed: database is locked") == (
+        SHARED_RUNTIME_CONTENTION
+    )
+    adapter = _adapter_for_finish_turn_test(
+        tmp_path,
+        monkeypatch,
+        TurnResult(environment_wedged=True, environment_detail="database is locked"),
+    )
+
+    result = adapter._finish_turn(
+        [],
+        environment_detail="The retained-capture reviewer did not complete within 300.0s",
+        turn_timed_out=True,
+        failure_reason=PROVIDER_SESSION_LIMIT,
+    )
+
+    assert result.failure_reason == PROVIDER_SESSION_LIMIT
 
 
 def test_claude_adapter_result_identifies_its_backend(capsys: pytest.CaptureFixture[str]) -> None:

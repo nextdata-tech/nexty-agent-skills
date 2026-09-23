@@ -434,6 +434,30 @@ def test_the_summary_names_an_interruption_instead_of_only_its_gate_row() -> Non
     assert "detail: Claude did not complete the turn within 324.0s" in text
 
 
+def test_the_summary_names_runner_budget_exhaustion() -> None:
+    scenario = make_scenario("budget-exhausted", turns=3)
+    interrupted = TurnResult(
+        environment_wedged=True,
+        environment_detail="Claude returned an error result (error_max_budget_usd)",
+        failure_reason="run_budget_exhausted",
+        last_mcp_call="advance_workflow:ok",
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={
+            scenario.id: recording_for(scenario, responses_for(scenario, first=interrupted))
+        },
+    ).run()
+
+    text = human_summary(result)
+
+    assert "interrupted: run_budget_exhausted" in text
+    assert "last MCP call: advance_workflow:ok" in text
+    assert "detail: Claude returned an error result (error_max_budget_usd)" in text
+
+
 def test_an_unclassified_interruption_still_names_itself_and_prints_its_detail() -> None:
     """A null reason reads, on that key, exactly like a run never interrupted.
 

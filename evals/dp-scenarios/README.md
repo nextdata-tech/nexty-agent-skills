@@ -556,8 +556,9 @@ checker markers retain their prior grading behavior.
 ### When a live run stops without being graded
 
 A live run can end for reasons that say nothing about the agent: the provider
-declines another turn, the Claude child stops producing terminal stream
-results, or two runs contend on the same runtime state. Those used to reach
+declines another turn, the runner's per-run spend cap is reached, the Claude
+child stops producing terminal stream results, or two runs contend on the same
+runtime state. Those used to reach
 the report as `ungraded` and nothing else, which reads exactly like a scenario
 defect.
 
@@ -575,6 +576,7 @@ carries the block whether or not it was interrupted:
 | `failure_reason` | What happened | What to do |
 | --- | --- | --- |
 | `provider_session_limit` | The provider refused another turn (usage, rate, or credit ceiling). | Wait for the reset; the scenario is untested, not failed. |
+| `run_budget_exhausted` | Claude Code stopped because the runner's configured `--max-budget-usd` cap was reached. | Raise or remove the run-local cap for a deliberate rerun; this run is incomplete, not passed or failed behaviorally. |
 | `codex_provider_retry_pending` | Codex reported a retryable provider error, then the root turn produced no terminal result before its deadline. | Inspect the safe variant/status metadata and retry only after provider availability is confirmed; the run is incomplete. |
 | `codex_provider_error` | Codex reported a non-retryable app-server error, or a root turn failed without a more specific provider classification. | Inspect the allow-listed variant/status metadata; the run is incomplete. |
 | `child_no_terminal_result` | A delegated child did not return a terminal result before its configured reviewer deadline. A `pendingInit` snapshot is not proof that the child is inactive; a matching completed wait clears the deadline. | Check the parent app-server event tail, elapsed/idle timing, reviewer phase, and metadata-only reader summaries before deciding whether a rerun is useful. |
@@ -584,6 +586,10 @@ carries the block whether or not it was interrupted:
 
 `summary.txt` prints the same three lines, because stdout is where the
 decision to rerun or to wait actually gets made.
+
+`environment_wedge` is a coarse stop category, not the diagnosis; use
+`interruption.failure_reason` for the specific cause. An invalid run remains
+visible as invalid in its scenario row and is never promoted to a pass.
 
 None of these is a pass. A green live run is one whose required gates passed,
 not one that stopped politely.

@@ -17,6 +17,7 @@ import dp_scenarios.runner.tier as tier_module
 
 from dp_scenarios.canary.verdict import Verdict, VerdictIssue
 from dp_scenarios.canary.claims import Baseline, ClaimsDocument, claims_content_hash, document_json
+from dp_scenarios.failure_reasons import RUN_BUDGET_EXHAUSTED
 from dp_scenarios.canary.probe import ProbeResult
 from dp_scenarios.grading import GATE_POINTS, Finding, GateResult
 from dp_scenarios.grading.gates import EventPosition, PublishedBuild
@@ -3760,6 +3761,29 @@ def test_an_interrupted_run_reaches_the_report_with_its_structured_reason() -> N
         "failure_detail": "Claude did not complete the turn within 324.0s",
         "last_mcp_call": "advance_workflow:error",
     }
+
+
+def test_runner_budget_exhaustion_stays_invalid_and_reaches_the_report() -> None:
+    scenario = make_scenario("budget-exhausted", turns=3)
+    interrupted = TurnResult(
+        environment_wedged=True,
+        environment_detail="Claude returned an error result (error_max_budget_usd)",
+        failure_reason=RUN_BUDGET_EXHAUSTED,
+        last_mcp_call="advance_workflow:ok",
+    )
+    recording = recording_for(scenario, responses_for(scenario, first=interrupted))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    run = machine_report(result)["scenarios"][0]["runs"][0]
+    assert run["terminal_state"] == "environment_wedge"
+    assert run["score"]["state"] == "invalid"
+    assert run["interruption"]["failure_reason"] == RUN_BUDGET_EXHAUSTED
 
 
 def test_a_clean_run_reports_an_empty_interruption_block() -> None:

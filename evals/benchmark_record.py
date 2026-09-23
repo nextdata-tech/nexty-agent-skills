@@ -169,7 +169,8 @@ DP_FAILURE_MODES = frozenset({
     "intake_failure", "turn_budget_exceeded", "operator_fallback",
 })
 DP_FAILURE_REASONS = frozenset({
-    "provider_session_limit", "child_no_terminal_result", "child_exited_early",
+    "provider_session_limit", "run_budget_exhausted", "child_no_terminal_result",
+    "child_exited_early",
     "codex_root_turn_no_terminal_result", "shared_runtime_contention",
     "interrupted_unclassified",
 })
