@@ -275,8 +275,8 @@ def _review_reader_error(message: str) -> dict[str, Any]:
     }
 
 
-def _utf8_prefix(value: str, max_bytes: int) -> str:
-    """Return a UTF-8-safe prefix bounded by its encoded byte length."""
+def _review_utf8_prefix(value: str, max_bytes: int) -> str:
+    """Return a UTF-8 prefix no larger than max_bytes, ending on a code point."""
 
     return value.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
 
@@ -294,7 +294,7 @@ def _review_entry_is_sensitive(name: str) -> bool:
 
 def _review_reader_roots(
     allowlist_path: Path,
-) -> tuple[list[tuple[Path, bool]], str | None]:
+) -> tuple[list[tuple[Path, Path, bool]], str | None]:
     """Load and validate the current review roots without exposing values."""
 
     try:
@@ -303,7 +303,7 @@ def _review_reader_roots(
         return [], "review input allowlist is unavailable"
     if not isinstance(raw, Mapping):
         return [], "review input allowlist is malformed"
-    roots: list[tuple[Path, bool]] = []
+    roots: list[tuple[Path, Path, bool]] = []
     for key, is_directory in (
         ("retained_capture_root", True),
         ("retained_blueprint_path", False),
@@ -311,7 +311,11 @@ def _review_reader_roots(
         value = raw.get(key)
         if not isinstance(value, str) or not value.strip():
             continue
+        if "\x00" in value:
+            return [], "review input allowlist contains an invalid path"
         root = Path(value)
+        if ".." in root.parts:
+            return [], "review input allowlist contains parent traversal"
         if not root.is_absolute():
             return [], "review input allowlist contains a non-absolute path"
         try:
@@ -322,38 +326,190 @@ def _review_reader_roots(
             return [], "retained capture root is not a directory"
         if not is_directory and not resolved_root.is_file():
             return [], "retained blueprint path is not a regular file"
-        roots.append((resolved_root, is_directory))
+        roots.append((root, resolved_root, is_directory))
     if not roots:
         return [], "review input allowlist is empty"
     return roots, None
 
 
-def _review_reader_path(
-    path_value: object, allowlist_path: Path
-) -> tuple[Path, str | None]:
-    """Resolve a requested review path against the current private allowlist."""
+@dataclasses.dataclass(frozen=True)
+class _ReviewReaderPath:
+    """Resolved access path plus the allowlist-spelled path shown to the child."""
+
+    resolved: Path
+    display: Path
+
+
+def _review_request_path_error(path_value: object) -> str | None:
+    """Validate the caller-supplied path before loading the allowlist."""
 
     if not isinstance(path_value, str) or not path_value.strip():
-        return Path(), "path must be a non-empty absolute path"
+        return "path must be a non-empty absolute path"
+    if "\x00" in path_value:
+        return "path contains an invalid character"
     requested = Path(path_value)
     if not requested.is_absolute():
-        return Path(), "path must be absolute"
-    roots, error = _review_reader_roots(allowlist_path)
-    if error is not None:
-        return Path(), error
+        return "path must be absolute"
+    if ".." in requested.parts:
+        return "path must not contain parent traversal"
+    if any(_review_entry_is_sensitive(part) for part in requested.parts):
+        return "requested review path is sensitive"
+    if redact_text(path_value) != path_value:
+        return "requested review path cannot be shown verbatim"
+    return None
+
+
+def _review_reader_path(
+    path_value: object,
+    allowlist_path: Path,
+    *,
+    roots: list[tuple[Path, Path, bool]] | None = None,
+) -> tuple[_ReviewReaderPath | None, str | None]:
+    """Resolve a requested review path against the current private allowlist."""
+
+    request_error = _review_request_path_error(path_value)
+    if request_error is not None:
+        return None, request_error
+    assert isinstance(path_value, str)
+    requested = Path(path_value)
+    if roots is None:
+        roots, error = _review_reader_roots(allowlist_path)
+        if error is not None:
+            return None, error
     try:
         resolved = requested.resolve(strict=True)
-    except (OSError, RuntimeError, ValueError):
-        return Path(), "requested review path is unavailable"
+    except (OSError, RuntimeError):
+        return None, "requested review path is unavailable"
     if any(
         _review_entry_is_sensitive(part)
         for part in resolved.parts
     ):
-        return Path(), "requested review path is sensitive"
-    for root, is_directory in roots:
-        if resolved == root or (is_directory and root in resolved.parents):
-            return resolved, None
-    return Path(), "requested review path is outside the current review_input"
+        return None, "requested review path is sensitive"
+    for written_root, resolved_root, is_directory in roots:
+        if resolved == resolved_root or (
+            is_directory and resolved_root in resolved.parents
+        ):
+            relative = resolved.relative_to(resolved_root)
+            display = written_root / relative
+            if redact_text(str(display)) != str(display):
+                return None, "requested review path cannot be shown verbatim"
+            return _ReviewReaderPath(resolved, display), None
+    return None, "requested review path is outside the current review_input"
+
+
+def _review_list_trailer(
+    *, total: int, withheld: int, max_lines: int, max_bytes: int
+) -> str:
+    return (
+        f"\n[{total} entries omitted: withheld={withheld} "
+        f"max_lines={max_lines} max_bytes={max_bytes}]"
+    )
+
+
+def _review_reader_list(
+    reader_path: _ReviewReaderPath,
+    *,
+    roots: list[tuple[Path, Path, bool]],
+    allowlist_path: Path,
+    max_lines: int,
+    max_bytes: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Build a deterministic, bounded directory result with omission reasons."""
+
+    resolved_directory = reader_path.resolved
+    if not resolved_directory.is_dir():
+        return None, "list requires a directory"
+
+    withheld = 0
+    candidates: list[dict[str, str]] = []
+    for entry in sorted(resolved_directory.iterdir(), key=lambda item: item.name):
+        if _review_entry_is_sensitive(entry.name):
+            withheld += 1
+            continue
+        child_path, child_error = _review_reader_path(
+            str(reader_path.display / entry.name), allowlist_path, roots=roots
+        )
+        if child_error is not None or child_path is None:
+            withheld += 1
+            continue
+        resolved_child = child_path.resolved
+        if not resolved_child.is_dir() and not resolved_child.is_file():
+            withheld += 1
+            continue
+        candidates.append(
+            {
+                "name": entry.name,
+                "path": str(child_path.display),
+                "kind": "directory" if resolved_child.is_dir() else "file",
+            }
+        )
+
+    def encoded_entries(entries: list[dict[str, str]]) -> str:
+        return json.dumps(entries, sort_keys=True)
+
+    visible: list[dict[str, str]] = []
+    cut_reason: str | None = None
+    for candidate in candidates:
+        if len(visible) >= max_lines:
+            cut_reason = "max_lines"
+            break
+        next_visible = [*visible, candidate]
+        if len(encoded_entries(next_visible).encode("utf-8")) > max_bytes:
+            cut_reason = "max_bytes"
+            break
+        visible = next_visible
+    omitted_candidates = len(candidates) - len(visible)
+    if withheld == 0 and omitted_candidates == 0:
+        text = encoded_entries(visible)
+        if len(text.encode("utf-8")) > max_bytes:
+            return None, "max_bytes too small to list review directory"
+        return {"path": str(reader_path.display), "entries": visible, "text": text}, None
+
+    total_entries = withheld + len(candidates)
+    reserve = len(
+        _review_list_trailer(
+            total=total_entries,
+            withheld=total_entries,
+            max_lines=total_entries,
+            max_bytes=total_entries,
+        ).encode("utf-8")
+    )
+    if max_bytes < len("[]".encode("utf-8")) + reserve:
+        return None, "max_bytes too small to list review directory"
+
+    visible = []
+    cut_reason = None
+    for candidate in candidates:
+        if len(visible) >= max_lines:
+            cut_reason = "max_lines"
+            break
+        next_visible = [*visible, candidate]
+        if len(encoded_entries(next_visible).encode("utf-8")) + reserve > max_bytes:
+            cut_reason = "max_bytes"
+            break
+        visible = next_visible
+    omitted_candidates = len(candidates) - len(visible)
+    omitted_lines = omitted_candidates if cut_reason == "max_lines" else 0
+    omitted_bytes = omitted_candidates if cut_reason == "max_bytes" else 0
+    total_omitted = withheld + omitted_lines + omitted_bytes
+    trailer = _review_list_trailer(
+        total=total_omitted,
+        withheld=withheld,
+        max_lines=omitted_lines,
+        max_bytes=omitted_bytes,
+    )
+    text = encoded_entries(visible) + trailer
+    structured = {
+        "path": str(reader_path.display),
+        "entries": visible,
+        "omitted": {
+            "total": total_omitted,
+            "withheld": withheld,
+            "max_lines": omitted_lines,
+            "max_bytes": omitted_bytes,
+        },
+    }
+    return {**structured, "text": text}, None
 
 
 def _review_reader_result(
@@ -365,9 +521,20 @@ def _review_reader_result(
     arguments = params.get("arguments") if isinstance(params, Mapping) else None
     if not isinstance(arguments, Mapping):
         return _review_reader_error("arguments must be an object")
-    path, error = _review_reader_path(arguments.get("path"), allowlist_path)
-    if error:
+    path_value = arguments.get("path")
+    request_error = _review_request_path_error(path_value)
+    if request_error is not None:
+        return _review_reader_error(request_error)
+    roots, error = _review_reader_roots(allowlist_path)
+    if error is not None:
         return _review_reader_error(error)
+    reader_path, error = _review_reader_path(
+        path_value, allowlist_path, roots=roots
+    )
+    if error is not None:
+        return _review_reader_error(error)
+    assert reader_path is not None
+
     operation = arguments.get("operation")
     if not isinstance(operation, str) or operation not in {"read", "list"}:
         return _review_reader_error("operation must be read or list")
@@ -382,77 +549,63 @@ def _review_reader_result(
         or not 1 <= max_bytes <= _REVIEW_READER_MAX_BYTES
     ):
         return _review_reader_error("read bounds are outside the permitted limits")
+
+    path = str(reader_path.display)
     try:
         if operation == "list":
-            if not path.is_dir():
-                return _review_reader_error("list requires a directory")
-            entries = []
-            for entry in sorted(path.iterdir(), key=lambda item: item.name):
-                if len(entries) >= max_lines:
-                    break
-                if _review_entry_is_sensitive(entry.name):
-                    continue
-                entries.append(
-                    {
-                        "name": entry.name,
-                        "kind": "directory" if entry.is_dir() else "file",
-                    }
-                )
-            text = json.dumps(entries, sort_keys=True)
+            result, error = _review_reader_list(
+                reader_path,
+                roots=roots,
+                allowlist_path=allowlist_path,
+                max_lines=max_lines,
+                max_bytes=max_bytes,
+            )
+            if error is not None:
+                return _review_reader_error(error)
+            assert result is not None
+            text = result.pop("text")
+            structured = result
         else:
-            if not path.is_file():
+            resolved_file = reader_path.resolved
+            if not resolved_file.is_file():
                 return _review_reader_error("read requires a regular file")
-            with path.open("rb") as source_file:
+            with resolved_file.open("rb") as source_file:
                 raw_bytes = source_file.read(_REVIEW_READER_MAX_SOURCE_BYTES + 1)
             source_truncated = len(raw_bytes) > _REVIEW_READER_MAX_SOURCE_BYTES
             if source_truncated:
                 raw_bytes = raw_bytes[:_REVIEW_READER_MAX_SOURCE_BYTES]
-                # Redaction patterns may need a line-ending delimiter. Never
-                # expose a byte-budget-cut suffix that could contain a partial
-                # credential or URL userinfo value.
-                if not raw_bytes.endswith(b"\n"):
-                    last_newline = raw_bytes.rfind(b"\n")
-                    raw_bytes = raw_bytes[: last_newline + 1] if last_newline >= 0 else b""
-            raw_text = raw_bytes.decode("utf-8", errors="replace")
-            selected_lines: list[str] = []
-            line_truncated = False
-            for line_number, line in enumerate(io.StringIO(raw_text, newline="")):
-                if line_number >= max_lines:
-                    line_truncated = True
+            selected_lines: list[bytes] = []
+            offset = 0
+            while len(selected_lines) < max_lines:
+                newline = raw_bytes.find(b"\n", offset)
+                if newline < 0:
+                    if offset < len(raw_bytes) and not source_truncated:
+                        selected_lines.append(raw_bytes[offset:])
+                        offset = len(raw_bytes)
                     break
-                selected_lines.append(line)
-            text = redact_text("".join(selected_lines))
-            truncated = source_truncated or line_truncated
-            if len(text.encode("utf-8")) > max_bytes:
-                truncated = True
+                selected_lines.append(raw_bytes[offset : newline + 1])
+                offset = newline + 1
+            line_truncated = source_truncated or offset < len(raw_bytes)
+            body = redact_text(
+                b"".join(selected_lines).decode("utf-8", errors="replace")
+            )
+            prefix = f"Path: {path}\n"
+            prefix_bytes = len(prefix.encode("utf-8"))
+            body_bytes = len(body.encode("utf-8"))
+            truncated = line_truncated or prefix_bytes + body_bytes > max_bytes
             if truncated:
                 marker = _REVIEW_READER_TRUNCATION_MARKER
-                marker_bytes = len(marker.encode("utf-8"))
-                if max_bytes < marker_bytes:
-                    return _review_reader_error(
-                        "max_bytes too small for truncation marker"
-                    )
-                text = _utf8_prefix(text, max_bytes - marker_bytes) + marker
-        if operation == "list":
-            text = json.dumps(entries, sort_keys=True)
-            encoded = text.encode("utf-8")
-            if len(encoded) > max_bytes:
-                marker = _REVIEW_READER_TRUNCATION_MARKER
-                marker_bytes = len(marker.encode("utf-8"))
-                if max_bytes >= marker_bytes:
-                    text = _utf8_prefix(
-                        encoded.decode("utf-8", errors="replace"),
-                        max_bytes - marker_bytes,
-                    ) + marker
-                else:
-                    text = _utf8_prefix(
-                        encoded.decode("utf-8", errors="replace"), max_bytes
-                    )
-            text = redact_text(text)
+                remaining = max_bytes - prefix_bytes - len(marker.encode("utf-8"))
+                if remaining <= 0:
+                    return _review_reader_error("max_bytes too small for review path")
+                body = _review_utf8_prefix(body, remaining) + marker
+            text = prefix + body
+            structured = {"path": path, "text": body, "truncated": truncated}
     except (OSError, UnicodeError) as exc:
         return _review_reader_error(f"review input read failed: {redact_text(str(exc))}")
     return {
         "isError": False,
+        "structuredContent": structured,
         "content": [{"type": "text", "text": text}],
     }
 
@@ -475,34 +628,49 @@ def _review_reader_trace_metadata(
         if isinstance(operation_value, str) and operation_value in {"read", "list"}
         else "invalid"
     )
-    path_value = arguments.get("path")
-    path_class = "invalid"
+    # Derive the trace class through the same validator as the user-visible
+    # result; otherwise the trace could classify malformed input differently.
+    path, path_error = _review_reader_path(arguments.get("path"), allowlist_path)
+    path_class = "invalid_allowlist"
     path_depth: int | None = None
-    path_error: str | None = None
-    if isinstance(path_value, str) and path_value.strip():
-        requested = Path(path_value)
-        if not requested.is_absolute():
-            path_class = "relative"
+    if path_error is None and path is not None:
+        roots, roots_error = _review_reader_roots(allowlist_path)
+        if roots_error is None:
+            for _, resolved_root, is_directory in roots:
+                if path.resolved == resolved_root or (
+                    is_directory and resolved_root in path.resolved.parents
+                ):
+                    path_class = "capture_root" if is_directory else "blueprint"
+                    path_depth = (
+                        len(path.resolved.relative_to(resolved_root).parts)
+                        if is_directory
+                        else 0
+                    )
+                    break
         else:
-            resolved, path_error = _review_reader_path(path_value, allowlist_path)
-            if path_error is None:
-                roots, _ = _review_reader_roots(allowlist_path)
-                for root, is_directory in roots:
-                    if resolved == root or (is_directory and root in resolved.parents):
-                        path_class = "capture_root" if is_directory else "blueprint"
-                        path_depth = len(resolved.relative_to(root).parts) if is_directory else 0
-                        break
-            elif path_error == "requested review path is outside the current review_input":
-                path_class = "outside_allowlist"
-            elif path_error == "requested review path is sensitive":
-                path_class = "sensitive"
-            elif path_error in {
-                "requested review path is unavailable",
-                "review input root is unavailable",
-            }:
-                path_class = "unavailable"
-            else:
-                path_class = "invalid_allowlist"
+            path_class = "invalid_allowlist"
+    elif path_error == "path must be absolute":
+        path_class = "relative"
+    elif path_error == "requested review path is outside the current review_input":
+        path_class = "outside_allowlist"
+    elif path_error == "requested review path is sensitive":
+        path_class = "sensitive"
+    elif path_error in {
+        "requested review path is unavailable",
+        "review input root is unavailable",
+    }:
+        path_class = "unavailable"
+    elif path_error is not None and path_error not in {
+        "review input allowlist is unavailable",
+        "review input allowlist is malformed",
+        "review input allowlist contains an invalid path",
+        "review input allowlist contains parent traversal",
+        "review input allowlist contains a non-absolute path",
+        "retained capture root is not a directory",
+        "retained blueprint path is not a regular file",
+        "review input allowlist is empty",
+    }:
+        path_class = "invalid"
 
     max_lines = arguments.get("max_lines", _REVIEW_READER_MAX_LINES)
     max_bytes = arguments.get("max_bytes", _REVIEW_READER_MAX_BYTES)
@@ -515,24 +683,31 @@ def _review_reader_trace_metadata(
         and 1 <= max_bytes <= _REVIEW_READER_MAX_BYTES
     )
     structured = result.get("structuredContent")
-    error_message = structured.get("error") if isinstance(structured, Mapping) else None
+    structured = structured if isinstance(structured, Mapping) else {}
+    error_message = structured.get("error")
     error_codes = {
         "arguments must be an object": "invalid_arguments",
         "path must be a non-empty absolute path": "invalid_path",
+        "path contains an invalid character": "path_invalid_character",
         "path must be absolute": "relative_path",
+        "path must not contain parent traversal": "path_parent_traversal",
+        "requested review path is sensitive": "sensitive_path",
+        "requested review path cannot be shown verbatim": "path_not_verbatim",
         "review input allowlist is unavailable": "allowlist_unavailable",
         "review input allowlist is malformed": "allowlist_malformed",
+        "review input allowlist contains an invalid path": "allowlist_path_invalid_character",
+        "review input allowlist contains parent traversal": "allowlist_parent_traversal",
         "review input allowlist contains a non-absolute path": "allowlist_path_invalid",
         "review input root is unavailable": "allowlist_root_unavailable",
         "retained capture root is not a directory": "capture_root_invalid",
         "retained blueprint path is not a regular file": "blueprint_invalid",
         "review input allowlist is empty": "allowlist_empty",
         "requested review path is unavailable": "path_unavailable",
-        "requested review path is sensitive": "sensitive_path",
         "requested review path is outside the current review_input": "path_outside_allowlist",
         "operation must be read or list": "invalid_operation",
         "read bounds are outside the permitted limits": "invalid_bounds",
-        "max_bytes too small for truncation marker": "invalid_bounds",
+        "max_bytes too small for review path": "max_bytes_below_prefix",
+        "max_bytes too small to list review directory": "max_bytes_below_trailer",
         "list requires a directory": "not_directory",
         "read requires a regular file": "not_file",
     }
@@ -557,27 +732,38 @@ def _review_reader_trace_metadata(
         and isinstance(content[0].get("text"), str)
         else ""
     )
-    returned_entries: int | None = None
-    if operation == "list" and error_code == "ok":
-        try:
-            decoded = json.loads(text_value)
-            returned_entries = len(decoded) if isinstance(decoded, list) else None
-        except json.JSONDecodeError:
-            returned_entries = None
-
     summary: dict[str, Any] = {
         "operation": operation,
         "path_class": path_class,
         "limits_valid": limits_valid,
         "error_code": error_code,
         "output_bytes": len(text_value.encode("utf-8")),
-        "truncated": "[runner output truncated]" in text_value,
+        "truncated": bool(structured.get("truncated", False)),
         "elapsed_ms": round(max(0.0, elapsed_ms), 3),
     }
     if path_depth is not None:
         summary["path_depth"] = path_depth
-    if returned_entries is not None:
-        summary["returned_entries"] = returned_entries
+    if operation == "list" and error_code == "ok":
+        entries = structured.get("entries")
+        if isinstance(entries, list):
+            summary["returned_entries"] = len(entries)
+        omitted = structured.get("omitted")
+        if isinstance(omitted, Mapping):
+            counts = {
+                "total": "omitted_total",
+                "withheld": "omitted_withheld",
+                "max_lines": "omitted_max_lines",
+                "max_bytes": "omitted_max_bytes",
+            }
+            valid_counts = all(
+                isinstance(omitted.get(key), int)
+                and not isinstance(omitted.get(key), bool)
+                and omitted[key] >= 0
+                for key in counts
+            )
+            if valid_counts:
+                summary.update({output: omitted[key] for key, output in counts.items()})
+                summary["truncated"] = omitted["total"] > 0
     return summary
 
 
@@ -1774,12 +1960,16 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 request = json.loads(line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
+            is_review_reader_call = (
+                isinstance(request, Mapping)
+                and request.get("method") == "tools/call"
+                and isinstance(request.get("params"), Mapping)
+                and request["params"].get("name") == _REVIEW_READER_TOOL
+            )
+            if not is_review_reader_call:
+                _trace_line(trace_path, "request", line)
             if isinstance(request, Mapping):
-                if (
-                    request.get("method") == "tools/call"
-                    and isinstance(request.get("params"), Mapping)
-                    and request["params"].get("name") == _REVIEW_READER_TOOL
-                ):
+                if is_review_reader_call:
                     write_review_reader_response(request)
                     continue
             _trace_line(trace_path, "request", line)

@@ -500,6 +500,225 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
     return responses
 
 
+def _checker_capture_call(marker: Mapping[str, object] | None) -> ToolCall:
+    return ToolCall(
+        "mcp__nxd-desktop__advance_workflow",
+        arguments={"workflow": "workflow-a", "action": {"type": "capture"}},
+        result={
+            "requirements": [
+                {
+                    "id": "review",
+                    "status": "pending",
+                    "review_input": {"retained_capture_root": "/captures/workflow-a"},
+                }
+            ]
+        },
+        observation=marker,
+    )
+
+
+def test_checker_skew_outcome_requires_markers_only_for_live_applicable_captures() -> None:
+    digest_a = "a" * 64
+    match = {
+        "kind": "checker_skew",
+        "schema": "nxd-checker-skew-v1",
+        "status": "match",
+        "source_sha256": digest_a,
+        "retained_sha256": digest_a,
+    }
+    marked = _checker_capture_call(match)
+    unmarked = _checker_capture_call(None)
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": marked.name,
+                        "arguments": marked.arguments,
+                        "result": marked.result,
+                        "observation": marked.observation,
+                    },
+                    {
+                        "name": unmarked.name,
+                        "arguments": unmarked.arguments,
+                        "result": unmarked.result,
+                        "observation": unmarked.observation,
+                    },
+                ]
+            }
+        ]
+    }
+    assert tier_module._checker_skew_outcome(observations) == ("match", ())
+    assert tier_module._checker_skew_outcome(
+        observations,
+        require_markers=True,
+    ) == ("ungraded", ("checker_skew_missing",))
+    marked_only = {
+        "turns": [{"tool_calls": observations["turns"][0]["tool_calls"][:1]}]
+    }
+    assert tier_module._checker_skew_outcome(
+        marked_only,
+        require_markers=True,
+    ) == ("match", ())
+    assert tier_module._checker_skew_outcome({"turns": [{"tool_calls": []}]}) == (None, ())
+
+    non_applicable = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": unmarked.name,
+                        "arguments": unmarked.arguments,
+                        "result": {"requirements": []},
+                        "observation": None,
+                    }
+                ]
+            }
+        ]
+    }
+    assert tier_module._checker_skew_outcome(
+        non_applicable,
+        require_markers=True,
+    ) == (None, ())
+
+
+def test_checker_skew_marker_requirement_uses_observed_turn_backends() -> None:
+    capture = _checker_capture_call(None)
+    capture_mapping = {
+        "name": capture.name,
+        "arguments": capture.arguments,
+        "result": capture.result,
+        "observation": capture.observation,
+    }
+
+    def outcome(*turns: Mapping[str, object]) -> tuple[str | None, tuple[str, ...]]:
+        return tier_module._checker_skew_outcome(
+            {"turns": list(turns)}, require_markers=True
+        )
+
+    assert outcome({"backend": "codex", "tool_calls": [capture_mapping]}) == (
+        "ungraded",
+        ("checker_skew_missing",),
+    )
+    assert outcome({"backend": "gemini", "tool_calls": [capture_mapping]}) == (
+        "ungraded",
+        ("checker_skew_missing",),
+    )
+    assert outcome({"backend": None, "tool_calls": [capture_mapping]}) == (
+        "ungraded",
+        ("checker_skew_missing",),
+    )
+    assert outcome({"backend": "claude", "tool_calls": [capture_mapping]}) == (
+        None,
+        (),
+    )
+
+    # A legacy None-backend prefix is excluded from S, so a subsequent
+    # Claude-only capture remains marker-exempt.
+    assert outcome(
+        {"backend": None, "tool_calls": []},
+        {"backend": "claude", "tool_calls": [capture_mapping]},
+    ) == (None, ())
+    # But a capture on the legacy turn itself is still fail-closed.
+    assert outcome(
+        {"backend": "claude", "tool_calls": []},
+        {"backend": None, "tool_calls": [capture_mapping]},
+    ) == ("ungraded", ("checker_skew_missing",))
+    # Mixed sessions require markers even on their Claude turns.
+    assert outcome(
+        {"backend": "codex", "tool_calls": []},
+        {"backend": "claude", "tool_calls": [capture_mapping]},
+    ) == ("ungraded", ("checker_skew_missing",))
+
+
+def test_checker_skew_mismatch_invalidates_even_with_unreadable_capture(tmp_path: Path) -> None:
+    scenario = make_scenario("checker-skew-mismatch")
+    environment_root = tmp_path / "runs"
+    environment_root.mkdir()
+    mismatch = {
+        "kind": "checker_skew",
+        "schema": "nxd-checker-skew-v1",
+        "status": "mismatch",
+        "source_sha256": "a" * 64,
+        "retained_sha256": "b" * 64,
+    }
+    unreadable = {
+        "kind": "checker_skew",
+        "schema": "nxd-checker-skew-v1",
+        "status": "unreadable",
+    }
+    first_turn = TurnResult(
+        agent_message="The capture completed.",
+        tool_calls=(
+            _checker_capture_call(mismatch),
+            _checker_capture_call(unreadable),
+        ),
+        terminal_result_count=1,
+        terminal_result_subtype="success",
+        terminal_result_is_error=False,
+    )
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=lambda *_args: InMemoryTransport(
+            responses_for(scenario, first=first_turn)
+        ),
+        environment_root=environment_root,
+        evidence_root=tmp_path / "evidence",
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert run.score.state is ScoreTerminalState.INVALID
+    assert result.verdict == "failed"
+    assert {finding.code for finding in run.score.findings} >= {
+        "checker_skew_mismatch",
+        "checker_skew_unreadable",
+    }
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"kind": "checker_skew", "schema": "wrong", "status": "unreadable"},
+        {
+            "kind": "checker_skew",
+            "schema": "nxd-checker-skew-v1",
+            "status": "match",
+            "source_sha256": "a" * 64,
+            "retained_sha256": "b" * 64,
+        },
+        {
+            "kind": "checker_skew",
+            "schema": "nxd-checker-skew-v1",
+            "status": "unreadable",
+            "source_sha256": "a" * 64,
+        },
+        {"kind": "checker_skew", "schema": "nxd-checker-skew-v1", "status": []},
+    ],
+)
+def test_checker_skew_malformed_markers_are_ungraded(marker: Mapping[str, object]) -> None:
+    call = _checker_capture_call(marker)
+    observations = {
+        "turns": [
+            {
+                "tool_calls": [
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "observation": call.observation,
+                    }
+                ]
+            }
+        ]
+    }
+    assert tier_module._checker_skew_outcome(observations) == (
+        "ungraded",
+        ("checker_skew_malformed",),
+    )
+
+
 def test_tier_runs_scenarios_concurrently_and_preserves_declaration_order(tmp_path: Path) -> None:
     scenarios = (make_scenario("first"), make_scenario("second"))
     (tmp_path / "runs").mkdir()
@@ -1768,6 +1987,37 @@ def test_artifact_only_sentinel_trip_is_seen_by_the_tier_scan(
     assert run.score.state is ScoreTerminalState.AUTOMATIC_ZERO
 
 
+@pytest.mark.parametrize("hard_failure", ["sentinel", "gold_access"])
+def test_ungraded_checker_marker_does_not_downgrade_automatic_zero(
+    monkeypatch: pytest.MonkeyPatch, hard_failure: str
+) -> None:
+    scenario = make_scenario(f"checker-ungraded-{hard_failure}")
+    recording = recording_for(scenario, responses_for(scenario))
+    if hard_failure == "sentinel":
+        monkeypatch.setattr(tier_module, "_sentinel_trip", lambda *_args: True)
+    else:
+        monkeypatch.setattr(
+            tier_module,
+            "gold_access_scan",
+            lambda *_args: SimpleNamespace(passed=False, examined=True, findings=()),
+        )
+    monkeypatch.setattr(
+        tier_module,
+        "_checker_skew_outcome",
+        lambda *_args, **_kwargs: ("ungraded", ("checker_skew_unreadable",)),
+    )
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    assert result.verdict == "failed"
+    assert result.scenario_runs[0].score.state is ScoreTerminalState.AUTOMATIC_ZERO
+
+
 def test_a_read_result_does_not_trip_the_sentinel_gate_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2951,7 +3201,7 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
         phase_by_turn={1: 1, 2: 2, 3: 3},
     )
     responses = [
-        TurnResult(agent_message="What does the value column represent?"),
+        TurnResult(agent_message="What does the value column represent?", backend="claude"),
         TurnResult(agent_message="What is the endpoint retry policy?"),
         TurnResult(agent_message="Yes, please proceed.", reported=True),
     ]
@@ -2971,6 +3221,8 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
     assert payload["turns"][1]["operator_answered_from_ground_truth"] is False
     assert payload["turns"][1]["operator_matched_rule_id"] == "unmatched.source_question"
     assert payload["turns"][2]["operator_matched"] is True
+    assert payload["turns"][0]["backend"] == "claude"
+    assert "backend" not in payload["turns"][1]
 
 
 def test_operator_observations_do_not_count_a_withheld_fact_as_answered(tmp_path: Path) -> None:

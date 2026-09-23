@@ -73,7 +73,7 @@ _MARKER_RE = re.compile(
     r"direction=(?P<direction>\S+)(?:\s+kind=(?P<kind>\S+))?"
     r"(?:\s+probe=(?P<probe>\S+))?(?:\s+signature=(?P<signature>\S+))?"
 )
-_CONNECTOR_RE = re.compile(r"^\s*\|\s*(?P<name>CSV|Other file|Database|REST API)\b")
+_CONNECTOR_RE = re.compile(r"^\s*\|\s*(?P<name>CSV|Other (?:local )?file|Database|REST API)\b")
 _API_SIGNATURE_RE = re.compile(
     r"^\s*[-*]\s+(?:\*\*)?`(?:source_aligned_input|data_product_input|"
     r"data_product_output|semantic_model|semantic_view)\([^`]*\)`"

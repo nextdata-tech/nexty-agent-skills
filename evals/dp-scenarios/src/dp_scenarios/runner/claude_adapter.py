@@ -28,6 +28,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
@@ -2430,11 +2431,13 @@ class ClaudeCodeAdapter:
             self._review_guard_settings = None
 
 
-def _write_result(value: TurnResult) -> None:
+def _write_result(value: TurnResult, *, backend: str | None = None) -> None:
     """Emit exactly one harness response line."""
 
     from dp_scenarios.runner.session import turn_result_to_dict
 
+    if backend is not None:
+        value = replace(value, backend=backend)
     sys.stdout.write(json.dumps({"result": turn_result_to_dict(value)}, ensure_ascii=False, sort_keys=True) + "\n")
     sys.stdout.flush()
 
@@ -2535,7 +2538,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 request = json.loads(line)
                 if not isinstance(request, Mapping):
                     raise ClaudeAdapterError("request must be a JSON object")
-                _write_result(adapter.send(request))
+                _write_result(adapter.send(request), backend="claude")
             except (ClaudeAdapterError, OSError, ValueError) as exc:
                 _write_result(
                     TurnResult(
@@ -2550,7 +2553,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                         last_mcp_call=getattr(adapter, "last_mcp_call", None),
                         session_id=adapter._session_id,
-                    )
+                    ),
+                    backend="claude",
                 )
                 return 1
     finally:

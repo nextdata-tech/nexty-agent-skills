@@ -7,10 +7,12 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-23 | restore #298 field-level semantic descriptions | NO_EVAL | — | [`2026-09-23-description-guidance-298-restore`](entries/2026-09-23-description-guidance-298-restore.md) |
 | 2026-09-23 | Codex reviewer deadlines and timeout diagnostics reflect observed state | NO_EVAL | — | [`2026-09-23-codex-reviewer-diagnostics`](entries/2026-09-23-codex-reviewer-diagnostics.md) |
 | 2026-09-23 | Codex native continuation preserves private app-server state | NO_EVAL | — | [`2026-09-23-codex-native-state-retention`](entries/2026-09-23-codex-native-state-retention.md) |
 | 2026-09-22 | preserve reviewer evidence when Agent prompts are redacted | NO_EVAL | — | [`2026-09-22-redacted-review-evidence`](entries/2026-09-22-redacted-review-evidence.md) |
 | 2026-09-22 | keep Codex file-change recovery and review state honest | NO_EVAL | — | [`2026-09-22-codex-file-change-recovery`](entries/2026-09-22-codex-file-change-recovery.md) |
+| 2026-09-22 | detect retained self-checker skew and harden review-reader paths | NO_EVAL | — | [`2026-09-22-codex-checker-skew-review-reader`](entries/2026-09-22-codex-checker-skew-review-reader.md) |
 | 2026-09-21 | nxd-generate-data-product: harden copied source and ratio contracts | NO_EVAL | — | [`2026-09-21-source-contract-hardening`](entries/2026-09-21-source-contract-hardening.md) |
 | 2026-09-21 | nxd-generate-data-product: reject reduced row-level ratios | NO_EVAL | — | [`2026-09-21-ratio-metric-reduction-guidance`](entries/2026-09-21-ratio-metric-reduction-guidance.md) |
 | 2026-09-21 | fix Codex root-turn terminal accounting | NO_EVAL | — | [`2026-09-21-codex-root-turn-accounting`](entries/2026-09-21-codex-root-turn-accounting.md) |

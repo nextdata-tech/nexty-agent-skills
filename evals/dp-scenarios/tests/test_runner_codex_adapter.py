@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import sys
@@ -22,6 +24,8 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAdapter,
     CodexAdapterError,
     _COLLAB_FAILURE_STATUSES,
+    _attach_checker_skew_markers,
+    _checker_skew_marker,
     _codex_timeout_detail,
     _event_debug_tail,
     _codex_timeout_failure_reason,
@@ -37,6 +41,7 @@ from dp_scenarios.runner.codex_adapter import (
     _update_reviewer_deadline_from_events,
     _load_mcp_server,
     parse_codex_events,
+    _write_result,
 )
 from dp_scenarios.runner import codex_adapter as codex_adapter_module
 from dp_scenarios.failure_reasons import (
@@ -47,6 +52,7 @@ from dp_scenarios.failure_reasons import (
     CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
 )
+from dp_scenarios.operator.transport import TurnResult
 from dp_scenarios.runner.review_guard import REVIEW_DEADLINE_MS
 
 
@@ -1168,6 +1174,12 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Complete closure authoring in this parent" in CODEX_SYSTEM_PROMPT
     assert "do not use destructive" in CODEX_SYSTEM_PROMPT
     assert "Do not use `spawnAgent` for closure authoring" in CODEX_SYSTEM_PROMPT
+
+
+def test_codex_adapter_result_identifies_its_backend(capsys: pytest.CaptureFixture[str]) -> None:
+    _write_result(TurnResult(agent_message="ready"), backend="codex")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"]["backend"] == "codex"
     assert "bounded per retained capture" in CODEX_SYSTEM_PROMPT
     assert "the per-capture limit resets" in CODEX_SYSTEM_PROMPT
     assert "do not call prepare_workflow, get_workflow_capabilities, or" in CODEX_SYSTEM_PROMPT
@@ -1231,6 +1243,7 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "retry once with a complete valid file-change operation" in CODEX_SYSTEM_PROMPT
     assert "do not report an environment" in CODEX_SYSTEM_PROMPT
     assert "corrected operation is rejected too" in CODEX_SYSTEM_PROMPT
+    assert "exact `path` values returned by the reader verbatim" in CODEX_SYSTEM_PROMPT
 
 
 def test_review_child_prompt_describes_the_runtime_read_only_boundary() -> None:
@@ -2042,6 +2055,240 @@ def test_parse_codex_events_preserves_mcp_calls_and_terminal_facts() -> None:
     assert result.tool_calls[0].name == "mcp__nxd-desktop__advance_workflow"
     assert observations[0]["tool"] == "advance_workflow"
     assert observations[0]["result"] == {"admission": {"run_id": "run-1"}}
+
+
+def test_codex_capture_gets_checker_marker_without_calling_review_reader(tmp_path: Path) -> None:
+    pack = tmp_path / "pack"
+    checker = pack / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_bytes(b"trusted checker bytes\n")
+    supervisor = tmp_path / "supervisor"
+    capture = supervisor / "captures" / "workflow-a" / "review"
+    capture.mkdir(parents=True)
+    (capture / "self_check.py").write_bytes(checker.read_bytes())
+    arguments = {"workflow": "workflow-a", "action": {"type": "capture"}}
+    events = [
+        {
+            "type": "item.started",
+            "item": {
+                "id": "capture-call",
+                "type": "mcp_tool_call",
+                "server": "nxd-desktop",
+                "tool": "advance_workflow",
+                "arguments": arguments,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "capture-call",
+                "type": "mcp_tool_call",
+                "server": "nxd-desktop",
+                "tool": "advance_workflow",
+                "arguments": arguments,
+                "result": {
+                    "structured_content": {
+                        "requirements": [
+                            {
+                                "id": "review",
+                                "status": "pending",
+                                "review_input": {
+                                    "retained_capture_root": str(capture),
+                                    "retained_blueprint_path": str(capture / "blueprint.md"),
+                                },
+                            }
+                        ]
+                    }
+                },
+            },
+        },
+        {"type": "turn.completed"},
+    ]
+
+    parsed, observations = parse_codex_events(
+        events,
+        redact_json_rpc=_identity,
+        redact_text=lambda value: value,
+        session_id="thread-a",
+    )
+    assert parsed.tool_calls[0].observation is None
+    assert not any(call.name.endswith("read_review_input") for call in parsed.tool_calls)
+    marked = _attach_checker_skew_markers(
+        parsed.tool_calls,
+        observations,
+        skill_pack_root=pack,
+        supervisor_data_dir=supervisor,
+    )
+    assert marked[0].observation == {
+        "kind": "checker_skew",
+        "schema": "nxd-checker-skew-v1",
+        "status": "match",
+        "source_sha256": hashlib.sha256(checker.read_bytes()).hexdigest(),
+        "retained_sha256": hashlib.sha256(checker.read_bytes()).hexdigest(),
+    }
+    assert str(capture) not in json.dumps(marked[0].observation)
+    assert "trusted checker bytes" not in json.dumps(marked[0].observation)
+
+
+def test_checker_skew_accepts_macos_data_dir_symlink_spelling(tmp_path: Path) -> None:
+    pack = tmp_path / "pack"
+    checker = pack / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_bytes(b"trusted checker bytes\n")
+    supervisor = tmp_path / "supervisor"
+    digest = "a" * 64
+    capture = supervisor / "captures" / "sha256" / digest
+    capture.mkdir(parents=True)
+    (capture / "self_check.py").write_bytes(checker.read_bytes())
+    supervisor_alias = tmp_path / "supervisor-alias"
+    supervisor_alias.symlink_to(supervisor, target_is_directory=True)
+    observation = {
+        "tool": "advance_workflow",
+        "arguments": {"action": {"type": "capture"}},
+        "result": {
+            "requirements": [
+                {
+                    "id": "review",
+                    "review_input": {
+                        "retained_capture_root": str(
+                            supervisor_alias / "captures" / "sha256" / digest
+                        )
+                    },
+                }
+            ]
+        },
+        "is_error": False,
+        "answered": True,
+    }
+
+    marker = _checker_skew_marker(
+        observation,
+        skill_pack_root=pack,
+        supervisor_data_dir=supervisor,
+    )
+
+    assert marker is not None
+    assert marker["status"] == "match"
+
+
+@pytest.mark.parametrize(
+    ("root_kind", "source_kind", "expected_status"),
+    [
+        ("different", "regular", "mismatch"),
+        ("missing", "regular", "unreadable"),
+        ("symlink", "regular", "unreadable"),
+        ("symlink-directory", "regular", "unreadable"),
+        ("fifo", "regular", "unreadable"),
+        ("regular", "symlink", "unreadable"),
+        ("outside", "regular", "malformed"),
+        ("valid-suffix-outside", "regular", "malformed"),
+    ],
+)
+def test_checker_skew_fails_closed_for_bad_sources_and_capture_paths(
+    tmp_path: Path, root_kind: str, source_kind: str, expected_status: str
+) -> None:
+    pack = tmp_path / "pack"
+    source = pack / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"trusted\n")
+    supervisor = tmp_path / "supervisor"
+    captures = supervisor / "captures"
+    capture = captures / "workflow"
+    capture.mkdir(parents=True)
+    retained = capture / "self_check.py"
+    retained.write_bytes(b"trusted\n")
+    root_value = str(capture)
+    if root_kind == "different":
+        retained.write_bytes(b"changed\n")
+    elif root_kind == "missing":
+        retained.unlink()
+    elif root_kind == "symlink":
+        retained.unlink()
+        outside_file = tmp_path / "outside-checker.py"
+        outside_file.write_bytes(b"trusted\n")
+        retained.symlink_to(outside_file)
+    elif root_kind == "symlink-directory":
+        alias = captures / "workflow-alias"
+        alias.symlink_to(capture, target_is_directory=True)
+        root_value = str(alias)
+    elif root_kind == "fifo":
+        retained.unlink()
+        os.mkfifo(retained)
+    elif root_kind == "outside":
+        root_value = str(tmp_path / "outside-capture")
+    elif root_kind == "valid-suffix-outside":
+        outside_capture = (
+            tmp_path
+            / "outside-supervisor"
+            / "captures"
+            / "sha256"
+            / ("b" * 64)
+        )
+        outside_capture.mkdir(parents=True)
+        root_value = str(outside_capture)
+    if source_kind == "symlink":
+        source.unlink()
+        outside_source = tmp_path / "trusted-checker.py"
+        outside_source.write_bytes(b"trusted\n")
+        source.symlink_to(outside_source)
+    observation = {
+        "tool": "advance_workflow",
+        "arguments": {"action": {"type": "capture"}},
+        "result": {
+            "requirements": [
+                {"id": "review", "review_input": {"retained_capture_root": root_value}}
+            ]
+        },
+        "is_error": False,
+        "answered": True,
+    }
+
+    marker = _checker_skew_marker(
+        observation,
+        skill_pack_root=pack,
+        supervisor_data_dir=supervisor,
+    )
+    assert marker is not None
+    assert marker["status"] == expected_status
+    if expected_status in {"unreadable", "malformed"}:
+        assert "source_sha256" not in marker
+        assert "retained_sha256" not in marker
+
+
+def test_checker_skew_over_cap_is_unreadable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter._CHECKER_SKEW_MAX_BYTES", 4
+    )
+    pack = tmp_path / "pack"
+    source = pack / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"ok")
+    supervisor = tmp_path / "supervisor"
+    capture = supervisor / "captures" / "workflow"
+    capture.mkdir(parents=True)
+    (capture / "self_check.py").write_bytes(b"too long")
+    observation = {
+        "tool": "advance_workflow",
+        "arguments": {"action": {"type": "capture"}},
+        "result": {
+            "requirements": [
+                {"id": "review", "review_input": {"retained_capture_root": str(capture)}}
+            ]
+        },
+        "is_error": False,
+        "answered": True,
+    }
+
+    marker = _checker_skew_marker(
+        observation,
+        skill_pack_root=pack,
+        supervisor_data_dir=supervisor,
+    )
+    assert marker == {
+        "kind": "checker_skew",
+        "schema": "nxd-checker-skew-v1",
+        "status": "unreadable",
+    }
 
 
 def test_parse_codex_file_change_rejection_is_recoverable_without_raw_error() -> None:
@@ -3115,7 +3362,11 @@ def test_main_suppresses_private_startup_exception_text(
             pass
 
     monkeypatch.setattr(codex_adapter_module, "CodexAdapter", StartupFailure)
-    monkeypatch.setattr(codex_adapter_module, "_write_result", written.append)
+    monkeypatch.setattr(
+        codex_adapter_module,
+        "_write_result",
+        lambda result, **_kwargs: written.append(result),
+    )
     monkeypatch.setattr(sys, "stdin", StringIO('{"message":{"text":"test"}}\n'))
     monkeypatch.setattr(codex_adapter_module.signal, "signal", lambda *_args: None)
 

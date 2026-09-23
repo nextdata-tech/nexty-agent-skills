@@ -35,16 +35,9 @@ vocabulary — the Workflow's **policy read-back gate** runs before any file is
 written. A closure whose scoring policy the user never saw is the one failure
 this skill treats as unrecoverable.
 
-**Connector types at a glance** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
-| Type | Service | `secrets[...]` key | Companion artifact |
-|---|---|---|---|
-| CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
-| Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
-| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |
-| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | required `connectivity_check.py`; no endpoint-map companion — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |
-| Google Drive files | `api-source` with `source_kind: google_drive_files` | flat Drive API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform lists and downloads selected files |
-| Google Sheets | `api-source` with `source_kind: google_sheets` | flat Sheets API attributes plus bearer credentials | `connectivity_check.py`; no local export — the transform reads selected spreadsheet ranges |
+**Connector types** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 
+For `api-source`, additionally require the closure-local `connectivity_check.py` probe; only its endpoint-map companion is absent. For `api-source`, the endpoint-map companion is absent because its map is carried by `endpoint_<model>` profile attributes; the connectivity probe is still required, and the `connectivity_check.py` for `api-source` must pass before authoring.
 Specialized API profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape. The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
 It runs the transform, verifies staging, and stands up the semantic MCP endpoint.
 Return facts and a structured handoff to `nxd-run-job-loop`; internal terms may appear in implementation guidance and structured handoffs. The owning loop translates status, failures, costs, and publication state into plain chat and never copies raw internal output; see [user-facing language](../nxd-run-job-loop/reference/user-facing-language.md).
@@ -279,9 +272,9 @@ per set of metrics over that table:
   a physical table without one may build but cannot be selected by
   `run_semantic_query`.
 
-Role builders: `field(number(), primary_key(), dimension(name=..., description="..."))` — key roles compose with a dimension, and `grain` is deprecated; `field(string(), dimension(name=..., pii=<flag>, description="..."))`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`. Put semantic descriptions on the `dimension(...)` or `metric(...)` role, not only on the enclosing `field(...)` / `metric_field(...)` wrapper: wrapper-only text is not reachable by the semantic catalog checker. **Timestamp types are parameterized:** import `DurationUnit` from `nxd.core.yaml_schemas` and use `timestamp(unit=DurationUnit.Milliseconds)` (or the source's required precision); never emit bare `timestamp()`, which raises `TypeError` during supervisor spec compilation. See [reference/nxd-spec-api.md](reference/nxd-spec-api.md) for the full type surface.
+Role builders: `field(number(), primary_key(), dimension(name=...), description="...")` — key roles compose with a dimension, and `grain` is deprecated; `field(string(), dimension(name=..., pii=<flag>), description="...")`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`. **Timestamp types are parameterized:** import `DurationUnit` from `nxd.core.yaml_schemas` and use `timestamp(unit=DurationUnit.Milliseconds)` (or the source's required precision); never emit bare `timestamp()`, which raises `TypeError` during supervisor spec compilation. See [reference/nxd-spec-api.md](reference/nxd-spec-api.md) for the full type surface.
 
-**Every field takes a role, except a measure a metric aggregates.** A field carrying a dimension or metric needs a `description=` on that semantic role; `primary_key()`/`join()` take none. Every `semantic_model` needs `.description(...)`, and a `join(...)` needs a `dimension(...)` on the same field. The semantic view must carry a metric — a bare `COUNT` will do — or the model is unqueryable (`struct.model_not_queryable`); a bare key is likewise not groupable. `describe_models` is all a later consumer sees, so a bare column is invisible and a bare name unusable. Put descriptions directly on `dimension(...)`/`metric(...)` — a wrapper-only `field()`/`metric_field()` description is not reachable and yields `struct.description_unreachable`. A dimension a **ruling** created must state that ruling.
+**Every field takes a role, except a measure a metric aggregates.** A field carrying a dimension or metric needs a `description=` on the field (the role inherits it); `primary_key()`/`join()` take none. Every `semantic_model` needs `.description(...)`, and a `join(...)` needs a `dimension(...)` on the same field. The semantic view must carry a metric — a bare `COUNT` will do — or the model is unqueryable (`struct.model_not_queryable`); a bare key is likewise not groupable. `describe_models` is all a later consumer sees, so a bare column is invisible and a bare name unusable. Put descriptions on `field()`/`metric_field()` so the dimension or metric inherits the same text shown by the catalog. A dimension a **ruling** created must state that ruling.
 Metrics stay question-driven: a numeric no question aggregates is a `number` dimension. For an approved row-level output, every projected value — including numeric amounts — remains a dimension and must be selected in `dimensions[]`; do not create or query a `total_<field>` metric in place of those record values. If the catalog exposes only an aggregate for a promised row-level field, repair the semantic roles before querying rather than presenting aggregate rows as records. No marker model: produce-verification is `.transform-complete`.
 `reference/models-example.md` shows the shape.
 
@@ -421,7 +414,6 @@ The desktop closure ships its own infra profile declaring the three local
 services the spec references (`duckdb`, `python-compute`, `csv-source`). Emit it
 **verbatim** from [reference/infra-profile.md](reference/infra-profile.md);
 `metadata.name` is `desktop-local` and MUST match `infra_profile=` in `spec.py`.
-Copy the fixed driver ids exactly: `duckdb`=`nxd:local/duckdb/storage:0.1.0`, `python-compute`=`nxd:local/python/compute:0.1.0`, `csv-source`=`nxd:local/file/storage:0.1.0`; never shorten them to a bare local driver.
 The `csv-source` service (driver `nxd:local/file/storage:0.1.0`) delivers the
 **relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the
 pinned snapshot and fails).

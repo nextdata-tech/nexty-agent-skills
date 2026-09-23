@@ -212,6 +212,38 @@ def test_connector_table_is_only_a_type_claim(tmp_path: Path) -> None:
     )
 
 
+def test_canonical_source_types_index_rows_are_type_claims(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    reference = root / "fixture-skill" / "reference"
+    reference.mkdir(parents=True)
+    (root / "fixture-skill" / "SKILL.md").write_text(
+        "See the [source types index](reference/source-types.md) for the canonical matrix.\n",
+        encoding="utf-8",
+    )
+    (reference / "source-types.md").write_text(
+        "| Source type | Service | Companion artifact | Detailed recipe |\n"
+        "|---|---|---|---|\n"
+        "| CSV | `csv-source` | `csv-source-path` + `data/` | [CSV](../SKILL.md) |\n"
+        "| Other local file | `file-source` | `file-source-path` + `data/` | [File](file-source.md) |\n"
+        "| Database | `db-source` | `db-source-tables` | [Database](database-source.md) |\n"
+        "| REST API | `api-source` | `connectivity_check.py`; endpoint attributes | [API](api-source.md) |\n",
+        encoding="utf-8",
+    )
+
+    result = extract_claims(root)
+
+    assert [claim.category for claim in result.claims] == ["type"] * 4
+    assert [claim.skill_file for claim in result.claims] == [
+        "fixture-skill/reference/source-types.md"
+    ] * 4
+    assert [claim.quote.split("|", 2)[1].strip() for claim in result.claims] == [
+        "CSV",
+        "Other local file",
+        "Database",
+        "REST API",
+    ]
+
+
 def test_fixture_skill_smoke_always_runs(tmp_path: Path) -> None:
     """Exercise the smoke boundary on a hermetic skills root on every host."""
 

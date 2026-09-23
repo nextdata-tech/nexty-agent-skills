@@ -82,6 +82,9 @@ class TurnResult:
     #: Sanitized identity of the last MCP call this turn observed, so an
     #: incomplete run still says where it stopped rather than only that it did.
     last_mcp_call: str | None = None
+    #: Provider adapter that produced this turn; None for synthetic/replay-era
+    #: records that predate explicit backend identity.
+    backend: str | None = None
     session_id: str | None = None
     #: Stream-level completion facts. Zero/None are deliberate fail-closed
     #: defaults for old replays and transports that did not observe a terminal
@@ -99,6 +102,8 @@ class TurnResult:
         object.__setattr__(self, "tool_calls", tuple(self.tool_calls))
         object.__setattr__(self, "tool_results", tuple(self.tool_results))
         object.__setattr__(self, "files_touched", tuple(self.files_touched))
+        if self.backend is not None and not isinstance(self.backend, str):
+            raise TypeError("backend must be a string or None")
         if self.build_failure_count < 0:
             raise ValueError("build_failure_count must be non-negative")
         if not isinstance(self.terminal_result_count, int) or isinstance(
