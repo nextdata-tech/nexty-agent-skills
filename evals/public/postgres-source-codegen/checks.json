@@ -1,0 +1,30 @@
+{
+  "name": "Generate a Postgres data-product source",
+  "skills": [
+    "nxd-generate-data-product"
+  ],
+  "deterministic_check": {
+    "script": "check_postgres_source.py",
+    "deps": [],
+    "redaction_markers": ["pg_eval_password_4f8d2a"],
+    "redaction_input_files": ["source-contract.yaml"]
+  },
+  "checks": [
+    {
+      "id": "contract-read-before-authoring",
+      "check": "The generated closure reflects the supplied Postgres topology, schema, and two source-table mappings."
+    },
+    {
+      "id": "dlt-sql-connector",
+      "check": "Ingestion uses dlt sql_database with the configured schema and table_names, then renames resources to the promised models."
+    },
+    {
+      "id": "flat-credential-boundary",
+      "check": "Connection fields are flat profile attributes with topology public and user/password private; the password is not present in generated source."
+    },
+    {
+      "id": "read-only-desktop-boundary",
+      "check": "The closure uses the local DuckDB output path without exporting source files, issuing write SQL, or contacting a live database."
+    }
+  ]
+}

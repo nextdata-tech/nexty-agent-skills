@@ -1,0 +1,22 @@
+provider: jira
+source_kind: jira
+base_url: https://acme.atlassian.test
+auth:
+  type: http_basic
+  username: jira_eval_user
+  api_token: jira_eval_token_6a2c9e
+operation:
+  name: issues
+  method: GET
+  path: /rest/api/3/search
+  jql: project = DATA ORDER BY created ASC
+  start_at: 0
+  max_results: 50
+  response:
+    rows_path: issues
+    total_path: total
+    fields:
+      - key
+      - summary
+      - status.name
+      - assignee.displayName

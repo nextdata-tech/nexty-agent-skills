@@ -1,0 +1,17 @@
+provider: salesforce
+source_kind: salesforce
+base_url: https://acme.my.salesforce.test
+api_version: v60.0
+auth:
+  type: bearer
+  token: sf_eval_token_8b1d4e
+  required_scopes:
+    - api
+operation:
+  name: accounts
+  method: GET
+  path: /services/data/v60.0/query
+  query: SELECT Id,Name,Industry,LastModifiedDate FROM Account ORDER BY LastModifiedDate
+  response:
+    rows_path: records
+    cursor_path: nextRecordsUrl

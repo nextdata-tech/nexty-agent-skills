@@ -1,0 +1,11 @@
+provider: postgres
+source_kind: sql_database
+host: db.eval.internal
+port: "5432"
+database: commerce
+schema: analytics
+user: readonly_eval
+password: pg_eval_password_4f8d2a
+tables:
+  orders_model: analytics.orders
+  customers_model: analytics.customers
