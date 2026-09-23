@@ -244,6 +244,46 @@ def test_live_inline_guidance_has_no_role_level_descriptions() -> None:
         assert errors == [], f"{path} has stale inline guidance: {errors}"
 
 
+def test_desktop_infra_guidance_keeps_exact_local_driver_ids() -> None:
+    text = (REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    profile = (
+        REPO_ROOT
+        / "src"
+        / "nxd-generate-data-product"
+        / "reference"
+        / "infra-profile.md"
+    ).read_text(encoding="utf-8")
+    normalized_text = re.sub(r"\s+", " ", text)
+    drivers = {
+        "duckdb": "nxd:local/duckdb/storage:0.1.0",
+        "python-compute": "nxd:local/python/compute:0.1.0",
+        "csv-source": "nxd:local/file/storage:0.1.0",
+    }
+    for service, driver_id in drivers.items():
+        assert f"`{service}` = `{driver_id}`" in normalized_text
+        assert re.search(
+            rf"- name: {re.escape(service)}\n\s+driver: {re.escape(driver_id)}",
+            profile,
+        )
+    assert "never shorten them to a bare local driver" in normalized_text
+
+
+def test_api_source_guidance_preserves_companion_requirements() -> None:
+    text = (REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_text = re.sub(r"\s+", " ", text)
+    assert "the only absent companion is the endpoint map" in normalized_text
+    assert "endpoint_<model>` profile attributes" in normalized_text
+    assert (
+        "additionally require the closure-local `connectivity_check.py` probe"
+        in normalized_text
+    )
+    assert "make it pass before authoring" in normalized_text
+
+
 def test_read_csv_rows_checks_required_and_duplicate_headers(tmp_path: Path):
     recipe = _recipe()
     source = _write(tmp_path / "source.csv", "id,name\n1,one\n")
