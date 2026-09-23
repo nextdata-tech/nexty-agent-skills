@@ -422,7 +422,9 @@ services the spec references (`duckdb`, `python-compute`, `csv-source`). Emit it
 **verbatim** from [reference/infra-profile.md](reference/infra-profile.md);
 `metadata.name` is `desktop-local` and MUST match `infra_profile=` in `spec.py`.
 Copy the fixed driver ids exactly: `duckdb`=`nxd:local/duckdb/storage:0.1.0`, `python-compute`=`nxd:local/python/compute:0.1.0`, `csv-source`=`nxd:local/file/storage:0.1.0`; never shorten them to a bare local driver.
-The `csv-source` service delivers the **relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the pinned snapshot and fails).
+The `csv-source` service (driver `nxd:local/file/storage:0.1.0`) delivers the
+**relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the
+pinned snapshot and fails).
 
 **Other connector types** change only the third service's name and its
 `attributes` — the rules, and what derived models do not change, are in
