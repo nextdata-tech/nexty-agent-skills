@@ -460,3 +460,20 @@ def test_recipe_source_runs_after_copying_into_a_closure(tmp_path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.ratio_cents("100", "4", metric_name="cpa") == 25
+
+
+def test_promise_verifiers_are_independent_and_review_sweeps_defect_classes() -> None:
+    # Live B3 and B1 runs paid one reset, recapture and review cycle for each
+    # sibling of the same defect. Each fresh review found one more
+    # self-consistency-only verifier. The generator must author an independent
+    # verifier per promised output, and the reviewer must sweep the whole class.
+    def flat(*parts: str) -> str:
+        return " ".join((REPO_ROOT.joinpath(*parts)).read_text(encoding="utf-8").split())
+
+    contracts = flat("src", "nxd-generate-data-product", "reference", "custom-contracts.md")
+    assert "Verify against an independent witness, one verifier per promised output." in contracts
+    assert "Every output the approved blueprint promises gets its own verifier." in contracts
+
+    review = flat("src", "nxd-review-closure", "SKILL.md")
+    assert "### Sweep a defect class once you find it" in review
+    assert "check every other promise, verifier, model and output in the capture for the same class in this same pass" in review
