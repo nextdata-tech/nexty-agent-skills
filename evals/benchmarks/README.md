@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-24 | trusted proposal validator reports object-valued provenance instead of crashing | NO_EVAL | — | [`2026-09-24-validator-provenance-crash`](entries/2026-09-24-validator-provenance-crash.md) |
+| 2026-09-24 | review-closure sweeps each defect class across all siblings in one round | NO_EVAL | — | [`2026-09-24-review-sweep-siblings`](entries/2026-09-24-review-sweep-siblings.md) |
 | 2026-09-23 | fix MCP trace duplication and restore driver guidance | NO_EVAL | — | [`2026-09-23-trace-and-driver-guidance-review-fixes`](entries/2026-09-23-trace-and-driver-guidance-review-fixes.md) |
 | 2026-09-23 | restore #298 field-level semantic descriptions | NO_EVAL | — | [`2026-09-23-description-guidance-298-restore`](entries/2026-09-23-description-guidance-298-restore.md) |
 | 2026-09-23 | Codex reviewer deadlines and timeout diagnostics reflect observed state | NO_EVAL | — | [`2026-09-23-codex-reviewer-diagnostics`](entries/2026-09-23-codex-reviewer-diagnostics.md) |

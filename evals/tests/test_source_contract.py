@@ -460,3 +460,17 @@ def test_recipe_source_runs_after_copying_into_a_closure(tmp_path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.ratio_cents("100", "4", metric_name="cpa") == 25
+
+
+def test_review_closure_sweeps_each_defect_class_in_one_round() -> None:
+    # Live B3/B1 runs paid one reset-recapture-review cycle per sibling of the
+    # same defect (verifier after verifier) because each fresh review sampled
+    # one instance. The reviewer must sweep siblings within the round.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "## Sweep each defect class before returning" in (
+        REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "check every sibling that could have the same defect in this same round" in text
+    assert "every `contracts/promises/*` verifier in the closure" in text
