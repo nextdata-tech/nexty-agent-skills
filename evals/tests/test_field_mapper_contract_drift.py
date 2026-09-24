@@ -154,7 +154,7 @@ def test_timestamp_columns_use_the_parameterized_nxd_type():
     assert "| `value_timestamp` | `timestamp()` |" not in contract
     assert "| `override_value_timestamp` | `timestamp()` |" not in contract
     assert "timestamp(unit=DurationUnit.Microseconds)" in contract
-    assert "import `DurationUnit` from `nxd.core.yaml_schemas`" in contract
+    assert "import `DurationUnit` from `nxd.spec.data_types`" in contract
 
 
 def test_provider_default_is_documented_as_grant_resolved():

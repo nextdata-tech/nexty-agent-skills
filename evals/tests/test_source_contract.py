@@ -477,3 +477,69 @@ def test_promise_verifiers_are_independent_and_review_sweeps_defect_classes() ->
     review = flat("src", "nxd-review-closure", "SKILL.md")
     assert "### Sweep a defect class once you find it" in review
     assert "check every other promise, verifier, model and output in the capture for the same class in this same pass" in review
+
+
+def test_metric_names_are_registry_unique_and_check_runs_before_capture() -> None:
+    # A live B3 repair added `row_count` to three semantic views, following the
+    # generator's own example. Spec compilation rejected the duplicates, and
+    # validation surfaced only a bounded preflight code. The agent could not
+    # read the finding because the skill called check_data_product optional.
+    def flat(*parts: str) -> str:
+        return " ".join((REPO_ROOT.joinpath(*parts)).read_text(encoding="utf-8").split())
+
+    generator = flat("src", "nxd-generate-data-product", "SKILL.md")
+    assert 'name="row_count"' not in generator
+    assert 'name="<model>_row_count"' in generator
+    assert "Metric names are global across the registry" in generator
+    assert "call the `check_data_product` MCP tool on the authoring closure before returning it" in generator
+
+    job_loop = flat("src", "nxd-run-job-loop", "SKILL.md")
+    assert "Before every capture, including after a repair, call the `check_data_product` MCP tool" in job_loop
+    assert "optional evidence only and are never execution authority" not in job_loop
+
+    workflow = flat("src", "nxd-run-job-loop", "reference", "workflow-v2.md")
+    assert "## When validation fails" in workflow
+    assert "`recovery: repair_then_retry` means the retained closure has a defect you can fix" in workflow
+
+
+def test_models_imports_stay_inside_nxd_spec() -> None:
+    # Supervisor validation rejects nxd.core.* imports in models.py. The skills
+    # told agents to import DurationUnit from nxd.core.yaml_schemas, and a live
+    # B1 run paid a failed validation plus recapture and re-review to learn it.
+    for relative in (
+        "src/nxd-generate-data-product/SKILL.md",
+        "src/nxd-build-semantic-data-product/SKILL.md",
+        "src/nxd-generate-data-product/mapper/CONTRACT.md",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "nxd.core.yaml_schemas" not in text, relative
+    api = (REPO_ROOT / "src/nxd-generate-data-product/reference/nxd-spec-api.md").read_text(
+        encoding="utf-8"
+    )
+    assert "from nxd.spec.data_types import DurationUnit" in api
+    assert "never import `DurationUnit`\nfrom `nxd.core.yaml_schemas`" in api
+
+
+def test_review_grades_verification_gaps_by_what_they_hide_today() -> None:
+    # Live B3 reviews raised a new MEDIUM "verifier not independent enough"
+    # finding every round while confirming the numbers were correct. The job
+    # loop blocks on MEDIUM, so the run could never publish.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "Grade a verification gap by what it hides today, not by what a future bug might do" in text
+    assert "A LOW gap is advisory." in text
+    assert "Robustness against a hypothetical future bug is never HIGH or MEDIUM on its own" in text
+
+
+def test_pending_review_round_is_closed_before_reset() -> None:
+    # A live B3 run published with all later reviews clear, but left an
+    # earlier needs_user round with user_decision null, which failed the
+    # construction review check by one point.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "workflow-v2.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "Close the pending review round before resetting." in text
+    assert "update that same round in `review-record.json` before calling `reset_workflow` or appending another round" in text

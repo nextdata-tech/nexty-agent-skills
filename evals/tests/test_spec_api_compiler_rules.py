@@ -87,7 +87,7 @@ def test_timestamp_requires_an_explicit_duration_unit():
 def test_semantic_inference_maps_timestamp_to_the_parameterized_type():
     t = SEMANTIC_SKILL.read_text(encoding="utf-8")
     assert "import `DurationUnit` from" in t
-    assert "`nxd.core.yaml_schemas`" in t
+    assert "`nxd.spec.data_types`" in t
     assert "`TIMESTAMP` / `TIMESTAMPTZ`" in t
     assert "timestamp(unit=DurationUnit.Milliseconds)" in t
     assert "| `TIMESTAMP` / `TIMESTAMPTZ` | `timestamp()` |" not in t
