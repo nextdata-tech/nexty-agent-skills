@@ -500,3 +500,21 @@ def test_metric_names_are_registry_unique_and_check_runs_before_capture() -> Non
     workflow = flat("src", "nxd-run-job-loop", "reference", "workflow-v2.md")
     assert "## When validation fails" in workflow
     assert "`recovery: repair_then_retry` means the retained closure has a defect you can fix" in workflow
+
+
+def test_models_imports_stay_inside_nxd_spec() -> None:
+    # Supervisor validation rejects nxd.core.* imports in models.py. The skills
+    # told agents to import DurationUnit from nxd.core.yaml_schemas, and a live
+    # B1 run paid a failed validation plus recapture and re-review to learn it.
+    for relative in (
+        "src/nxd-generate-data-product/SKILL.md",
+        "src/nxd-build-semantic-data-product/SKILL.md",
+        "src/nxd-generate-data-product/mapper/CONTRACT.md",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "nxd.core.yaml_schemas" not in text, relative
+    api = (REPO_ROOT / "src/nxd-generate-data-product/reference/nxd-spec-api.md").read_text(
+        encoding="utf-8"
+    )
+    assert "from nxd.spec.data_types import DurationUnit" in api
+    assert "never import `DurationUnit`\nfrom `nxd.core.yaml_schemas`" in api
