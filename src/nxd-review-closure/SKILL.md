@@ -147,6 +147,23 @@ how wrong the data is. If the expected value is computed by the same expression
 that produced the actual value, the assert is decoration. The reconciliation
 must come from an INDEPENDENT read of the source.
 
+Apply this to every assert and every `contracts/promises/*` verifier in the
+closure, not only the first one you open. List them, check each, and return
+every instance that fails in this round.
+
+## Sweep each defect class before returning
+
+A finding is rarely unique. When one model, promise, verifier, or output shows
+a defect, check every sibling that could have the same defect in this same
+round, and return each evidenced instance as its own finding. For example, if
+one promise verifier fails check 6, check all the others. If one output leaks a
+column, check every other output.
+
+Every corrected generation gets a fresh review, and each repair costs the owner
+a reset, a recapture, and another full round. A sibling that already had the
+defect but surfaces only in a later round means this round was incomplete,
+not that the closure regressed.
+
 ### 7. Null and coverage handling
 
 - blanks coerced to zero, fabricating a real measurement
