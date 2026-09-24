@@ -2,7 +2,7 @@
   "id": "2026-09-24-b3-marketing-attribution-first-live-sonnet-pass",
   "date": "2026-09-24",
   "label": "B3 marketing-attribution first live Sonnet pass",
-  "notes": "Live Claude Sonnet runs of B3 marketing-attribution on main with #322-#324 and a supervisor built from nxd main (with nxd#7951/#7953). Run 13 passed clean: 45 against a threshold of 36; intake, construction, build and follow-up pass; the sentinel scan was examined and clean; replay verified; QUALIFIED. Run 12 on identical code failed only intake: after rejected prepares the agent fixed the inline typed proposal but did not write the fix back to dp-blueprint.proposal.json. One pass in two same-code epochs is demonstrated-once, not a repeatability rate.",
+  "notes": "Live Claude Sonnet runs of B3 marketing-attribution on skills 0.52.8 (main with #322-#324; recorded after 0.52.9 merged) and a supervisor built from nxd main (with nxd#7951/#7953). Run 13 passed clean: 45 against a threshold of 36; intake, construction, build and follow-up pass; the sentinel scan was examined and clean; replay verified; QUALIFIED. Run 12 on identical code failed only intake: after rejected prepares the agent fixed the inline typed proposal but did not write the fix back to dp-blueprint.proposal.json. One pass in two same-code epochs is demonstrated-once, not a repeatability rate.",
   "plugin_version": "0.52.9",
   "report_tags": {
     "run12": "run12",
@@ -25,68 +25,68 @@
               "score": {
                 "gates": {
                   "intake": {
-                    "examined": true,
-                    "points": 0,
-                    "required": true,
+                    "ungraded": false,
                     "passed": false,
+                    "required": true,
+                    "examined": true,
                     "codes": [
                       "intake_workflow_typed_proposal_file_missing"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "capability": {
-                    "examined": false,
-                    "points": 0,
-                    "required": false,
+                    "ungraded": false,
                     "passed": false,
+                    "required": false,
+                    "examined": false,
                     "codes": [
                       "capability_shortfall_not_staged"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "narrowing": {
-                    "examined": false,
-                    "points": 0,
-                    "required": false,
+                    "ungraded": false,
                     "passed": false,
+                    "required": false,
+                    "examined": false,
                     "codes": [
                       "narrowing_change_not_staged"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "construction": {
-                    "examined": true,
-                    "points": 10,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 10
                   },
                   "build": {
-                    "examined": true,
-                    "points": 20,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 20
                   },
                   "query": {
-                    "examined": false,
-                    "points": 0,
-                    "required": false,
+                    "ungraded": false,
                     "passed": false,
+                    "required": false,
+                    "examined": false,
                     "codes": [
                       "query_answer_gold_not_declared"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "follow-up": {
-                    "examined": true,
-                    "points": 15,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 15
                   }
                 },
                 "total": 35,
@@ -201,66 +201,66 @@
               "score": {
                 "gates": {
                   "intake": {
-                    "examined": true,
-                    "points": 10,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 10
                   },
                   "capability": {
-                    "examined": false,
-                    "points": 0,
-                    "required": false,
+                    "ungraded": false,
                     "passed": false,
+                    "required": false,
+                    "examined": false,
                     "codes": [
                       "capability_shortfall_not_staged"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "narrowing": {
-                    "examined": false,
-                    "points": 0,
-                    "required": false,
+                    "ungraded": false,
                     "passed": false,
+                    "required": false,
+                    "examined": false,
                     "codes": [
                       "narrowing_change_not_staged"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "construction": {
-                    "examined": true,
-                    "points": 10,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 10
                   },
                   "build": {
-                    "examined": true,
-                    "points": 20,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 20
                   },
                   "query": {
-                    "examined": false,
-                    "points": 0,
-                    "required": false,
+                    "ungraded": false,
                     "passed": false,
+                    "required": false,
+                    "examined": false,
                     "codes": [
                       "query_answer_gold_not_declared"
                     ],
-                    "ungraded": false
+                    "points": 0
                   },
                   "follow-up": {
-                    "examined": true,
-                    "points": 15,
-                    "required": true,
+                    "ungraded": false,
                     "passed": true,
+                    "required": true,
+                    "examined": true,
                     "codes": [],
-                    "ungraded": false
+                    "points": 15
                   }
                 },
                 "total": 45,
