@@ -348,6 +348,25 @@ def test_value_level_priority_provenance_can_be_source_bound(priority):
     assert not v3.validate_proposal(parsed, proposal)
 
 
+def test_object_valued_provenance_is_an_issue_not_a_crash():
+    # A live agent wrote {"kind": "explicit"} objects instead of strings. The
+    # term-priority check used set membership on that value and raised
+    # TypeError, so the trusted validator emitted no report and the supervisor
+    # could only relay an opaque "failed trusted validation".
+    text = sample()
+    parsed = v3.parse(text)
+    proposal = proposal_for(text)
+    proposal["provenance"] = {
+        path: {"kind": origin} for path, origin in proposal["provenance"].items()
+    }
+    proposal["provenance"]["v3:terms[customer].priority"] = {"kind": "explicit"}
+
+    codes = {issue.code for issue in v3.validate_proposal(parsed, proposal)}
+
+    assert "v3.provenance.value" in codes
+    assert "v3.term.priority_provenance" in codes
+
+
 def test_explicit_anchors_cannot_merge_two_source_subsections_into_one_term():
     text = sample().replace(
         "### Customer\n\nA person or organization responsible for an order.",
