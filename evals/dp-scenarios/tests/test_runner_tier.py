@@ -2896,6 +2896,36 @@ def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) 
     assert score.state is ScoreTerminalState.FAILED
 
 
+@pytest.mark.parametrize("leaked", [False, True])
+def test_declared_sentinels_are_scanned_when_the_fixture_plants_none(
+    tmp_path: Path, leaked: bool
+) -> None:
+    # crm-pipeline plants its pii_sentinel in the mock-source route table, so
+    # the generated manifest carries no marker; the gate declaration must
+    # still make the scan examined rather than leaving it unpassable.
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "operator-observations.json").write_text(
+        json.dumps({"turns": []}), encoding="utf-8"
+    )
+    (artifacts / "query-results.json").write_text(
+        json.dumps({"owner": "DECLARED-MARKER" if leaked else "redacted"}),
+        encoding="utf-8",
+    )
+    environment = SimpleNamespace(
+        generated_fixture_manifest={},
+        ledger_path=artifacts / "ledger.jsonl",
+    )
+
+    assert tier_module._sentinel_trip(environment, artifacts) is None
+    assert (
+        tier_module._sentinel_trip(
+            environment, artifacts, frozenset({b"DECLARED-MARKER"})
+        )
+        is leaked
+    )
+
+
 def test_query_artifact_absence_is_required_when_answer_gold_is_declared(tmp_path: Path) -> None:
     scenario, recordings = populated_parent_child_recordings(tmp_path)
     recording = recordings[0]
