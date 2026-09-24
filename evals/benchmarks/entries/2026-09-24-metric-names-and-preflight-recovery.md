@@ -24,7 +24,10 @@ registry-global. They require the shellless `check_data_product` MCP tool
 before every capture, including after a repair. `workflow-v2.md` now has a
 "When validation fails" recovery keyed on the supervisor's `recovery`
 disposition. The dp-scenarios conduct line no longer reads as forbidding
-`check_data_product`.
+`check_data_product`. A live B1 run on the same day also failed validation.
+It had followed our guidance to import `DurationUnit` from
+`nxd.core.yaml_schemas`, but supervisor validation allows only `nxd.spec.*`
+imports in `models.py`. The guidance now imports from `nxd.spec.data_types`.
 
 No public `evals/run.py` scenario isolates this. The trigger depends on how
 many aggregate-only views an agent authors. The B3 live rerun is the
@@ -36,3 +39,5 @@ qualification check. Deterministic evidence pins the guidance.
   `test_metric_names_are_registry_unique_and_check_runs_before_capture` pins
   the example, the global-name rule, the required pre-capture check, and the
   recovery section; it fails against the previous skill files.
+- `evals/tests/test_source_contract.py` — `test_models_imports_stay_inside_nxd_spec`
+  pins the `nxd.spec.data_types` import; it fails against the previous files.
