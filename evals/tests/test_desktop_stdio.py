@@ -204,6 +204,11 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
         proxy.stdin.flush()
         response = json.loads(proxy.stdout.readline())
         assert response["result"]["echo"] == "initialize"
+        second_request = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+        proxy.stdin.write(json.dumps(second_request) + "\n")
+        proxy.stdin.flush()
+        second_response = json.loads(proxy.stdout.readline())
+        assert second_response["result"]["echo"] == "ping"
         proxy.stdin.close()
         assert proxy.wait(timeout=10) == 0
         trace = session.trace_path.read_text()
@@ -211,6 +216,18 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
         assert "secret" not in trace
         records = [json.loads(line) for line in trace.splitlines()]
         assert {record["direction"] for record in records} == {"request", "response"}
+        request_records = [
+            record for record in records if record["direction"] == "request"
+        ]
+        response_records = [
+            record for record in records if record["direction"] == "response"
+        ]
+        assert len(request_records) == 2
+        assert [record["message"]["method"] for record in request_records] == [
+            "initialize",
+            "ping",
+        ]
+        assert len(response_records) == 2
         assert all(record["message"] for record in records)
         result = json.loads(session.server_result_path.read_text())
         assert result["status"] == "passed"
@@ -383,9 +400,32 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
                 },
             }
         )
+        assert read["id"] == 2
         assert read["result"]["isError"] is False
         assert "Approved blueprint" in read["result"]["content"][0]["text"]
         assert read["result"]["structuredContent"]["path"] == str(blueprint)
+        trace_text_after_read = session.trace_path.read_text()
+        trace_records = [json.loads(line) for line in trace_text_after_read.splitlines()]
+        reader_summaries = [
+            record
+            for record in trace_records
+            if record.get("direction") == "summary"
+            and record.get("message", {}).get("params", {}).get("name")
+            == ds._REVIEW_READER_TOOL
+        ]
+        assert len(reader_summaries) == 1
+        assert reader_summaries[0]["synthetic"] is True
+        assert reader_summaries[0]["message"]["params"] == {
+            "name": ds._REVIEW_READER_TOOL
+        }
+        assert "arguments" not in json.dumps(reader_summaries[0])
+        assert "Approved blueprint" not in trace_text_after_read
+        assert str(blueprint) not in trace_text_after_read
+        assert not any(
+            record.get("direction") in {"request", "response"}
+            and record.get("message", {}).get("id") == 2
+            for record in trace_records
+        )
         bounded_read = call(
             {
                 "jsonrpc": "2.0",
@@ -402,7 +442,31 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
                 },
             }
         )
+        assert bounded_read["id"] == 2.5
         assert bounded_read["result"]["isError"] is False
+        trace_records_after_bounded = [
+            json.loads(line) for line in session.trace_path.read_text().splitlines()
+        ]
+        bounded_summaries = [
+            record
+            for record in trace_records_after_bounded
+            if record.get("direction") == "summary"
+            and record.get("message", {}).get("params", {}).get("name")
+            == ds._REVIEW_READER_TOOL
+        ]
+        assert len(bounded_summaries) == 2
+        assert all(
+            record["message"]["params"] == {"name": ds._REVIEW_READER_TOOL}
+            for record in bounded_summaries
+        )
+        assert all(
+            "arguments" not in json.dumps(record) for record in bounded_summaries
+        )
+        assert not any(
+            record.get("direction") in {"request", "response"}
+            and record.get("message", {}).get("id") == 2.5
+            for record in trace_records_after_bounded
+        )
         listing = call(
             {
                 "jsonrpc": "2.0",

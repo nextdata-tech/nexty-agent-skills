@@ -24,6 +24,9 @@ from collections.abc import Iterable
 
 #: The provider declined to continue the session (usage or rate ceiling).
 PROVIDER_SESSION_LIMIT = "provider_session_limit"
+#: Claude Code stopped because the runner's per-run ``--max-budget-usd`` cap
+#: was reached. This is distinct from an account/provider usage ceiling.
+RUN_BUDGET_EXHAUSTED = "run_budget_exhausted"
 #: The child stayed alive but produced no terminal ``result`` before the deadline.
 CHILD_NO_TERMINAL_RESULT = "child_no_terminal_result"
 #: The Codex app-server root turn stayed alive but produced no terminal result.
@@ -45,6 +48,7 @@ INTERRUPTED_UNCLASSIFIED = "interrupted_unclassified"
 FAILURE_REASONS = frozenset(
     {
         PROVIDER_SESSION_LIMIT,
+        RUN_BUDGET_EXHAUSTED,
         CHILD_NO_TERMINAL_RESULT,
         CODEX_ROOT_TURN_NO_TERMINAL_RESULT,
         CODEX_PROVIDER_RETRY_PENDING,
@@ -56,7 +60,8 @@ FAILURE_REASONS = frozenset(
 )
 
 # Ordered most-specific first: a message naming a provider limit is a provider
-# limit even when the surrounding text also mentions a lock.
+# limit even when the surrounding text also mentions a lock. Structured
+# terminal subtypes are classified separately and take precedence over prose.
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         CODEX_PROVIDER_RETRY_PENDING,
@@ -95,14 +100,30 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
+_TERMINAL_SUBTYPE_REASONS = {
+    "error_max_budget_usd": RUN_BUDGET_EXHAUSTED,
+}
 
-def classify_failure_reason(*texts: str | None) -> str | None:
+
+def classify_failure_reason(
+    *texts: str | None,
+    terminal_subtype: str | None = None,
+) -> str | None:
     """Return the structured reason implied by any diagnostic text, if any.
+
+    A known structured terminal subtype takes precedence over free-form text.
+    Subtype matching is exact so agent prose mentioning a CLI subtype cannot
+    turn a behavioral result into an infrastructure interruption.
 
     Every candidate string is scanned for the highest-precedence pattern
     before falling back to the next one, so a stderr tail that names a
     provider limit still wins over a lock message in the result payload.
     """
+
+    if isinstance(terminal_subtype, str):
+        reason = _TERMINAL_SUBTYPE_REASONS.get(terminal_subtype.strip().casefold())
+        if reason is not None:
+            return reason
 
     candidates = [text for text in texts if isinstance(text, str) and text]
     if not candidates:
@@ -132,6 +153,7 @@ __all__ = [
     "CODEX_PROVIDER_RETRY_PENDING",
     "FAILURE_REASONS",
     "PROVIDER_SESSION_LIMIT",
+    "RUN_BUDGET_EXHAUSTED",
     "SHARED_RUNTIME_CONTENTION",
     "classify_failure_reason",
     "first_reason",

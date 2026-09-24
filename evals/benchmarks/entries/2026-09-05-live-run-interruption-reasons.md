@@ -46,10 +46,21 @@ Three concrete faults are closed:
    defect. Each live run now gets its own copy; replay still reads the package
    directly and is byte-identical.
 
-None of the four reasons is a pass. `provider_session_limit`,
-`child_no_terminal_result`, `child_exited_early` and `shared_runtime_contention`
-all describe a scenario that was not tested, and the README says so where an
-operator will read it.
+None of these reasons is a pass. `provider_session_limit`,
+`run_budget_exhausted`, `child_no_terminal_result`, `child_exited_early` and
+`shared_runtime_contention` all describe a scenario that was not tested, and
+the README says so where an operator will read it.
+
+### Follow-up — classify the runner's own spend cap
+
+The September 23 live B1 run stopped on operator turn 12 of a 22-turn budget;
+its terminal diagnostics record Claude Code's structured
+`error_max_budget_usd` subtype. The runner now preserves that as
+`run_budget_exhausted`, distinct from a provider or account usage limit. The
+run remains invalid/incomplete; no behavioral gate result is promoted to
+success. This is a harness-only diagnostic change with no scenario arm and
+remains `NO_EVAL`. A separate current-main attempt stopped immediately at the
+provider session limit; the two interruptions remain distinct.
 
 ## Evidence
 
@@ -69,9 +80,11 @@ operator will read it.
   retaining its partial transcript, a stderr ceiling outranks a bare stall, and
   the last MCP call survives onto the turn that stopped.
 - `evals/dp-scenarios/tests/test_runner_failure_reasons.py` — the vocabulary
-  itself, including that a provider ceiling outranks a lock message in the same
-  text and that ordinary agent prose is never classified.
+  itself, including that structured run-cap subtypes outrank prose, free-text
+  mentions of the subtype do not classify, a provider ceiling outranks a lock
+  message in the same text, and ordinary agent prose is never classified.
 - `evals/dp-scenarios/tests/test_runner_tier.py` and
   `evals/dp-scenarios/tests/test_runner_report.py` — the reason, detail and last MCP call survive
-  the whole path into `report.json` and `summary.txt`, and a clean run reports
-  the same block with null members.
+  the whole path into `report.json` and `summary.txt`; budget exhaustion is
+  reported as invalid rather than success, and a clean run reports the same
+  block with null members.

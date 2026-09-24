@@ -55,6 +55,8 @@ from dp_scenarios.runner.review_guard import _marker as _parse_review_marker
 from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
+    INTERRUPTED_UNCLASSIFIED,
+    RUN_BUDGET_EXHAUSTED,
     classify_failure_reason,
     first_reason,
 )
@@ -914,6 +916,7 @@ def parse_claude_events(
     terminal_result_count = 0
     terminal_result_subtype: str | None = None
     terminal_result_is_error: bool | None = None
+    terminal_failure_reason: str | None = None
     input_tokens_total = 0
     output_tokens_total = 0
     token_usage_seen = False
@@ -977,11 +980,28 @@ def parse_claude_events(
             terminal_result_is_error = raw_is_error if isinstance(raw_is_error, bool) else None
             raw_subtype = event.get("subtype")
             terminal_result_subtype = raw_subtype if isinstance(raw_subtype, str) else None
+            subtype_reason = classify_failure_reason(
+                terminal_subtype=terminal_result_subtype
+            )
+            if subtype_reason is not None:
+                terminal_failure_reason = subtype_reason
+            budget_exhausted = subtype_reason == RUN_BUDGET_EXHAUSTED
             # Missing or malformed result facts are not completion evidence
-            # and are treated as an error for transport diagnostics too.
-            result_error = result_error or raw_is_error is not False
-            if raw_is_error is not False:
-                result_error_detail = final_answer or "Claude returned an error result"
+            # and are treated as an error for transport diagnostics too. A
+            # structured run-budget stop is also an interruption even in CLI
+            # versions that report ``is_error: false`` for it.
+            event_is_error = raw_is_error is not False or budget_exhausted
+            result_error = result_error or event_is_error
+            if event_is_error:
+                error_fallback = "Claude returned an error result"
+                if budget_exhausted:
+                    error_fallback = f"{error_fallback} ({terminal_result_subtype})"
+                if final_answer and budget_exhausted:
+                    result_error_detail = (
+                        f"{final_answer} (terminal subtype: {terminal_result_subtype})"
+                    )
+                else:
+                    result_error_detail = final_answer or error_fallback
 
     calls: list[ToolCall] = []
     flat_results: list[object] = []
@@ -1069,7 +1089,7 @@ def parse_claude_events(
     # is an agent-visible outcome that ``build_failed`` already grades, and
     # classifying its payload here would relabel an ordinary build failure
     # whose message happens to mention a lock as an infrastructure fault.
-    failure_reason = classify_failure_reason(result_error_detail)
+    failure_reason = terminal_failure_reason or classify_failure_reason(result_error_detail)
     return (
         TurnResult(
             transcript_delta="\n".join(transcript),
@@ -2243,6 +2263,30 @@ class ClaudeCodeAdapter:
                 shutil.copyfile(trace_path, self.artifact_dir / "mcp-trace.jsonl")
         details = [detail for detail in (result.environment_detail, environment_detail) if detail]
         safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
+        transport_reason = first_reason((failure_reason,))
+        parsed_reason = first_reason((result.failure_reason,))
+        interruption = turn_timed_out or result.turn_timed_out or environment_detail is not None
+        diagnostic_reason = (
+            classify_failure_reason(safe_detail)
+            if interruption and safe_detail
+            else None
+        )
+        generic_interruption_reasons = {
+            CHILD_NO_TERMINAL_RESULT,
+            CHILD_EXITED_EARLY,
+            INTERRUPTED_UNCLASSIFIED,
+        }
+        if (
+            transport_reason not in generic_interruption_reasons
+            and transport_reason is not None
+        ):
+            final_failure_reason = transport_reason
+        elif parsed_reason not in generic_interruption_reasons and parsed_reason is not None:
+            final_failure_reason = parsed_reason
+        elif diagnostic_reason is not None:
+            final_failure_reason = diagnostic_reason
+        else:
+            final_failure_reason = first_reason((failure_reason, result.failure_reason))
         return TurnResult(
             transcript_delta=result.transcript_delta,
             agent_message=result.agent_message,
@@ -2256,10 +2300,10 @@ class ClaudeCodeAdapter:
             environment_wedged=(result.environment_wedged or environment_detail is not None) and not turn_timed_out,
             turn_timed_out=result.turn_timed_out or turn_timed_out,
             environment_detail=safe_detail,
-            # The transport-level classification is the more specific one: it
-            # saw the child's stderr and exit code, which the stream events
-            # cannot carry.  A parsed reason only fills the gap.
-            failure_reason=first_reason((failure_reason, result.failure_reason)),
+            # Keep specific transport/stream classifications authoritative, but
+            # let a recognized reason in the redacted interruption diagnostic
+            # replace a generic timeout/exit fallback.
+            failure_reason=final_failure_reason,
             last_mcp_call=result.last_mcp_call or self._last_mcp_call,
             session_id=result.session_id,
             terminal_result_count=result.terminal_result_count,

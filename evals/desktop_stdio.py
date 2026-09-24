@@ -1966,8 +1966,6 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 and isinstance(request.get("params"), Mapping)
                 and request["params"].get("name") == _REVIEW_READER_TOOL
             )
-            if not is_review_reader_call:
-                _trace_line(trace_path, "request", line)
             if isinstance(request, Mapping):
                 if is_review_reader_call:
                     write_review_reader_response(request)

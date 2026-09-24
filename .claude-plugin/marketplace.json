@@ -11,7 +11,7 @@
       "source": "./",
       "displayName": "Nexty AI Pro",
       "description": "Compatibility bundle containing the complete Nextdata AI skill set. Prefer Nexty Desktop or Nexty DataMesh for new installs.",
-      "version": "0.52.3",
+      "version": "0.52.4",
       "author": {
         "name": "Nextdata"
       }
@@ -30,7 +30,7 @@
       ],
       "displayName": "Nexty Desktop",
       "description": "Build, serve, query, refine, and export local data products through the Nexty Desktop supervisor.",
-      "version": "0.52.3",
+      "version": "0.52.4",
       "author": {
         "name": "Nextdata"
       }
@@ -57,7 +57,7 @@
       ],
       "displayName": "Nexty DataMesh",
       "description": "Set up, inspect, build, govern, debug, evaluate, and query data products on a deployed Nextdata DataMesh.",
-      "version": "0.52.3",
+      "version": "0.52.4",
       "author": {
         "name": "Nextdata"
       }
