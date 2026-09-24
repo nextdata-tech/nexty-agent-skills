@@ -89,6 +89,101 @@ def test_clean_connector_closure_passes(tmp_path: Path):
     assert ok, detail
 
 
+def test_shadow_function_cannot_masquerade_as_dlt_connector(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def rest_api_resources(config):
+    return []
+
+def ingest(duckdb, secrets):
+    config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+    return rest_api_resources(config)
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "no dlt.sources.rest_api import" in detail
+
+
+def test_local_assignment_cannot_shadow_dlt_connector(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    rest_api_resources = lambda config: []
+    config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+    return rest_api_resources(config)
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "no dlt.sources.rest_api import" in detail
+
+
+def test_conditional_import_cannot_shadow_dlt_connector(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    if secrets.get("use_decoy"):
+        from local_fake import rest_api_resources
+    config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+    return rest_api_resources(config)
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "no dlt.sources.rest_api import" in detail
+
+
+def test_match_pattern_capture_cannot_shadow_dlt_connector(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+match "decoy":
+    case rest_api_resources:
+        pass
+
+def ingest(duckdb, secrets):
+    config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+    return rest_api_resources(config)
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "no dlt.sources.rest_api import" in detail
+
+
+def test_exception_handler_name_cannot_shadow_dlt_connector(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    auth_type = secrets.get("auth_type")
+    if auth_type == "bearer":
+        config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+        return rest_api_resources(config)
+    try:
+        raise RuntimeError("unreachable")
+    except Exception as rest_api_resources:
+        return []
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "no dlt.sources.rest_api import" in detail
+
+
+def test_function_local_connector_import_must_precede_call(tmp_path: Path):
+    src = '''
+def ingest(duckdb, secrets):
+    auth_type = secrets.get("auth_type")
+    if auth_type == "bearer":
+        config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+        return rest_api_resources(config)
+    from dlt.sources.rest_api import rest_api_resources
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "no dlt.sources.rest_api import" in detail
+
+
 def test_hybrid_is_rejected(tmp_path: Path):
     ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=HYBRID))
     assert not ok, "a closure that imports the connector AND hand-rolls must fail"
@@ -205,6 +300,80 @@ def test_missing_transform_dir_reports_clearly(tmp_path: Path):
     ok, detail = checker.uses_rest_api_resources(tmp_path)
     assert not ok
     assert "transform" in detail
+
+
+def test_shared_profile_auth_gate_accepts_flat_private_credentials(tmp_path: Path):
+    (tmp_path / "infra-profile.yaml").write_text(
+        """services:
+  - name: api-source
+    attributes:
+      - key: base_url
+        value: https://api.example.test
+        public: true
+      - key: auth_type
+        value: bearer
+        public: true
+      - key: auth_token
+        value: opaque-test-token
+        public: false
+""",
+        encoding="utf-8",
+    )
+
+    ok, detail, fields = checker.profile_has_structured_auth(
+        tmp_path, expected_token="opaque-test-token"
+    )
+    assert ok, detail
+    assert fields["auth_token"] == "opaque-test-token"
+
+
+def test_shared_profile_auth_gate_does_not_echo_credential_values(tmp_path: Path):
+    secret = "opaque-test-token-do-not-print"
+    (tmp_path / "infra-profile.yaml").write_text(
+        f"""services:
+  - name: api-source
+    attributes:
+      - key: base_url
+        value: https://api.example.test
+        public: true
+      - key: auth_type
+        value: bearer
+        public: true
+      - key: auth_token
+        value: {secret}
+        public: true
+""",
+        encoding="utf-8",
+    )
+
+    ok, detail, _ = checker.profile_has_structured_auth(
+        tmp_path, expected_token="different-test-token"
+    )
+    assert not ok
+    assert "auth_token" in detail
+    assert secret not in detail
+    assert "different-test-token" not in detail
+
+
+def test_shared_profile_auth_gate_rejects_exportable_token(tmp_path: Path):
+    (tmp_path / "infra-profile.yaml").write_text(
+        """services:
+  - name: api-source
+    attributes:
+      - key: base_url
+        value: https://api.example.test
+      - key: auth_type
+        value: bearer
+      - key: auth_token
+        value: opaque-test-token
+        public: true
+""",
+        encoding="utf-8",
+    )
+
+    ok, detail, _ = checker.profile_has_structured_auth(tmp_path)
+    assert not ok
+    assert "must remain private" in detail
 
 
 def test_unparseable_transform_is_not_a_silent_pass(tmp_path: Path):

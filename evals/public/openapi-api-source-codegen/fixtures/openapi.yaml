@@ -1,0 +1,81 @@
+openapi: 3.0.3
+info:
+  title: Orders API
+  version: 1.0.0
+  description: Synthetic, read-only API contract for local code-generation evaluation.
+servers:
+  - url: https://orders.example.test/v1
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders for analytics.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          description: Opaque continuation cursor returned in next_cursor.
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      x-nexty-required-scopes:
+        - orders:read
+      x-nexty-pagination:
+        cursor_param: after
+        cursor_path: next_cursor
+        items_field: results
+        page_size: 2
+      responses:
+        "200":
+          description: One page of orders.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPage"
+              example:
+                results:
+                  - id: order-001
+                    amount: 24.5
+                    status: paid
+                next_cursor: cursor-page-2
+components:
+  schemas:
+    OrderPage:
+      type: object
+      required:
+        - results
+        - next_cursor
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        next_cursor:
+          type: string
+          nullable: true
+    Order:
+      type: object
+      required:
+        - id
+        - amount
+        - status
+      properties:
+        id:
+          type: string
+          example: order-001
+        amount:
+          type: number
+          format: double
+          example: 24.5
+        status:
+          type: string
+          enum:
+            - pending
+            - paid
+            - cancelled
+          example: paid
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

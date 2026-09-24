@@ -45,6 +45,7 @@ from api_connector_gate import (  # noqa: E402
     endpoints_not_public,
     find_closure,
     no_hardcoded_url_or_path,
+    profile_has_structured_auth,
     profile_attributes,
     transform_sources,
     uses_rest_api_resources,
@@ -117,34 +118,6 @@ def no_literal_secret_in_source(root: Path) -> tuple[bool, str]:
         if VALID_TOKEN in p.read_text(encoding="utf-8", errors="replace"):
             hits.append(str(p.relative_to(root)))
     return not hits, f"token literal found in {hits}" if hits else ""
-
-
-def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
-    """infra-profile.yaml's api-source service must carry auth_type: bearer +
-    auth_token as flat attributes -- never the whole credential nested under
-    one opaque value, and never omitted (this API requires auth)."""
-    profile = root / "infra-profile.yaml"
-    if not profile.is_file():
-        return False, "infra-profile.yaml missing", {}
-    text = profile.read_text(encoding="utf-8", errors="replace")
-    if "api-source" not in text:
-        return False, "no api-source service declared", {}
-    if "auth_type" not in text or "bearer" not in text:
-        return False, "no auth_type: bearer attribute found", {}
-    if "auth_token" not in text:
-        return False, "no auth_token attribute found", {}
-    fields, public_flags = profile_attributes(root)
-    if fields.get("auth_token") != VALID_TOKEN:
-        return False, f"auth_token attribute does not match the brief's token (got {fields.get('auth_token')!r})", fields
-    if "base_url" not in fields:
-        return False, "no base_url attribute found", fields
-    # A credential marked public survives export, which is the whole reason the
-    # flag exists. checks.json states this as a FAIL condition and tells the
-    # judge to grade from this fact, so the fact has to actually carry it.
-    if public_flags.get("auth_token") == "true":
-        return False, ("auth_token is marked public: true — the credential would "
-                       "survive export; a secret attribute must be public: false"), fields
-    return True, "", fields
 
 
 def header_declared_in_profile(root: Path) -> tuple[bool, str]:
@@ -542,7 +515,9 @@ def main() -> int:
     ok, detail = no_literal_secret_in_source(root)
     check("secret:not-a-literal-in-source", ok, detail)
 
-    ok, detail, fields = infra_profile_has_structured_auth(root)
+    ok, detail, fields = profile_has_structured_auth(
+        root, expected_token=VALID_TOKEN
+    )
     check("secret:structured-auth-in-profile", ok, detail)
 
     ok, detail = sensitivity_artifacts_present(root)

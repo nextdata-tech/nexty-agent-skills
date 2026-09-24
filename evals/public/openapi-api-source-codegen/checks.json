@@ -1,0 +1,38 @@
+{
+  "name": "Generate a generic REST API source from OpenAPI",
+  "skills": [
+    "nxd-generate-data-product"
+  ],
+  "deterministic_check": {
+    "script": "check_openapi_api_source.py",
+    "deps": [
+      "pyyaml>=6.0"
+    ]
+  },
+  "checks": [
+    {
+      "id": "contract-first",
+      "check": "The closure follows the provided OpenAPI contract for the server, GET /orders route, results envelope, cursor and bearer scheme, and honors its x-nexty-required-scopes authorization extension for orders:read rather than inventing another API."
+    },
+    {
+      "id": "dlt-rest-connector",
+      "check": "Ingestion uses dlt RESTAPIConfig/rest_api_resources; it does not hand-roll HTTP or use a client library beside the connector."
+    },
+    {
+      "id": "cursor-and-envelope",
+      "check": "The orders resource selects results and explicitly follows next_cursor using the after query parameter."
+    },
+    {
+      "id": "profile-driven-auth",
+      "check": "The API endpoint topology, bearer auth and exact required_scopes metadata are driven by flat api-source profile attributes; auth_token is private and the transform passes that secret into dlt's structured bearer auth."
+    },
+    {
+      "id": "read-only-and-secret-safe",
+      "check": "The generated resource remains read-only, contains no credential literal, and clearly marks the profile placeholder as requiring a locally supplied credential."
+    },
+    {
+      "id": "no-live-claims",
+      "check": "The agent does not claim to have run dlt, materialized the product, executed the connectivity probe, or contacted an API."
+    }
+  ]
+}
