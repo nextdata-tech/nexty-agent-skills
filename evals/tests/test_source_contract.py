@@ -530,3 +530,16 @@ def test_review_grades_verification_gaps_by_what_they_hide_today() -> None:
     assert "Grade a verification gap by what it hides today, not by what a future bug might do" in text
     assert "A LOW gap is advisory." in text
     assert "Robustness against a hypothetical future bug is never HIGH or MEDIUM on its own" in text
+
+
+def test_pending_review_round_is_closed_before_reset() -> None:
+    # A live B3 run published with all later reviews clear, but left an
+    # earlier needs_user round with user_decision null, which failed the
+    # construction review check by one point.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "workflow-v2.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "Close the pending review round before resetting." in text
+    assert "update that same round in `review-record.json` before calling `reset_workflow` or appending another round" in text

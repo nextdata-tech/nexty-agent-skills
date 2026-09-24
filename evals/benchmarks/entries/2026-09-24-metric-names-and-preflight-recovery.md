@@ -33,6 +33,11 @@ A later B3 run still churned. Each review round raised a new MEDIUM finding,
 the current output was correct. The job loop blocks on MEDIUM. The reviewer now
 grades verification gaps by what they hide today: HIGH if an output is wrong
 now, MEDIUM if the blueprint promises that check, and LOW (advisory) otherwise.
+With those fixes, B3 published and passed intake, build and follow-up. It
+scored 35 against a threshold of 36. The only construction finding was
+`construction_adversarial_review_unresolved`: an earlier `needs_user` review
+round kept `user_decision: null` after the operator authorized its corrections.
+`workflow-v2.md` now says to close that round before resetting.
 
 No public `evals/run.py` scenario isolates this. The trigger depends on how
 many aggregate-only views an agent authors. The B3 live rerun is the
@@ -49,3 +54,6 @@ qualification check. Deterministic evidence pins the guidance.
 - `evals/tests/test_source_contract.py` —
   `test_review_grades_verification_gaps_by_what_they_hide_today` pins the
   severity calibration; it fails against the previous review skill.
+- `evals/tests/test_source_contract.py` —
+  `test_pending_review_round_is_closed_before_reset` pins the close-before-reset
+  step; it fails against the previous `workflow-v2.md`.

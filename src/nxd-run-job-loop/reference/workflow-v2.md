@@ -622,6 +622,16 @@ validation, admission, or publication.
 
 ## Reset after behavior changes
 
+Close the pending review round before resetting. When the operator authorizes
+corrections for a round whose ledger `status` is `needs_user`, or which has
+accepted `behavior_affecting` findings, update that same round in
+`review-record.json` before calling `reset_workflow` or appending another
+round. Fill its `user_decision`: `approved_at_unix_ms`, a `citation` that
+copies the authorizing operator message byte for byte, and `approved_finding_ids`
+listing the accepted findings being corrected. Also set each corrected finding's
+`state`. A round left with `user_decision: null` and unresolved accepted findings
+fails the construction review check even when every later round is clear.
+
 If the blueprint or typed proposal changes after `prepare_workflow` succeeds,
 do not retry the old operation or patch its binding. Call `reset_workflow` with
 the supervisor-returned graph-root requirement (the activated contract
