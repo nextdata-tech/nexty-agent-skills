@@ -543,3 +543,17 @@ def test_pending_review_round_is_closed_before_reset() -> None:
     )
     assert "Close the pending review round before resetting." in text
     assert "update that same round in `review-record.json` before calling `reset_workflow` or appending another round" in text
+
+
+def test_advisory_only_review_rounds_report_clear() -> None:
+    # The supervisor satisfies review only on a clear verdict with no findings.
+    # A live B3 agent held publication for a single LOW advisory claim after
+    # confirming every fix, because nothing said an advisory-only round is clear.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "workflow-v2.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "A round whose only claims are `LOW` is clear once you resolve them." in text
+    assert "Never hold publication for an advisory claim" in text
+    assert "never downgrade a `HIGH` or `MEDIUM` claim to reach this path" in text

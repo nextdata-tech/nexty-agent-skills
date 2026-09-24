@@ -37,7 +37,11 @@ With those fixes, B3 published and passed intake, build and follow-up. It
 scored 35 against a threshold of 36. The only construction finding was
 `construction_adversarial_review_unresolved`: an earlier `needs_user` review
 round kept `user_decision: null` after the operator authorized its corrections.
-`workflow-v2.md` now says to close that round before resetting.
+`workflow-v2.md` now says to close that round before resetting. The next run
+confirmed every fix and was left with one LOW advisory claim, yet the agent
+still held publication. The supervisor is satisfied only by a clear report
+with no findings, and nothing said that an advisory-only round resolves to
+clear. `workflow-v2.md` now says so, while the claim stays in the ledger.
 
 No public `evals/run.py` scenario isolates this. The trigger depends on how
 many aggregate-only views an agent authors. The B3 live rerun is the
@@ -57,3 +61,6 @@ qualification check. Deterministic evidence pins the guidance.
 - `evals/tests/test_source_contract.py` —
   `test_pending_review_round_is_closed_before_reset` pins the close-before-reset
   step; it fails against the previous `workflow-v2.md`.
+- `evals/tests/test_source_contract.py` —
+  `test_advisory_only_review_rounds_report_clear` pins the advisory-only
+  resolution; it fails against the previous `workflow-v2.md`.
