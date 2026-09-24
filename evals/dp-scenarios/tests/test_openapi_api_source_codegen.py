@@ -101,6 +101,17 @@ def _mock_scenario(identity: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
         "items_field": pagination["items_field"],
         "cursor_field": pagination["cursor_path"],
     }
+    # Keep server readiness independent of the caller's grants, without adding
+    # a non-source endpoint to the OpenAPI document used by the codegen eval.
+    scenario["routes"].append(
+        {
+            "path": "/__ready",
+            "method": "GET",
+            "response": {"json": {"ok": True}},
+            "status": 200,
+            "auth_required": False,
+        }
+    )
     return scenario, document
 
 
