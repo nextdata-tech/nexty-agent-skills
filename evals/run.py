@@ -417,6 +417,10 @@ PUBLIC_CHECKER_VISIBLE_EXCEPTIONS = {
         "The prompt explicitly requires this agent-run acceptance self-check; "
         "its output is agent evidence, not a runner-side oracle."
     ),
+    "generate-semantic-layer-from-live-source-and-questions/fixtures/check_semantic_model.py": (
+        "The prompt explicitly requires this agent-run acceptance self-check; "
+        "its output is agent evidence, not a runner-side oracle."
+    ),
     "treasury-yield-curve/fixtures/check_determinism.py": (
         "Preserves the measured workspace; deterministic_check_fact executes "
         "the source fixture, not the agent-editable workspace copy."
@@ -430,6 +434,7 @@ PUBLIC_AGENT_RUN_SELF_CHECKS = frozenset({
     "job-loop-export-handoff/fixtures/check_job_loop.py",
     "job-loop-serve-query-refine/fixtures/check_job_loop.py",
     "generate-runnable-dp-from-intent/fixtures/check_generated_closure.py",
+    "generate-semantic-layer-from-live-source-and-questions/fixtures/check_semantic_model.py",
 })
 
 
