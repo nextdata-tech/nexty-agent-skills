@@ -154,6 +154,17 @@ must come from an INDEPENDENT read of the source.
 - an exclusion applied but not itemized as a named term
 - a dense grid fabricated where the source is sparse
 
+### Sweep a defect class once you find it
+
+When you find one instance of a defect class, check every other promise,
+verifier, model and output in the capture for the same class in this same
+pass, and return every instance you can evidence. Examples are a verifier that
+only checks self-consistency, or a promised output with no verifier of its own.
+The owner can fix a class in one correction only if you name all of it. A
+later round that discovers a sibling instance you could have seen now wastes a
+full reset, recapture and review cycle. Each instance still needs its own
+`file:line` evidence, so do not generalize beyond what you inspected.
+
 ## What is NOT yours
 
 `nxd-generate-data-product` Step 7 owns all of this and duplicating it wastes the round:
