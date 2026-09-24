@@ -1772,8 +1772,16 @@ def _artifacts_surface_bytes(artifact_root: Path) -> bytes | None:
     return b"\n".join(chunks) if chunks else None
 
 
-def _sentinel_trip(environment: RunEnvironment, artifact_root: Path) -> bool | None:
-    markers = marker_values(environment.generated_fixture_manifest)
+def _sentinel_trip(
+    environment: RunEnvironment,
+    artifact_root: Path,
+    declared: frozenset[bytes] = frozenset(),
+) -> bool | None:
+    # ``declared`` carries markers a scenario plants outside the generated
+    # fixture (``crm-pipeline`` puts its ``pii_sentinel`` in the mock-source
+    # route table).  Without them such a scenario scans nothing and its
+    # sentinel stays unexamined, which can never pass.
+    markers = marker_values(environment.generated_fixture_manifest) | declared
     if not markers:
         return None
     observations = _load_json(artifact_root / _OPERATOR_OBSERVATIONS_NAME)
@@ -2571,10 +2579,11 @@ class TierRunner:
                     # inventory -- ``capability-shortfall`` plants its graded
                     # ``pii_sentinel`` in the mock-source route table, which
                     # ``marker_values`` never reads -- so the gate declarations
-                    # are unioned in.  Redaction only: these deliberately do
-                    # not widen the in-engine sentinel scan, because a marker
-                    # in a tool result the agent legitimately read is not a
-                    # leak.
+                    # are unioned in.  They do not widen the in-engine
+                    # sentinel scan, because a marker in a tool result the
+                    # agent legitimately read is not a leak; the end-of-run
+                    # ``_sentinel_trip`` scan, which excludes raw tool
+                    # results, does include them.
                     engine = OperatorEngine(
                         scenario.script,
                         transport,
@@ -2970,7 +2979,9 @@ class TierRunner:
                 route_status = "unexamined"
                 route_reason = "mock source counters did not contain a route observation"
         terminal_state = observations.get("terminal_state")
-        sentinel_observation = _sentinel_trip(environment, artifact_root)
+        sentinel_observation = _sentinel_trip(
+            environment, artifact_root, declared_sentinels(scenario)
+        )
         sentinel = True if terminal_state == EngineTerminalState.SENTINEL_TRIP.value else sentinel_observation
         checker_state, checker_codes = _checker_skew_outcome(
             observations,
