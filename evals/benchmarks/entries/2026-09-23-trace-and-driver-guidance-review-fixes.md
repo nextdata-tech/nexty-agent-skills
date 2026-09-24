@@ -2,7 +2,7 @@
 id: 2026-09-23-trace-and-driver-guidance-review-fixes
 date: 2026-09-23
 label: "fix MCP trace duplication and restore driver guidance"
-plugin_version: 0.52.3
+plugin_version: 0.52.4
 status: NO_EVAL
 scenarios: []
 record: null
