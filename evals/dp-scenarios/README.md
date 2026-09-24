@@ -175,7 +175,7 @@ the routine core suite:
 
 - **marketing-attribution** — B3's safe campaign-name matching, including
   case/whitespace normalization, one unique 50-character truncation, and a
-  matched-conversions-only CPA policy.
+  matched-conversions-only CPA policy, with a leak scan over an unrelated newsletter-contacts export.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -211,7 +211,7 @@ scenario.
 | [inventory-position](scenarios/inventory-position/README.md) | core | 9 | profile-backed inventory and warehouse lookup with quality warnings |
 | [application-reconciliation](scenarios/application-reconciliation/README.md) | core | 10 | 391-to-353 count dispute with status/tombstone lineage |
 | [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
-| [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign-name normalization, unique truncation, and unmatched-CPA policy |
+| [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign matching, unmatched-CPA policy, and out-of-scope export sentinel scan |
 
 ## Running
 
