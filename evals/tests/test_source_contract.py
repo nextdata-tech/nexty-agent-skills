@@ -518,3 +518,15 @@ def test_models_imports_stay_inside_nxd_spec() -> None:
     )
     assert "from nxd.spec.data_types import DurationUnit" in api
     assert "never import `DurationUnit`\nfrom `nxd.core.yaml_schemas`" in api
+
+
+def test_review_grades_verification_gaps_by_what_they_hide_today() -> None:
+    # Live B3 reviews raised a new MEDIUM "verifier not independent enough"
+    # finding every round while confirming the numbers were correct. The job
+    # loop blocks on MEDIUM, so the run could never publish.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "Grade a verification gap by what it hides today, not by what a future bug might do" in text
+    assert "A LOW gap is advisory." in text
+    assert "Robustness against a hypothetical future bug is never HIGH or MEDIUM on its own" in text

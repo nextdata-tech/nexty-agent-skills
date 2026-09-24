@@ -28,6 +28,11 @@ disposition. The dp-scenarios conduct line no longer reads as forbidding
 It had followed our guidance to import `DurationUnit` from
 `nxd.core.yaml_schemas`, but supervisor validation allows only `nxd.spec.*`
 imports in `models.py`. The guidance now imports from `nxd.spec.data_types`.
+A later B3 run still churned. Each review round raised a new MEDIUM finding,
+"the verifier would not catch a hypothetical future bug", while it confirmed
+the current output was correct. The job loop blocks on MEDIUM. The reviewer now
+grades verification gaps by what they hide today: HIGH if an output is wrong
+now, MEDIUM if the blueprint promises that check, and LOW (advisory) otherwise.
 
 No public `evals/run.py` scenario isolates this. The trigger depends on how
 many aggregate-only views an agent authors. The B3 live rerun is the
@@ -41,3 +46,6 @@ qualification check. Deterministic evidence pins the guidance.
   recovery section; it fails against the previous skill files.
 - `evals/tests/test_source_contract.py` — `test_models_imports_stay_inside_nxd_spec`
   pins the `nxd.spec.data_types` import; it fails against the previous files.
+- `evals/tests/test_source_contract.py` —
+  `test_review_grades_verification_gaps_by_what_they_hide_today` pins the
+  severity calibration; it fails against the previous review skill.
