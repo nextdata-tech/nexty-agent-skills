@@ -232,7 +232,11 @@ installed `nxd-desktop` MCP server, and the job-loop skills. At present,
 `capability-shortfall` is the only package in the `live` tier. The runner needs
 the local `claude` executable, the `nxd-desktop-supervisor` executable, and the
 desktop Python environment at `~/.nxd/desktop-venv/bin/python` unless an
-explicit `--desktop-python` is supplied. It does not use the platform CLI or a
+explicit `--desktop-python` is supplied. The supervisor's directory must also hold
+`nxd-desktop-kernel-host`: the supervisor spawns that sibling only when
+validation starts, so the runner checks for it before any agent turn rather
+than letting a partial build (such as a `target/ci` holding only the
+supervisor) surface mid-run as `workflow/execution_unavailable`. It does not use the platform CLI or a
 Kubernetes cluster.
 
 Before each disposable MCP server starts, the runner activates the bundled
