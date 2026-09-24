@@ -1032,12 +1032,15 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
         for scenario in load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
         if scenario.id == "marketing-attribution"
     )
-    configured = _evidence_contract(marketing, review_timeout_seconds=600)
+    configured = _evidence_contract(marketing, review_timeout_seconds=900)
     assert configured is not None
     review_rule = next(rule for rule in configured["conduct"] if "review_time_budget_seconds" in rule)
-    assert "review_time_budget_seconds: 600" in review_rule
-    assert "hard absolute 600-second budget" in review_rule
-    assert "review_time_budget_seconds: 120" not in review_rule
+    assert "review_time_budget_seconds: 900" in review_rule
+    assert "review_inspection_cutoff_seconds: 840" in review_rule
+    assert "hard absolute 900-second budget" in review_rule
+    ledger_rule = next(rule for rule in configured["conduct"] if "nxd-conversation-review-ledger-v1" in rule and "budget_ms" in rule)
+    assert "budget_ms: 900000" in ledger_rule
+    assert "review_time_budget_seconds: 600" not in review_rule
 
     crm = next(
         scenario
@@ -1122,10 +1125,11 @@ def test_workflow_v2_review_handoff_rule_preserves_the_conversation_boundary() -
         "If any later reset, workflow switch, or behavior change occurs, the earlier evidence is stale",
         "supervisor-provided review_input",
         "reviewer must run inline (run_in_background=false)",
-        "review_time_budget_seconds: 300",
-        "review_inspection_cutoff_seconds: 240",
-        "hard absolute 300-second budget",
-        "After 240 seconds, the runner-owned guard denies further child Read, Glob, and Grep calls",
+        "review_time_budget_seconds: 600",
+        "review_inspection_cutoff_seconds: 540",
+        "hard absolute 600-second budget",
+        "After 540 seconds, the runner-owned guard denies further child Read, Glob, and Grep calls",
+        "budget_ms: 600000",
         "progress checkpoint",
         "does not extend or reset the deadline",
         "marker line must use exactly the NXD_REVIEW_DISPATCH keys and constant values",

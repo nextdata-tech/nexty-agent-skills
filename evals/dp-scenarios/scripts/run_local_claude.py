@@ -579,12 +579,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--effort", default="medium", choices=("low", "medium", "high", "xhigh", "max"))
     parser.add_argument("--max-budget-usd", type=float, help="per-scenario Claude Code spend ceiling")
-    parser.add_argument("--turn-timeout", type=float, default=600.0, help="maximum seconds for each agent turn")
+    parser.add_argument(
+        "--turn-timeout",
+        type=float,
+        default=1800.0,
+        help="maximum seconds for each agent turn",
+    )
     parser.add_argument(
         "--review-timeout",
         type=float,
         default=DEFAULT_REVIEW_TIMEOUT_SECONDS,
-        help="maximum seconds for the retained-capture reviewer (default: 300)",
+        help=(
+            "maximum seconds for the retained-capture reviewer "
+            f"(default: {DEFAULT_REVIEW_TIMEOUT_SECONDS:g})"
+        ),
     )
     parser.add_argument("--supervisor", type=Path, help="nxd-desktop-supervisor executable")
     parser.add_argument(

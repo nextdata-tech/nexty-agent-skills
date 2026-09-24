@@ -324,6 +324,11 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --native-run-root /tmp/dp-scenarios-native-root
 ```
 
+Each live agent turn defaults to a 1800-second timeout. Retained-capture review
+defaults to 600 seconds; its inspection window closes after 540 seconds, leaving
+the final 60 seconds for the reviewer to return its findings. These are harness
+time budgets, not grading criteria.
+
 `--allow-host-home` exposes the host credential/configuration home to the agent
 process. `--allow-host-home-bash` additionally exposes shell access and should
 be used only when the scenario needs it; the current capability-shortfall live

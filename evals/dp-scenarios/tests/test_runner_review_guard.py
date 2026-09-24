@@ -18,6 +18,7 @@ from dp_scenarios.runner.review_guard import (
     handle_event,
     review_budget_line,
     review_inspection_cutoff_line,
+    review_ledger_budget_ms_line,
     settings_payload,
     validate_review_timeout_seconds,
     write_initial_state,
@@ -121,6 +122,16 @@ def _report_input() -> dict[str, object]:
             },
         },
     }
+
+
+def test_default_review_budget_and_cutoff_keep_the_finalization_reserve() -> None:
+    assert guard_module.DEFAULT_REVIEW_TIMEOUT_SECONDS == 600.0
+    assert guard_module.REVIEW_DEADLINE_MS == 600_000
+    assert guard_module.REVIEW_FINALIZATION_RESERVE_MS == 60_000
+    assert REVIEW_INSPECTION_CUTOFF_MS == 540_000
+    assert review_budget_line() == "review_time_budget_seconds: 600"
+    assert review_ledger_budget_ms_line() == "budget_ms: 600000"
+    assert review_inspection_cutoff_line() == "review_inspection_cutoff_seconds: 540"
 
 
 def test_capture_to_report_is_owner_scoped_and_clears_only_on_matching_response(tmp_path: Path) -> None:
@@ -1131,9 +1142,9 @@ def test_owner_dispatch_accepts_the_configured_review_budget(tmp_path: Path) -> 
     handle_event(_capture_event(), state_path=state_path)
 
     prompt = _review_prompt()
-    prompt = prompt.replace(REVIEW_BUDGET_LINE, review_budget_line(600))
+    prompt = prompt.replace(REVIEW_BUDGET_LINE, review_budget_line(900))
     prompt = prompt.replace(
-        REVIEW_INSPECTION_CUTOFF_LINE, review_inspection_cutoff_line(600)
+        REVIEW_INSPECTION_CUTOFF_LINE, review_inspection_cutoff_line(900)
     )
     decision = handle_event(
         {
@@ -1146,7 +1157,7 @@ def test_owner_dispatch_accepts_the_configured_review_budget(tmp_path: Path) -> 
             },
         },
         state_path=state_path,
-        review_timeout_seconds=600,
+        review_timeout_seconds=900,
     )
 
     assert decision == {}
@@ -1293,7 +1304,7 @@ def test_settings_carries_the_configured_review_timeout() -> None:
     settings = settings_payload(
         python="/usr/bin/python3",
         script="/tmp/review_guard.py",
-        review_timeout_seconds=600,
+        review_timeout_seconds=900,
     )
     command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "--review-timeout 600" in command
+    assert "--review-timeout 900" in command
