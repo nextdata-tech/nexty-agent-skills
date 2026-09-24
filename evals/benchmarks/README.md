@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-24 | trusted proposal validator reports object-valued provenance instead of crashing | NO_EVAL | — | [`2026-09-24-validator-provenance-crash`](entries/2026-09-24-validator-provenance-crash.md) |
+| 2026-09-24 | repair reported failed contracts and exception class first | NO_EVAL | — | [`2026-09-24-validation-failure-facts`](entries/2026-09-24-validation-failure-facts.md) |
 | 2026-09-24 | registry-unique metric names, required pre-capture check, validation-failure recovery | NO_EVAL | — | [`2026-09-24-metric-names-and-preflight-recovery`](entries/2026-09-24-metric-names-and-preflight-recovery.md) |
 | 2026-09-24 | independent promise verifiers and one-round defect-class review sweeps | NO_EVAL | — | [`2026-09-24-independent-promise-verifiers`](entries/2026-09-24-independent-promise-verifiers.md) |
 | 2026-09-24 | an advisory-only review round reports clear | NO_EVAL | — | [`2026-09-24-advisory-only-review-clear`](entries/2026-09-24-advisory-only-review-clear.md) |
