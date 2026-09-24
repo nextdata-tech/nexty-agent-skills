@@ -130,8 +130,11 @@ def test_provider_preflight_is_reserved_for_provider_backed_tiers() -> None:
 
 def test_local_runner_defaults_and_validates_the_review_timeout() -> None:
     module = _load_runner_module()
+    defaults = module.build_parser().parse_args([])
 
-    assert module.build_parser().parse_args([]).review_timeout == 300.0
+    assert defaults.turn_timeout == 1800.0
+    assert defaults.review_timeout == 600.0
+    assert "(default: 600)" in module.build_parser().format_help()
     with pytest.raises(TierError, match="--review-timeout must be a positive finite number"):
         module.main(["--review-timeout", "nan"])
 

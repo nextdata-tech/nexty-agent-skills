@@ -986,7 +986,7 @@ def _update_reviewer_deadline_from_events(
 
     ``turn/start`` can return notifications alongside its response.  Those
     notifications are handed to ``_collect_turn`` as ``before_turn`` events;
-    ignoring them leaves a retained reviewer without its 300-second deadline
+    ignoring them leaves a retained reviewer without its configured deadline
     and lets the outer turn timeout wait the full 90% budget instead.
     """
 

@@ -38,6 +38,7 @@ from dp_scenarios.runner.review_guard import (
     REVIEW_DEADLINE_MS,
     REVIEW_DISPATCH_PENDING,
     REVIEW_INSPECTION_CUTOFF_LINE,
+    REVIEW_LEDGER_BUDGET_MS_LINE,
     RELAY_PENDING,
     REPORT_IN_FLIGHT,
     REVIEW_RESERVE_INSTRUCTION,
@@ -45,6 +46,7 @@ from dp_scenarios.runner.review_guard import (
     STATE_VERSION,
     review_budget_line,
     review_inspection_cutoff_line,
+    review_ledger_budget_ms_line,
     review_reserve_instruction,
     settings_payload,
     validate_review_timeout_seconds,
@@ -394,7 +396,8 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "ended_at_unix_ms; null timestamps are invalid. The minimal valid shape is "
     "{schema: nxd-conversation-review-ledger-v1, workflow: <workflow>, "
     "review_rounds: [{status: complete, started_at_unix_ms: <integer>, "
-    "ended_at_unix_ms: <integer>, budget_ms: 300000, findings: [], "
+    "ended_at_unix_ms: <integer>, "
+    f"{REVIEW_LEDGER_BUDGET_MS_LINE}, findings: [], "
     "adjudications: [], user_decision: null, deferred_finding_ids: []}]}; "
     "keep every key and do not replace it with a claims-only summary.",
     "If prepare_workflow rejects a proposal and returns a prepare_recovery_id, "
@@ -463,6 +466,10 @@ def scenario_conduct_rules(review_timeout_seconds: object | None = None) -> tupl
     )
     return tuple(
         rule.replace(REVIEW_BUDGET_LINE, review_budget_line(timeout))
+        .replace(
+            REVIEW_LEDGER_BUDGET_MS_LINE,
+            review_ledger_budget_ms_line(timeout),
+        )
         .replace(REVIEW_INSPECTION_CUTOFF_LINE, review_inspection_cutoff_line(timeout))
         .replace(REVIEW_RESERVE_INSTRUCTION, review_reserve_instruction(timeout))
         .replace(default_absolute_budget, configured_absolute_budget)

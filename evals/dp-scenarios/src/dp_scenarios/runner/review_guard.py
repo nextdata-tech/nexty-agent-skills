@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover - Windows is not a supported live host.
 
 STATE_ENV = "NXD_EVAL_REVIEW_GUARD_STATE"
 STATE_VERSION = 1
-DEFAULT_REVIEW_TIMEOUT_SECONDS = 300.0
+DEFAULT_REVIEW_TIMEOUT_SECONDS = 600.0
 REVIEW_DEADLINE_MS = int(DEFAULT_REVIEW_TIMEOUT_SECONDS * 1000)
 REVIEW_FINALIZATION_RESERVE_MS = 60_000
 REVIEW_FINALIZATION_RESERVE_SECONDS = REVIEW_FINALIZATION_RESERVE_MS / 1000.0
@@ -88,6 +88,13 @@ def review_budget_line(timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS)
     return f"review_time_budget_seconds: {timeout:.15g}"
 
 
+def review_ledger_budget_ms_line(
+    timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS,
+) -> str:
+    timeout = validate_review_timeout_seconds(timeout_seconds)
+    return f"budget_ms: {int(timeout * 1000)}"
+
+
 def review_inspection_cutoff_line(timeout_seconds: object = DEFAULT_REVIEW_TIMEOUT_SECONDS) -> str:
     _, cutoff = _review_timing(timeout_seconds)
     return f"review_inspection_cutoff_seconds: {cutoff:.15g}"
@@ -122,6 +129,7 @@ def _review_timeout_arg(value: str) -> float:
 
 
 REVIEW_BUDGET_LINE = review_budget_line()
+REVIEW_LEDGER_BUDGET_MS_LINE = review_ledger_budget_ms_line()
 REVIEW_INSPECTION_CUTOFF_MS = int(_review_timing(DEFAULT_REVIEW_TIMEOUT_SECONDS)[1] * 1000)
 REVIEW_INSPECTION_CUTOFF_LINE = review_inspection_cutoff_line()
 REVIEW_RESERVE_INSTRUCTION = review_reserve_instruction()
@@ -1272,11 +1280,13 @@ __all__ = [
     "REVIEW_DEADLINE_MS",
     "DEFAULT_REVIEW_TIMEOUT_SECONDS",
     "REVIEW_BUDGET_LINE",
+    "REVIEW_LEDGER_BUDGET_MS_LINE",
     "REVIEW_INSPECTION_CUTOFF_MS",
     "REVIEW_INSPECTION_CUTOFF_LINE",
     "REVIEW_RESERVE_INSTRUCTION",
     "REVIEW_RESERVE_DIAGNOSTIC",
     "review_budget_line",
+    "review_ledger_budget_ms_line",
     "review_inspection_cutoff_line",
     "review_reserve_instruction",
     "review_reserve_diagnostic",
