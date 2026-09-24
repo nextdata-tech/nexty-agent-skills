@@ -18,6 +18,35 @@ def _validate_settings(settings: Mapping[str, object]) -> None:
         _string(value, f"follow-up.promise_fields.{key}")
 
 
+_DIAGNOSTIC_KEYS = (
+    "spend_row_count",
+    "conversion_row_count",
+    "matched_pair_count",
+    "unmatched_spend_count",
+    "unmatched_conversion_count",
+    "spend_row_match_rate_bps",
+    "conversion_row_match_rate_bps",
+    "casefold_whitespace_match_count",
+    "unique_50_character_truncation_match_count",
+)
+
+
+def _landed_relation(landed: Mapping[str, object]) -> object:
+    """Order landed rows by campaign_key; a landed relation has no row order.
+
+    Only a well-formed mapping-of-rows is normalized, and duplicates survive the
+    sort, so a missing, extra, or repeated row still disagrees with the
+    reference. Anything malformed is returned unchanged and compared strictly.
+    """
+
+    rows = landed.get("rows")
+    if not isinstance(rows, list) or not all(
+        isinstance(row, Mapping) and isinstance(row.get("campaign_key"), str) for row in rows
+    ):
+        return landed
+    return {**landed, "rows": sorted(rows, key=lambda row: row["campaign_key"])}
+
+
 def _not_examined(*findings: str) -> dict[str, object]:
     return {"status": "not-examined", "passed": False, "findings": list(findings)}
 
@@ -54,7 +83,10 @@ def check(
         return _not_examined("attribution_decision_history_not_examined")
 
     findings: list[str] = []
-    if landed != expected.get("landed"):
+    expected_landed = expected.get("landed")
+    if not isinstance(expected_landed, Mapping) or _landed_relation(landed) != _landed_relation(
+        expected_landed
+    ):
         findings.append("attribution_landed_disagrees_with_independent_reference")
     if matching != expected.get("matching"):
         findings.append("attribution_matching_disagrees_with_independent_reference")
@@ -83,15 +115,17 @@ KIND = register(
         evidence_contract={
             "landed": (
                 "object with rows of campaign_key, spend_cents, conversions, and cpa_cents; "
-                "include only safely matched campaign pairs"
+                "include only safely matched campaign pairs; row order is not graded"
             ),
             "matching": (
                 "object with ordered matches (spend_id, conversion_id, match_method), "
                 "unmatched_spend_ids, and unmatched_conversion_ids"
             ),
             "diagnostics": (
-                "source row counts, matched and unmatched counts, side-specific row match rates "
-                "in basis points, and safe-match-method counts"
+                "object with exactly these integer keys: "
+                + ", ".join(_DIAGNOSTIC_KEYS)
+                + " (source row counts, matched and unmatched counts, side-specific row "
+                "match rates in basis points, and safe-match-method counts)"
             ),
             "promise": (
                 "casefold_whitespace='approved', unique_50_character_truncation='approved', "

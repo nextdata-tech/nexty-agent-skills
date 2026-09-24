@@ -168,3 +168,37 @@ def test_missing_durable_match_facts_are_not_examined() -> None:
 
     assert result["status"] == "not-examined"
     assert result["findings"] == ["attribution_matching_not_examined"]
+
+
+@pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
+def test_landed_rows_are_a_relation_but_still_exact() -> None:
+    # A live Sonnet run landed the gold rows sorted by campaign_key; the grader
+    # compared list order the contract never specified.
+    target = _good_target()
+    landed = copy.deepcopy(target["landed"])
+    landed["rows"] = sorted(landed["rows"], key=lambda row: row["campaign_key"], reverse=True)
+    target["landed"] = landed
+    assert _scenario().follow_up_check(target)["passed"]
+
+    duplicated = copy.deepcopy(target)
+    duplicated["landed"]["rows"].append(duplicated["landed"]["rows"][0])
+    missing = copy.deepcopy(target)
+    missing["landed"]["rows"].pop()
+    for mutant in (duplicated, missing):
+        result = _scenario().follow_up_check(mutant)
+        assert "attribution_landed_disagrees_with_independent_reference" in result["findings"]
+
+    reordered_matches = _good_target()
+    reordered_matches["matching"] = copy.deepcopy(reordered_matches["matching"])
+    reordered_matches["matching"]["matches"].reverse()
+    result = _scenario().follow_up_check(reordered_matches)
+    assert "attribution_matching_disagrees_with_independent_reference" in result["findings"]
+
+
+def test_evidence_contract_names_every_graded_diagnostic_key() -> None:
+    from dp_scenarios.followups import marketing_attribution
+
+    contract = marketing_attribution.KIND.evidence_contract["diagnostics"]
+    for key in _scenario().raw_gold("diagnostics"):
+        assert key in contract
+    assert set(marketing_attribution._DIAGNOSTIC_KEYS) == set(_scenario().raw_gold("diagnostics"))
