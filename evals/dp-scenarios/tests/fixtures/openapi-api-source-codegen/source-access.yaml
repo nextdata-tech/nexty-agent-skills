@@ -1,0 +1,18 @@
+# Test-only mock identities. This file is outside evals/public and is never
+# copied into the agent workspace or supplied to the Claude eval process.
+required_scopes:
+  - orders:read
+initial_requests: 12
+identities:
+  api_expected_token:
+    token: mock-orders-expected-token
+    scopes:
+      - orders:read
+  authenticated_without_scope:
+    token: mock-orders-no-scope-token
+    scopes: []
+  authorized:
+    token: mock-orders-authorized-token
+    scopes:
+      - orders:read
+  invalid_request_token: mock-orders-invalid-token

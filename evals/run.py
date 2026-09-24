@@ -264,6 +264,8 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "jira-api-source-codegen": frozenset({"check_jira_api_source.py"}),
     "hubspot-api-source-codegen": frozenset({"check_hubspot_api_source.py"}),
     "google-drive-source-codegen": frozenset({"check_google_drive_source.py"}),
+    "google-sheets-source-codegen": frozenset({"check_google_sheets_source.py"}),
+    "openapi-api-source-codegen": frozenset({"check_openapi_api_source.py"}),
     # The optional-output desktop verifier is runner-side ground truth: it
     # re-serves the landed closure and checks the catalog/query contract.
     "optional-empty-output-aggregate-desktop": frozenset({
@@ -394,6 +396,60 @@ HTTP_STUB_RUNNER_SIDE_FIXTURES = {
     # file" — same reasoning as DERIVATION_RUNNER_SIDE_FIXTURES excluding
     # check_derived_closure.py.
 }
+
+# Exact legacy check scripts intentionally visible in public scenario workspaces.
+# The job-loop scripts are agent-run forcing functions; the harness verifies the
+# staged copies stayed pristine. The other two preserve measured scenario
+# workspaces, while deterministic_check_fact always runs the authoritative
+# script from scenario_dir/fixtures rather than the agent's editable copy.
+# See evals/tests/test_public_checker_workspace_isolation.py for the exact-path
+# inventory guard and the per-path tamper rationale.
+PUBLIC_CHECKER_VISIBLE_EXCEPTIONS = {
+    "job-loop-export-handoff/fixtures/check_job_loop.py": (
+        "Agent runs the forcing function; desktop_harness_fact verifies the "
+        "staged checker stayed pristine against the source fixture."
+    ),
+    "job-loop-serve-query-refine/fixtures/check_job_loop.py": (
+        "Agent runs the forcing function; desktop_harness_fact verifies the "
+        "staged checker stayed pristine against the source fixture."
+    ),
+    "generate-runnable-dp-from-intent/fixtures/check_generated_closure.py": (
+        "The prompt explicitly requires this agent-run acceptance self-check; "
+        "its output is agent evidence, not a runner-side oracle."
+    ),
+    "treasury-yield-curve/fixtures/check_determinism.py": (
+        "Preserves the measured workspace; deterministic_check_fact executes "
+        "the source fixture, not the agent-editable workspace copy."
+    ),
+    "coauthor-supplied-rubric/fixtures/check_coauthored_closure.py": (
+        "Preserves the measured workspace; deterministic_check_fact executes "
+        "the source fixture, not the agent-editable workspace copy."
+    ),
+}
+PUBLIC_AGENT_RUN_SELF_CHECKS = frozenset({
+    "job-loop-export-handoff/fixtures/check_job_loop.py",
+    "job-loop-serve-query-refine/fixtures/check_job_loop.py",
+    "generate-runnable-dp-from-intent/fixtures/check_generated_closure.py",
+})
+
+
+def workspace_fixture_exclusions(scenario_name: str) -> frozenset[str]:
+    """Return every runner/server-side fixture withheld for one scenario.
+
+    Keep the fixture-copy loop and the checker-visibility regression test on
+    one resolver so a newly declared global runner-side set cannot silently be
+    omitted from the agent workspace filter.
+    """
+    excluded: set[str] = set()
+    for name, value in globals().items():
+        if (name.endswith("_RUNNER_SIDE_FIXTURES")
+                or name.endswith("_SERVER_SIDE_FIXTURES")):
+            if isinstance(value, (set, frozenset)):
+                excluded.update(value)
+    excluded.update(SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS.get(scenario_name, ()))
+    return frozenset(excluded)
+
+
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
@@ -597,9 +653,7 @@ def build_workspace(
 
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
-        scenario_exclusions = SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS.get(
-            scenario_dir.name, frozenset()
-        )
+        runner_side_fixtures = workspace_fixture_exclusions(scenario_dir.name)
         for item in fixtures.iterdir():
             # Server-side MCP inputs must NOT land in the agent's workspace. The
             # catalog is the data the agent is supposed to obtain by CALLING the
@@ -615,12 +669,7 @@ def build_workspace(
             # a source checkout unreadable; protected cells prove that with
             # their separately configured source-isolation wrapper.
             if (item.name.startswith(".") or item.name == "__pycache__"
-                    or item.name in MCP_SERVER_SIDE_FIXTURES | JOB_RUNNER_SIDE_FIXTURES
-                    | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
-                    | DERIVATION_RUNNER_SIDE_FIXTURES
-                    | EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES
-                    | HTTP_STUB_RUNNER_SIDE_FIXTURES
-                    or item.name in scenario_exclusions):
+                    or item.name in runner_side_fixtures):
                 continue
             dst = ws / item.name
             if item.is_dir():

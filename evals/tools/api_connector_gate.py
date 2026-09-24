@@ -127,6 +127,44 @@ def profile_attributes(root: Path) -> tuple[dict[str, str], dict[str, str]]:
     return fields, public_flags
 
 
+def profile_has_structured_auth(
+    root: Path,
+    *,
+    expected_auth_type: str = "bearer",
+    token_key: str = "auth_token",
+    expected_token: str | None = None,
+) -> tuple[bool, str, dict[str, str]]:
+    """Require flat, profile-driven API auth without exposing credential values.
+
+    The api-source profile stores one ``key``/``value``/``public`` attribute
+    per field. This shared check is used by both synthetic codegen and the
+    authenticated REST-source checker so auth requirements do not drift.
+    ``expected_token`` is optional: runner fixtures with a known synthetic
+    credential can pin the value, while a static scenario with no supplied
+    credential can check the topology and private flag alone.
+    """
+    profile = root / "infra-profile.yaml"
+    if not profile.is_file():
+        return False, "infra-profile.yaml missing", {}
+    text = profile.read_text(encoding="utf-8", errors="replace")
+    if "api-source" not in text:
+        return False, "no api-source service declared", {}
+    fields, public_flags = profile_attributes(root)
+    if fields.get("auth_type") != expected_auth_type:
+        return False, f"no auth_type: {expected_auth_type} attribute found", fields
+    if token_key not in fields:
+        return False, f"no {token_key} attribute found", fields
+    if expected_token is not None and fields.get(token_key) != expected_token:
+        return False, f"{token_key} does not match the expected fixture value", fields
+    if "base_url" not in fields:
+        return False, "no base_url attribute found", fields
+    if public_flags.get(token_key) == "true":
+        return False, (
+            f"{token_key} is marked public: true; a credential must remain private"
+        ), fields
+    return True, "", fields
+
+
 def declared_endpoints(root: Path) -> dict[str, str]:
     """The closure's endpoint map, as {model name: endpoint path}.
 
@@ -226,6 +264,105 @@ def _dotted(node: ast.AST) -> str:
     return ".".join(reversed(parts))
 
 
+def _import_bindings(statements: list[ast.stmt]) -> tuple[dict[str, str], set[str]]:
+    """Resolve direct-scope imports to their bound dotted module/symbol paths."""
+    bindings: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    def add(bound_name: str, imported_path: str) -> None:
+        previous = bindings.get(bound_name)
+        if previous is not None and previous != imported_path:
+            ambiguous.add(bound_name)
+        bindings[bound_name] = imported_path
+
+    for statement in statements:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                bound_name = alias.asname or alias.name.split(".")[0]
+                imported_path = alias.name if alias.asname else alias.name.split(".")[0]
+                add(bound_name, imported_path)
+        elif isinstance(statement, ast.ImportFrom) and statement.level == 0:
+            module = statement.module or ""
+            for alias in statement.names:
+                if alias.name != "*":
+                    add(alias.asname or alias.name, f"{module}.{alias.name}" if module else alias.name)
+    return bindings, ambiguous
+
+
+def _scope_assignment_binds_name(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef, name: str
+) -> bool:
+    """Detect module/function assignments without mistaking nested locals."""
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        args = scope.args
+        if any(arg.arg == name for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)):
+            return True
+        if (args.vararg and args.vararg.arg == name) or (args.kwarg and args.kwarg.arg == name):
+            return True
+
+    def visit(node: ast.AST) -> bool:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                if getattr(child, "name", None) == name:
+                    return True
+                continue
+            if isinstance(child, (ast.MatchAs, ast.MatchStar)) and child.name == name:
+                return True
+            if isinstance(child, ast.MatchMapping) and child.rest == name:
+                return True
+            if isinstance(child, ast.ExceptHandler) and child.name == name:
+                return True
+            if isinstance(child, ast.Name) and child.id == name and isinstance(child.ctx, ast.Store):
+                return True
+            if visit(child):
+                return True
+        return False
+
+    return visit(scope)
+
+
+def _nested_import_binds_name(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef, name: str
+) -> bool:
+    """Reject conditional imports that can replace a direct-scope binding."""
+    direct = set(getattr(scope, "body", ()))
+
+    def binds(statement: ast.Import | ast.ImportFrom) -> bool:
+        for alias in statement.names:
+            bound_name = (
+                alias.asname
+                or (alias.name.split(".")[0] if isinstance(statement, ast.Import) else alias.name)
+            )
+            if alias.name != "*" and bound_name == name:
+                return True
+        return False
+
+    def visit(node: ast.AST) -> bool:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                if child not in direct and binds(child):
+                    return True
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                continue
+            if visit(child):
+                return True
+        return False
+
+    return visit(scope)
+
+
+def _import_statement_binds_name(statement: ast.Import | ast.ImportFrom, name: str) -> bool:
+    for alias in statement.names:
+        bound_name = (
+            alias.asname
+            or (alias.name.split(".")[0] if isinstance(statement, ast.Import) else alias.name)
+        )
+        if alias.name != "*" and bound_name == name:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # The connector gate
 # ---------------------------------------------------------------------------
@@ -299,8 +436,13 @@ def _http_client_calls(tree: ast.Module) -> list[str]:
     return sorted(hits)
 
 
-def _uses_dlt_rest(tree: ast.Module) -> bool:
-    """A `dlt.sources.rest_api` import AND a real call to its entry points.
+def is_dlt_rest_call(
+    tree: ast.Module,
+    call: ast.Call,
+    *,
+    entrypoint: str | None = None,
+) -> bool:
+    """Whether this call resolves to an imported dlt REST API entry point.
 
     Both import forms count. `import dlt.sources.rest_api as rest` followed by
     `rest.rest_api_resources(cfg)` is the connector architecture spelled the
@@ -308,19 +450,67 @@ def _uses_dlt_rest(tree: ast.Module) -> bool:
     with "no dlt.sources.rest_api import found" — a false accusation, and the
     kind this gate is least able to afford now that three scenarios share it.
     """
-    imported = any(
-        (isinstance(n, ast.ImportFrom)
-         and (n.module or "").startswith("dlt.sources.rest_api"))
-        or (isinstance(n, ast.Import)
-            and any(a.name.startswith("dlt.sources.rest_api") for a in n.names))
-        for n in ast.walk(tree)
+    if not isinstance(call, ast.Call):
+        return False
+    module_imports, module_ambiguous = _import_bindings(tree.body)
+    known_entrypoints = {"rest_api_resources", "rest_api_source"}
+    if entrypoint is not None and entrypoint not in known_entrypoints:
+        return False
+    allowed_entrypoints = {entrypoint} if entrypoint else known_entrypoints
+    entrypoints = {
+        f"dlt.sources.rest_api.{name}" for name in allowed_entrypoints
+    }
+    dotted = _dotted(call.func)
+    root, _, suffix = dotted.partition(".")
+    function = _enclosing_function_in_tree(call, tree)
+    local_imports, local_ambiguous = (
+        _import_bindings(function.body) if function is not None else ({}, set())
     )
-    called = any(
-        isinstance(n, ast.Call)
-        and _dotted(n.func).split(".")[-1] in ("rest_api_resources", "rest_api_source")
-        for n in ast.walk(tree)
+    bindings = {**module_imports, **local_imports}
+    ambiguous = (module_ambiguous - set(local_imports)) | local_ambiguous
+    if root not in bindings or root in ambiguous:
+        return False
+    resolved = bindings[root] + (f".{suffix}" if suffix else "")
+    if resolved not in entrypoints:
+        return False
+    if function is not None and root in local_imports and not any(
+        isinstance(statement, (ast.Import, ast.ImportFrom))
+        and statement.lineno < call.lineno
+        and _import_statement_binds_name(statement, root)
+        for statement in function.body
+    ):
+        return False
+    if root not in local_imports and _scope_assignment_binds_name(tree, root):
+        return False
+    if _nested_import_binds_name(tree, root):
+        return False
+    if function is not None and _scope_assignment_binds_name(function, root):
+        return False
+    if function is not None and _nested_import_binds_name(function, root):
+        return False
+    return True
+
+
+def _uses_dlt_rest(tree: ast.Module) -> bool:
+    """A transform calls an imported dlt REST API entry point."""
+    return any(
+        is_dlt_rest_call(tree, node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
     )
-    return imported and called
+
+
+def _enclosing_function_in_tree(node: ast.AST, tree: ast.Module) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    parent = parents.get(node)
+    while parent is not None:
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return parent
+        parent = parents.get(parent)
+    return None
 
 
 def uses_rest_api_resources(root: Path) -> tuple[bool, str]:
