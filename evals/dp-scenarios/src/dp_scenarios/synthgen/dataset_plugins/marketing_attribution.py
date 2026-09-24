@@ -100,8 +100,7 @@ register_dataset(
         builder=_build_marketing_attribution,
         description=(
             "Ad spend and conversions use case/whitespace drift, one unique 50-character "
-            "truncation, a typo that must remain unmatched, and deterministic one-sided rows. "
-            "The conversion contact_email field is injected PII for leak-scan coverage only."
+            "truncation, a typo that must remain unmatched, and deterministic one-sided rows."
         ),
         plant="marketing_attribution_unmatched_cpa",
         requires_explicit_plant=True,
