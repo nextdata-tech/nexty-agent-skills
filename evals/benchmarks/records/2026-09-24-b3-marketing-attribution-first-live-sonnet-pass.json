@@ -1,0 +1,361 @@
+{
+  "id": "2026-09-24-b3-marketing-attribution-first-live-sonnet-pass",
+  "date": "2026-09-24",
+  "label": "B3 marketing-attribution first live Sonnet pass",
+  "notes": "Live Claude Sonnet runs of B3 marketing-attribution on main with #322-#324 and a supervisor built from nxd main (with nxd#7951/#7953). Run 13 passed clean: 45 against a threshold of 36; intake, construction, build and follow-up pass; the sentinel scan was examined and clean; replay verified; QUALIFIED. Run 12 on identical code failed only intake: after rejected prepares the agent fixed the inline typed proposal but did not write the fix back to dp-blueprint.proposal.json. One pass in two same-code epochs is demonstrated-once, not a repeatability rate.",
+  "plugin_version": "0.52.9",
+  "report_tags": {
+    "run12": "run12",
+    "run13": "run13"
+  },
+  "reports": {
+    "run12": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "marketing-attribution",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "marketing-attribution",
+              "result": "FAIL",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "examined": true,
+                    "points": 0,
+                    "required": true,
+                    "passed": false,
+                    "codes": [
+                      "intake_workflow_typed_proposal_file_missing"
+                    ],
+                    "ungraded": false
+                  },
+                  "capability": {
+                    "examined": false,
+                    "points": 0,
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "capability_shortfall_not_staged"
+                    ],
+                    "ungraded": false
+                  },
+                  "narrowing": {
+                    "examined": false,
+                    "points": 0,
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "ungraded": false
+                  },
+                  "construction": {
+                    "examined": true,
+                    "points": 10,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  },
+                  "build": {
+                    "examined": true,
+                    "points": 20,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  },
+                  "query": {
+                    "examined": false,
+                    "points": 0,
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "ungraded": false
+                  },
+                  "follow-up": {
+                    "examined": true,
+                    "points": 15,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  }
+                },
+                "total": 35,
+                "scoreable_max": 55,
+                "threshold": 36,
+                "waived_gates": {
+                  "capability": "capability_shortfall_not_staged",
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": null,
+                  "sentinel": false
+                },
+                "state": "failed",
+                "findings": [
+                  "intake_workflow_typed_proposal_file_missing",
+                  "capability_shortfall_not_staged",
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 10,
+                "observed_calls": 126
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.52.8",
+                "supervisor_version": "sha256:d78432367456c74cf8b8a451652a6c900c90e4acb7a75bc309cdde16bf3b9449",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "ba847cc53e619d574ca9d65d48b1b9ba0f326c27914117d0035bc3c9dca8de6f",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "65253456c2bbd82c44f2abbe468093abdd1d79bd525a99b3c780baf4b6aac04b",
+                "turn_budget": 10,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "marketing-attribution",
+                "tier": "full",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "marketing-attribution-trial-0",
+                "session_config_sha256": "sha256:43982040063d6f72b32542050e4d5804c01ce4de12385e94db2051df9cc74652",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "REJECTED",
+                "operator_mode": "scripted",
+                "reasons": [
+                  "score_state:failed",
+                  "gate_waived:capability",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "verified"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "read_data_product_resource"
+              },
+              "route_fidelity": {
+                "status": "not-applicable"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "run13": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "marketing-attribution",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "marketing-attribution",
+              "result": "PASS",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "examined": true,
+                    "points": 10,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  },
+                  "capability": {
+                    "examined": false,
+                    "points": 0,
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "capability_shortfall_not_staged"
+                    ],
+                    "ungraded": false
+                  },
+                  "narrowing": {
+                    "examined": false,
+                    "points": 0,
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "ungraded": false
+                  },
+                  "construction": {
+                    "examined": true,
+                    "points": 10,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  },
+                  "build": {
+                    "examined": true,
+                    "points": 20,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  },
+                  "query": {
+                    "examined": false,
+                    "points": 0,
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "ungraded": false
+                  },
+                  "follow-up": {
+                    "examined": true,
+                    "points": 15,
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false
+                  }
+                },
+                "total": 45,
+                "scoreable_max": 55,
+                "threshold": 36,
+                "waived_gates": {
+                  "capability": "capability_shortfall_not_staged",
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": null,
+                  "sentinel": false
+                },
+                "state": "passed",
+                "findings": [
+                  "capability_shortfall_not_staged",
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 10,
+                "observed_calls": 247
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.52.8",
+                "supervisor_version": "sha256:d78432367456c74cf8b8a451652a6c900c90e4acb7a75bc309cdde16bf3b9449",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "ba847cc53e619d574ca9d65d48b1b9ba0f326c27914117d0035bc3c9dca8de6f",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "65253456c2bbd82c44f2abbe468093abdd1d79bd525a99b3c780baf4b6aac04b",
+                "turn_budget": 10,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "marketing-attribution",
+                "tier": "full",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "marketing-attribution-trial-0",
+                "session_config_sha256": "sha256:43982040063d6f72b32542050e4d5804c01ce4de12385e94db2051df9cc74652",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "QUALIFIED",
+                "operator_mode": "scripted",
+                "reasons": [
+                  "gate_waived:capability",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "verified"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "run_semantic_query"
+              },
+              "route_fidelity": {
+                "status": "not-applicable"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

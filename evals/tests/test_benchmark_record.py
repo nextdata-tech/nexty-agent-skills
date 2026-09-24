@@ -380,6 +380,36 @@ class BenchmarkRecordTests(unittest.TestCase):
             compact["scenarios"][0]["runs"][0]["scenario_id"],
         )
 
+    def test_dp_report_accepts_current_live_producer_fields(self):
+        # A full-tier live report from the Claude/Codex adapters carries the
+        # adapter backend and per-call observations; B3's first live pass was
+        # rejected until the recorder learned them.
+        payload = dp_report(dp_run())
+        run = payload["scenarios"][0]["runs"][0]
+        run["manifest"]["tier"] = "full"
+        run["manifest"]["agent_sampling_params"]["backend"] = "claude"
+        result = run["replay_recording"]["turns"][0]["result"]
+        result["backend"] = "codex"
+        result["tool_calls"] = [
+            {"name": "Glob", "arguments": {}, "result": None, "observation": None},
+        ]
+
+        compact = recorder.compact_report(payload)
+
+        self.assertEqual("full", compact["scenarios"][0]["runs"][0]["manifest"]["tier"])
+
+    def test_dp_report_rejects_an_unknown_live_backend(self):
+        self.assert_dp_rejected(
+            lambda value: value["scenarios"][0]["runs"][0]["manifest"]
+            ["agent_sampling_params"].update(backend="other"),
+            "backend",
+        )
+        self.assert_dp_rejected(
+            lambda value: value["scenarios"][0]["runs"][0]["replay_recording"]
+            ["turns"][0]["result"].update(backend="other"),
+            "backend",
+        )
+
     def test_dp_report_rejects_malformed_redacted_touched_file_envelopes(self):
         invalid = (
             ({"redacted": False, "sha256": "a" * 64, "size_bytes": 1}, "redacted"),

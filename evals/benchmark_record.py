@@ -154,8 +154,9 @@ DP_MANIFEST_HASH_FIELDS = frozenset(
         "session_config_sha256",
     }
 )
-DP_TIER_VALUES = frozenset({"smoke", "T0", "core", "live"})
+DP_TIER_VALUES = frozenset({"smoke", "T0", "core", "full", "live"})
 DP_VALIDATION_MODES = frozenset({"live", "replay"})
+DP_AGENT_BACKENDS = frozenset({"claude", "codex"})
 DP_AGENT_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 DP_ROUTE_FIDELITY_STATUSES = frozenset({"examined", "unexamined", "not-applicable"})
 DP_REPLAY_STATUSES = frozenset({"verified", "mismatch", "not-attempted"})
@@ -226,6 +227,7 @@ DP_TURN_RESULT_FIELDS = frozenset({
     "environment_wedged", "turn_timed_out", "environment_detail", "failure_reason",
     "last_mcp_call", "session_id", "terminal_result_count", "terminal_result_subtype",
     "terminal_result_is_error", "provider_model_calls", "input_tokens", "output_tokens",
+    "backend",
 })
 DP_TERMINAL_DIAGNOSTICS_FIELDS = frozenset({"root_turns", "exactly_one_terminal_result_per_turn"})
 DP_TERMINAL_DIAGNOSTIC_TURN_FIELDS = frozenset({
@@ -842,8 +844,12 @@ def _validate_runtime_knobs(value: Any, path: str) -> None:
 
 def _validate_agent_sampling(value: Any, path: str, validation_mode: str) -> None:
     if validation_mode == "live":
-        raw = _exact_keys(value, {"effort", "temperature"}, path,
+        # ``backend`` names the live agent adapter (claude or codex); older
+        # reports predate it, so it stays optional.
+        raw = _exact_keys(value, {"backend", "effort", "temperature"}, path,
                           required={"effort", "temperature"})
+        if "backend" in raw:
+            _enum(raw["backend"], DP_AGENT_BACKENDS, f"{path}.backend")
         _enum(raw["effort"], DP_AGENT_EFFORTS, f"{path}.effort")
         _safe_text(raw["effort"], f"{path}.effort")
         if raw["temperature"] != "provider-default":
@@ -1120,18 +1126,24 @@ def _validate_replay_recording(value: Any, path: str) -> None:
 
 
 def _validate_turn_result(value: Any, path: str) -> None:
-    legacy_fields = DP_TURN_RESULT_FIELDS - {"provider_model_calls", "input_tokens", "output_tokens"}
+    legacy_fields = DP_TURN_RESULT_FIELDS - {
+        "provider_model_calls", "input_tokens", "output_tokens", "backend",
+    }
     raw = _exact_keys(value, DP_TURN_RESULT_FIELDS, path, required=legacy_fields)
     _encoded_bytes(raw["transcript_delta"], f"{path}.transcript_delta")
     _encoded_bytes(raw["agent_message"], f"{path}.agent_message")
     if raw["approval_artifact"] is not None:
         _encoded_bytes(raw["approval_artifact"], f"{path}.approval_artifact")
+    if raw.get("backend") is not None:
+        _enum(raw["backend"], DP_AGENT_BACKENDS, f"{path}.backend")
     for field in ("tool_calls", "tool_results", "files_touched"):
         if not isinstance(raw[field], list):
             raise BenchmarkError(f"{path}.{field} must be an array")
     for index, call_value in enumerate(raw["tool_calls"]):
         call_path = f"{path}.tool_calls[{index}]"
-        call = _exact_keys(call_value, DP_TOOL_CALL_FIELDS, call_path,
+        # ``observation`` carries the adapter's encoded tool observation;
+        # reports from before it existed omit it.
+        call = _exact_keys(call_value, DP_TOOL_CALL_FIELDS | {"observation"}, call_path,
                            required=DP_TOOL_CALL_FIELDS)
         _code(call["name"], f"{call_path}.name")
     for index, file_value in enumerate(raw["files_touched"]):
