@@ -561,3 +561,16 @@ def test_advisory_only_review_rounds_report_clear() -> None:
     # ledger validator rejected the round and construction could not pair it.
     assert "a non-empty `proposed_effect` that says no closure change follows" in text
     assert "The ledger validator rejects an empty `proposed_effect`" in text
+
+
+def test_validation_failure_facts_are_repaired_first() -> None:
+    # A live B1 agent retried a failed validation five times blind: the
+    # supervisor now reports the failed contracts and exception class, and
+    # check_data_product cannot reproduce a source-dependent failure.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "workflow-v2.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "carries `failed_contracts` or `exception_class`, repair those first" in text
+    assert "`check_data_product` does not execute against a live source" in text

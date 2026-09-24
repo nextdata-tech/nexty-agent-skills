@@ -22,6 +22,12 @@ construction failed while every other gate passed. The paragraph now names
 change follows. A round in that form passes both validators; the empty form
 fails both.
 
+The same "When validation fails" section now tells the agent to repair the
+`failed_contracts` and `exception_class` that nxd#7959 adds to a failed
+validation diagnostic and to `inspect_run`. A live B1 run retried validation
+five times blind because `check_data_product`, which does not execute against
+the live source, kept passing.
+
 No public `evals/run.py` scenario isolates this. The B3 live rerun is the
 qualification check.
 
@@ -30,3 +36,6 @@ qualification check.
 - `evals/tests/test_source_contract.py` —
   `test_advisory_only_review_rounds_report_clear` pins the rule; it fails
   against the previous `workflow-v2.md`.
+- `evals/tests/test_source_contract.py` —
+  `test_validation_failure_facts_are_repaired_first` pins the failure-facts
+  rule; it fails against the previous `workflow-v2.md`.
