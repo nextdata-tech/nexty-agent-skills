@@ -557,3 +557,7 @@ def test_advisory_only_review_rounds_report_clear() -> None:
     assert "A round whose only claims are `LOW` is clear once you resolve them." in text
     assert "Never hold publication for an advisory claim" in text
     assert "never downgrade a `HIGH` or `MEDIUM` claim to reach this path" in text
+    # A live B3 agent then left proposed_effect empty on the advisory note; the
+    # ledger validator rejected the round and construction could not pair it.
+    assert "a non-empty `proposed_effect` that says no closure change follows" in text
+    assert "The ledger validator rejects an empty `proposed_effect`" in text
