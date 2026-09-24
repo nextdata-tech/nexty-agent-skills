@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-24 | trusted proposal validator reports object-valued provenance instead of crashing | NO_EVAL | — | [`2026-09-24-validator-provenance-crash`](entries/2026-09-24-validator-provenance-crash.md) |
+| 2026-09-24 | registry-unique metric names, required pre-capture check, validation-failure recovery | NO_EVAL | — | [`2026-09-24-metric-names-and-preflight-recovery`](entries/2026-09-24-metric-names-and-preflight-recovery.md) |
 | 2026-09-24 | independent promise verifiers and one-round defect-class review sweeps | NO_EVAL | — | [`2026-09-24-independent-promise-verifiers`](entries/2026-09-24-independent-promise-verifiers.md) |
 | 2026-09-23 | fix MCP trace duplication and restore driver guidance | NO_EVAL | — | [`2026-09-23-trace-and-driver-guidance-review-fixes`](entries/2026-09-23-trace-and-driver-guidance-review-fixes.md) |
 | 2026-09-23 | restore #298 field-level semantic descriptions | NO_EVAL | — | [`2026-09-23-description-guidance-298-restore`](entries/2026-09-23-description-guidance-298-restore.md) |

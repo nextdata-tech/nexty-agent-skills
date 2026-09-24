@@ -11,6 +11,7 @@ do not fall back to a direct CLI or local substitute.
 - [Relay consent and capture](#relay-consent-and-capture)
 - [Run and report the review](#run-and-report-the-review)
 - [Follow returned actions through admission](#follow-returned-actions-through-admission)
+- [When validation fails](#when-validation-fails)
 - [Reset after behavior changes](#reset-after-behavior-changes)
 
 ## Gate on the connected capability
@@ -596,6 +597,28 @@ hash, or completion claim. Do not claim completion from closure files, a local
 DuckDB, `build-record.json`, or a successful local self-check. Claim readiness
 only from the supervisor's structured response and its admitted publication
 state.
+
+## When validation fails
+
+A failed `start_requirement` for validation returns a bounded `phase`, `code`,
+`detail`, and `recovery`. The supervisor deliberately omits compiler and
+subprocess output from that diagnostic.
+
+- `recovery: repair_then_retry` means the retained closure has a defect you can
+  fix. Call `check_data_product` on the authoring closure to read the specific
+  structure, runtime, contract, and semantic findings. For example, a
+  `structure/spec_compile_failed` finding carries the compiler's own error,
+  such as a duplicate metric name. Repair the closure, then reset the
+  capture requirement with `replacement_blueprint_path` set to null. Recapture,
+  obtain a fresh review, and start validation again. Never resubmit an
+  unchanged closure after this outcome, and never audit by hand in place of
+  `check_data_product`.
+- `recovery: retry_unchanged` means a bounded runtime limit was hit. Retry
+  once with a fresh request id.
+- `recovery: stop` is a blocker. Report it with its code.
+
+`check_data_product` is diagnosis only. It never substitutes for supervisor
+validation, admission, or publication.
 
 ## Reset after behavior changes
 

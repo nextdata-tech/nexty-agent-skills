@@ -302,7 +302,9 @@ SCENARIO_CONDUCT_RULES: tuple[str, ...] = (
     "After consent, follow only the workflow response's current next_actions "
     "through supervisor capture, one "
     "retained-input conversation review, trusted validation, and start_run. "
-    "Never fall back to check_data_product or build_data_product.",
+    "Never use build_data_product, and never treat check_data_product as a "
+    "substitute for supervisor validation or admission; it remains the "
+    "skills' pre-capture diagnosis.",
     "When capture returns a review action, dispatch exactly one general-purpose "
     "Agent or Task conversation child: set its subagent_type argument exactly "
     "to \"general-purpose\" (never omit it or invent a custom type), and use "

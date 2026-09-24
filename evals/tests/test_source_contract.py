@@ -477,3 +477,26 @@ def test_promise_verifiers_are_independent_and_review_sweeps_defect_classes() ->
     review = flat("src", "nxd-review-closure", "SKILL.md")
     assert "### Sweep a defect class once you find it" in review
     assert "check every other promise, verifier, model and output in the capture for the same class in this same pass" in review
+
+
+def test_metric_names_are_registry_unique_and_check_runs_before_capture() -> None:
+    # A live B3 repair added `row_count` to three semantic views, following the
+    # generator's own example. Spec compilation rejected the duplicates, and
+    # validation surfaced only a bounded preflight code. The agent could not
+    # read the finding because the skill called check_data_product optional.
+    def flat(*parts: str) -> str:
+        return " ".join((REPO_ROOT.joinpath(*parts)).read_text(encoding="utf-8").split())
+
+    generator = flat("src", "nxd-generate-data-product", "SKILL.md")
+    assert 'name="row_count"' not in generator
+    assert 'name="<model>_row_count"' in generator
+    assert "Metric names are global across the registry" in generator
+    assert "call the `check_data_product` MCP tool on the authoring closure before returning it" in generator
+
+    job_loop = flat("src", "nxd-run-job-loop", "SKILL.md")
+    assert "Before every capture, including after a repair, call the `check_data_product` MCP tool" in job_loop
+    assert "optional evidence only and are never execution authority" not in job_loop
+
+    workflow = flat("src", "nxd-run-job-loop", "reference", "workflow-v2.md")
+    assert "## When validation fails" in workflow
+    assert "`recovery: repair_then_retry` means the retained closure has a defect you can fix" in workflow

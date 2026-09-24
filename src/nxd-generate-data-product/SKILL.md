@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.52.5
+  version: 0.52.6
 ---
 
 # nxd-generate-data-product skill
@@ -265,8 +265,9 @@ per set of metrics over that table:
   query-time, not a physical table.
 - **A row-level ratio is not an aggregate metric.** Never expose a row-level ratio (such as per-campaign CPA) through `metric(Agg.AVG, ...)` or any other reduction. For aggregate queries, expose additive numerator and denominator metrics separately and calculate the ratio from those query results. The allowed row-grain alternative is a derived ratio column validated with `assert_row_ratios`; expose it only at that row grain, without a reducing metric over the ratio column.
 - **Aggregate-only outputs still need a governed count.** Add
-  `metric_field(number(), metric(Agg.COUNT, column="*", name="row_count", ...))`
-  (or count a non-null key) in a semantic view and register it with
+  `metric_field(number(), metric(Agg.COUNT, column="*", name="<model>_row_count", ...))`
+  (or count a non-null key) in a semantic view. Metric names are global across
+  the registry: a bare `row_count` on two views fails spec compilation and register it with
   `data_product_output().model(view)`. This supports `describe_models` and
   grouped aggregate queries without record-level rows or placeholder data.
 - **Every query-facing promised model needs a semantic view.** Define the view
@@ -455,8 +456,9 @@ action. See [reference/closure-record.md](reference/closure-record.md) for the
 capture contract; `build-record.json` remains generated, never hand-authored.
 
 ### Step 6b — Defer adversarial review to the job loop after capture
-Under workflow-v2, the Step 7 self-check is an optional agent-side
-evidence phase, not a shellless gate. If the helper runtime and tools exist, the agent may run the
+Under workflow-v2, call the `check_data_product` MCP tool on the authoring
+closure before returning it and fix every failing finding; it needs no shell.
+The shell-based Step 7 helpers are optional evidence. If they exist, the agent may run the
 closure-root self-check, lock verification, structural checks, and connector
 checks described in the reference docs. Record them as optional evidence only;
 they do not authorize capture, replace the trusted supervisor checker, or relax
