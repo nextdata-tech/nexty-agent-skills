@@ -82,7 +82,11 @@ its infra profile is the infra-profile.yaml file at the workspace root; read it
 for the base URL and the endpoints it lists, and call the source yourself to
 learn anything the profile does not state. Keep the authored data-product
 closure in the workspace's closure/ directory and keep any blueprint at the
-workspace root. Use the nxd-desktop MCP tools for workflow capability,
+workspace root. That root layout belongs to the first workflow id only: if the
+run needs another workflow id, author it under nxd-jobs/<workflow>/ with its
+own closure/, dp-blueprint.md, dp-blueprint.proposal.json, and
+review-record.json, and never extend or overwrite the first workflow's files.
+Use the nxd-desktop MCP tools for workflow capability,
 preparation, consent relay, capture, review reporting, validation, admission,
 serving, inspection, and governed queries; do not invoke
 nxd-desktop-supervisor from Bash. When a supervisor response requires a
@@ -236,8 +240,11 @@ review_round_index is a non-negative JSON integer, never a boolean. outcome is
 non-empty text. evidence_ref is the exact normalized relative evidence
 reference: self-check uses the published closure's
 build-record.json#self_check, while review uses the adjacent job-level
-review-record.json#review_rounds/<review_round_index> as shown. Do not add
-keys, use an object wrapper, or use a different reference.
+review-record.json#review_rounds/<review_round_index> as shown, prefixed with
+nxd-jobs/<workflow>/ for a later workflow id (for example
+nxd-jobs/<workflow>/review-record.json#review_rounds/0 and
+nxd-jobs/<workflow>/closure/build-record.json#self_check). Do not add keys,
+use an object wrapper, or use a different reference.
 
 If scenario-evidence-contract.json exists at the workspace root, read it
 before advancing the workflow and treat its artifact_path as a required,
