@@ -278,6 +278,7 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
 
     monkeypatch.setattr(module, "load_scenarios", fake_load_scenarios)
     monkeypatch.setattr(module, "run_drift_canary", fake_canary)
+    monkeypatch.setattr(module, "require_kernel_host_sibling", lambda supervisor: supervisor)
     monkeypatch.setattr(module, "TierRunner", fake_tier_runner)
     monkeypatch.setattr(module, "write_report", lambda *args, **kwargs: (None, None, ()))
 
@@ -1040,3 +1041,22 @@ def test_a_token_and_host_home_bash_are_refused_rather_than_silently_resolved() 
     quiet = argparse.Namespace(allow_host_home=True, allow_host_home_bash=False)
     assert module._tool_grant_arguments(quiet, oauth_token_present=True) == ["--no-bash"]
     assert module._tool_grant_arguments(quiet, oauth_token_present=False) == ["--no-bash"]
+
+
+def test_live_runner_requires_the_kernel_host_next_to_the_supervisor(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_text("#!/bin/sh\n", encoding="utf-8")
+    supervisor.chmod(0o755)
+
+    with pytest.raises(TierError, match="nxd-desktop-kernel-host is missing"):
+        module.require_kernel_host_sibling(supervisor)
+
+    kernel_host = tmp_path / "nxd-desktop-kernel-host"
+    kernel_host.write_text("#!/bin/sh\n", encoding="utf-8")
+    kernel_host.chmod(0o644)
+    with pytest.raises(TierError, match="nxd-desktop-kernel-host is missing"):
+        module.require_kernel_host_sibling(supervisor)
+
+    kernel_host.chmod(0o755)
+    assert module.require_kernel_host_sibling(supervisor) == kernel_host

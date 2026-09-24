@@ -84,6 +84,28 @@ def _runtime_pin(desktop_python: Path) -> str:
     return f"python-{version}:sha256:{_sha256(desktop_python)}"
 
 
+KERNEL_HOST_BINARY = "nxd-desktop-kernel-host"
+
+
+def require_kernel_host_sibling(supervisor: Path) -> Path:
+    """Fail before any agent turn when the supervisor cannot spawn its kernel.
+
+    The supervisor resolves ``nxd-desktop-kernel-host`` next to its own
+    executable only when validation starts. Without this check a partial
+    install (for example a ``target/<profile>`` holding just the supervisor)
+    passes every earlier workflow step and then leaves validation stuck, which
+    reads as an agent or skill failure instead of an environment defect.
+    """
+
+    candidate = supervisor.parent / KERNEL_HOST_BINARY
+    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+        raise TierError(
+            f"{KERNEL_HOST_BINARY} is missing next to the supervisor at {candidate}; "
+            "build the desktop supervisor crate's bins into the same directory"
+        )
+    return candidate
+
+
 def _resolve_executable(explicit: Path | None, name: str) -> Path:
     if explicit is not None:
         candidate = explicit.expanduser()
@@ -635,6 +657,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.epochs,
     )
     supervisor = resolve_supervisor(args.supervisor)
+    require_kernel_host_sibling(supervisor)
     desktop_python = resolve_desktop_python(args.desktop_python)
     claude: Path | None = None
     codex: Path | None = None
