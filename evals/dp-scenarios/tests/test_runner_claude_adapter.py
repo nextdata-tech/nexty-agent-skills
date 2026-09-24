@@ -300,6 +300,10 @@ def test_default_prompt_describes_channels_and_review_dispatch_mechanics_not_sce
     )
 
     assert "agent-attestations.json at your workspace root" in collapsed
+    # A follow-up that starts another workflow id needs its own job directory;
+    # the flat root layout led a live agent to invent ledger keys.
+    assert "author it under nxd-jobs/<workflow>/" in collapsed
+    assert "nxd-jobs/<workflow>/review-record.json#review_rounds/0" in collapsed
     assert "a non-authoritative attestation channel" in collapsed
     assert "optional, non-authoritative attestation channel" not in collapsed
     assert "root JSON array (not an object wrapper)" in collapsed
