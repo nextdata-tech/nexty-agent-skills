@@ -222,6 +222,27 @@ def test_capture_to_report_is_owner_scoped_and_clears_only_on_matching_response(
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     review_record = workspace / "nxd-jobs" / "sales" / "review-record.json"
+    # The ledger files can be read back so the round is appended, not
+    # blindly rewritten; anything else stays closed until the report lands.
+    for ledger_file in (review_record, workspace / "agent-attestations.json"):
+        assert handle_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Read",
+                "agent_id": "owner-agent",
+                "tool_input": {"file_path": str(ledger_file)},
+            },
+            state_path=state_path,
+        ) == {}
+    assert handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "agent_id": "owner-agent",
+            "tool_input": {"file_path": str(workspace / "nxd-jobs" / "sales" / "closure" / "models.py")},
+        },
+        state_path=state_path,
+    )["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert handle_event(
         {
             "hook_event_name": "PreToolUse",

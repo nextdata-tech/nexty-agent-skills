@@ -1106,7 +1106,10 @@ def _owner_pre(
         # synchronous child into an empty tool result.
         return _allow()
     if state["state"] == RELAY_PENDING:
-        if tool in {"write", "edit"}:
+        # Reading the two ledger files back is part of recording the round:
+        # Claude's Edit refuses an unread file, so denying Read here pushed a
+        # live agent into a blind Write that replaced the whole ledger.
+        if tool in {"read", "write", "edit"}:
             path = _event_tool_input(event).get("file_path", _event_tool_input(event).get("path"))
             return _allow() if _safe_write_path(path, state) else _deny(
                 "Review relay permits only review-record.json or agent-attestations.json inside the agent workspace."
@@ -1133,7 +1136,7 @@ def _owner_pre(
             state["state"] = REPORT_IN_FLIGHT
             state["report_tool_use_id"] = _event_id(event, "tool_use_id", "toolUseId")
             return _allow()
-        return _deny("After the reviewer returns, relay its bounded report; do not inspect, review, reset, or launch another tool.")
+        return _deny("After the reviewer returns, relay its bounded report; only review-record.json and agent-attestations.json may be read or edited until then. Do not inspect, review, reset, or launch another tool.")
     if state["state"] == REPORT_IN_FLIGHT:
         return _deny("The review report is in flight; wait for the supervisor response before taking another action.")
     return _allow()
