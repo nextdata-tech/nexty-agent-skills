@@ -38,11 +38,13 @@ Declare bearer auth in flat `api-source` profile attributes, dispatching from
 `secrets["auth_type"]` and reading the credential from the private
 `auth_token` attribute. Add a non-secret `required_scopes` profile attribute
 with the exact scope strings from the contract extension; it documents the
-authorization requirement and is not sent as an HTTP credential. Construct and
-call the REST config inside the positive `auth_type == "bearer"` branch, and
-reject unsupported auth types. No credential was supplied for this scenario:
-use only a clearly marked, non-usable profile placeholder such as
-`${ORDERS_READ_TOKEN}`. Mark `base_url`, `endpoint_orders`, `auth_type`, and
+authorization requirement and is not sent as an HTTP credential. Dispatch
+bearer auth in the positive `auth_type == "bearer"` branch, reject unsupported
+auth types, then build and call the REST config after the dispatch. No credential
+was supplied for this scenario: use exactly the clearly marked, non-usable
+profile placeholder `${ORDERS_READ_TOKEN}` (the checker permits this placeholder
+in documentation; do not substitute another value). Mark `base_url`,
+`endpoint_orders`, `auth_type`, and
 `required_scopes` public; keep `auth_token` private. Do not invent a token, copy
 one into generated source, or claim the closure has authenticated successfully.
 Keep the profile marked sensitive and state that a real credential must be

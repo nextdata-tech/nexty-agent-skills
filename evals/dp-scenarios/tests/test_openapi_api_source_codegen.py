@@ -119,6 +119,20 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
+def test_mock_overlay_applies_openapi_extension_scopes_to_bearer_route() -> None:
+    identity = _source_access()["identities"]["api_expected_token"]
+    scenario, document = _mock_scenario(identity)
+    operation = document["paths"]["/orders"]["get"]
+    route = next(route for route in scenario["routes"] if route["path"] == "/orders")
+
+    # OpenAPI 3 bearer uses an empty standard scope list; the local test
+    # overlays the separate Nexty extension onto the route policy that mockrest
+    # enforces as 403 for an authenticated identity without the grant.
+    assert operation["security"][0]["bearerAuth"] == []
+    assert route["auth_required"] is True
+    assert route["required_scopes"] == operation["x-nexty-required-scopes"]
+
+
 @pytest.mark.parametrize("request_identity", ["missing", "invalid_request_token"])
 def test_openapi_mock_returns_401_for_missing_or_invalid_token(request_identity: str) -> None:
     access = _source_access()
