@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import csv
+import hashlib
 import importlib.util
 import re
 from pathlib import Path
@@ -340,6 +342,321 @@ def test_read_csv_rows_can_require_an_exact_header_set(tmp_path: Path):
             required_columns=("id",),
             expected_columns=("id",),
             source_name="source",
+        )
+
+
+def test_source_projection_guidance_keeps_default_and_privacy_boundary():
+    materialization = (
+        REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "source-materialization.md"
+    ).read_text(encoding="utf-8")
+    audit = (
+        REPO_ROOT
+        / "src"
+        / "nxd-generate-data-product"
+        / "reference"
+        / "pre-capture-audit.md"
+    ).read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", materialization + audit)
+
+    assert "Byte-exact landing remains mandatory by default" in normalized
+    assert "allow_columns" in normalized
+    assert "drop_reasons" in normalized
+    assert "source_sha256" in normalized and "landed_sha256" in normalized
+    assert "Tell the user which columns were omitted and why" in normalized
+    assert "never land, echo, or query the raw identifier" in normalized.casefold()
+
+
+def _project_hr_csv(recipe, tmp_path: Path):
+    source = _write(
+        tmp_path / "hr.csv",
+        "month,department,headcount,name,email,salary\n"
+        "2026-01,Engineering,8,Alice Example,alice@example.invalid,140000\n"
+        "2026-02,Engineering,7,Bob Example,bob@example.invalid,150000\n",
+    )
+    landed = tmp_path / "closure" / "data" / "headcount" / "headcount.csv"
+    evidence = recipe.project_csv_columns(
+        source,
+        landed,
+        allow_columns=("month", "department", "headcount"),
+        required_columns=("month", "department", "headcount"),
+        personal_data_columns=("name", "email", "salary"),
+        drop_reasons={
+            "name": "Direct identifier; the approved headcount output is aggregated.",
+            "email": "Direct identifier; the approved headcount output is aggregated.",
+            "salary": "Compensation is outside the approved headcount output.",
+        },
+        reason="The approved output needs monthly department counts only.",
+        source_name="hr-export",
+    )
+    return source, landed, evidence
+
+
+def test_csv_projection_is_accepted_when_declared_and_exact(tmp_path: Path):
+    recipe = _recipe()
+    source, landed, evidence = _project_hr_csv(recipe, tmp_path)
+
+    verified = recipe.verify_csv_landing(
+        source, landed, declaration=evidence, source_name="hr-export"
+    )
+
+    assert verified["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert verified["landed_sha256"] == hashlib.sha256(landed.read_bytes()).hexdigest()
+    assert verified["allow_columns"] == ["month", "department", "headcount"]
+    assert verified["drop_reasons"]["salary"].startswith("Compensation")
+    with landed.open(newline="", encoding="utf-8") as handle:
+        assert list(csv.reader(handle)) == [
+            ["month", "department", "headcount"],
+            ["2026-01", "Engineering", "8"],
+            ["2026-02", "Engineering", "7"],
+        ]
+    assert b"Alice Example" not in landed.read_bytes()
+    assert b"alice@example.invalid" not in landed.read_bytes()
+    assert b"140000" not in landed.read_bytes()
+    assert "Alice Example" not in repr(verified)
+    assert "alice@example.invalid" not in repr(verified)
+    assert "140000" not in repr(verified)
+
+
+def test_csv_file_landing_stays_byte_exact_without_a_projection(tmp_path: Path):
+    recipe = _recipe()
+    source = tmp_path / "source.csv"
+    source.write_bytes(b"id,name\r\n1,one\r\n")
+    landed = tmp_path / "landed.csv"
+    landed.write_bytes(source.read_bytes())
+
+    evidence = recipe.verify_csv_landing(
+        source, landed, source_name="source"
+    )
+
+    assert evidence["mode"] == "byte_exact"
+    assert evidence["source_sha256"] == evidence["landed_sha256"]
+
+
+def test_csv_projection_is_rejected_without_a_declaration(tmp_path: Path):
+    recipe = _recipe()
+    source, landed, _evidence = _project_hr_csv(recipe, tmp_path)
+
+    with pytest.raises(RuntimeError, match="without a declared column projection"):
+        recipe.verify_csv_landing(source, landed, source_name="hr-export")
+
+
+def test_csv_projection_rejects_changed_retained_values_even_with_updated_digest(
+    tmp_path: Path,
+):
+    recipe = _recipe()
+    source, landed, evidence = _project_hr_csv(recipe, tmp_path)
+    rows = [
+        ["month", "department", "headcount"],
+        ["2026-01", "Engineering", "CHANGED_SENTINEL_VALUE"],
+        ["2026-02", "Engineering", "7"],
+    ]
+    with landed.open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle, lineterminator="\n").writerows(rows)
+    evidence["landed_sha256"] = hashlib.sha256(landed.read_bytes()).hexdigest()
+
+    with pytest.raises(
+        RuntimeError, match="landed row 2 differs in an allowed column"
+    ) as exc:
+        recipe.verify_csv_landing(
+            source, landed, declaration=evidence, source_name="hr-export"
+        )
+    assert "CHANGED_SENTINEL_VALUE" not in str(exc.value)
+
+
+def test_csv_projection_requires_deterministic_landed_serialization(tmp_path: Path):
+    recipe = _recipe()
+    source, landed, evidence = _project_hr_csv(recipe, tmp_path)
+    rows = [
+        ["month", "department", "headcount"],
+        ["2026-01", "Engineering", "8"],
+        ["2026-02", "Engineering", "7"],
+    ]
+    with landed.open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle, lineterminator="\r\n").writerows(rows)
+    evidence["landed_sha256"] = hashlib.sha256(landed.read_bytes()).hexdigest()
+
+    with pytest.raises(RuntimeError, match="deterministic CSV projection"):
+        recipe.verify_csv_landing(
+            source, landed, declaration=evidence, source_name="hr-export"
+        )
+
+
+def test_csv_projection_rejects_dropping_a_non_declared_column(tmp_path: Path):
+    recipe = _recipe()
+    source = _write(
+        tmp_path / "source.csv",
+        "month,department,headcount,region,name\n"
+        "2026-01,Engineering,8,EMEA,Alice Example\n",
+    )
+    landed = tmp_path / "landed.csv"
+
+    with pytest.raises(RuntimeError, match="retain every other source column"):
+        recipe.project_csv_columns(
+            source,
+            landed,
+            allow_columns=("month", "department", "headcount"),
+            required_columns=("month", "department", "headcount"),
+            personal_data_columns=("name",),
+            drop_reasons={"name": "Direct identifier not needed."},
+            reason="Only approved output fields are needed.",
+            source_name="hr-export",
+        )
+
+
+def test_csv_projection_requires_an_explicit_decision_to_keep_personal_data(
+    tmp_path: Path,
+):
+    recipe = _recipe()
+    source = _write(
+        tmp_path / "source.csv",
+        "month,department,email,name\n"
+        "2026-01,Engineering,person@example.invalid,Person Example\n",
+    )
+    landed = tmp_path / "landed.csv"
+    declaration = {
+        "allow_columns": ("month", "department", "email"),
+        "required_columns": ("month", "department", "email"),
+        "personal_data_columns": ("email", "name"),
+        "drop_reasons": {"name": "The approved output does not need a name."},
+        "reason": "The approved output needs an email join.",
+        "source_name": "hr-export",
+    }
+
+    with pytest.raises(RuntimeError, match="explicit user decision"):
+        recipe.project_csv_columns(source, landed, **declaration)
+
+    evidence = recipe.project_csv_columns(
+        source,
+        landed,
+        **declaration,
+        personal_data_decision="User explicitly approved email for the join.",
+    )
+    assert evidence["personal_data_decision"].startswith("User explicitly approved")
+    assert b"Person Example" not in landed.read_bytes()
+
+
+def test_csv_projection_rejects_row_changes_even_with_updated_evidence(tmp_path: Path):
+    recipe = _recipe()
+    source, landed, evidence = _project_hr_csv(recipe, tmp_path)
+    rows = [
+        ["month", "department", "headcount"],
+        ["2026-01", "Engineering", "8"],
+    ]
+    with landed.open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle, lineterminator="\n").writerows(rows)
+    evidence["row_count"] = len(rows) - 1
+    evidence["landed_sha256"] = hashlib.sha256(landed.read_bytes()).hexdigest()
+
+    with pytest.raises(RuntimeError, match="projection changed the source row count"):
+        recipe.verify_csv_landing(
+            source, landed, declaration=evidence, source_name="hr-export"
+        )
+
+
+def test_csv_projection_derives_a_non_identifying_key_before_landing(tmp_path: Path):
+    recipe = _recipe()
+    raw_identifier = "EMPLOYEE-001-SENSITIVE"
+    source = _write(
+        tmp_path / "continuity.csv",
+        "month,department,employee_id,salary\n"
+        f"2026-01,Engineering,{raw_identifier},140000\n"
+        f"2026-02,Engineering,{raw_identifier},150000\n",
+    )
+    landed = tmp_path / "continuity-projection.csv"
+    secret_key = b"approved test-only continuity key, 32 bytes minimum"
+
+    derivations = {
+        "person_key": {
+            "input_columns": ["employee_id"],
+            "method": "hmac-sha256:v1",
+            "key_ref": "approved-secret-slot:person-continuity-v1",
+            "domain": "headcount-attrition/person-continuity/v1",
+        }
+    }
+    derivation_keys = {
+        "approved-secret-slot:person-continuity-v1": secret_key,
+    }
+    evidence = recipe.project_csv_columns(
+        source,
+        landed,
+        allow_columns=("month", "department", "person_key"),
+        required_columns=("month", "department", "person_key"),
+        personal_data_columns=("employee_id", "salary"),
+        drop_reasons={
+            "employee_id": "Raw identifier is replaced by the approved continuity key.",
+            "salary": "Compensation is not needed by the approved output.",
+        },
+        reason="The approved output needs monthly continuity without raw identifiers.",
+        source_name="hr-continuity-export",
+        derived_columns=derivations,
+        derivation_keys=derivation_keys,
+    )
+    verified = recipe.verify_csv_landing(
+        source,
+        landed,
+        declaration=evidence,
+        source_name="hr-continuity-export",
+        derivation_keys=derivation_keys,
+    )
+
+    with landed.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["person_key"] == rows[1]["person_key"]
+    assert rows[0]["person_key"].startswith("hmac-sha256:v1:")
+    assert raw_identifier.encode() not in landed.read_bytes()
+    assert "140000" not in landed.read_text(encoding="utf-8")
+    assert raw_identifier not in repr(verified)
+    assert "140000" not in repr(verified)
+    assert verified["derived_columns"] == derivations
+    assert verified["derived_columns"]["person_key"]["key_ref"] == (
+        "approved-secret-slot:person-continuity-v1"
+    )
+    assert verified["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert verified["landed_sha256"] == hashlib.sha256(landed.read_bytes()).hexdigest()
+
+
+def test_csv_projection_verifier_recomputes_derived_values(tmp_path: Path):
+    recipe = _recipe()
+    source = _write(
+        tmp_path / "continuity.csv",
+        "month,employee_id\n2026-01,EMPLOYEE-SENTINEL\n",
+    )
+    landed = tmp_path / "continuity-projection.csv"
+    key = b"approved test-only continuity key, 32 bytes minimum"
+
+    derivations = {
+        "person_key": {
+            "input_columns": ["employee_id"],
+            "method": "hmac-sha256:v1",
+            "key_ref": "approved-secret-slot:test-v1",
+            "domain": "test/person/v1",
+        }
+    }
+    derivation_keys = {"approved-secret-slot:test-v1": key}
+    evidence = recipe.project_csv_columns(
+        source,
+        landed,
+        allow_columns=("month", "person_key"),
+        required_columns=("month", "person_key"),
+        personal_data_columns=("employee_id",),
+        drop_reasons={"employee_id": "Only a continuity key is required."},
+        reason="The approved output needs continuity without raw identifiers.",
+        source_name="hr-continuity-export",
+        derived_columns=derivations,
+        derivation_keys=derivation_keys,
+    )
+    rows = [["month", "person_key"], ["2026-01", "altered-derived-value"]]
+    with landed.open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle, lineterminator="\n").writerows(rows)
+    evidence["landed_sha256"] = hashlib.sha256(landed.read_bytes()).hexdigest()
+
+    with pytest.raises(RuntimeError, match="landed row 2 differs in an allowed column"):
+        recipe.verify_csv_landing(
+            source,
+            landed,
+            declaration=evidence,
+            source_name="hr-continuity-export",
+            derivation_keys=derivation_keys,
         )
 
 

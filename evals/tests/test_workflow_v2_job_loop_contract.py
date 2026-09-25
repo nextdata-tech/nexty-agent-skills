@@ -472,7 +472,8 @@ def test_generator_distinguishes_optional_tables_and_physical_pii_exposure():
         "include it in both `PHYSICAL_MODELS` and `OPTIONAL_EMPTY_MODELS`",
         "Never change it to `.promise(...)` or omit the model",
         "do not mask a column in the physical DuckDB table or direct SQL",
-        "project every sensitive column out before any dlt resource is yielded",
+        "through the declared projection before landing",
+        "derive the non-identifying key in memory before landing and omit the raw value",
     ):
         assert marker in text
 
