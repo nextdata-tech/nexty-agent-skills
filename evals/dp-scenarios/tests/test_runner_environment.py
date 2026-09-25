@@ -1067,6 +1067,102 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
     assert "raw_rows_refusal" not in headcount_contract["required_fields"]
 
 
+def test_evidence_contracts_do_not_predeclare_follow_up_decisions() -> None:
+    """Decision IDs reach the agent only when the operator presents each event."""
+
+    from dp_scenarios.runner.environment import _evidence_contract
+    from dp_scenarios.scenario import load_scenarios
+
+    from _repo_paths import REPO_ROOT
+
+    scenarios = load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
+    checked_ids: set[str] = set()
+    expected_event_turns = {
+        "b2-weekend-fx": 4,
+        "b2-weekend-fx-reversal": 6,
+        "b3-unmatched-cpa-denominator": 4,
+        "c2-active-count-reconciliation": 5,
+        "c6-source-local-day": 5,
+    }
+    decision_values = {
+        "finance-close": {
+            "fields": ("promise", "decision_history"),
+            "values": ("exclude_and_warn", "preserve_unconverted"),
+        },
+        "marketing-attribution": {
+            "fields": ("promise", "decision_history"),
+            "values": ("matched_conversions_only",),
+        },
+        "application-reconciliation": {
+            "fields": ("governed_query", "decision"),
+            "values": ("status = active", "tombstoned = false"),
+        },
+        "locale-timezone": {
+            "fields": ("time_policy", "decision"),
+            "values": ("source_local", "retain_utc_for_audit", "audit"),
+        },
+    }
+    for scenario in scenarios:
+        contract = _evidence_contract(scenario)
+        if contract is None:
+            continue
+
+        contract_text = json.dumps(contract, sort_keys=True)
+        value_check = decision_values.get(scenario.id)
+        if value_check is not None:
+            decision_contract_text = json.dumps(
+                {
+                    field: contract["required_fields"][field]
+                    for field in value_check["fields"]
+                },
+                sort_keys=True,
+            )
+            for value in value_check["values"]:
+                assert value not in decision_contract_text, (
+                    f"{scenario.id} evidence contract disclosed decision value "
+                    f"{value!r} before its event"
+                )
+
+        settings = scenario.gates["follow-up"].settings
+        decision_ids = {
+            value
+            for key, value in settings.items()
+            if key == "decision_id" or key.endswith("_decision_id")
+        }
+        for decision_id in decision_ids:
+            assert isinstance(decision_id, str)
+            assert decision_id not in contract_text, (
+                f"{scenario.id} evidence contract disclosed decision ID "
+                f"{decision_id!r} before its event"
+            )
+            if not any("decision" in field for field in contract["required_fields"]):
+                # The agent never records this ID (B6 grades the delivered
+                # report), so the event must not announce it either.
+                assert all(
+                    card.content is None or decision_id not in card.content
+                    for card in scenario.events.cards
+                ), f"{scenario.id} event cards announce internal decision ID {decision_id!r}"
+                continue
+            assert any(
+                card.trigger_turn == expected_event_turns[decision_id]
+                and card.content is not None
+                and decision_id in card.content
+                for card in scenario.events.cards
+            ), (
+                f"{scenario.id} does not present decision ID {decision_id!r} "
+                "when that decision is made"
+            )
+            checked_ids.add(decision_id)
+
+    assert checked_ids == {
+        "b2-weekend-fx",
+        "b2-weekend-fx-reversal",
+        "b3-unmatched-cpa-denominator",
+        "c2-active-count-reconciliation",
+        "c6-source-local-day",
+    }
+
+
 def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
     """The prompt is harness mechanics; conduct travels with the scenario."""
 

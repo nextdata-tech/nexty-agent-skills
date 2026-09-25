@@ -4,7 +4,8 @@
   type: scope_creep
   content: >-
     Before you finish, show the exact lineage for each exclusion cause and
-    record which population definition we approved.
+    record the approved active, non-tombstoned population definition under
+    decision ID c2-active-count-reconciliation.
   outcome: application_reconciliation_lineage_requested
   plant: true
   required_terms:

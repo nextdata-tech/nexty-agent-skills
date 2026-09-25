@@ -101,8 +101,8 @@ KIND = register(
             ),
             "promise": (
                 "object with exactly amount_parser='comma_and_parentheses', "
-                "missing_fx_policy='exclude_and_warn', output_total='eur', and "
-                "rounding='cents'"
+                "missing_fx_policy as a string reflecting the operator's "
+                "decision, output_total='eur', and rounding='cents'"
             ),
             "diagnostics": (
                 "object with integer keys input_row_count, converted_row_count, "
@@ -110,8 +110,10 @@ KIND = register(
                 "and parenthesized_amount_count"
             ),
             "decision_history": (
-                "array of objects; include {id: 'b2-weekend-fx'} and "
-                "{id: 'b2-weekend-fx-reversal', supersedes: 'b2-weekend-fx'}"
+                "array of objects recording only decisions the operator actually "
+                "made; use IDs exactly as the operator provides them when each "
+                "decision is presented, and include supersedes only when a later "
+                "operator decision explicitly replaces an earlier one"
             ),
         },
         validate_settings=_validate_settings,

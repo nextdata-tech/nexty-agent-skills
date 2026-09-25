@@ -69,7 +69,7 @@ def _is_integer(value: object) -> bool:
 def _validate_settings(settings: Mapping[str, object]) -> None:
     _string(settings.get("profile_mode"), "follow-up.profile_mode")
     _string(settings.get("true_classification"), "follow-up.true_classification")
-    _string(settings.get("secret_marker"), "follow-up.secret_marker")
+    _string(settings.get("pii_sentinel"), "follow-up.pii_sentinel")
 
 
 def _not_examined(*findings: str) -> dict[str, object]:
@@ -136,7 +136,7 @@ def check(
     if diagnosis.get("negative_stock_action") != "warn_and_preserve":
         findings.append("negative_stock_was_not_preserved_as_warning")
 
-    marker = _string(settings.get("secret_marker"), "follow-up.secret_marker").casefold().encode()
+    marker = _string(settings.get("pii_sentinel"), "follow-up.pii_sentinel").casefold().encode()
     for name, value in surfaces.items():
         if isinstance(value, str) and value:
             haystack = value.casefold().encode()
@@ -175,8 +175,11 @@ KIND = register(
                 "(JSON integer), quality_policy (JSON string; enum exactly warn_and_preserve), "
                 "negative_position_ids (JSON array of unique non-empty JSON strings; exact "
                 "membership, order-insensitive), and orphan_warehouse_ids (JSON array of unique "
-                "non-empty JSON strings; exact membership, order-insensitive). All scalar "
-                "diagnostics are compared exactly"
+                "non-empty JSON strings; the members are the distinct warehouse_id values of "
+                "positions whose warehouse_id is missing from the warehouse lookup, not position_id "
+                "values; exact membership, order-insensitive). orphan_warehouse_count counts "
+                "position rows with a missing warehouse, including repeated rows for one missing "
+                "warehouse, not distinct warehouses. All scalar diagnostics are compared exactly"
             ),
             "access": (
                 "JSON object with mode (JSON string; enum exactly profile_reference_only) and "

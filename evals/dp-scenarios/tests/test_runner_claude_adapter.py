@@ -30,6 +30,7 @@ from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     PROVIDER_SESSION_LIMIT,
+    REVIEWER_DEADLINE_EXCEEDED,
     RUN_BUDGET_EXHAUSTED,
     SHARED_RUNTIME_CONTENTION,
 )
@@ -1660,7 +1661,7 @@ def test_accepted_review_dispatch_uses_a_silent_child_deadline_and_reaps_the_gro
     assert 0.15 <= time.monotonic() - started < 1.5
     assert result.turn_timed_out is True
     assert result.environment_wedged is False
-    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    assert result.failure_reason == REVIEWER_DEADLINE_EXCEEDED
     assert "reviewer activity" in result.transcript_delta
     assert adapter._process is None
     adapter.close()
@@ -1715,7 +1716,7 @@ def test_review_inspection_activity_does_not_extend_the_accepted_deadline(
     assert 0.15 <= time.monotonic() - started < 1.5
     assert result.turn_timed_out is True
     assert result.environment_wedged is False
-    assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
+    assert result.failure_reason == REVIEWER_DEADLINE_EXCEEDED
     assert "inspection-0" in result.transcript_delta
     assert adapter._process is None
     adapter.close()
@@ -1969,6 +1970,28 @@ def test_new_pending_reviewer_id_cannot_restart_absolute_deadline(tmp_path: Path
     )
     assert adapter._refresh_review_deadline(started + 0.2) is None
     adapter.close()
+
+
+def test_reviewer_timeout_diagnostic_has_a_specific_failure_reason(
+    tmp_path: Path,
+) -> None:
+    fake_claude = tmp_path / "unused-fake-claude.py"
+    fake_claude.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+    (tmp_path / "mcp.json").write_text("{}", encoding="utf-8")
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
+
+    class ReapedProcess:
+        @staticmethod
+        def poll() -> int:
+            return -9
+
+    try:
+        detail, reason = adapter._timeout_diagnostic(ReapedProcess(), reviewer=True)  # type: ignore[arg-type]
+    finally:
+        adapter.close()
+
+    assert "retained-capture reviewer" in detail
+    assert reason == REVIEWER_DEADLINE_EXCEEDED
 
 
 def test_new_capture_without_a_reviewer_id_disarms_the_previous_deadline(

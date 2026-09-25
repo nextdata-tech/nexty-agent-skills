@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dp_scenarios.ledger.lint import PHASE_ACTION_KINDS
-from dp_scenarios.failure_reasons import INTERRUPTED_UNCLASSIFIED
+from dp_scenarios.failure_reasons import (
+    INTERRUPTED_UNCLASSIFIED,
+    REVIEWER_DEADLINE_EXCEEDED,
+)
 
 from .answer_sheet import AnswerSheet
 from .appender import (
@@ -49,6 +52,14 @@ from .matcher import Category, MatchResult, MatcherBank, MatcherError, asks_for_
 from .text_match import term_present
 from .persona import PersonaCard
 from .transport import Attachment, OperatorMessage, Transport, TurnResult, TouchedFile, ToolCall
+
+
+_REVISED_PLAN_PATTERN = re.compile(
+    r"\b(?:updated|amended|revised|replacement)\b.{0,120}\b(?:plan|blueprint)\b"
+    r"|\b(?:plan|blueprint)\b.{0,120}\b(?:updated|amended|revised|replacement)\b"
+    r"|\bgeneration\s+\d+\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class TerminalState(str, Enum):
@@ -1177,6 +1188,8 @@ class OperatorEngine:
         next_match: MatchResult | None = None
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
+        review_fix_authorized = False
+        reapproval_uses = 0
         previous_agent_message = ""
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
@@ -1209,6 +1222,28 @@ class OperatorEngine:
                 # the message the pending reply was selected from.
                 agent_message=previous_agent_message,
             )
+            # A review-fix decision is substantive and must reach the agent
+            # even when this fixed slot was originally marked as an approval.
+            # The approval is deferred to the separately declared, bounded
+            # reapproval answer when the revised plan is presented.
+            defer_scheduled_approval = bool(
+                scripted_turn.approval
+                and next_reply is not None
+                and next_match is not None
+                and next_match.decision_id == "review_fix_authorization"
+            )
+            declared_reapproval = self.script.answer_sheet.reapproval
+            dynamic_reapproval = bool(
+                declared_reapproval is not None
+                and reapproval_uses < declared_reapproval.max_uses
+                and review_fix_authorized
+                and next_match is not None
+                and next_match.approval_requested
+                and next_match.solicits_operator
+                and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
+                and not scripted_turn.approval
+            )
+            approval_turn = (scripted_turn.approval and not defer_scheduled_approval) or dynamic_reapproval
             # Turn one, a non-substitutable turn and an approval turn all
             # transmit their declared line whatever the directive says, so
             # recording one there would put a value in the ledger that governed
@@ -1226,7 +1261,7 @@ class OperatorEngine:
             directive_governs = (
                 index > 1
                 and scripted_turn.substitute_reply
-                and not scripted_turn.approval
+                and not approval_turn
                 and (self.driver is not None or yielding)
             )
             recorded_directive = directive if directive_governs else "answer"
@@ -1239,10 +1274,14 @@ class OperatorEngine:
             # ``next_reply`` is falsy only after a repeat suppression and the
             # matcher always returns something.
             base = (
-                scripted_turn.text
+                declared_reapproval.answer
+                if dynamic_reapproval and declared_reapproval is not None
+                else next_reply
+                if defer_scheduled_approval and next_reply is not None
+                else scripted_turn.text
                 if index == 1
                 or not scripted_turn.substitute_reply
-                or scripted_turn.approval
+                or approval_turn
                 or yielding
                 else (next_reply or scripted_turn.text)
             )
@@ -1266,14 +1305,14 @@ class OperatorEngine:
                 self.driver is not None
                 and index > 1
                 and scripted_turn.substitute_reply
-                and not scripted_turn.approval
+                and not approval_turn
             )
             if self.driver is not None and not authorable:
                 driver_skip_reason = (
                     "turn_one"
                     if index == 1
                     else "approval"
-                    if scripted_turn.approval
+                    if approval_turn
                     else "non_substitutable"
                 )
             if authorable:
@@ -1378,7 +1417,7 @@ class OperatorEngine:
                 # some unrelated matcher reply -- or a refusal -- as the
                 # approval, and that text becomes the ``spec_approved``
                 # ledger row's ``artifact_ref``.
-                and not scripted_turn.approval
+                and not approval_turn
                 and next_reply
                 # The yield rule is path-independent: a rendered persona line
                 # is still a refusal nobody asked for.
@@ -1638,8 +1677,8 @@ class OperatorEngine:
                 approval_artifact,
                 approval_marker,
                 claim=claim or None,
-                operator_approval=scripted_turn.approval,
-                operator_approval_text=message.text if scripted_turn.approval else None,
+                operator_approval=approval_turn,
+                operator_approval_text=message.text if approval_turn else None,
                 operator_mode=operator_mode,
                 operator_directive=recorded_directive,
                 operator_beat_id=operator_beat_id,
@@ -1648,6 +1687,10 @@ class OperatorEngine:
                 driver_repeat_rejected=driver_repeat_rejected,
                 driver_beat_substituted=driver_beat_substituted,
             )
+            if match.decision_id == "review_fix_authorization" and not repeat_suppressed:
+                review_fix_authorized = True
+            if dynamic_reapproval:
+                reapproval_uses += 1
             # The match is kept even when suppressed; only the *reply* is
             # withdrawn. The directive is resolved from the match, and
             # discarding it here made a suppressed turn indistinguishable from
@@ -1677,7 +1720,11 @@ class OperatorEngine:
             reason = "sentinel_trip"
         elif turn_timed_out:
             terminal_state = TerminalState.TURN_TIMEOUT
-            reason = "turn_timeout"
+            reason = (
+                REVIEWER_DEADLINE_EXCEEDED
+                if failure_reason == REVIEWER_DEADLINE_EXCEEDED
+                else "turn_timeout"
+            )
         elif (
             len(records) == len(self.script.turns)
             and bool(records)

@@ -92,8 +92,8 @@ Two rules that fail at load and surprise people:
 - `turns[0]` must **equal `opening_message` exactly** — same string, not a
   paraphrase.
 
-`ground_truth`, `driver_forbidden_terms` and `gap_stance` are the **only**
-optional keys — and the first two carry most of the scenario's substance.
+`ground_truth`, `driver_forbidden_terms`, `gap_stance` and `reapproval` are
+optional keys. A sheet without them keeps the existing behavior.
 
 - `opening_message` — the contributor's own vague first words, verbatim.
 - `turns` — a list. A plain string is an ordinary turn. A mapping can declare:
@@ -119,6 +119,12 @@ optional keys — and the first two carry most of the scenario's substance.
   The other half is the persona's `stance_when_unknown`, which decides the
   voice — the two compose, so a scenario never has to describe a personality
   and a persona never has to know what this particular data can do.
+- `reapproval` — a bounded approval answer for a revised plan after the
+  operator authorizes a review fix. It has exactly `answer` (the approval text)
+  and `max_uses` (a positive integer). The engine can send it only when the
+  agent asks to approve an updated, amended, revised, or replacement plan
+  after that review-fix decision. The use limit prevents an open-ended
+  approval loop; it does not authorize another review fix.
 
 Give the agent room. A live agent needs several turns to author a spec, build,
 and self-check. A scenario that asks for results one turn after approval grades

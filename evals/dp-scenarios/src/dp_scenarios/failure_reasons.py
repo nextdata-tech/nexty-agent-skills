@@ -37,6 +37,8 @@ CODEX_PROVIDER_RETRY_PENDING = "codex_provider_retry_pending"
 CODEX_PROVIDER_ERROR = "codex_provider_error"
 #: The child exited before emitting a terminal ``result``.
 CHILD_EXITED_EARLY = "child_exited_early"
+#: The retained-capture reviewer exceeded its separate hard deadline.
+REVIEWER_DEADLINE_EXCEEDED = "reviewer_deadline_exceeded"
 #: Two runs contended on shared runtime state (locked store, busy resource).
 SHARED_RUNTIME_CONTENTION = "shared_runtime_contention"
 #: The run was interrupted but the diagnostic matched no known pattern.  This
@@ -54,6 +56,7 @@ FAILURE_REASONS = frozenset(
         CODEX_PROVIDER_RETRY_PENDING,
         CODEX_PROVIDER_ERROR,
         CHILD_EXITED_EARLY,
+        REVIEWER_DEADLINE_EXCEEDED,
         SHARED_RUNTIME_CONTENTION,
         INTERRUPTED_UNCLASSIFIED,
     }
@@ -148,6 +151,7 @@ __all__ = [
     "CHILD_EXITED_EARLY",
     "INTERRUPTED_UNCLASSIFIED",
     "CHILD_NO_TERMINAL_RESULT",
+    "REVIEWER_DEADLINE_EXCEEDED",
     "CODEX_ROOT_TURN_NO_TERMINAL_RESULT",
     "CODEX_PROVIDER_ERROR",
     "CODEX_PROVIDER_RETRY_PENDING",

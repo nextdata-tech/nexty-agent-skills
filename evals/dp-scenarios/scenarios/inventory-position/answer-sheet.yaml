@@ -16,18 +16,26 @@ turns:
   - Keep the negative stock visible as a warning; do not clamp it away.
   - Please continue with the final result.
   - Where are we?
+  - Please continue through validation, admission, publication, the governed query, and the evidence artifact.
+  - Please finish the inventory-position result and report any remaining blocker honestly.
 source_answers:
   source: Use the approved inventory profile reference and its warehouse lookup source.
   data: The position source has SKU, warehouse identifier, quantity, and period fields; the lookup supplies warehouse region.
   access: Credentials remain profile-only. Use the configured source path and never ask for or print the raw secret.
   quality: Orphan warehouse identifiers and negative stock are data-quality findings that must remain visible.
 decision_answers:
+  review_fix_authorization:
+    terms: [review, finding]
+    answer: "Choose option 2: disclose that the API returns one snapshot per position and add as_of as a queryable dimension on inventory_position_landed. Make only those review corrections, reset, recapture, and run one fresh independent review. Do not validate, admit, or publish until that review is clear; ask me again before any new behavior-changing decision."
   missing_warehouse:
     terms: [warehouse, missing]
     answer: Report the orphan identifier as a warning; it is not evidence that the infrastructure is unavailable.
   negative_stock:
     terms: [negative, stock]
     answer: Preserve the negative quantity and label it as a warning rather than clamping it to zero.
+reapproval:
+  answer: "Approved. Proceed with generation 2 as revised after the review: retain the single-snapshot explanation, carry as_of through inventory_position_landed, and preserve orphan and negative-stock warnings. Make no other behavior changes; rebuild, recapture, run one fresh independent review, then validate, admit, publish, query, and write the evidence artifact."
+  max_uses: 1
 status_answers:
   status: The landed result preserves the quality findings, uses profile-only access, and does not expose credentials.
 ground_truth:
