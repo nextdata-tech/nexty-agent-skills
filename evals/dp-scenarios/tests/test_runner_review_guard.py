@@ -11,6 +11,7 @@ import dp_scenarios.runner.review_guard as guard_module
 from dp_scenarios.runner.review_guard import (
     NORMAL,
     RELAY_PENDING,
+    REPORT_IN_FLIGHT,
     REVIEW_BUDGET_LINE,
     REVIEW_DISPATCH_PENDING,
     REVIEW_INSPECTION_CUTOFF_MS,
@@ -124,6 +125,24 @@ def _report_input() -> dict[str, object]:
     }
 
 
+def _write_pending_review_state(
+    path: Path, *, state_name: str = RELAY_PENDING
+) -> None:
+    write_initial_state(path)
+    state = _state(path)
+    state.update(
+        {
+            "state": state_name,
+            "workflow": "sales",
+            "revision": 8,
+            "generation": 4,
+            "subject_sha256": "sha256:subject",
+            "dependency_evidence_sha256": "sha256:dependency",
+        }
+    )
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+
 def test_default_review_budget_and_cutoff_keep_the_finalization_reserve() -> None:
     assert guard_module.DEFAULT_REVIEW_TIMEOUT_SECONDS == 600.0
     assert guard_module.REVIEW_DEADLINE_MS == 600_000
@@ -132,6 +151,117 @@ def test_default_review_budget_and_cutoff_keep_the_finalization_reserve() -> Non
     assert review_budget_line() == "review_time_budget_seconds: 600"
     assert review_ledger_budget_ms_line() == "budget_ms: 600000"
     assert review_inspection_cutoff_line() == "review_inspection_cutoff_seconds: 540"
+
+
+@pytest.mark.parametrize("state_name", [REVIEW_DISPATCH_PENDING, RELAY_PENDING])
+@pytest.mark.parametrize(
+    "tool_name", ["ToolSearch", "mcp__nxd-desktop__inspect_workflow"]
+)
+def test_pending_review_allows_read_only_recovery_tools(
+    tmp_path: Path, state_name: str, tool_name: str
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    _write_pending_review_state(state_path, state_name=state_name)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool_name,
+            "tool_input": {"workflow": "sales"}
+            if tool_name.endswith("inspect_workflow")
+            else {"query": "advance_workflow report_requirement schema"},
+        },
+        state_path=state_path,
+    )
+
+    assert decision == {}
+
+
+def test_stdio_review_gate_keeps_read_only_inspection_available() -> None:
+    from evals import desktop_stdio
+
+    assert "inspect_workflow" not in desktop_stdio._REVIEW_PENDING_BLOCKED_OPERATIONS
+    assert "reset_workflow" in desktop_stdio._REVIEW_PENDING_BLOCKED_OPERATIONS
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "mcp__nxd-desktop__reset_workflow",
+        "mcp__nxd-desktop__read_review_input",
+        "Skill",
+    ],
+)
+def test_relay_pending_still_denies_mutating_or_review_access_tools(
+    tmp_path: Path, tool_name: str
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    _write_pending_review_state(state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool_name,
+            "tool_input": {"skill": "nxd-review-closure"},
+        },
+        state_path=state_path,
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    ("tool_input", "invalid_json"),
+    [
+        ({"action": "report_requirement"}, False),
+        ({"__unparsedToolInput": '{action: "report_requirement"}'}, True),
+    ],
+)
+def test_malformed_report_relay_denial_shows_expected_call_shape(
+    tmp_path: Path, tool_input: dict[str, object], invalid_json: bool
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    _write_pending_review_state(state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__nxd-desktop__advance_workflow",
+            "tool_input": tool_input,
+        },
+        state_path=state_path,
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "mcp__nxd-desktop__advance_workflow" in reason
+    assert '"type": "report_requirement"' in reason
+    assert '"workflow": "sales"' in reason
+    assert '"expected_revision": 8' in reason
+    assert '"generation": 4' in reason
+    assert '"subject_sha256": "sha256:subject"' in reason
+    assert '"dependency_evidence_sha256": "sha256:dependency"' in reason
+    assert "<reviewer session_ref>" in reason
+    assert "<bounded reviewer report object>" in reason
+    assert ("not valid JSON" in reason) is invalid_json
+    assert _state(state_path)["state"] == RELAY_PENDING
+
+
+def test_correct_report_relay_is_accepted_from_relay_pending(tmp_path: Path) -> None:
+    state_path = tmp_path / "guard-state.json"
+    _write_pending_review_state(state_path)
+
+    decision = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__nxd-desktop__advance_workflow",
+            "tool_input": _report_input(),
+        },
+        state_path=state_path,
+    )
+
+    assert decision == {}
+    assert _state(state_path)["state"] == REPORT_IN_FLIGHT
 
 
 def test_capture_to_report_is_owner_scoped_and_clears_only_on_matching_response(tmp_path: Path) -> None:
