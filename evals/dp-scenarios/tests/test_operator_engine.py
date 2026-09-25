@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.ledger import LedgerStore, Manifest, SupervisorFacts, lint, read_ledger
+from dp_scenarios.failure_reasons import REVIEWER_DEADLINE_EXCEEDED
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.appender import AppenderError, StaticSupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.engine import FAILURE_MODES, OperatorEngine, OperatorScript, TerminalState, operator_script_hash
@@ -421,6 +422,25 @@ def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() ->
     ).run()
     assert timeout_with_diagnostic.terminal_state is TerminalState.TURN_TIMEOUT
     assert "environment_wedge" not in timeout_with_diagnostic.failure_modes
+
+
+def test_reviewer_deadline_keeps_turn_timeout_gate_but_names_the_stop_reason() -> None:
+    timed_out = OperatorEngine(
+        make_script(turns=("Improve weekly visibility.",)),
+        InMemoryTransport(
+            [
+                TurnResult(
+                    turn_timed_out=True,
+                    failure_reason=REVIEWER_DEADLINE_EXCEEDED,
+                )
+            ]
+        ),
+    ).run()
+
+    assert timed_out.terminal_state is TerminalState.TURN_TIMEOUT
+    assert "turn_timeout" in timed_out.failure_modes
+    assert timed_out.stop_reason == REVIEWER_DEADLINE_EXCEEDED
+    assert timed_out.failure_reason == REVIEWER_DEADLINE_EXCEEDED
 
 
 def test_rubber_stamper_approval_records_open_decision_marker() -> None:

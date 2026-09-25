@@ -19,11 +19,15 @@ does not change the EUR reconciliation rule or invent an exchange rate.
 
 ## Conversation
 
-The answer sheet drives a nine-turn arc through input inspection, approval,
-the missing-rate policy, intermediate checks, decision reversal, and final
-reconciliation. Turn 9 is a non-substitutable operator message authorizing one
-bounded review-fix round, since completing the reset, recapture, and fresh
-review can extend the ordinary close conversation.
+The answer sheet has a 14-turn budget for input inspection, approval, the
+missing-rate policy, intermediate checks, decision reversal, and final
+reconciliation, followed by capacity for up to three review-fix rounds and
+separate validation, publication, and governed-query turns. The explicit
+review-fix authorization lives in `decision_answers`; every post-approval turn
+can deliver that matched reply when the agent solicits it, instead of waiting
+for a fixed authorization at the end of the script. Turn 3 remains a verbatim
+approval. The fixed decision and plant events at turns 4 and 6 remain in the
+event schedule and still fire when a matched reply is delivered.
 
 - **Turn 3** is a verbatim approval: exclude the weekend row with no FX rate,
   include rows with a rate, and reconcile in EUR cents. It also carries the
@@ -37,9 +41,11 @@ review can extend the ordinary close conversation.
 - If an independent review reports blocking findings, the operator authorizes
   only those reported corrections. The agent must reset, correct, recapture,
   and obtain a fresh independent review before validation or publication.
-  This scenario reserves one such review-fix round; `crm-pipeline` uses a
-  larger 22-turn budget because its conversation has multiple separate
-  remediation and re-approval decisions.
+  Turns 9–11 provide room for repeated review-fix rounds, and turns 12–14
+  reserve distinct prompts for validation, publication, and the final query.
+  Matcher-selected replies remain available throughout those turns, so another
+  review finding can still be authorized while the agent is working through
+  the close.
 
 The answer sheet's ground-truth brief explains that parentheses mean negative
 amounts and that rounding belongs at the declared cents boundary. It does not

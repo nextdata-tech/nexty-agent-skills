@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dp_scenarios.ledger.lint import PHASE_ACTION_KINDS
-from dp_scenarios.failure_reasons import INTERRUPTED_UNCLASSIFIED
+from dp_scenarios.failure_reasons import (
+    INTERRUPTED_UNCLASSIFIED,
+    REVIEWER_DEADLINE_EXCEEDED,
+)
 
 from .answer_sheet import AnswerSheet
 from .appender import (
@@ -1677,7 +1680,11 @@ class OperatorEngine:
             reason = "sentinel_trip"
         elif turn_timed_out:
             terminal_state = TerminalState.TURN_TIMEOUT
-            reason = "turn_timeout"
+            reason = (
+                REVIEWER_DEADLINE_EXCEEDED
+                if failure_reason == REVIEWER_DEADLINE_EXCEEDED
+                else "turn_timeout"
+            )
         elif (
             len(records) == len(self.script.turns)
             and bool(records)

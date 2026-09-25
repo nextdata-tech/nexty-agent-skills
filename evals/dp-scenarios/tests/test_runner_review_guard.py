@@ -536,6 +536,199 @@ def test_explicit_background_dispatch_is_rejected(tmp_path: Path) -> None:
     assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
 
 
+def test_worktree_isolation_dispatch_is_rejected_without_claiming_the_slot(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    rejected = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "worktree-review",
+            "session_id": "owner-session",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "isolation": "worktree",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+
+    reason = rejected["hookSpecificOutput"]["permissionDecisionReason"]
+    assert rejected["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "dispatch the reviewer without isolation" in reason
+    assert _state(state_path)["state"] == REVIEW_DISPATCH_PENDING
+    assert "review_tool_use_id" not in _state(state_path)
+    assert "review_started_at" not in _state(state_path)
+
+    retry = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "inline-review",
+            "session_id": "owner-session",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "isolation": "none",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+    assert retry == {}
+    assert _state(state_path)["review_tool_use_id"] == "inline-review"
+
+
+@pytest.mark.parametrize(
+    ("event_name", "failure_payload"),
+    [
+        ("PostToolUseFailure", {"error": "Cannot create agent worktree"}),
+        ("PostToolUse", {"tool_response": {"is_error": True, "content": []}}),
+    ],
+)
+def test_failed_first_reviewer_dispatch_releases_slot_for_valid_retry(
+    tmp_path: Path,
+    event_name: str,
+    failure_payload: dict[str, object],
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+
+    first_dispatch = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "failed-review",
+            "session_id": "owner-session",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+    assert first_dispatch == {}
+    assert _state(state_path)["review_tool_use_id"] == "failed-review"
+
+    failed_result = handle_event(
+        {
+            "hook_event_name": event_name,
+            "tool_name": "Agent",
+            "tool_use_id": "failed-review",
+            "session_id": "owner-session",
+            **failure_payload,
+        },
+        state_path=state_path,
+    )
+
+    assert failed_result == {}
+    after_failure = _state(state_path)
+    assert after_failure["state"] == REVIEW_DISPATCH_PENDING
+    assert "review_tool_use_id" not in after_failure
+    assert "review_started_at" not in after_failure
+    assert "review_round_index" not in after_failure
+
+    retry = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "valid-review",
+            "session_id": "owner-session",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+    assert retry == {}
+    assert _state(state_path)["review_tool_use_id"] == "valid-review"
+
+    completed = handle_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "valid-review",
+            "session_id": "owner-session",
+            "tool_response": {
+                "status": "completed",
+                "content": [{"type": "text", "text": "No findings."}],
+                "agent_id": "review-agent",
+            },
+        },
+        state_path=state_path,
+    )
+    assert completed == {}
+    assert _state(state_path)["state"] == RELAY_PENDING
+
+
+def test_nested_child_error_does_not_release_a_successful_parent_dispatch(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "guard-state.json"
+    workspace = tmp_path / "agent"
+    workspace.mkdir()
+    write_initial_state(state_path, workspace_root=workspace)
+    handle_event(_capture_event(), state_path=state_path)
+    handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "successful-review",
+            "session_id": "owner-session",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+
+    handle_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "successful-review",
+            "session_id": "owner-session",
+            "tool_response": {
+                "is_error": False,
+                "content": [{"is_error": True, "text": "child tool error"}],
+            },
+        },
+        state_path=state_path,
+    )
+
+    state = _state(state_path)
+    assert state["state"] == REVIEW_DISPATCH_PENDING
+    assert state["review_tool_use_id"] == "successful-review"
+    rejected_retry = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "second-review",
+            "session_id": "owner-session",
+            "tool_input": {
+                "subagent_type": "general-purpose",
+                "prompt": _review_prompt(),
+            },
+        },
+        state_path=state_path,
+    )
+    assert rejected_retry["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "already has a dispatcher" in rejected_retry["hookSpecificOutput"][
+        "permissionDecisionReason"
+    ]
+
+
 def test_malformed_marker_is_denied_and_stop_is_blocked_while_pending(tmp_path: Path) -> None:
     state_path = tmp_path / "guard-state.json"
     workspace = tmp_path / "agent"
@@ -1316,7 +1509,12 @@ def test_owner_dispatch_does_not_invite_retry_when_supervisor_paths_are_absent(
 
 def test_settings_install_all_three_hook_phases() -> None:
     settings = settings_payload(python="/usr/bin/python3", script="/tmp/review_guard.py")
-    assert set(settings["hooks"]) == {"PreToolUse", "PostToolUse", "Stop"}
+    assert set(settings["hooks"]) == {
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "Stop",
+    }
     assert settings["hooks"]["PreToolUse"][0]["matcher"] == "*"
     assert "review_guard.py" in settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 

@@ -216,11 +216,24 @@ CHOICE_PATTERN = re.compile(
 
 # A review's implementation findings can recap an earlier decision while the
 # direct question asks the operator to authorize a separate repair. Capture
-# that action question so an unrelated decision mentioned only in the recap
-# (for example the B2 reversal) cannot answer it. Other declared decisions
-# that match this request clause still take precedence below.
+# the whole action question so an unrelated decision mentioned only in the
+# recap (for example the B2 reversal) cannot answer it. Other declared
+# decisions that match this request clause still take precedence below.
 _REVIEW_FIX_REQUEST_PATTERN = re.compile(
-    r"\bshould\s+i\b(?P<request>[^?]*\bapply\b[^?]*\bfix(?:es)?\b[^?]*)\?",
+    r"\b(?:(?:should|may|can|shall)\s+i|(?:do\s+you\s+)?want\s+me\s+to|"
+    r"would\s+you\s+like\s+me\s+to)\b(?P<request>[^?\n]{0,500}\?)",
+    re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_FIX_ACTION_PATTERN = re.compile(
+    r"\b(?:apply|proceed\s+with|make|go\s+ahead\s+with|add)\b"
+    r"[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|comments?)\b"
+    r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
+    r"wording|description|field)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
+    r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:finding|findings|issue|issues|flagged|reported)\b"
+    r"|\b(?:finding|findings|issue|issues)\b.{0,140}\breview(?:er)?\b",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -415,12 +428,21 @@ class MatcherBank:
     def _classify(self, message: str) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         prose = _NON_PROSE.sub(" ", message)
-        lowered = message.casefold()
         review_fix = self.answer_sheet.decision_answers.get("review_fix_authorization")
-        review_fix_request = _REVIEW_FIX_REQUEST_PATTERN.search(prose)
+        review_fix_request = None
+        for candidate in _REVIEW_FIX_REQUEST_PATTERN.finditer(prose):
+            clause = candidate.group("request")
+            context_start = max(0, candidate.start() - 800)
+            context_end = min(len(prose), candidate.end() + 100)
+            review_context = prose[context_start:context_end]
+            if (
+                _REVIEW_FIX_ACTION_PATTERN.search(clause) is not None
+                and _REVIEW_FINDING_CONTEXT_PATTERN.search(review_context) is not None
+            ):
+                review_fix_request = candidate
+                break
         if (
             review_fix is not None
-            and all(term.casefold() in lowered for term in review_fix.terms)
             and review_fix_request is not None
             and solicits_operator(message)
         ):
@@ -450,7 +472,11 @@ class MatcherBank:
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
         # "no review finding was reported" cannot consume a later decision.
-        if decision is not None and solicits_operator(message):
+        if (
+            decision is not None
+            and decision.decision_id != "review_fix_authorization"
+            and solicits_operator(message)
+        ):
             return MatchResult(
                 Category.DECISION_REQUEST,
                 f"decision.answer.{decision.decision_id}",

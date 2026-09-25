@@ -206,6 +206,7 @@ def settings_payload(
         "hooks": {
             "PreToolUse": [{"matcher": "*", "hooks": [hook]}],
             "PostToolUse": [{"matcher": "*", "hooks": [hook]}],
+            "PostToolUseFailure": [{"matcher": "*", "hooks": [hook]}],
             "Stop": [{"matcher": "*", "hooks": [hook]}],
         }
     }
@@ -398,6 +399,15 @@ def _result_value(event: dict[str, object]) -> object:
 def _result_is_error(event: dict[str, object]) -> bool:
     value = _result_value(event)
     return any(isinstance(item, dict) and item.get("is_error") is True for item in _walk(value))
+
+
+def _direct_tool_result_is_error(event: dict[str, object]) -> bool:
+    """Check the Agent call envelope without interpreting nested child output."""
+
+    if event.get("is_error") is True:
+        return True
+    value = _result_value(event)
+    return isinstance(value, dict) and value.get("is_error") is True
 
 
 def _claim_text(value: object) -> list[str]:
@@ -1072,6 +1082,11 @@ def _owner_pre(
                 "Reviewer dispatch rejected: the fresh supervisor-retained capture or blueprint is unavailable; do not use a fallback path."
             )
         tool_input = _event_tool_input(event)
+        if "isolation" in tool_input and tool_input.get("isolation") not in (None, "none"):
+            return _deny(
+                "Reviewer dispatch rejected: dispatch the reviewer without isolation "
+                "(omit isolation or set it to none)."
+            )
         subagent_type = _string(tool_input.get("subagent_type"))
         if subagent_type not in REVIEW_ALLOWED_SUBAGENT_TYPES:
             return _deny("The retained-capture reviewer must be a single general-purpose conversation child.")
@@ -1153,7 +1168,7 @@ def _handle(
     tool = _event_tool_name(event)
     child = _is_child(event, state)
 
-    if event_name == "posttooluse":
+    if event_name in {"posttooluse", "posttoolusefailure"}:
         # The parent Agent/Task result can carry the child agent_id on some
         # Claude versions.  Match its tool-use id before applying the child
         # exemption, otherwise the owner would remain stuck in dispatching.
@@ -1162,6 +1177,18 @@ def _handle(
             and tool in {"agent", "task"}
             and _event_id(event, "tool_use_id", "toolUseId") == state.get("review_tool_use_id")
         ):
+            if event_name == "posttoolusefailure" or _direct_tool_result_is_error(event):
+                # A failed Agent call did not start the retained-capture
+                # reviewer. Release the one-dispatch claim so the owner can
+                # retry with the same capture and budget; the adapter also
+                # disarms its deadline when it observes the cleared id.
+                for key in (
+                    "review_tool_use_id",
+                    "review_round_index",
+                    "review_started_at",
+                ):
+                    state.pop(key, None)
+                return _allow()
             if _nonempty_result(event):
                 state["state"] = RELAY_PENDING
             return _allow()

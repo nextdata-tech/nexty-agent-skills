@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.operator.answer_sheet import script_turn_text
+from dp_scenarios.operator.engine import OperatorEngine
+from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
 from dp_scenarios.scenario import declared_sentinels, load_scenario
 from dp_scenarios.runner.environment import PinnedVersions, RunEnvironment
 from dp_scenarios.synthgen import generate_dataset
@@ -41,21 +43,54 @@ def test_b2_loads_as_core_and_declares_the_reversal_plant() -> None:
     assert SCENARIO.tier == "core"
     assert SCENARIO.dataset == "finance_close"
     assert SCENARIO.events.planted_card_ids() == {"finance_close_reconciliation"}
-    assert SCENARIO.turn_budget == 9
+    assert SCENARIO.turn_budget == 14
     assert len(SCENARIO.operator_script.turns) == SCENARIO.turn_budget
-    assert SCENARIO.operator_script.phase_by_turn[9] == 7
+    assert SCENARIO.operator_script.phase_by_turn[14] == 7
+    assert SCENARIO.operator_script.turns[2].approval
+    assert not SCENARIO.operator_script.turns[2].substitute_reply
+    assert all(
+        turn.substitute_reply for turn in SCENARIO.operator_script.turns[3:]
+    )
     assert SCENARIO.operator_script.answer_sheet.answer_for_source("Where is the AP vendor contacts export?") is not None
     assert SCENARIO.operator_script.answer_sheet.answer_for_decision(
         "The review reported findings. Should I apply the specific fixes?"
     ).decision_id == "review_fix_authorization"
-    review_fix_turn = SCENARIO.operator_script.answer_sheet.turns[8]
-    assert isinstance(review_fix_turn, dict)
-    assert review_fix_turn["substitute_reply"] is False
-    assert script_turn_text(review_fix_turn) == (
-        SCENARIO.operator_script.answer_sheet.decision_answers[
-            "review_fix_authorization"
-        ].answer
+    assert script_turn_text(SCENARIO.operator_script.answer_sheet.turns[2]).startswith(
+        "Approved."
     )
+
+
+def test_b2_run3_review_requests_receive_authorization_on_the_next_turn() -> None:
+    """Replay live review asks through the real matcher and operator engine."""
+
+    run3_agent_messages = (
+        "The mandatory independent review flagged one blocking issue and two "
+        "advisory ones. What happens next is fixing the field description and "
+        "running one more independent review round. Want me to proceed with "
+        "that fix and the extra review round, or would you like to handle it "
+        "differently?",
+        "The blocking review finding is a field-description wording bug. Do you "
+        "want me to proceed with that fix and the extra review round now?",
+        "The blocking review finding is the empty-string description. Should I "
+        "proceed with that fix now?",
+        "The blocking review finding is the empty-string description. Should I "
+        "proceed with that fix now — yes or no?",
+        "The review finding is the fx_rate field-description wording. May I fix "
+        "that wording and run the reset, recapture, and review cycle?",
+    )
+    responses = [TurnResult(agent_message="Ready to inspect the close.") for _ in range(14)]
+    for index, message in enumerate(run3_agent_messages, start=2):
+        responses[index] = TurnResult(agent_message=message)
+    transport = InMemoryTransport(responses)
+
+    OperatorEngine(SCENARIO.operator_script, transport).run()
+
+    authorization = SCENARIO.operator_script.answer_sheet.decision_answers[
+        "review_fix_authorization"
+    ].answer
+    for request_index in range(len(run3_agent_messages)):
+        operator_turn_index = request_index + 3
+        assert authorization in transport.message_texts[operator_turn_index]
 
 
 def test_hostile_decimal_reconciliation_and_supersession_pass() -> None:

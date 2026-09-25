@@ -313,6 +313,63 @@ def test_b2_review_fix_routing_does_not_relabel_approval_evidence() -> None:
 
 
 @pytest.mark.parametrize(
+    "message",
+    [
+        "The independent review flagged one blocking issue. Want me to proceed "
+        "with that fix and the extra review round, or would you like to handle "
+        "it differently?",
+        "The blocking review finding is the field-description wording. Do you "
+        "want me to proceed with that fix and the extra review round now?",
+        "The review finding is the empty-string description. Should I proceed "
+        "with that fix now?",
+        "The review finding is the empty-string description. Should I proceed "
+        "with that fix now — yes or no?",
+        "The review finding concerns the fx_rate field. May I fix the "
+        "field-description wording and run the reset, recapture, and review cycle?",
+        "The review found two blocking issues. May I make these two corrections "
+        "and run the reset, recapture, and review cycle again?",
+        "The review finding is still open. Do you want me to apply both fixes "
+        "and rebuild?",
+        "The review finding is still open. Would you like me to go ahead with "
+        "those changes?",
+        "The review finding is still open. Can I make those changes?",
+        "The review finding is still open. Shall I proceed with the correction?",
+        B2_REVIEW_FIX_TURN_4,
+        B2_REVIEW_FIX_TURN_6,
+    ],
+)
+def test_b2_review_fix_authorization_accepts_live_request_phrasings(
+    message: str,
+) -> None:
+    result = MatcherBank(FINANCE_CLOSE.persona, FINANCE_CLOSE.answer_sheet).reply_for(message)
+
+    assert result.category is Category.DECISION_REQUEST
+    assert result.decision_id == "review_fix_authorization"
+    assert result.reply == FINANCE_CLOSE.answer_sheet.decision_answers[
+        "review_fix_authorization"
+    ].answer
+    assert result.solicits_operator
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Status: the review finding is resolved and the fix is ready for a new build.",
+        "The reported fix is applied; the review finding is resolved.",
+        "The review finding is resolved. Do you approve the blueprint for publication?",
+        "The review finding is resolved. Do you want me to apply the approved blueprint?",
+    ],
+)
+def test_b2_review_fix_fallback_does_not_capture_status_or_blueprint_approval(
+    message: str,
+) -> None:
+    result = MatcherBank(FINANCE_CLOSE.persona, FINANCE_CLOSE.answer_sheet).reply_for(message)
+
+    assert result.decision_id != "review_fix_authorization"
+    assert result.rule_id != "decision.answer.review_fix_authorization"
+
+
+@pytest.mark.parametrize(
     ("scenario_id", "message", "decision_id"),
     [
         (
