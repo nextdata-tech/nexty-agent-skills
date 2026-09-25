@@ -178,7 +178,7 @@ def test_pending_review_allows_read_only_recovery_tools(
 
 
 def test_stdio_review_gate_keeps_read_only_inspection_available() -> None:
-    from evals import desktop_stdio
+    import desktop_stdio
 
     assert "inspect_workflow" not in desktop_stdio._REVIEW_PENDING_BLOCKED_OPERATIONS
     assert "reset_workflow" in desktop_stdio._REVIEW_PENDING_BLOCKED_OPERATIONS
