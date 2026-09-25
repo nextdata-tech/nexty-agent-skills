@@ -207,7 +207,9 @@ def build_server(
         description=(
             "Execute a governed semantic query. Accepts a selection of CONCEPT "
             "NAMES (not SQL): measures (required, list of metric names), "
-            "dimensions (optional, list of dimension names), and filters "
+            "dimensions (optional, list of dimension names; a temporal "
+            "dimension may instead be {\"dimension\": <name>, \"grain\": "
+            "<grain>} using a grain describe_model lists), and filters "
             "(optional). The data product compiles a fan-out-safe, governed SQL "
             "query and returns the compiled SQL plus result rows. Do NOT write "
             "raw SQL — pass concept names only. Only call this once you have "
@@ -216,7 +218,10 @@ def build_server(
     )
     def run_semantic_query(
         measures: list[str],
-        dimensions: list[str] | None = None,
+        # Items are untyped to match production: each is a dimension name or,
+        # for a temporal dimension, a {"dimension", "grain"} object. The genuine
+        # compiler validates both shapes, so a bad grain is refused, not guessed.
+        dimensions: list[Any] | None = None,
         filters: list[SemanticFilter] | None = None,
     ) -> dict:
         from nxd.experimental.semantic import CompileError, compile_selection
