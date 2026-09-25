@@ -1,4 +1,0 @@
-nxd.data_product[spec]
-dlt[duckdb]==1.28.2
-duckdb==1.5.4
-pandas==2.3.3
