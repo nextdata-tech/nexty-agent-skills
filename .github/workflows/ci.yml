@@ -257,6 +257,16 @@ jobs:
       - name: Check the eval surface against the shipped NXD contract
         working-directory: evals/mcp
         run: uv run --locked --no-sync python contract_check.py --surface "$RUNNER_TEMP/eval-surface.json"
+      # NXD's PR-time consumer check reads the COMMITTED eval_surface.json, since
+      # it has no nxd wheel of ours to build the server with. A stale copy would
+      # make that check measure a server that no longer exists.
+      - name: Check the committed eval surface is current
+        working-directory: evals/mcp
+        run: |
+          if ! diff -u eval_surface.json "$RUNNER_TEMP/eval-surface.json"; then
+            echo "::error file=evals/mcp/eval_surface.json::stale; regenerate with: uv run python contract_surface.py --out eval_surface.json"
+            exit 1
+          fi
       # Names BOTH sides of the pairing that was checked. Runs on failure too:
       # a red run whose summary does not say which NXD build it was measured
       # against sends the reader to the logs to find out what it even compared.

@@ -112,7 +112,7 @@ trigger, dispatch to, or wait on an NXD build, and NXD does not wait on it. Do
 not add a reciprocal dispatch to "keep them in step" — that turns two
 independently failing pipelines into one cycle.
 
-### The two lanes
+### The three lanes
 
 - **`semantic MCP contract`** (`.github/workflows/ci.yml`, required). Checks the
   pinned-and-published pairing. It installs the exact wheels NXD published for
@@ -127,7 +127,18 @@ independently failing pipelines into one cycle.
   no Snowflake. A red canary means the NEXT NXD bump will break the evals — it
   is not evidence about any pairing that shipped.
 
-Both fail closed: a missing token, an unresolvable artifact, a manifest with no
+- **NXD's `semantic MCP consumer` check** (in NXD, advisory). Runs on any NXD
+  pull request that changes `mcp_contract.json`: it compares the contract that
+  PR would ship against this repository's `main`, using `contract_check.py`,
+  `contract_exceptions.json`, and the committed `eval_surface.json`. It is
+  stdlib-only and builds nothing on our side, so it is a read, not a dispatch.
+  Its purpose is to tell the NXD author, while the PR is still open, that the
+  eval server here needs a matching change.
+  `eval_surface.json` is generated, never hand-edited:
+  `uv run python contract_surface.py --out eval_surface.json`. The
+  `semantic MCP contract` job fails if the committed copy is stale.
+
+The first two fail closed: a missing token, an unresolvable artifact, a manifest with no
 MCP provenance, a wheel-digest mismatch, a server that will not start, or any
 undeclared difference exits non-zero. In particular, an artifact published
 before NXD emitted MCP provenance is **refused** rather than silently accepted —

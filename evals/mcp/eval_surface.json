@@ -1,0 +1,140 @@
+{
+  "schema": "nxd-eval-mcp-surface-v1",
+  "tools": [
+    {
+      "description": "Return full metadata for one semantic model: its metrics (each with an aggregation and a compatible_dimensions list), its dimensions (with pii flags), and its joins (each with a reaches_dimensions list \u2014 dimensions reachable through that join). Use this to learn exactly what concepts exist and which dimensions a metric supports before running a query. Never guess concept names.",
+      "input_schema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "describe_modelArguments",
+        "type": "object"
+      },
+      "name": "describe_model",
+      "parameters": [
+        {
+          "name": "name",
+          "required": true
+        }
+      ]
+    },
+    {
+      "description": "List the semantic models (entities) exposed by this data product. Returns each model's name, grain, and description. Call this FIRST to discover the catalog before building any query.",
+      "input_schema": {
+        "properties": {},
+        "title": "list_modelsArguments",
+        "type": "object"
+      },
+      "name": "list_models",
+      "parameters": []
+    },
+    {
+      "description": "Execute a governed semantic query. Accepts a selection of CONCEPT NAMES (not SQL): measures (required, list of metric names), dimensions (optional, list of dimension names; a temporal dimension may instead be {\"dimension\": <name>, \"grain\": <grain>} using a grain describe_model lists), and filters (optional). The data product compiles a fan-out-safe, governed SQL query and returns the compiled SQL plus result rows. Do NOT write raw SQL \u2014 pass concept names only. Only call this once you have confirmed intent (the right metric, compatible dimensions).",
+      "input_schema": {
+        "$defs": {
+          "SemanticFilter": {
+            "description": "Wire-shaped filter payload, without reimplementing compiler validation.",
+            "properties": {
+              "dimension": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Dimension"
+              },
+              "op": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Op"
+              },
+              "value": {
+                "anyOf": [
+                  {},
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Value"
+              }
+            },
+            "title": "SemanticFilter",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "dimensions": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dimensions"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/SemanticFilter"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Filters"
+          },
+          "measures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Measures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "measures"
+        ],
+        "title": "run_semantic_queryArguments",
+        "type": "object"
+      },
+      "name": "run_semantic_query",
+      "parameters": [
+        {
+          "name": "dimensions",
+          "required": false
+        },
+        {
+          "name": "filters",
+          "required": false
+        },
+        {
+          "name": "measures",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
