@@ -62,17 +62,24 @@ def _snapshot(path: Path) -> dict[str, bytes]:
 def test_all_shipped_scenario_fixtures_and_routes_keep_their_prechange_bytes(
     tmp_path: Path,
 ) -> None:
+    # Every scenario that shipped before source tables must still ship with its
+    # original bytes. Scenarios added later are not pinned here; they only have
+    # to generate deterministically.
     scenarios = load_scenarios(SCENARIOS)
-    assert {scenario.id for scenario in scenarios} == set(PRE_SOURCE_FIXTURE_HASHES)
-    actual_route_scenarios = {
-        scenario.id for scenario in scenarios if scenario.route_table is not None
+    assert set(PRE_SOURCE_FIXTURE_HASHES) <= {scenario.id for scenario in scenarios}
+    pinned_route_scenarios = {
+        scenario.id
+        for scenario in scenarios
+        if scenario.route_table is not None and scenario.id in PRE_SOURCE_FIXTURE_HASHES
     }
-    assert actual_route_scenarios == set(PRE_SOURCE_ROUTE_DIGESTS)
+    assert pinned_route_scenarios == set(PRE_SOURCE_ROUTE_DIGESTS)
 
     for scenario in scenarios:
         first = scenario.generate_fixture(tmp_path / scenario.id / "first")
         second = scenario.generate_fixture(tmp_path / scenario.id / "second")
         assert _snapshot(first.out_dir) == _snapshot(second.out_dir), scenario.id
+        if scenario.id not in PRE_SOURCE_FIXTURE_HASHES:
+            continue
         manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
         assert frozenset(manifest) == PRE_SOURCE_MANIFEST_KEYS, scenario.id
         assert manifest["fixture_hash"] == PRE_SOURCE_FIXTURE_HASHES[scenario.id], scenario.id
