@@ -29,6 +29,16 @@ LOCAL_INFERENCE = (
 )
 REVIEW_SKILL = REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md"
 WORKFLOW_V2 = JOB_LOOP / "reference" / "workflow-v2.md"
+DATABASE_SOURCE = (
+    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "database-source.md"
+)
+ADVERSARIAL_REVIEW = (
+    REPO_ROOT
+    / "src"
+    / "nxd-generate-data-product"
+    / "reference"
+    / "adversarial-review.md"
+)
 PRE_CAPTURE_AUDIT = (
     REPO_ROOT
     / "src"
@@ -792,3 +802,105 @@ def test_reviewer_skill_runs_only_on_supervisor_retained_post_check_inputs():
     ):
         assert marker in text, f"reviewer retained-input contract lost: {marker}"
     assert "before nxd-generate-data-product runs its Step 7 self-check" not in text
+
+
+def test_behavior_affecting_review_findings_wait_for_later_user_approval():
+    job = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    workflow = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    review = " ".join(ADVERSARIAL_REVIEW.read_text(encoding="utf-8").split())
+
+    for text in (job, workflow):
+        for marker in (
+            "workflow/review_findings",
+            "`needs_user`",
+            "later turn",
+            "I don't know, you tell me",
+            "whatever you think",
+            "Do not edit",
+            "reset",
+            "recapture",
+        ):
+            assert marker in text, f"review authorization boundary lost: {marker}"
+    assert "review report and an accepted adjudication are not authorization" in review
+    assert "accepted finding IDs in a later turn" in review
+    assert "A later review finding needs its own explicit user decision" in review
+
+
+def test_review_ledger_rules_match_the_shipped_round_validator():
+    workflow = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    review = " ".join(ADVERSARIAL_REVIEW.read_text(encoding="utf-8").split())
+
+    for text in (workflow, review):
+        for marker in (
+            "actual epoch milliseconds",
+            "never estimate or invent",
+            '`state: "applied"` requires a non-empty `applied_files`',
+            '`applied_files: []`',
+            "only accepted `behavior_affecting` findings",
+            "`structural_note` finding",
+            "`validate_review_round(round)`",
+            "Without shell access",
+        ):
+            assert marker in text, f"review-round bookkeeping rule lost: {marker}"
+    assert "A `not_applied` finding lists no files" in workflow
+    assert "never defer a rejected" in workflow
+    assert "Never defer rejected" in review
+    assert "approved_finding_ids" in workflow
+    assert "exact authorizing" in workflow
+    assert workflow.index("Validate the completed round with `validate_review_round`") < workflow.index(
+        "and reset. Never reset first"
+    )
+
+
+def test_blueprint_decisions_and_generation_preserve_user_scope():
+    job = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    workflow = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    generator = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
+
+    assert "Every Decision must come from something the user stated" in job
+    assert "Never pre-fill an anticipated decision or reversal" in job
+    for marker in (
+        "preserve every Model and Output name exactly",
+        "Break each Questions entry into all of its requested clauses",
+        "Evidence and contracts may establish facts, but do not imply a decision",
+        "anticipated reversal",
+        "`[DECIDE]`",
+    ):
+        assert marker in workflow, f"blueprint provenance/fidelity rule lost: {marker}"
+    assert "keep every Model and Output name exactly as approved" in generator
+    assert "cover every clause of every Questions entry" in generator
+    assert "Add no Decision from source rows, contracts, or evidence" in generator
+
+
+def test_job_loop_stops_after_the_approved_request_is_answered():
+    job = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    scope_rule = job[job.index("Once the published product answers") :]
+    for marker in (
+        "finish the handoff",
+        "do not start another workflow",
+        "draft a new version",
+        "expand the questions, models, or outputs on your own",
+        "If the user later asks for a change",
+        "confirm that requested scope",
+        "rather than declining it",
+    ):
+        assert marker in scope_rule, f"post-publication scope boundary lost: {marker}"
+
+
+def test_database_source_runtime_and_optional_data_layout_are_explicit():
+    database = " ".join(DATABASE_SOURCE.read_text(encoding="utf-8").split())
+    generator = " ".join(GENERATOR_SKILL.read_text(encoding="utf-8").split())
+
+    for marker in (
+        "Desktop runtime does not install the closure's `requirements.txt`",
+        "An NXD change adding `dlt[sql_database]` and a PostgreSQL driver",
+        "For other runtimes that do install the closure's `requirements.txt`",
+        "may omit both `csv-source-path` and `data/`",
+        "neither is a database input",
+        "empty/README-only `data/` scaffold",
+        "`validation/scratch_transform_failed`",
+        "does not read `csv-source-path`",
+        "`db-source-tables` is the database table map",
+    ):
+        assert marker in database, f"database-source runtime/layout contract lost: {marker}"
+    assert "The Desktop runtime does not install that file" in generator
