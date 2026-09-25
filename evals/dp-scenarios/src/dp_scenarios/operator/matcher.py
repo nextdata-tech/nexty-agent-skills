@@ -255,12 +255,13 @@ CHOICE_PATTERN = re.compile(
 # decisions that match this request clause still take precedence below.
 _REVIEW_FIX_REQUEST_PATTERN = re.compile(
     r"\b(?:(?:should|may|can|shall)\s+i|(?:do\s+you\s+)?want\s+me\s+to|"
-    r"would\s+you\s+like\s+me\s+to|which\s+(?:would|do)\s+you\s+like|"
+    r"would\s+you\s+like\s+me\s+to|do\s+you(?=\s+authorize)|"
+    r"which\s+(?:would|do)\s+you\s+like|"
     r"pick\s+one\s*[:,-]?)\b(?P<request>[^?]{0,500}\?)",
     re.IGNORECASE | re.DOTALL,
 )
 _REVIEW_FIX_ACTION_PATTERN = re.compile(
-    r"\b(?:apply|proceed\s+with|make|go\s+ahead\s+with|add)\b"
+    r"\b(?:apply|proceed\s+with|make|go\s+ahead\s+with|add|authorize)\b"
     r"[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|comments?)\b"
     r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
     r"wording|description|field)\b",
@@ -271,9 +272,14 @@ _REVIEW_FIX_CHOICE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
-    r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:finding|findings|issue|issues|flagged|reported)\b"
+    r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:finding|findings|issue|issues|"
+    r"correction|corrections|flagged|reported)\b"
     r"|\b(?:finding|findings|issue|issues)\b.{0,140}\breview(?:er)?\b",
     re.IGNORECASE | re.DOTALL,
+)
+_CORRECTION_INVITATION_PATTERN = re.compile(
+    r"\bopen\s+to\s+your\s+correction\b",
+    re.IGNORECASE,
 )
 
 def asks_for_a_choice(message: str) -> bool:
@@ -531,6 +537,16 @@ class MatcherBank:
         ):
             if approval_rule is not None:
                 request_decision = self.answer_sheet.answer_for_decision(request_text)
+                if (
+                    request_decision is None
+                    and _CORRECTION_INVITATION_PATTERN.search(prose) is not None
+                ):
+                    # A correction invitation can apply to a decision stated
+                    # in the same message, even when a separate plan-approval
+                    # question is the only clause with an explicit question
+                    # mark. Keep this opt-in to correction language so recap
+                    # decisions cannot answer unrelated B2/B5 asks.
+                    request_decision = self.answer_sheet.answer_for_decision(prose)
                 if request_decision is not None:
                     return MatchResult(
                         Category.DECISION_REQUEST,

@@ -1135,6 +1135,14 @@ def test_evidence_contracts_do_not_predeclare_follow_up_decisions() -> None:
                 f"{scenario.id} evidence contract disclosed decision ID "
                 f"{decision_id!r} before its event"
             )
+            if not any("decision" in field for field in contract["required_fields"]):
+                # The agent never records this ID (B6 grades the delivered
+                # report), so the event must not announce it either.
+                assert all(
+                    card.content is None or decision_id not in card.content
+                    for card in scenario.events.cards
+                ), f"{scenario.id} event cards announce internal decision ID {decision_id!r}"
+                continue
             assert any(
                 card.trigger_turn == expected_event_turns[decision_id]
                 and card.content is not None
