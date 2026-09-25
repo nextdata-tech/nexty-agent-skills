@@ -1,0 +1,25 @@
+{
+  "schema": "nxd-dp-spec-lock-v3",
+  "spec_hash": "sha256:c0e716cef3b40d6cdd31c35c1fc0947e6647bdfec1f8b12edc6ef10efd01432c",
+  "proposal_hash": "sha256:4eab76489bf260b9ba78c9c8fd959dfe68178fc521510a0c81ea633ae3f044ef",
+  "canonicalization": "nxd-dp-spec-canon-v3",
+  "snapshot": "dp-blueprint.approved.md",
+  "snapshot_sha256": "790dc5dd002cddf8cdb1772be2454d81df270950434f5356164597e7d2faf913",
+  "proposal_snapshot": "dp-blueprint.proposal.approved.json",
+  "proposal_snapshot_sha256": "4eab76489bf260b9ba78c9c8fd959dfe68178fc521510a0c81ea633ae3f044ef",
+  "spec_status_at_copy": "approved",
+  "dp_spec_version": 3,
+  "name": "crm_pipeline",
+  "workflow": "crm-pipeline",
+  "terms_hash": "b54f8a6d60ce872cf184f0a0caa7eed30fd19c54b9c0afe1dcb518f84f0fd28b",
+  "contract_inventory_hash": "d5e708fc380b68f622203cb11714a342634db447ad173be0748353bdce8ee03d",
+  "locked_decisions_hash": "65926036ed814b476c44cd711192c6117b88c876ee0af093912a1a738c96b06c",
+  "delivery_profile": "desktop-local-duckdb-semantic-query",
+  "source_basename": "approved.md",
+  "compiler_version": {
+    "plugin": "nxd-workflow-v3-materializer-v2",
+    "generator_skill": "nxd-workflow-supervisor",
+    "self_check": "nxd-self-check-v3"
+  },
+  "copied_at_unix_ms": 0
+}

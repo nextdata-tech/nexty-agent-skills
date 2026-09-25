@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=../../../../../representations/runtime/json-schema/v1/models.json
+api-version: data-product.nextdata.com/v1
+models:
+- attributes:
+    deal_id:
+      data-type: string
+      description: Unique CRM deal identifier, from the source `id` field.
+      metadata:
+        __nxd_semantic__: '{"roles":[{"kind":"primary_key"},{"kind":"dimension","name":"deal_id"}]}'
+    stage:
+      data-type: string
+      description: 'Pipeline stage reported by the source: prospecting, qualification, negotiation, closed_won, or closed_lost.'
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"stage"}'
+    amount:
+      data-type: number
+      description: Deal amount, as reported by the source.
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"amount"}'
+    updated_at:
+      data-type: string
+      description: Last-updated timestamp reported by the source, carried through unchanged as the source's ISO 8601 string.
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"updated_at"}'
+  description: 'The governed, redacted list of currently active CRM pipeline deals: one row per active deal with deal_id, stage, amount, and updated_at.'
+  name: deals
+- attributes:
+    deal_count:
+      data-type: number
+      description: Number of current (non-deleted) deals.
+      metadata:
+        __nxd_semantic__: '{"kind":"metric","name":"deal_count","agg":"count","column":"*"}'
+        __nxd_semantic_view__: '{"semantic_view":true,"over":"deals"}'
+    total_amount:
+      data-type: number
+      description: Total amount across current (non-deleted) deals.
+      metadata:
+        __nxd_semantic__: '{"kind":"metric","name":"total_amount","agg":"sum","of":{"model":"deals","column":"amount"}}'
+  name: deals_metrics
+- attributes:
+    decision_id:
+      data-type: string
+      description: Stable slug identifying the ruling.
+      metadata:
+        __nxd_semantic__: '{"roles":[{"kind":"primary_key"},{"kind":"dimension","name":"decision_id"}]}'
+    status:
+      data-type: string
+      description: One of confirmed, proposed, or blocked.
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"decision_status"}'
+    provenance:
+      data-type: string
+      description: 'Authorship of the ruling: user_confirmed, agent_authored, source_derived, or deferred.'
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"decision_provenance"}'
+    ruling:
+      data-type: string
+      description: One-sentence statement of the ruling.
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"decision_ruling"}'
+    applies_to:
+      data-type: string
+      description: Models/columns this ruling materializes in.
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"decision_applies_to"}'
+    detail:
+      data-type: string
+      description: Evidence or basis for the ruling.
+      metadata:
+        __nxd_semantic__: '{"kind":"dimension","name":"decision_detail"}'
+  description: 'Ledger of the rulings this data product materializes: the current-deal definition, the owner/email redaction, and the decision not to compute an attention ranking.'
+  name: nxd_decisions
+- attributes:
+    decision_count:
+      data-type: number
+      description: Number of ledgered rulings.
+      metadata:
+        __nxd_semantic__: '{"kind":"metric","name":"decision_count","agg":"count","of":{"model":"nxd_decisions","column":"decision_id"}}'
+        __nxd_semantic_view__: '{"semantic_view":true,"over":"nxd_decisions"}'
+  name: nxd_decisions_metrics

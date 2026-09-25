@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=../../../../../representations/runtime/json-schema/v1/manifest.json
+domain: desktop.local
+executor:
+  config:
+    script: transform/main.py
+  driver: nxd:local/python/compute:0.1.0
+  service: python-compute
+  secrets:
+  - api-source
+  sensor:
+    simple:
+      startup: false
+      when: all
+inputs: {}
+name: crm_pipeline
+output:
+  models:
+  - url: deals
+    visibility: public
+  - url: deals_metrics
+    visibility: public
+  - url: nxd_decisions
+    visibility: public
+  - url: nxd_decisions_metrics
+    visibility: public
+  ports:
+    duckdb:
+      config:
+        model_tables:
+          deals: deals
+          deals_metrics: deals_metrics
+          nxd_decisions: nxd_decisions
+          nxd_decisions_metrics: nxd_decisions_metrics
+        path: __NXD_STAGING_DATA__
+        schema: main
+      promises:
+        model:
+        - deals
+        - nxd_decisions
+        validation:
+        - computeService:
+            driver: nxd:local/python/compute:0.1.0
+          description: Every output row is a current (non-deleted) deal.
+          models:
+          - deals
+          name: current-deals-non-deleted
+          source: contracts/promises/current-deals-non-deleted.py
+        - computeService:
+            driver: nxd:local/python/compute:0.1.0
+          description: No output row, and no other stored surface of this product,
+            includes owner name or owner email.
+          models:
+          - deals
+          name: current-deals-no-owner-pii
+          source: contracts/promises/current-deals-no-owner-pii.py
+        - computeService:
+            driver: nxd:local/python/compute:0.1.0
+          description: No row or field in this output represents a priority or attention
+            ranking.
+          models:
+          - deals
+          name: current-deals-no-ranking
+          source: contracts/promises/current-deals-no-ranking.py
+      service: duckdb
+version: 0.0.1

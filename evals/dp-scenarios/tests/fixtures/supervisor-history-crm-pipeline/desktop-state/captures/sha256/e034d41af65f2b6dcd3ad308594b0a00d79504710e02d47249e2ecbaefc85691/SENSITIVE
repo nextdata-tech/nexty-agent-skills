@@ -1,0 +1,13 @@
+This closure holds live credential configuration in plaintext.
+
+File:  infra-profile.yaml
+Keys:  api-source.attributes -> credential_env (names the environment
+       variable the connector runtime reads for the live bearer token;
+       no live token value is stored in this file)
+Rotate: replace the `credential_env` value and rebuild the data product
+        if the deployment's token environment variable name changes.
+
+Do not commit or hand-zip this directory with credential configuration
+intact, or reuse it as a template for a different source without
+clearing it first. To share the product, use the supervisor's
+export_data_product tool, which strips credentials fail-closed.

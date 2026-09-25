@@ -1,0 +1,4 @@
+decision_id,status,provenance,ruling,applies_to,detail
+current-deal-definition,confirmed,user_confirmed,"Use the source status field to distinguish current (active) deals from deleted deals; current means the source reports the deal as active, not deleted.","deals.status, deals","Operator confirmed the status value 'deleted' marks a tombstoned record that must be excluded from the active output."
+owner-and-email-redaction,confirmed,user_confirmed,"Owner name and owner email are dropped at ingestion and never land in any stored surface of this product, raw or served.","deals","Operator instruction: keep owner and email details redacted."
+no-attention-ranking,confirmed,user_confirmed,"This product does not compute, land, or expose a priority or attention ranking of deals, because no ranking threshold was supplied.","deals","Operator instruction: do not rank records by attention because no threshold is provided."
