@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -23,6 +24,7 @@ from dp_scenarios.runner.session import (
     turn_result_from_dict,
     turn_result_to_dict,
 )
+import dp_scenarios.runner.session as session_module
 from dp_scenarios.operator.transport import InMemoryTransport, OperatorMessage
 from dp_scenarios.runner.checkpoint import CheckpointError, CheckpointStore
 
@@ -294,6 +296,69 @@ def test_native_resume_replays_prefix_locally_and_continues_the_provider_session
     assert resumed.send_message("fourth").agent_message == "four"
     assert provider.resumed == [session_id]
     assert provider.message_texts == ("third", "fourth")
+
+
+def test_native_resume_live_requests_keep_authoritative_operator_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_result = TurnResult(agent_message="one")
+    second_result = TurnResult(agent_message="two")
+    third_result = TurnResult(agent_message="three")
+    prefix = ReplayRecording(
+        (RecordedTurn(OperatorMessage("first"), first_result),)
+    )
+
+    class CapturingProcess:
+        def __init__(self) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO()
+            self.stderr = io.BytesIO()
+
+    process = CapturingProcess()
+    monkeypatch.setattr(
+        session_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    responses = [
+        json.dumps({"result": turn_result_to_dict(result)}).encode("utf-8") + b"\n"
+        for result in (second_result, third_result)
+    ]
+    live = LiveSession(
+        command=("unused-live-command",),
+        resume_command_builder=lambda session_id: ("resume", session_id),
+    )
+    live._read_stdout_line = lambda: responses.pop(0)  # type: ignore[method-assign]
+    native = NativeResumeSession(
+        prefix,
+        live,
+        session_id="00000000-0000-4000-8000-000000000001",
+    )
+    recorded = RecordingSession(native, initial_recording=prefix)
+
+    recorded.start_fresh_session()
+    assert recorded.send_message("first") is first_result
+    assert recorded.send_message("second").agent_message == "two"
+    assert recorded.send_message("third").agent_message == "three"
+
+    requests = [
+        json.loads(line)
+        for line in process.stdin.getvalue().decode("utf-8").splitlines()
+    ]
+    assert [request["turn"] for request in requests] == [2, 3]
+    assert [request["message"]["text"] for request in requests] == [
+        "second",
+        "third",
+    ]
+    saved = recorded.recording()
+    expected = ReplayRecording(
+        (
+            RecordedTurn(OperatorMessage("first"), first_result),
+            RecordedTurn(OperatorMessage("second"), second_result),
+            RecordedTurn(OperatorMessage("third"), third_result),
+        )
+    )
+    assert saved.to_dict() == expected.to_dict()
 
 
 def test_native_resume_rejects_a_prefix_message_mismatch_before_provider_use() -> None:

@@ -357,6 +357,20 @@ agent called, and the gate results. Start there when you want to know how a run
 actually went; `summary.txt` gives you the verdict and gate codes, and names the
 transcripts at the end.
 
+#### Runner-owned supervisor history
+
+Each live Claude epoch also writes these deterministic histories under its
+`artifacts/` directory. The existing `supervisor-facts.json` and
+`query-results.json` contracts remain unchanged.
+
+- `publication-history.json` — `dp-scenario-publication-history-v1`: session-attributed supervisor releases.
+- `run-records.json` — `dp-scenario-run-records-v1`: admissions, run status transitions, and operator-turn attribution.
+- `run-failures.json` — `dp-scenario-run-failures-v1`: bounded structured run, operation, and tool-result diagnostics.
+- `tool-calls.json` — `dp-scenario-tool-calls-v1`: allowlisted MCP call fields and endpoint-to-workflow mappings.
+- `query-history.json` — `dp-scenario-query-history-v1`: turn-attributed structured semantic-query results, capped at 64.
+- `supervisor-captures.json` — `dp-scenario-supervisor-captures-v1`: safe snapshot inventory; copied files live under `supervisor-captures/<digest>/`.
+- `definition-export.json` — `dp-scenario-definition-export-v1`: compiled manifest promises and inventory metadata for session runs.
+
 To run several selected scenario packages at once, repeat `--scenario` and set
 `--jobs`, for example:
 

@@ -1,0 +1,24 @@
+{
+  "provenance": "Sanitized supervisor replay for crm-pipeline and crm-pipeline-current-v2.",
+  "trimmed": [
+    "Retained only test-consumed workflow identities, run records, admission links, and definition metadata.",
+    "Removed agent prose, unused artifacts and tables, extra turns/results, and closure source bodies.",
+    "Capture paths and database dossier fields are minimized; credential-like material is omitted."
+  ],
+  "ids": {
+    "workflows": {
+      "crm-pipeline": {
+        "workflow_key": "wf-sha256-v1-d3fcb896676640e8597596f0aea71dcfbcb460aa2f48f5849c28ad79b1d65b2f",
+        "definition_id": "sha256-v1:99115ddd364977dd0d8657466089ab1aa68c538cf815409b9946f4fcacb5d886",
+        "admission_request_id": "run-crm-pipeline-1",
+        "run_id": "run-e96e6a40-43dd-4a8c-bd0a-d354cc3a86b9"
+      },
+      "crm-pipeline-current-v2": {
+        "workflow_key": "wf-sha256-v1-943cc11bafca4e4957a05bc0d114283d8436741928bb4cf4acd0fb1ff723909e",
+        "definition_id": "sha256-v1:679e37bfe62b916eaad74e33a3ffd954bcad7a8d367473def1e61010e693e6dd",
+        "admission_request_id": "crm-pipeline-current-v2-start-run-1",
+        "run_id": "run-03552f49-796b-4260-8dac-8cb911807137"
+      }
+    }
+  }
+}

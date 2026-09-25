@@ -1,0 +1,1268 @@
+{
+  "turns": [
+    {
+      "turn": 1,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__list_data_products",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__get_workflow_capabilities",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__prepare_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "prepare-crm-pipeline-1"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_prepare_recovery",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__prepare_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "prepare-crm-pipeline-2"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "consent-crm-pipeline-1",
+            "action": {
+              "type": "session_decision"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-1",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-1",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 4,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-1"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__prepare_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "prepare-crm-pipeline-3"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_prepare_recovery",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__prepare_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "prepare-crm-pipeline-4"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-2"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "consent-crm-pipeline-2",
+            "action": {
+              "type": "session_decision"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-2",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {
+              "requirements": [
+                {
+                  "id": "review",
+                  "status": "pending",
+                  "review_input": {
+                    "retained_capture_root": "/sanitized/captures/sha256/364357cc65421365af8ada2184af76420e5f065325e96c254bbef8fa3985fa84"
+                  }
+                }
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-2",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "validate-crm-pipeline-1",
+            "action": {
+              "type": "start_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "run-crm-pipeline-1",
+            "action": {
+              "type": "start_run"
+            }
+          },
+          "result": {
+            "content": {
+              "workflow": "crm-pipeline",
+              "admission": {
+                "run_id": "run-e96e6a40-43dd-4a8c-bd0a-d354cc3a86b9",
+                "artifact_id": "artifact-d6192e70-c4cf-4192-961e-8359c450dd93",
+                "status": "terminal"
+              }
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_run",
+          "arguments": {
+            "run_id": "run-e96e6a40-43dd-4a8c-bd0a-d354cc3a86b9"
+          },
+          "result": {
+            "content": {
+              "run": {
+                "run_id": "run-e96e6a40-43dd-4a8c-bd0a-d354cc3a86b9",
+                "workflow": "crm-pipeline",
+                "artifact_id": "artifact-d6192e70-c4cf-4192-961e-8359c450dd93",
+                "status": "Published",
+                "lifecycle": "terminal",
+                "outcome": ""
+              }
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__list_data_products",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__resume_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {
+              "workflow": "crm-pipeline",
+              "run_id": "run-e96e6a40-43dd-4a8c-bd0a-d354cc3a86b9",
+              "semantic_endpoint": "http://127.0.0.1:55892/mcp/"
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__list_data_product_resources",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {
+              "contents": [
+                {
+                  "uri": "nxd://data-products/crm-pipeline/releases/1/verified.json",
+                  "text": "{\"release\":{\"workflow\":\"crm-pipeline\",\"run_id\":\"run-e96e6a40-43dd-4a8c-bd0a-d354cc3a86b9\",\"artifact_id\":\"artifact-d6192e70-c4cf-4192-961e-8359c450dd93\",\"publish_seq\":1},\"evidence\":{\"model_tables\":[{\"dataset\":\"main\",\"table\":\"deals\",\"row_count\":5},{\"dataset\":\"main\",\"table\":\"nxd_decisions\",\"row_count\":3}]}}"
+                }
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__describe_models",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:55892/mcp/"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:55892/mcp/"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:55892/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "deal_id",
+                "stage",
+                "amount",
+                "updated_at",
+                "total_amount"
+              ],
+              "rows": [
+                [
+                  "DEAL-2001",
+                  "sample",
+                  0.0,
+                  "sample",
+                  0.0
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:55892/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "stage",
+                "deal_count",
+                "total_amount"
+              ],
+              "rows": [
+                [
+                  "sample",
+                  0,
+                  0.0
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:55892/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "decision_id",
+                "decision_status",
+                "decision_detail",
+                "decision_count"
+              ],
+              "rows": [
+                [
+                  "current-deal-definition",
+                  "sample",
+                  "sample",
+                  0
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-3"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_prepare_recovery",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-4"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "consent-crm-pipeline-3",
+            "action": {
+              "type": "session_decision"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-3",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-3",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-5"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_prepare_recovery",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-6"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "consent-crm-pipeline-4",
+            "action": {
+              "type": "session_decision"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-4",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-4",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 9,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-7"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-5",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-5",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 12,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-8"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_prepare_recovery",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-9"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "consent-crm-pipeline-5",
+            "action": {
+              "type": "session_decision"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-6",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-6",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 13,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__reset_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "reset-crm-pipeline-10"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "capture-crm-pipeline-7",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {
+              "requirements": [
+                {
+                  "id": "review",
+                  "status": "pending",
+                  "review_input": {
+                    "retained_capture_root": "/sanitized/captures/sha256/d311b62892792fe9d8f16ca167a23968f405a45c0ffe842a1272a12f50c4db02"
+                  }
+                }
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "review-crm-pipeline-7",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline",
+            "request_id": "validate-crm-pipeline-2",
+            "action": {
+              "type": "start_requirement"
+            }
+          },
+          "result": {
+            "content": {
+              "operation": {
+                "operation_id": "operation-7e17a569-9a4c-49ad-9cd1-2f191250c6ca",
+                "workflow": "crm-pipeline",
+                "request_id": "validate-crm-pipeline-2",
+                "status": "failed",
+                "binding": {
+                  "requirement_id": "validation"
+                },
+                "diagnostic": {
+                  "phase": "supervisor_preflight",
+                  "code": "validation/existing_workflow_unsupported",
+                  "recovery": "stop"
+                }
+              }
+            },
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 14,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__check_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__get_workflow_capabilities",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__prepare_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-prepare-1"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_prepare_recovery",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__prepare_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-prepare-2"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-consent-1",
+            "action": {
+              "type": "session_decision"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-capture-1",
+            "action": {
+              "type": "capture"
+            }
+          },
+          "result": {
+            "content": {
+              "requirements": [
+                {
+                  "id": "review",
+                  "status": "pending",
+                  "review_input": {
+                    "retained_capture_root": "/sanitized/captures/sha256/e034d41af65f2b6dcd3ad308594b0a00d79504710e02d47249e2ecbaefc85691"
+                  }
+                }
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-review-1",
+            "action": {
+              "type": "report_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-validation-1",
+            "action": {
+              "type": "start_requirement"
+            }
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__advance_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2",
+            "request_id": "crm-pipeline-current-v2-start-run-1",
+            "action": {
+              "type": "start_run"
+            }
+          },
+          "result": {
+            "content": {
+              "workflow": "crm-pipeline-current-v2",
+              "admission": {
+                "run_id": "run-03552f49-796b-4260-8dac-8cb911807137",
+                "artifact_id": "artifact-39fea2c1-5cbc-4c3d-91d7-533565ccd847",
+                "status": "terminal"
+              }
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__resume_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2"
+          },
+          "result": {
+            "content": {
+              "workflow": "crm-pipeline-current-v2",
+              "run_id": "run-03552f49-796b-4260-8dac-8cb911807137",
+              "semantic_endpoint": "http://127.0.0.1:60044/mcp/"
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__describe_models",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "stage",
+                "deal_count",
+                "total_amount"
+              ],
+              "rows": [
+                [
+                  "sample",
+                  0,
+                  "sample"
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "deal_id",
+                "stage",
+                "amount",
+                "updated_at",
+                "deal_count"
+              ],
+              "rows": [
+                [
+                  "DEAL-2001",
+                  "sample",
+                  "sample",
+                  "sample",
+                  0
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__list_data_product_resources",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {
+              "contents": [
+                {
+                  "uri": "nxd://data-products/crm-pipeline-current-v2/releases/1/verified.json",
+                  "text": "{\"release\":{\"workflow\":\"crm-pipeline-current-v2\",\"run_id\":\"run-03552f49-796b-4260-8dac-8cb911807137\",\"artifact_id\":\"artifact-39fea2c1-5cbc-4c3d-91d7-533565ccd847\",\"publish_seq\":1},\"evidence\":{\"model_tables\":[{\"dataset\":\"main\",\"table\":\"deals\",\"row_count\":5},{\"dataset\":\"main\",\"table\":\"nxd_decisions\",\"row_count\":4}]}}"
+                }
+              ]
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__read_data_product_resource",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "decision_id",
+                "decision_ruling",
+                "decision_detail",
+                "decision_count"
+              ],
+              "rows": [
+                [
+                  "current-deal-definition",
+                  "sample",
+                  "sample",
+                  0
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 17,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__resume_data_product",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2"
+          },
+          "result": {
+            "content": {
+              "workflow": "crm-pipeline-current-v2",
+              "run_id": "run-03552f49-796b-4260-8dac-8cb911807137",
+              "semantic_endpoint": "http://127.0.0.1:60044/mcp/"
+            },
+            "is_error": false
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__run_semantic_query",
+          "arguments": {
+            "endpoint": "http://127.0.0.1:60044/mcp/"
+          },
+          "result": {
+            "content": {
+              "columns": [
+                "deal_id",
+                "stage",
+                "amount",
+                "updated_at",
+                "deal_count"
+              ],
+              "rows": [
+                [
+                  "DEAL-2001",
+                  "sample",
+                  "sample",
+                  "sample",
+                  0
+                ]
+              ]
+            },
+            "is_error": false
+          }
+        }
+      ]
+    },
+    {
+      "turn": 22,
+      "tool_calls": [
+        {
+          "name": "mcp__nxd-desktop__inspect_workflow",
+          "arguments": {},
+          "result": {
+            "content": {},
+            "is_error": true
+          }
+        },
+        {
+          "name": "mcp__nxd-desktop__inspect_workflow",
+          "arguments": {
+            "workflow": "crm-pipeline-current-v2"
+          },
+          "result": {
+            "content": {},
+            "is_error": false
+          }
+        }
+      ]
+    }
+  ]
+}

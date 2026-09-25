@@ -1,0 +1,26 @@
+output:
+  ports:
+    duckdb:
+      promises:
+        model:
+          - deals
+          - nxd_decisions
+        validation:
+          - name: current-deals-non-deleted
+            description: "Every output row is a current (non-deleted) deal."
+            models: [deals]
+            source: contracts/promises/current-deals-non-deleted.py
+            computeService:
+              driver: nxd:local/python/compute:0.1.0
+          - name: current-deals-no-owner-pii
+            description: "No output row, and no other stored surface of this product, includes owner name or owner email."
+            models: [deals]
+            source: contracts/promises/current-deals-no-owner-pii.py
+            computeService:
+              driver: nxd:local/python/compute:0.1.0
+          - name: current-deals-no-ranking
+            description: "No row or field in this output represents a priority or attention ranking."
+            models: [deals]
+            source: contracts/promises/current-deals-no-ranking.py
+            computeService:
+              driver: nxd:local/python/compute:0.1.0

@@ -742,6 +742,18 @@ class NativeResumeSession:
             return self._replay.send_message(message)
         return self.transport.send_message(message)
 
+    def send_message_with_turn(
+        self, message: OperatorMessage | str, turn: int
+    ) -> TurnResult:
+        if not self._started:
+            raise SessionError("native resume session must be started before sending a turn")
+        if self._replay.remaining_turns:
+            return self._replay.send_message(message)
+        send_with_turn = getattr(self.transport, "send_message_with_turn", None)
+        if callable(send_with_turn):
+            return send_with_turn(message, turn)
+        return self.transport.send_message(message)
+
     send = send_message
 
     def close(self) -> None:
@@ -866,6 +878,23 @@ class LiveSession:
     resume = resume_session
 
     def send_message(self, message: OperatorMessage | str) -> TurnResult:
+        return self._send_message(message, operator_turn=None)
+
+    def send_message_with_turn(
+        self, message: OperatorMessage | str, turn: int
+    ) -> TurnResult:
+        """Send a live request with its authoritative operator turn number."""
+
+        if not isinstance(turn, int) or isinstance(turn, bool) or turn <= 0:
+            raise SessionError("live operator turn must be a positive integer")
+        return self._send_message(message, operator_turn=turn)
+
+    def _send_message(
+        self,
+        message: OperatorMessage | str,
+        *,
+        operator_turn: int | None,
+    ) -> TurnResult:
         if isinstance(message, str):
             message = OperatorMessage(message)
         if self.handler is not None:
@@ -880,6 +909,8 @@ class LiveSession:
                 self.start_fresh_session()
         assert self._process is not None and self._process.stdin is not None and self._process.stdout is not None
         request = {"type": "turn", "message": operator_message_to_dict(message)}
+        if operator_turn is not None:
+            request["turn"] = operator_turn
         self._process.stdin.write((json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
         self._process.stdin.flush()
         line = self._read_stdout_line()
@@ -1126,7 +1157,11 @@ class RecordingSession:
         # appending it a second time would shift the next checkpoint number
         # and make the resumed run appear to have an extra turn.
         prefix_replayed = bool(getattr(self.transport, "remaining_prefix_turns", 0))
-        result = self.transport.send_message(message)
+        send_with_turn = getattr(self.transport, "send_message_with_turn", None)
+        if not prefix_replayed and callable(send_with_turn):
+            result = send_with_turn(message, len(self.turns) + 1)
+        else:
+            result = self.transport.send_message(message)
         if not isinstance(result, TurnResult):
             raise SessionError("recorded transport returned no TurnResult")
         if self._workflow_observation_pending:

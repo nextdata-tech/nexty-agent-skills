@@ -69,6 +69,46 @@ SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
 TRUSTED_CREDENTIAL_ENVS_ENV = "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"
 
 
+def _supervisor_history_secret_values(repo_root: Path) -> tuple[str, ...]:
+    """Return current credential values for in-memory capture refusal only."""
+
+    from dp_scenarios.runner.checkpoint import _is_secret_key
+
+    variable_names = {SOURCE_CREDENTIAL_ENV}
+    stdio_module = sys.modules.get("dp_scenarios_desktop_stdio")
+    if stdio_module is None:
+        _load_desktop_stdio(repo_root)
+        stdio_module = sys.modules.get("dp_scenarios_desktop_stdio")
+    mapping_parser = getattr(stdio_module, "_safe_trusted_credential_mappings", None)
+    mappings = (
+        mapping_parser(
+            os.environ.get(TRUSTED_CREDENTIAL_ENVS_ENV, ""),
+            set(os.environ),
+        )
+        if callable(mapping_parser)
+        else []
+    )
+    variable_names.update(
+        variable
+        for mapping in mappings
+        for _, separator, variable in (mapping.partition("="),)
+        if separator and variable
+    )
+    variable_names.update(
+        name for name in os.environ if _is_secret_key(name)
+    )
+    return tuple(
+        sorted(
+            {
+                value
+                for name in variable_names
+                if isinstance((value := os.environ.get(name)), str)
+                and len(value) >= 8
+            }
+        )
+    )
+
+
 DEFAULT_SYSTEM_PROMPT = """You are the agent under test in a local DP-scenarios run.
 
 This block is harness mechanics only: where things are, which channels exist,
@@ -853,6 +893,14 @@ def _snapshot_workspace(workspace: Path, *, artifact_dir: Path) -> dict[str, byt
         "query-results.json",
         "supervisor-facts.json",
         "mcp-trace.jsonl",
+        "publication-history.json",
+        "run-records.json",
+        "run-failures.json",
+        "tool-calls.json",
+        "query-history.json",
+        "supervisor-captures.json",
+        "supervisor-captures",
+        "definition-export.json",
     }
     workspace = workspace.resolve()
     artifact_dir = artifact_dir.resolve()
@@ -1188,6 +1236,24 @@ def _write_json(path: Path, value: object) -> None:
     temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
     temporary.write_text(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _last_history_turn(artifact_dir: Path) -> int:
+    """Read only the persisted history counter needed before child startup."""
+
+    try:
+        value = json.loads((artifact_dir / "tool-calls.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return 0
+    if (
+        isinstance(value, Mapping)
+        and value.get("schema") == "dp-scenario-tool-calls-v1"
+        and isinstance(value.get("last_turn"), int)
+        and not isinstance(value.get("last_turn"), bool)
+        and value["last_turn"] >= 0
+    ):
+        return value["last_turn"]
+    return 0
 
 
 def _rows_as_mappings(payload: Mapping[str, object]) -> list[dict[str, object]] | None:
@@ -1703,6 +1769,11 @@ class ClaudeCodeAdapter:
         self._review_deadline_id: str | None = None
         self._review_deadline_at: float | None = None
         self._desktop_stdio_type, self._redact_json_rpc, self._redact_text = _load_desktop_stdio(repo_root)
+        # One adapter send corresponds to one operator turn. Load only the
+        # counter before child startup; the full history module and artifacts
+        # are loaded after the first completed turn.
+        self._history: Any | None = None
+        self._turn = _last_history_turn(self.artifact_dir)
 
     @property
     def last_mcp_call(self) -> str | None:
@@ -2277,6 +2348,31 @@ class ClaudeCodeAdapter:
                 workflow=workflow if isinstance(workflow, str) and workflow else None,
             )
         _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
+        history = getattr(self, "_history", None)
+        if history is None:
+            try:
+                from dp_scenarios.runner.supervisor_history import SupervisorHistory
+
+                history = SupervisorHistory(
+                    self.artifact_dir,
+                    secret_values=_supervisor_history_secret_values(self.repo_root),
+                )
+                self._history = history
+            except Exception:
+                history = None
+        if history is not None:
+            try:
+                history.observe_turn(
+                    turn=getattr(self, "_turn", 0),
+                    observations=observations,
+                    built_runs=self._built_runs,
+                    state_dir=self._state_dir,
+                )
+                history.write()
+            except Exception:
+                # History evidence must never turn an otherwise completed
+                # operator turn into an adapter failure.
+                pass
         self._record_review_guard_state()
         with contextlib.suppress(OSError):
             trace_path = getattr(self._stdio, "trace_path", None)
@@ -2367,6 +2463,36 @@ class ClaudeCodeAdapter:
     def send(self, request: Mapping[str, object]) -> TurnResult:
         """Forward one harness request and return one typed observation."""
 
+        supplied_turn = request.get("turn")
+        has_supplied_turn = (
+            isinstance(supplied_turn, int)
+            and not isinstance(supplied_turn, bool)
+            and supplied_turn > 0
+        )
+        if has_supplied_turn:
+            self._turn = supplied_turn
+        else:
+            self._turn += 1
+        if has_supplied_turn:
+            history = getattr(self, "_history", None)
+            if history is None and self._turn <= _last_history_turn(self.artifact_dir):
+                try:
+                    from dp_scenarios.runner.supervisor_history import SupervisorHistory
+
+                    history = SupervisorHistory(
+                        self.artifact_dir,
+                        secret_values=_supervisor_history_secret_values(self.repo_root),
+                    )
+                    self._history = history
+                except Exception:
+                    history = None
+            if history is not None:
+                try:
+                    if self._turn <= history.last_turn:
+                        history.discard_turns_from(self._turn)
+                except Exception:
+                    # History recovery must not block the live conversation.
+                    pass
         if self._process is None:
             self.start()
         assert self._process is not None and self._process.stdin is not None

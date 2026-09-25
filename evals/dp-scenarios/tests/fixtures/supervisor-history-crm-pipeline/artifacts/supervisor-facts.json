@@ -1,0 +1,10 @@
+{
+  "artifact_id": "artifact-39fea2c1-5cbc-4c3d-91d7-533565ccd847",
+  "lifecycle_state": "terminal",
+  "per_model_row_counts": {
+    "main.deals": "5",
+    "main.nxd_decisions": "4"
+  },
+  "publish_sequence": "1",
+  "run_id": "run-03552f49-796b-4260-8dac-8cb911807137"
+}
