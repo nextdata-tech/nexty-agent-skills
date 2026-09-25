@@ -78,8 +78,7 @@ def test_the_reference_names_every_required_answer_sheet_key() -> None:
         f"answer-sheet keys missing from the contributor reference: "
         f"{sorted(ANSWER_SHEET_KEYS - listed)}"
     )
-    # The two optional ones carry most of the substance, so they must be covered
-    # too -- just not presented as required.
+    # Optional keys must be documented without being presented as required.
     assert OPTIONAL_ANSWER_SHEET_KEYS <= _backticked(text)
 
 

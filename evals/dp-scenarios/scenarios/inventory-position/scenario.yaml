@@ -10,7 +10,7 @@ fixture:
 coverage:
   variant: inventory-warehouse-quality
   untested: This package grades profile-backed inventory evidence through a local mock source; it does not claim a live Postgres fixture session or a retained parent run for B10.
-turn_budget: 9
+turn_budget: 11
 repeatability:
   tier: mock-source
   epochs: 3
@@ -30,6 +30,8 @@ phase_map:
   7: 6
   8: 7
   9: 7
+  10: 7
+  11: 7
 required_plants:
   - inventory_position_orphans
 gates:

@@ -202,6 +202,40 @@ _NON_PROSE = re.compile(
     re.DOTALL,
 )
 
+_REQUEST_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n\s*\n+")
+_QUESTION_CLAUSE_END = re.compile(r"\?\s*[\"')\]]*$")
+
+
+def _operator_request_text(message: str) -> str:
+    """Return only question or explicit-ask clauses from an agent message.
+
+    A recap can repeat the complete wording of an earlier decision while the
+    sentence that actually asks the operator for approval names no such
+    decision. Decision routing for an approval ask must be based on the ask
+    clause, not the surrounding recap. Keep the answer-sheet's substring
+    matching unchanged; this helper only narrows the text it sees.
+    """
+
+    prose = _NON_PROSE.sub(" ", message)
+    clauses: list[str] = []
+    for clause in _REQUEST_CLAUSE_SPLIT.split(prose):
+        candidate = clause.strip()
+        if not candidate:
+            continue
+        is_question = bool(_QUESTION_CLAUSE_END.search(candidate))
+        is_explicit_ask = bool(SOLICITATION_PATTERN.search(candidate))
+        if is_question or is_explicit_ask:
+            clauses.append(candidate)
+    return " ".join(clauses)
+
+
+def _approval_request_rule(request_text: str) -> str | None:
+    """Return the approval rule present in an actual request clause."""
+
+    if APPROVAL_REQUEST_PATTERN.search(request_text):
+        return "approval.request"
+    return None
+
 
 # Vocabulary that makes an ask a *choice* whatever else it mentions. The rule
 # bank is first-match-wins with ``source.question`` first, and that rule fires
@@ -221,7 +255,8 @@ CHOICE_PATTERN = re.compile(
 # decisions that match this request clause still take precedence below.
 _REVIEW_FIX_REQUEST_PATTERN = re.compile(
     r"\b(?:(?:should|may|can|shall)\s+i|(?:do\s+you\s+)?want\s+me\s+to|"
-    r"would\s+you\s+like\s+me\s+to)\b(?P<request>[^?\n]{0,500}\?)",
+    r"would\s+you\s+like\s+me\s+to|which\s+(?:would|do)\s+you\s+like|"
+    r"pick\s+one\s*[:,-]?)\b(?P<request>[^?]{0,500}\?)",
     re.IGNORECASE | re.DOTALL,
 )
 _REVIEW_FIX_ACTION_PATTERN = re.compile(
@@ -230,6 +265,10 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
     r"wording|description|field)\b",
     re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_FIX_CHOICE_PATTERN = re.compile(
+    r"\b(?:which\s+(?:would|do)\s+you\s+like|pick\s+one)\b",
+    re.IGNORECASE,
 )
 _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
     r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:finding|findings|issue|issues|flagged|reported)\b"
@@ -428,15 +467,20 @@ class MatcherBank:
     def _classify(self, message: str) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         prose = _NON_PROSE.sub(" ", message)
+        request_text = _operator_request_text(message)
+        approval_rule = _approval_request_rule(request_text)
         review_fix = self.answer_sheet.decision_answers.get("review_fix_authorization")
         review_fix_request = None
         for candidate in _REVIEW_FIX_REQUEST_PATTERN.finditer(prose):
             clause = candidate.group("request")
-            context_start = max(0, candidate.start() - 800)
+            context_start = max(0, candidate.start() - 1400)
             context_end = min(len(prose), candidate.end() + 100)
             review_context = prose[context_start:context_end]
             if (
-                _REVIEW_FIX_ACTION_PATTERN.search(clause) is not None
+                (
+                    _REVIEW_FIX_ACTION_PATTERN.search(clause) is not None
+                    or _REVIEW_FIX_CHOICE_PATTERN.match(candidate.group(0)) is not None
+                )
                 and _REVIEW_FINDING_CONTEXT_PATTERN.search(review_context) is not None
             ):
                 review_fix_request = candidate
@@ -446,6 +490,14 @@ class MatcherBank:
             and review_fix_request is not None
             and solicits_operator(message)
         ):
+            if (
+                approval_rule is not None
+                and not all(
+                    term.casefold() in request_text.casefold()
+                    for term in review_fix.terms
+                )
+            ):
+                return MatchResult(Category.APPROVAL_REQUEST, approval_rule, "")
             # A decision named in the actual repair question is more specific
             # than this generic authorization. A decision appearing only in
             # the surrounding recap is not the question being asked.
@@ -477,6 +529,16 @@ class MatcherBank:
             and decision.decision_id != "review_fix_authorization"
             and solicits_operator(message)
         ):
+            if approval_rule is not None:
+                request_decision = self.answer_sheet.answer_for_decision(request_text)
+                if request_decision is not None:
+                    return MatchResult(
+                        Category.DECISION_REQUEST,
+                        f"decision.answer.{request_decision.decision_id}",
+                        request_decision.answer,
+                        decision_id=request_decision.decision_id,
+                    )
+                return MatchResult(Category.APPROVAL_REQUEST, approval_rule, "")
             return MatchResult(
                 Category.DECISION_REQUEST,
                 f"decision.answer.{decision.decision_id}",

@@ -1,0 +1,61 @@
+{
+  "schema": "operator-matcher-approval-cases-v1",
+  "cases": [
+    {
+      "source": "dp-b2-sonnet-run4 turn 1, shortened to recap and ask",
+      "scenario_id": "finance-close",
+      "message": "The blueprint recaps a weekend FX decision and its reversal. Do you approve this blueprint so I can proceed?",
+      "expected_rule_id": "persona.approval_request",
+      "expected_decision_id": null
+    },
+    {
+      "source": "direct weekend-rate decision question",
+      "scenario_id": "finance-close",
+      "message": "Should we use the weekend FX rate for the close?",
+      "expected_rule_id": "decision.answer.weekend_fx",
+      "expected_decision_id": "weekend_fx"
+    },
+    {
+      "source": "dp-b5-sonnet-run4 turn 3, review choice",
+      "scenario_id": "inventory-position",
+      "message": "The independent review found one blocking finding. Two ways to resolve it: pick one and I will make the fix. Which would you like, option 1 or option 2?",
+      "expected_rule_id": "decision.answer.review_fix_authorization",
+      "expected_decision_id": "review_fix_authorization"
+    },
+    {
+      "source": "choice phrasing without review findings",
+      "scenario_id": "inventory-position",
+      "message": "Which would you like, option 1 or option 2?",
+      "expected_rule_id": "unmatched.decision_request",
+      "expected_decision_id": null
+    },
+    {
+      "source": "dp-b1-pair3-before turn 18, completion recap and follow-up ask",
+      "scenario_id": "crm-pipeline",
+      "message": "The workflow is complete and meets the requirements you approved. If you want something adjusted, a new field or a different exclusion rule, let me know specifically what and I will treat it as a new instruction.",
+      "expected_rule_id": "decision.answer.workflow_revision",
+      "expected_decision_id": "workflow_revision"
+    },
+    {
+      "source": "dp-b3-sonnet-2200 turn 1, shortened to recap and approval ask",
+      "scenario_id": "marketing-attribution",
+      "message": "Fuzzy matching is rejected, and unmatched conversions stay visible. Do you approve this plan so I can generate the product?",
+      "expected_rule_id": "persona.approval_request",
+      "expected_decision_id": null
+    },
+    {
+      "source": "dp-b3-sonnet-2200 turn 2, shortened to recap and approval ask",
+      "scenario_id": "marketing-attribution",
+      "message": "The updated blueprint still rejects fuzzy matching and preserves unmatched conversions. Do you approve this updated blueprint?",
+      "expected_rule_id": "persona.approval_request",
+      "expected_decision_id": null
+    },
+    {
+      "source": "direct fuzzy-matching decision question",
+      "scenario_id": "marketing-attribution",
+      "message": "Should we allow fuzzy matching for Summer Sale?",
+      "expected_rule_id": "decision.answer.fuzzy_matching",
+      "expected_decision_id": "fuzzy_matching"
+    }
+  ]
+}

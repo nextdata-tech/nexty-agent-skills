@@ -32,21 +32,27 @@ ROOT = Path(__file__).parents[1]
 OBSTACLE = "reconnect"
 
 
-def _sheet(turns: list[object], *, obstacle_terms: list[str] | None = None) -> object:
-    return answer_sheet_from_mapping(
-        {
-            "version": 1,
-            "scenario_id": "script-turns",
-            "opening_message": "How is our pipeline moving?",
-            "turns": turns,
-            "source_answers": {"data": "Each record carries an amount."},
-            "decision_answers": {"choice": {"terms": ["option"], "answer": "Yes."}},
-            "status_answers": {"status": "The work is still in progress."},
-            "opening_forbidden_terms": ["driver", "mechanism"],
-            "open_decision_markers": ["[DECISION NEEDED]"],
-            "obstacle_terms": obstacle_terms or [],
-        }
-    )
+def _sheet(
+    turns: list[object],
+    *,
+    obstacle_terms: list[str] | None = None,
+    reapproval: object | None = None,
+) -> object:
+    value: dict[str, object] = {
+        "version": 1,
+        "scenario_id": "script-turns",
+        "opening_message": "How is our pipeline moving?",
+        "turns": turns,
+        "source_answers": {"data": "Each record carries an amount."},
+        "decision_answers": {"choice": {"terms": ["option"], "answer": "Yes."}},
+        "status_answers": {"status": "The work is still in progress."},
+        "opening_forbidden_terms": ["driver", "mechanism"],
+        "open_decision_markers": ["[DECISION NEEDED]"],
+        "obstacle_terms": obstacle_terms or [],
+    }
+    if reapproval is not None:
+        value["reapproval"] = reapproval
+    return answer_sheet_from_mapping(value)
 
 
 def test_a_mapping_turn_declares_the_substitution_switch() -> None:
@@ -138,6 +144,38 @@ def test_a_turn_may_declare_itself_the_operator_approval() -> None:
 def test_a_turn_that_declares_no_approval_is_not_an_approval() -> None:
     for turn in ("Please continue.", {"text": "Please continue.", "substitute_reply": False}):
         assert ScriptTurn.from_value(turn).approval is False
+
+
+def test_a_reapproval_answer_is_declared_with_a_positive_use_limit() -> None:
+    sheet = _sheet(
+        ["How is our pipeline moving?", "Please continue."],
+        reapproval={"answer": "Approved after the review.", "max_uses": 2},
+    )
+
+    assert sheet.reapproval.answer == "Approved after the review."  # type: ignore[attr-defined]
+    assert sheet.reapproval.max_uses == 2  # type: ignore[attr-defined]
+    assert sheet.to_mapping()["reapproval"] == {  # type: ignore[attr-defined]
+        "answer": "Approved after the review.",
+        "max_uses": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "reapproval",
+    [
+        {},
+        {"answer": "Approved."},
+        {"answer": "Approved.", "max_uses": 0},
+        {"answer": "Approved.", "max_uses": True},
+        {"answer": "Approved.", "max_uses": 1, "unexpected": "yes"},
+    ],
+)
+def test_malformed_reapproval_declarations_are_rejected(reapproval: object) -> None:
+    with pytest.raises(AnswerSheetError):
+        _sheet(
+            ["How is our pipeline moving?", "Please continue."],
+            reapproval=reapproval,
+        )
 
 
 def test_the_opening_check_reads_a_mapping_turns_text() -> None:

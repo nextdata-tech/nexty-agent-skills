@@ -92,8 +92,9 @@ KIND = register(
         handler=check,
         evidence_contract={
             "time_policy": (
-                "object with source_timezone='America/New_York', daily_boundary='source_local', "
-                "and utc_conversion='retain_utc_for_audit'"
+                "object with source_timezone='America/New_York', daily_boundary (string "
+                "reflecting the operator's decision), and utc_conversion (string "
+                "reflecting the operator's decision)"
             ),
             "daily_comparison": (
                 "object with exactly source_local_total and utc_total as two-decimal "
@@ -109,10 +110,11 @@ KIND = register(
                 "do not add other fields"
             ),
             "decision": (
-                "object with exactly id='c6-source-local-day', status proposed or "
-                "confirmed, and reporting_definition exactly "
-                "{day_boundary:'source_local', utc_role:'audit'}; do not add "
-                "other fields"
+                "object with exactly id (string), status (string), and "
+                "reporting_definition with exactly day_boundary (string) and "
+                "utc_role (string); use the ID and values supplied by the "
+                "operator when the decision is presented, and do not infer or "
+                "prepopulate a decision"
             ),
         },
         validate_settings=_validate_settings,

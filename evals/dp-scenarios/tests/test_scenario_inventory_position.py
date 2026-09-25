@@ -54,6 +54,14 @@ def test_b5_declares_fresh_consent_after_a_plan_reset() -> None:
 
     assert approvals == [3, 4]
     assert [SCENARIO.operator_script.phase_by_turn[turn] for turn in approvals] == [3, 3]
+    assert SCENARIO.operator_script.turn_budget == len(SCENARIO.operator_script.turns) == 11
+    assert SCENARIO.operator_script.phase_by_turn[10] == 7
+    assert SCENARIO.operator_script.phase_by_turn[11] == 7
+    assert "option 2" in SCENARIO.answer_sheet.decision_answers[
+        "review_fix_authorization"
+    ].answer.casefold()
+    assert SCENARIO.answer_sheet.reapproval is not None
+    assert SCENARIO.answer_sheet.reapproval.max_uses == 1
 
 
 def test_orphans_negative_stock_and_profile_boundary_pass() -> None:

@@ -4,7 +4,9 @@
   type: scope_creep
   content: >-
     Before you finish, compare the source-local and UTC day boundaries and
-    keep the original non-English category values queryable.
+    keep the original non-English category values queryable. Record the
+    reporting decision as c6-source-local-day: use the source-local day
+    boundary and retain UTC for audit.
   outcome: locale_timezone_boundary_requested
   plant: true
   required_terms:
