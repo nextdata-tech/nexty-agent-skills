@@ -53,12 +53,14 @@ EXPECTED_TIERS = {
     "application-reconciliation": "core",
     "locale-timezone": "core",
     "marketing-attribution": "full",
+    "headcount-attrition": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
 # query is required only where an `answer` gold row-set is declared, which the
 # tier decides from `has_scoreable_answer_gold`. Leaving it in the base set
-# made this table disagree with the tier for eight of the nine packages.
+# made this table disagree with the tier for packages whose gold is consumed
+# only by their scenario-specific follow-up.
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
     | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
@@ -476,6 +478,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "capability-shortfall")
     shutil.rmtree(root / "crm-pipeline")
     shutil.rmtree(root / "finance-close")
+    shutil.rmtree(root / "headcount-attrition")
     shutil.rmtree(root / "inventory-position")
     shutil.rmtree(root / "application-reconciliation")
     shutil.rmtree(root / "locale-timezone")

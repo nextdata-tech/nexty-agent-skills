@@ -1023,6 +1023,7 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
         "application-reconciliation",
         "locale-timezone",
         "marketing-attribution",
+        "headcount-attrition",
     }
     for name in with_conduct:
         assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"
@@ -1052,6 +1053,18 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
     assert "object with at least the required" in crm_contract["required_fields"]["surfaces"]
     assert "governed_output" in crm_contract["required_fields"]["surfaces"]
     assert "raw_internal" in crm_contract["required_fields"]["surfaces"]
+
+    headcount = next(
+        scenario
+        for scenario in load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
+        if scenario.id == "headcount-attrition"
+    )
+    headcount_contract = _evidence_contract(headcount)
+    assert headcount_contract is not None
+    assert "landed_schema" in headcount_contract["required_fields"]
+    assert "result_rows" in headcount_contract["required_fields"]
+    assert "decision_history" not in headcount_contract["required_fields"]
+    assert "raw_rows_refusal" not in headcount_contract["required_fields"]
 
 
 def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:

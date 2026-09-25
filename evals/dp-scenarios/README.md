@@ -176,6 +176,9 @@ the routine core suite:
 - **marketing-attribution** — B3's safe campaign-name matching, including
   case/whitespace normalization, one unique 50-character truncation, and a
   matched-conversions-only CPA policy, with a leak scan over an unrelated newsletter-contacts export.
+- **headcount-attrition** — B6's monthly workforce snapshot comparison, an
+  explicit low-count suppression decision, a raw-row refusal, and a PII sentinel
+  scan across landed files, artifacts, and query output.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -212,6 +215,7 @@ scenario.
 | [application-reconciliation](scenarios/application-reconciliation/README.md) | core | 10 | 391-to-353 count dispute with status/tombstone lineage |
 | [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
 | [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign matching, unmatched-CPA policy, and out-of-scope export sentinel scan |
+| [headcount-attrition](scenarios/headcount-attrition/README.md) | full | 13 | monthly headcount and attrition with PII exclusion and small-cell suppression |
 
 ## Running
 
