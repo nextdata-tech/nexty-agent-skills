@@ -10,7 +10,7 @@ fixture:
 coverage:
   variant: hostile-decimal-weekend-fx
   untested: This package grades deterministic close reconciliation and decision evidence through a local mock source; it does not claim a live finance system or authenticated agent run.
-turn_budget: 8
+turn_budget: 9
 repeatability:
   tier: deterministic
   epochs: 5
@@ -29,6 +29,7 @@ phase_map:
   6: 6
   7: 7
   8: 7
+  9: 7
 required_plants:
   - finance_close_reconciliation
 gates:
@@ -42,6 +43,7 @@ gates:
     kind: finance_close
     decision_id: b2-weekend-fx
     superseding_decision_id: b2-weekend-fx-reversal
+    pii_sentinel: sentinel-4c979bdd8ab8f86ed36ebf95a938b73d14c3b2447eaba218@invalid.example
     promise_fields:
       amount_parser: comma_and_parentheses
       missing_fx_policy: exclude_and_warn

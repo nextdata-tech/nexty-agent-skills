@@ -11,7 +11,10 @@ The source exposes inventory positions and a separate warehouse lookup. Two
 positions refer to warehouse identifiers that the lookup does not contain, and
 one position has negative stock. The agent must preserve those source values,
 attach regions where the lookup succeeds, and report the unmatched identifiers
-as row-level quality warnings.
+as row-level quality warnings. In diagnostics, `orphan_warehouse_ids` lists the
+distinct missing `warehouse_id` values, while `orphan_warehouse_count` counts
+position rows with a missing warehouse. Repeated positions for one missing
+warehouse therefore increase the count but appear once in the identifier list.
 
 Credentials are profile-only. The agent must use the configured profile
 reference, never request or print a raw secret, and never treat a missing lookup
@@ -52,8 +55,8 @@ routes:
 `gold/inventory_position_reconciliation.json` preserves all eight positions,
 using `valid`, `orphan_warehouse`, and `negative_stock` quality labels. The
 diagnostics gold expects eight input positions, three known warehouses, two
-orphan identifiers, one negative quantity, and the `warn_and_preserve` quality
-policy.
+orphan position rows, their distinct missing warehouse IDs, one negative
+quantity, and the `warn_and_preserve` quality policy.
 
 ## What is actually driven
 
@@ -101,7 +104,9 @@ the issue as data quality, not infrastructure failure.
 
 - Landed rows must match the independent reconciliation gold, including the
   two orphan rows and the negative quantity.
-- Diagnostics must match the independent counts and identifier lists.
+- Diagnostics must match the independent counts and identifier lists;
+  `orphan_warehouse_count` counts rows, while `orphan_warehouse_ids` contains
+  distinct missing warehouse IDs rather than position IDs.
 - Access must be `profile_reference_only`, with `raw_credentials_read: false`.
 - The diagnosis must be `data_quality_warning`, explicitly reject the
   infrastructure-failure interpretation, and use `warn_and_preserve` for

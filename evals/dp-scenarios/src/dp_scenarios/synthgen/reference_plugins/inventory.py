@@ -15,8 +15,9 @@ def _inventory_gold(data_dir: Path) -> ReferenceGold:
     positions = list(csv.DictReader((data_dir / "inventory_positions.csv").open(encoding="utf-8", newline="")))
     lookup = {row["warehouse_id"]: row for row in warehouses}
     output_rows: list[dict[str, Any]] = []
-    orphan_ids: list[str] = []
+    orphan_ids: set[str] = set()
     negative_ids: list[str] = []
+    orphan_position_count = 0
     for row in positions:
         warehouse_id = row["warehouse_id"]
         quantity = int(Decimal(row["quantity"]))
@@ -24,7 +25,8 @@ def _inventory_gold(data_dir: Path) -> ReferenceGold:
         quality = "valid"
         if warehouse is None:
             quality = "orphan_warehouse"
-            orphan_ids.append(warehouse_id)
+            orphan_ids.add(warehouse_id)
+            orphan_position_count += 1
         if quantity < 0:
             quality = "negative_stock" if quality == "valid" else "orphan_and_negative"
             negative_ids.append(row["position_id"])
@@ -41,7 +43,7 @@ def _inventory_gold(data_dir: Path) -> ReferenceGold:
     diagnostics = {
         "input_position_count": len(positions),
         "warehouse_count": len(warehouses),
-        "orphan_warehouse_count": len(orphan_ids),
+        "orphan_warehouse_count": orphan_position_count,
         "orphan_warehouse_ids": sorted(orphan_ids),
         "negative_quantity_count": len(negative_ids),
         "negative_position_ids": sorted(negative_ids),

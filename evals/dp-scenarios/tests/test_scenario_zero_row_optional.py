@@ -200,6 +200,20 @@ def test_turn_one_is_one_analyst_sentence_without_source_driver_or_mechanism_nou
 def test_optional_resource_is_reachable_from_plausible_follow_up_questions() -> None:
     bank = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
 
+    assert SCENARIO.answer_sheet.decision_answers["optional_output_problem"].terms == (
+        "problem",
+    )
+    assert SCENARIO.answer_sheet.decision_answers["optional_output_issue"].terms == (
+        "issue",
+    )
+    assert SCENARIO.answer_sheet.decision_answers["optional_output_exception"].terms == (
+        "exception",
+    )
+    incidental = SCENARIO.answer_sheet.answer_for_decision(
+        "The optional problem happened in January."
+    )
+    assert incidental == SCENARIO.answer_sheet.decision_answers["optional_output_problem"]
+
     primary = bank.reply_for("Which source did you use to work out how January went?")
     assert primary.category is Category.SOURCE_QUESTION
     assert primary.answer_key == "source"
@@ -219,6 +233,10 @@ def test_optional_resource_is_reachable_from_plausible_follow_up_questions() -> 
         assert optional.decision_id is not None
         assert optional.decision_id.startswith("optional_output")
         assert "placeholder" in optional.reply.casefold()
+
+    declarative = bank.reply_for("There were problems during January.")
+    assert declarative.decision_id is None
+    assert not declarative.solicits_operator
 
     unrelated = bank.reply_for("What was the January outcome?")
     assert unrelated.decision_id is None

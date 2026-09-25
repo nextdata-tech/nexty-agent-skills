@@ -122,6 +122,19 @@ def test_b1_declares_review_findings_adjudication_without_coaching_the_fix() -> 
         assert matcher.reply_for(message).rule_id != "decision.answer.review_fix_authorization"
 
 
+def test_non_soliciting_status_line_does_not_consume_review_fix_authorization() -> None:
+    message = "The build is ready to proceed; no review finding was reported and no fix is needed."
+    direct_match = SCENARIO.answer_sheet.answer_for_decision(message)
+    assert direct_match is not None
+    assert direct_match.decision_id == "review_fix_authorization"
+
+    result = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet).reply_for(message)
+
+    assert not result.solicits_operator
+    assert result.decision_id is None
+    assert result.rule_id != "decision.answer.review_fix_authorization"
+
+
 def test_b1_script_resolves_the_internal_status_projection_choice() -> None:
     """The operator explicitly selects the contract-preserving review fix."""
 
@@ -169,6 +182,13 @@ def test_b1_script_resolves_the_internal_status_projection_choice() -> None:
 def test_b1_authorizes_only_removal_of_an_unapproved_metrics_surface() -> None:
     answer = SCENARIO.answer_sheet.decision_answers["metrics_surface_removal"]
     assert answer.terms == ("metrics", "aggregate", "surface")
+    incidental_mention = SCENARIO.answer_sheet.answer_for_decision(
+        "The crm_pipeline_metrics aggregate surface is under review."
+    )
+    assert incidental_mention == answer
+    assert MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet).reply_for(
+        "The crm_pipeline_metrics aggregate surface is under review."
+    ).decision_id is None
     matcher = MatcherBank(SCENARIO.persona, SCENARIO.answer_sheet)
     result = matcher.reply_for(
         "The independent review found that crm_pipeline_metrics is an unapproved "
@@ -245,7 +265,7 @@ def test_b1_answers_amount_precision_as_an_explicit_data_contract() -> None:
         "The independent review found that non-integral source amounts are silently "
         "truncated. Please adjudicate this finding before further workflow actions.",
         "Blocking review finding: fractional deal amounts are converted with "
-        "int(amount), silently truncating values such as 125.75 to 125. Please "
+        "int(amount), silently truncated from values such as 125.75 to 125. Please "
         "adjudicate this finding.",
     ):
         result = matcher.reply_for(question)

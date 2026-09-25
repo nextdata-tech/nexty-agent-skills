@@ -214,6 +214,15 @@ CHOICE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A review's implementation findings can recap an earlier decision while the
+# direct question asks the operator to authorize a separate repair. Capture
+# that action question so an unrelated decision mentioned only in the recap
+# (for example the B2 reversal) cannot answer it. Other declared decisions
+# that match this request clause still take precedence below.
+_REVIEW_FIX_REQUEST_PATTERN = re.compile(
+    r"\bshould\s+i\b(?P<request>[^?]*\bapply\b[^?]*\bfix(?:es)?\b[^?]*)\?",
+    re.IGNORECASE | re.DOTALL,
+)
 
 def asks_for_a_choice(message: str) -> bool:
     """Whether the agent is putting a decision to the operator."""
@@ -405,9 +414,41 @@ class MatcherBank:
 
     def _classify(self, message: str) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
+        prose = _NON_PROSE.sub(" ", message)
+        lowered = message.casefold()
+        review_fix = self.answer_sheet.decision_answers.get("review_fix_authorization")
+        review_fix_request = _REVIEW_FIX_REQUEST_PATTERN.search(prose)
+        if (
+            review_fix is not None
+            and all(term.casefold() in lowered for term in review_fix.terms)
+            and review_fix_request is not None
+            and solicits_operator(message)
+        ):
+            # A decision named in the actual repair question is more specific
+            # than this generic authorization. A decision appearing only in
+            # the surrounding recap is not the question being asked.
+            request_text = review_fix_request.group("request").casefold()
+            for decision_id in sorted(self.answer_sheet.decision_answers):
+                if decision_id == "review_fix_authorization":
+                    continue
+                decision = self.answer_sheet.decision_answers[decision_id]
+                if all(term.casefold() in request_text for term in decision.terms):
+                    return MatchResult(
+                        Category.DECISION_REQUEST,
+                        f"decision.answer.{decision.decision_id}",
+                        decision.answer,
+                        decision_id=decision.decision_id,
+                    )
+            return MatchResult(
+                Category.DECISION_REQUEST,
+                "decision.answer.review_fix_authorization",
+                review_fix.answer,
+                decision_id="review_fix_authorization",
+                matched=True,
+            )
         decision = self.answer_sheet.answer_for_decision(message)
         # A decision answer is an operator response, not a keyword-triggered
-        # status line.  Require an actual solicitation so a report such as
+        # status line. Require an actual solicitation so a report such as
         # "no review finding was reported" cannot consume a later decision.
         if decision is not None and solicits_operator(message):
             return MatchResult(

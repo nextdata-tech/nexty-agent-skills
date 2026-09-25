@@ -43,7 +43,7 @@ gates:
     kind: inventory_position
     profile_mode: profile_reference_only
     true_classification: data_quality_warning
-    secret_marker: inventory-profile-secret-sentinel-28bd
+    pii_sentinel: inventory-profile-secret-sentinel-28bd
 # Graded by the follow-up kind, which reads this key by name and compares
 # these rows against the agent's evidence artifact. It is not query gold:
 # the query oracle wants a bare row list, and `_parse_gold` requires the
