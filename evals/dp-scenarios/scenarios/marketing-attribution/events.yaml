@@ -9,7 +9,7 @@
   id: marketing_attribution_unmatched_cpa
   trigger_turn: 4
   type: decision_reversal
-  content: "[DECISION NEEDED] Keep unmatched conversion rows visible, but use only safely matched campaign conversions in CPA denominators."
+  content: "[DECISION NEEDED] Record this decision as b3-unmatched-cpa-denominator: keep unmatched conversion rows visible, but use only safely matched campaign conversions in CPA denominators."
   outcome: matched_conversion_cpa_denominator_approved
   plant: true
   required_terms:

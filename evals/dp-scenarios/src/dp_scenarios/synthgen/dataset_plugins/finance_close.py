@@ -6,7 +6,7 @@ from decimal import Decimal
 import random
 from typing import Mapping
 
-from ..datasets import BASE_INSTANT, DatasetDefinition
+from ..datasets import BASE_INSTANT, DatasetDefinition, InjectorSpec
 from ..defects import Frame
 from ..registry import register_dataset
 
@@ -89,7 +89,11 @@ def _build_finance_close(seed: int, rng: random.Random) -> Mapping[str, Frame]:
             "notes": "small euro close",
         },
     ]
-    return {"close_entries": rows}
+    ap_vendor_contacts: Frame = [
+        {"vendor_id": "VENDOR-001", "contact_email": "ap-contact-001@example.invalid"},
+        {"vendor_id": "VENDOR-002", "contact_email": "ap-contact-002@example.invalid"},
+    ]
+    return {"close_entries": rows, "ap_vendor_contacts": ap_vendor_contacts}
 
 
 register_dataset(
@@ -106,9 +110,12 @@ register_dataset(
                 "fx_rate",
                 "status",
                 "notes",
-            )
+            ),
+            "ap_vendor_contacts": ("vendor_id", "contact_email"),
         },
-        injectors=(),
+        injectors=(
+            InjectorSpec("ap_vendor_contacts", "pii_sentinels", {"columns": ["contact_email"]}),
+        ),
         builder=_build_finance_close,
         description=(
             "Month-end close entries use comma-formatted and parenthesized amounts. "

@@ -1426,7 +1426,37 @@ def test_construction_rejects_a_status_only_review_round() -> None:
     )
 
     assert result.passed is False
-    assert "construction_adversarial_review_not_observed" in result.codes
+    assert "construction_review_round_invalid" in result.codes
+    assert "construction_adversarial_review_not_observed" not in result.codes
+    invalid = next(
+        finding
+        for finding in result.findings
+        if finding.code == "construction_review_round_invalid"
+    )
+    assert "round_index=0" in invalid.detail
+    assert "failed_rule=round fields must match the schema" in invalid.detail
+
+
+def test_construction_reports_the_nested_rule_for_an_invalid_review_round() -> None:
+    round_ = _review_round("needs_user")
+    round_["findings"][0]["classification"] = "invented"
+    result = gate_construction(
+        _ledger({"action_kind": "self_check", "claim": {"outcome": "pass"}}),
+        observations=_dispatch_observations(),
+        attestations=(_review_attestation(),),
+        review_rounds={"closure": [round_]},
+        published_closure=_published_build(),
+        require_observed=True,
+    )
+
+    assert result.passed is False
+    invalid = next(
+        finding
+        for finding in result.findings
+        if finding.code == "construction_review_round_invalid"
+    )
+    assert "round_index=0" in invalid.detail
+    assert "failed_rule=findings[0].classification" in invalid.detail
 
 
 def test_construction_does_not_exempt_the_reviewer_from_its_attestation() -> None:
@@ -1507,7 +1537,8 @@ def test_construction_needs_both_the_dispatch_and_the_recorded_round() -> None:
         require_observed=True,
     )
     assert skipped.passed is False
-    assert "construction_adversarial_review_not_observed" in skipped.codes
+    assert "construction_review_round_invalid" in skipped.codes
+    assert "construction_adversarial_review_not_observed" not in skipped.codes
 
 
 @pytest.mark.parametrize(
@@ -2169,7 +2200,8 @@ def test_construction_does_not_misdiagnose_self_check_when_review_ledger_is_inva
     )
 
     assert result.passed is False
-    assert "construction_adversarial_review_not_observed" in result.codes
+    assert "construction_review_round_invalid" in result.codes
+    assert "construction_adversarial_review_not_observed" not in result.codes
     assert "construction_self_check_not_observed" not in result.codes
 
 

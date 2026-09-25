@@ -113,7 +113,19 @@ def test_newsletter_export_answers_are_returned_only_when_asked() -> None:
     scenario = _scenario()
     assert scenario.turn_budget == 10
     assert len(scenario.operator_script.turns) == 10
+    redaction = scenario.answer_sheet.decision_answers["physical_redaction"]
+    assert redaction.terms == ("newsletter", "contacts")
+    assert scenario.answer_sheet.answer_for_decision(
+        "newsletter_contacts.csv"
+    ) == redaction
+    assert scenario.answer_sheet.answer_for_decision(
+        "The newsletter_contacts identifier is mentioned."
+    ) == redaction
     matcher = MatcherBank(scenario.persona, scenario.answer_sheet)
+    incidental_mention = matcher.reply_for(
+        "The newsletter_contacts identifier is mentioned."
+    )
+    assert incidental_mention.decision_id is None
     source_reply = matcher.reply_for("What is the newsletter column for?")
     assert source_reply.rule_id == "source.answer.newsletter"
     assert "not part of this attribution request" in source_reply.reply

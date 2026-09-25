@@ -58,6 +58,7 @@ from dp_scenarios.failure_reasons import (
     CHILD_EXITED_EARLY,
     CHILD_NO_TERMINAL_RESULT,
     INTERRUPTED_UNCLASSIFIED,
+    REVIEWER_DEADLINE_EXCEEDED,
     RUN_BUDGET_EXHAUSTED,
     classify_failure_reason,
     first_reason,
@@ -2261,10 +2262,14 @@ class ClaudeCodeAdapter:
             )
         else:
             message = f"Claude did not complete the turn within {self.timeout_s:.1f}s{suffix}"
-        return (
-            message,
-            classify_failure_reason(detail) or CHILD_NO_TERMINAL_RESULT,
-        )
+        reason = classify_failure_reason(detail)
+        if reason is None:
+            reason = (
+                REVIEWER_DEADLINE_EXCEEDED
+                if reviewer
+                else CHILD_NO_TERMINAL_RESULT
+            )
+        return message, reason
 
     def _early_exit_diagnostic(self, process: subprocess.Popen[bytes]) -> tuple[str, str]:
         """Classify EOF after reaping without confusing it with a deadline."""

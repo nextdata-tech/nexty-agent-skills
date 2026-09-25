@@ -2439,6 +2439,187 @@ def _valid_review_round(entry: object) -> bool:
     return True
 
 
+def _review_round_invalid_rule(entry: object) -> str | None:
+    """Describe the first structural rule that rejects a legacy review round.
+
+    Keep this diagnostic in the same validation order as ``_valid_review_round``
+    so a failed construction gate identifies the actual first failed invariant,
+    including nested finding and adjudication defects.
+    """
+
+    if not isinstance(entry, Mapping):
+        return "round must be an object"
+    required = {
+        "status",
+        "started_at_unix_ms",
+        "ended_at_unix_ms",
+        "budget_ms",
+        "findings",
+        "adjudications",
+        "user_decision",
+        "deferred_finding_ids",
+    }
+    missing = sorted(required - set(entry))
+    extra = sorted(set(entry) - required)
+    if missing or extra:
+        return f"round fields must match the schema (missing={missing}, extra={extra})"
+    status = entry.get("status")
+    if not isinstance(status, str) or status not in _REVIEW_ROUND_STATUS:
+        return "status must be a declared review-round status"
+    started = entry.get("started_at_unix_ms")
+    ended = entry.get("ended_at_unix_ms")
+    budget = entry.get("budget_ms")
+    if not (_is_int(started) and _is_int(ended) and _is_int(budget) and budget > 0):
+        return "start, end, and positive budget must be integer timestamps"
+    assert isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int)
+    elapsed = ended - started
+    if elapsed < 0:
+        return "end timestamp must not precede start timestamp"
+    if status == "timed_out" and elapsed < budget:
+        return "timed_out rounds must consume at least the declared budget"
+    if status in {"complete", "needs_user"} and elapsed > budget:
+        return "complete and needs_user rounds must finish within the declared budget"
+    findings = entry.get("findings")
+    adjudications = entry.get("adjudications")
+    if not isinstance(findings, list):
+        return "findings must be an array"
+    if not isinstance(adjudications, list):
+        return "adjudications must be an array"
+    finding_fields = {
+        "id",
+        "claim",
+        "evidence",
+        "classification",
+        "proposed_effect",
+        "applied_files",
+        "state",
+    }
+    finding_ids: set[str] = set()
+    states_by_id: dict[str, object] = {}
+    classifications_by_id: dict[str, object] = {}
+    for index, finding in enumerate(findings):
+        location = f"findings[{index}]"
+        if not isinstance(finding, Mapping) or set(finding) != finding_fields:
+            return f"{location} must match the finding schema"
+        finding_id = finding.get("id")
+        if not isinstance(finding_id, str) or not finding_id:
+            return f"{location}.id must be a non-empty string"
+        if finding_id in finding_ids:
+            return f"{location}.id must be unique"
+        if not isinstance(finding.get("claim"), str) or not finding["claim"]:
+            return f"{location}.claim must be a non-empty string"
+        evidence = finding.get("evidence")
+        if not isinstance(evidence, list) or not evidence or any(
+            not isinstance(citation, str) or not citation for citation in evidence
+        ):
+            return f"{location}.evidence must contain non-empty citations"
+        classification = finding.get("classification")
+        if not isinstance(classification, str) or classification not in _REVIEW_CLASSIFICATIONS:
+            return f"{location}.classification must be a declared classification"
+        if not isinstance(finding.get("proposed_effect"), str) or not finding["proposed_effect"]:
+            return f"{location}.proposed_effect must be a non-empty string"
+        applied_files = finding.get("applied_files")
+        if not isinstance(applied_files, list) or any(
+            not isinstance(path, str) or not path for path in applied_files
+        ):
+            return f"{location}.applied_files must contain non-empty paths"
+        state = finding.get("state")
+        if not isinstance(state, str) or state not in _REVIEW_FINDING_STATES:
+            return f"{location}.state must be a declared finding state"
+        if (state == "applied") != bool(applied_files):
+            return f"{location}.state and applied_files must agree"
+        finding_ids.add(finding_id)
+        states_by_id[finding_id] = state
+        classifications_by_id[finding_id] = classification
+
+    adjudication_fields = {"finding_id", "disposition", "citation"}
+    adjudicated_ids: set[str] = set()
+    dispositions_by_id: dict[str, object] = {}
+    for index, adjudication in enumerate(adjudications):
+        location = f"adjudications[{index}]"
+        if not isinstance(adjudication, Mapping) or set(adjudication) != adjudication_fields:
+            return f"{location} must match the adjudication schema"
+        finding_id = adjudication.get("finding_id")
+        if not isinstance(finding_id, str) or not finding_id:
+            return f"{location}.finding_id must be a non-empty string"
+        if finding_id in adjudicated_ids:
+            return f"{location}.finding_id must be unique"
+        disposition = adjudication.get("disposition")
+        if not isinstance(disposition, str) or disposition not in _REVIEW_DISPOSITIONS:
+            return f"{location}.disposition must be a declared disposition"
+        citation = adjudication.get("citation")
+        if citation is not None and (not isinstance(citation, str) or not citation):
+            return f"{location}.citation must be null or a non-empty string"
+        if disposition == "rejected" and not citation:
+            return f"{location}.citation is required for rejected findings"
+        adjudicated_ids.add(finding_id)
+        dispositions_by_id[finding_id] = disposition
+    if finding_ids != adjudicated_ids:
+        return "finding IDs and adjudication finding IDs must match"
+
+    user_decision = entry.get("user_decision")
+    approved_ids: set[str] = set()
+    if user_decision is not None:
+        if not isinstance(user_decision, Mapping) or set(user_decision) != {
+            "approved_at_unix_ms",
+            "citation",
+            "approved_finding_ids",
+        }:
+            return "user_decision must match its schema"
+        approved = user_decision.get("approved_finding_ids")
+        if not _is_int(user_decision.get("approved_at_unix_ms")):
+            return "user_decision.approved_at_unix_ms must be an integer"
+        if not isinstance(user_decision.get("citation"), str) or not user_decision["citation"]:
+            return "user_decision.citation must be a non-empty string"
+        if not isinstance(approved, list) or any(
+            not isinstance(finding_id, str) or not finding_id for finding_id in approved
+        ):
+            return "user_decision.approved_finding_ids must contain non-empty IDs"
+        if len(approved) != len(set(approved)) or not set(approved).issubset(finding_ids):
+            return "user_decision.approved_finding_ids must be unique known findings"
+        approved_ids = set(approved)
+
+    deferred = entry.get("deferred_finding_ids")
+    if not isinstance(deferred, list) or any(
+        not isinstance(finding_id, str) or not finding_id for finding_id in deferred
+    ):
+        return "deferred_finding_ids must contain non-empty IDs"
+    deferred_ids = set(deferred)
+    if len(deferred) != len(deferred_ids) or not deferred_ids.issubset(finding_ids):
+        return "deferred_finding_ids must be unique known findings"
+    if deferred_ids and user_decision is None:
+        return "deferred findings require a user_decision"
+
+    needs_user_ids = {key for key, value in states_by_id.items() if value == "needs_user"}
+    if status != "needs_user" and needs_user_ids:
+        return "needs_user findings require status needs_user"
+    if status == "needs_user" and user_decision is None and not needs_user_ids:
+        return "status needs_user requires a needs_user finding or user_decision"
+    applied_behavior_ids = {
+        finding_id
+        for finding_id, state in states_by_id.items()
+        if state == "applied"
+        and classifications_by_id.get(finding_id) == "behavior_affecting"
+    }
+    accepted_behavior_ids = {
+        finding_id
+        for finding_id in finding_ids
+        if dispositions_by_id.get(finding_id) == "accepted"
+        and classifications_by_id.get(finding_id) == "behavior_affecting"
+    }
+    if not deferred_ids.issubset(accepted_behavior_ids):
+        return "deferred findings must be accepted behavior-affecting findings"
+    if any(states_by_id.get(finding_id) == "applied" for finding_id in deferred_ids):
+        return "deferred findings must not be applied"
+    if not applied_behavior_ids.issubset(approved_ids):
+        return "applied behavior-affecting findings require user approval"
+    if user_decision is not None and accepted_behavior_ids != (
+        applied_behavior_ids | deferred_ids
+    ):
+        return "accepted behavior-affecting findings must be applied or deferred"
+    return None
+
+
 def _valid_workflow_review_round(entry: object) -> bool:
     """Validate the supervisor's workflow-v2 conversation review record."""
 
@@ -2723,6 +2904,7 @@ def gate_construction(
     review_observed = False
     unresolved = False
     final_dispatch: EventPosition | None = None
+    invalid_review_rounds: list[tuple[int, str]] = []
 
     if build is None:
         findings: list[Finding] = []
@@ -2759,6 +2941,13 @@ def gate_construction(
 
     if build is not None:
         rounds = _closure_review_rounds(review_rounds, build.closure_path)
+        if rounds is not None:
+            invalid_review_rounds = [
+                (index, _review_round_invalid_rule(round_))
+                for index, round_ in enumerate(rounds)
+                if not _valid_review_round(round_)
+                and not _valid_workflow_review_round(round_)
+            ]
         all_closure_dispatches = tuple(
             dispatch
             for dispatch in dispatches
@@ -2884,12 +3073,21 @@ def gate_construction(
             )
         )
     elif not review_observed:
-        findings.append(
-            Finding(
-                "construction_adversarial_review_not_observed",
-                "review dispatches, rounds, and indexed attestations did not pair one-to-one",
+        if invalid_review_rounds:
+            findings.extend(
+                Finding(
+                    "construction_review_round_invalid",
+                    f"round_index={index}; failed_rule={rule}",
+                )
+                for index, rule in invalid_review_rounds
             )
-        )
+        else:
+            findings.append(
+                Finding(
+                    "construction_adversarial_review_not_observed",
+                    "review dispatches, rounds, and indexed attestations did not pair one-to-one",
+                )
+            )
     if not review_attestations:
         findings.append(
             Finding(

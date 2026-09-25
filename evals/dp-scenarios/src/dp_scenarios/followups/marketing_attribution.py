@@ -129,11 +129,13 @@ KIND = register(
             ),
             "promise": (
                 "casefold_whitespace='approved', unique_50_character_truncation='approved', "
-                "fuzzy_matching='rejected', and unmatched_cpa_denominator='matched_conversions_only'"
+                "fuzzy_matching='rejected', and unmatched_cpa_denominator as a string "
+                "reflecting the operator's decision"
             ),
             "decision_history": (
-                "array containing {id: 'b3-unmatched-cpa-denominator', "
-                "decision: 'matched_conversions_only'}"
+                "array of objects recording only decisions the operator actually "
+                "made; use IDs and decision values exactly as the operator "
+                "provides them when each decision is presented"
             ),
         },
         validate_settings=_validate_settings,

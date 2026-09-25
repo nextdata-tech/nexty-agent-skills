@@ -140,16 +140,18 @@ KIND = register(
             ),
             "governed_query": (
                 "object with exactly grain='reconciliation_metric', filters "
-                "including 'status = active' and 'tombstoned = false', and a "
+                "reflecting the operator-approved population definition, and a "
                 "metrics object with exactly the integer keys "
                 "export_applications, dashboard_active_applications, "
                 "difference, status_filter_exclusions, and "
                 "tombstone_exclusions"
             ),
             "decision": (
-                "object with exactly id='c2-active-count-reconciliation', status "
-                "proposed or confirmed, and population_definition exactly "
-                "{status:'active', tombstoned:'false'}; do not add other fields"
+                "object with exactly id (string), status (string), and "
+                "population_definition with exactly status (string) and "
+                "tombstoned (string); use the ID and values supplied by the "
+                "operator when the decision is presented, and do not infer or "
+                "prepopulate a decision"
             ),
         },
         validate_settings=_validate_settings,

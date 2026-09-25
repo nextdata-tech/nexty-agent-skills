@@ -146,6 +146,9 @@ REVIEW_CHILD_TOOLS = frozenset({"read", "glob", "grep", "skill"})
 # adapter's read grant cannot silently drift apart.
 RETAINED_REVIEW_ROOT_NAMES = ("captures", "blueprints")
 DESKTOP_ADVANCE = "mcp__nxd-desktop__advance_workflow"
+REVIEW_RECOVERY_TOOLS = frozenset(
+    {"toolsearch", "mcp__nxd-desktop__inspect_workflow"}
+)
 REVIEW_SKILL_NAMES = frozenset(
     {"nxd-review-closure", "nexty-agent-skills:nxd-review-closure"}
 )
@@ -206,6 +209,7 @@ def settings_payload(
         "hooks": {
             "PreToolUse": [{"matcher": "*", "hooks": [hook]}],
             "PostToolUse": [{"matcher": "*", "hooks": [hook]}],
+            "PostToolUseFailure": [{"matcher": "*", "hooks": [hook]}],
             "Stop": [{"matcher": "*", "hooks": [hook]}],
         }
     }
@@ -398,6 +402,15 @@ def _result_value(event: dict[str, object]) -> object:
 def _result_is_error(event: dict[str, object]) -> bool:
     value = _result_value(event)
     return any(isinstance(item, dict) and item.get("is_error") is True for item in _walk(value))
+
+
+def _direct_tool_result_is_error(event: dict[str, object]) -> bool:
+    """Check the Agent call envelope without interpreting nested child output."""
+
+    if event.get("is_error") is True:
+        return True
+    value = _result_value(event)
+    return isinstance(value, dict) and value.get("is_error") is True
 
 
 def _claim_text(value: object) -> list[str]:
@@ -751,6 +764,44 @@ def _report_matches(tool_input: dict[str, object], state: dict[str, object], eve
     return False
 
 
+def _relay_denial_message(
+    tool_input: dict[str, object], state: dict[str, object]
+) -> str:
+    """Explain the exact captured binding required for the pending report."""
+
+    prefix = (
+        "The tool input was not valid JSON. "
+        if "__unparsedToolInput" in tool_input
+        else ""
+    )
+
+    def captured(field: str, fallback: str) -> str:
+        value = state.get(field)
+        return json.dumps(value, ensure_ascii=True) if value is not None else fallback
+
+    return (
+        prefix
+        + "Review relay rejected. Call `mcp__nxd-desktop__advance_workflow` with "
+        + "a JSON object shaped like: "
+        + "{\"workflow\": "
+        + captured("workflow", "<captured workflow>")
+        + ", \"expected_revision\": "
+        + captured("revision", "<captured revision>")
+        + ", \"action\": {\"type\": \"report_requirement\", \"parameters\": "
+        + "{\"requirement_id\": \"review\", \"generation\": "
+        + captured("generation", "<captured generation>")
+        + ", \"subject_sha256\": "
+        + captured("subject_sha256", "<captured subject hash>")
+        + ", \"dependency_evidence_sha256\": "
+        + captured(
+            "dependency_evidence_sha256", "<captured dependency evidence hash>"
+        )
+        + ", \"session_ref\": \"<reviewer session_ref>\", \"report\": "
+        + "<bounded reviewer report object>}}}. Copy the session_ref and report "
+        + "from the reviewer output; do not include other review material."
+    )
+
+
 def _workspace_root(state: dict[str, object]) -> Path:
     value = state.get("workspace_root")
     if not isinstance(value, str) or not Path(value).is_absolute():
@@ -1035,6 +1086,8 @@ def _owner_pre(
             "The owning conversation may not use shell access to inspect or modify supervisor-retained captures or blueprints."
         )
     if state["state"] == REVIEW_DISPATCH_PENDING:
+        if tool in REVIEW_RECOVERY_TOOLS:
+            return _allow()
         if tool not in {"agent", "task"}:
             return _deny(
                 "A captured review is pending: dispatch exactly one general-purpose reviewer with the canonical NXD_REVIEW_DISPATCH marker."
@@ -1072,6 +1125,11 @@ def _owner_pre(
                 "Reviewer dispatch rejected: the fresh supervisor-retained capture or blueprint is unavailable; do not use a fallback path."
             )
         tool_input = _event_tool_input(event)
+        if "isolation" in tool_input and tool_input.get("isolation") not in (None, "none"):
+            return _deny(
+                "Reviewer dispatch rejected: dispatch the reviewer without isolation "
+                "(omit isolation or set it to none)."
+            )
         subagent_type = _string(tool_input.get("subagent_type"))
         if subagent_type not in REVIEW_ALLOWED_SUBAGENT_TYPES:
             return _deny("The retained-capture reviewer must be a single general-purpose conversation child.")
@@ -1106,6 +1164,8 @@ def _owner_pre(
         # synchronous child into an empty tool result.
         return _allow()
     if state["state"] == RELAY_PENDING:
+        if tool in REVIEW_RECOVERY_TOOLS:
+            return _allow()
         # Reading the two ledger files back is part of recording the round:
         # Claude's Edit refuses an unread file, so denying Read here pushed a
         # live agent into a blind Write that replaced the whole ledger.
@@ -1117,7 +1177,7 @@ def _owner_pre(
         if tool == DESKTOP_ADVANCE.casefold():
             tool_input = _event_tool_input(event)
             if not _report_parameters(tool_input):
-                return _deny("Review relay permits only the captured report_requirement workflow action.")
+                return _deny(_relay_denial_message(tool_input, state))
             if not _report_matches(tool_input, state, {"tool_result": {}}):
                 # The response is checked in PostToolUse. PreToolUse still
                 # validates all caller-controlled binding fields.
@@ -1132,11 +1192,16 @@ def _owner_pre(
                     or not _string(parameters.get("session_ref"))
                     or not isinstance(parameters.get("report"), dict)
                 ):
-                    return _deny("Review report binding does not match the supervisor-captured requirement.")
+                    return _deny(_relay_denial_message(tool_input, state))
             state["state"] = REPORT_IN_FLIGHT
             state["report_tool_use_id"] = _event_id(event, "tool_use_id", "toolUseId")
             return _allow()
-        return _deny("After the reviewer returns, relay its bounded report; only review-record.json and agent-attestations.json may be read or edited until then. Do not inspect, review, reset, or launch another tool.")
+        return _deny(
+            "After the reviewer returns, relay its bounded report. ToolSearch and "
+            "inspect_workflow are read-only recovery tools; only review-record.json "
+            "and agent-attestations.json may be read or edited before the report. "
+            "Do not load skills, read reviewer inputs, reset workflow, or launch another tool."
+        )
     if state["state"] == REPORT_IN_FLIGHT:
         return _deny("The review report is in flight; wait for the supervisor response before taking another action.")
     return _allow()
@@ -1153,7 +1218,7 @@ def _handle(
     tool = _event_tool_name(event)
     child = _is_child(event, state)
 
-    if event_name == "posttooluse":
+    if event_name in {"posttooluse", "posttoolusefailure"}:
         # The parent Agent/Task result can carry the child agent_id on some
         # Claude versions.  Match its tool-use id before applying the child
         # exemption, otherwise the owner would remain stuck in dispatching.
@@ -1162,6 +1227,18 @@ def _handle(
             and tool in {"agent", "task"}
             and _event_id(event, "tool_use_id", "toolUseId") == state.get("review_tool_use_id")
         ):
+            if event_name == "posttoolusefailure" or _direct_tool_result_is_error(event):
+                # A failed Agent call did not start the retained-capture
+                # reviewer. Release the one-dispatch claim so the owner can
+                # retry with the same capture and budget; the adapter also
+                # disarms its deadline when it observes the cleared id.
+                for key in (
+                    "review_tool_use_id",
+                    "review_round_index",
+                    "review_started_at",
+                ):
+                    state.pop(key, None)
+                return _allow()
             if _nonempty_result(event):
                 state["state"] = RELAY_PENDING
             return _allow()

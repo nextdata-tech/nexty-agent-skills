@@ -34,7 +34,9 @@ PRE_SOURCE_FIXTURE_HASHES = {
     "capability-shortfall": "7c329774d54bba0551e23a88f6a1439da2f569e91026db674a01ecc1d5432c0a",
     "credential-rotation": "7c329774d54bba0551e23a88f6a1439da2f569e91026db674a01ecc1d5432c0a",
     "crm-pipeline": "6b03043c69f1303fff27af451d518590d1d376a511802963c99c87eedf8d7c5c",
-    "finance-close": "81173495792c13c82b62220345513eaaad8f8d795ff33603d2d87657d49803d0",
+    # B2 deliberately plants an out-of-scope AP vendor contacts export carrying
+    # the declared PII sentinel, so the hard sentinel gate has something to catch.
+    "finance-close": "2a5bdb92c9477572e72f9b9a4cb5e18edeaf493e6ab23ccc090419beea21206e",
     "inventory-position": "7543585008de404b91072cb6cb937ac2543a1c9183c657004f8b45c07bc9eff4",
     "locale-timezone": "9d5e4eb52f2fe6ff0a857915e93fa0568106293925287c5ed35027ef0b1ab709",
     "marketing-attribution": "814423d1b10aafb06122686fe77198981c32eac3ba2cd3d86789068e44bbf58a",

@@ -68,11 +68,13 @@ _SOURCE_SERVICE_NAME = "api-source"
 _SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
 _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
 _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
+# `inspect_workflow` stays available while review is pending: it is a bounded,
+# read-only supervisor inspection. Keep state-changing and unrelated workflow
+# operations blocked until the captured report is relayed.
 _REVIEW_PENDING_BLOCKED_OPERATIONS = frozenset(
     {
         "reset_workflow",
         "list_data_products",
-        "inspect_workflow",
         "check_data_product",
         "prepare_workflow",
         "get_workflow_capabilities",

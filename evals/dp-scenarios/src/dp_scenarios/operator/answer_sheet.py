@@ -41,7 +41,9 @@ ANSWER_SHEET_KEYS = frozenset(
 # brief and must keep validating and matching exactly as before.  Only a
 # package that declares one opts into brief-backed answers for otherwise
 # unmatched questions (see MatcherBank._unmatched).
-OPTIONAL_ANSWER_SHEET_KEYS = frozenset({"driver_forbidden_terms", "ground_truth", "gap_stance"})
+OPTIONAL_ANSWER_SHEET_KEYS = frozenset(
+    {"driver_forbidden_terms", "ground_truth", "gap_stance", "reapproval"}
+)
 
 #: What it *means* in this drill that the operator cannot answer something.
 #: The scenario axis of the operator's behaviour: the persona supplies the
@@ -166,6 +168,17 @@ class DecisionAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class ReapprovalAnswer:
+    """A bounded, declared approval for a reviewed plan revision."""
+
+    answer: str
+    max_uses: int
+
+    def to_mapping(self) -> dict[str, object]:
+        return {"answer": self.answer, "max_uses": self.max_uses}
+
+
+@dataclass(frozen=True, slots=True)
 class GroundTruthFact:
     """One fact the operator actually knows and may state when asked.
 
@@ -207,6 +220,8 @@ class AnswerSheet:
     ground_truth: Mapping[str, GroundTruthFact] = field(default_factory=lambda: MappingProxyType({}))
     gap_stance: str = DEFAULT_GAP_STANCE
     """What an unanswerable question means here; see :data:`GAP_STANCES`."""
+    reapproval: ReapprovalAnswer | None = None
+    """Optional bounded approval for a revised plan after an authorized review fix."""
 
     @property
     def turn_one(self) -> str:
@@ -309,6 +324,8 @@ class AnswerSheet:
             mapping["driver_forbidden_terms"] = list(self.driver_forbidden_terms)
         if self.gap_stance != DEFAULT_GAP_STANCE:
             mapping["gap_stance"] = self.gap_stance
+        if self.reapproval is not None:
+            mapping["reapproval"] = self.reapproval.to_mapping()
         return mapping
 
 
@@ -358,6 +375,21 @@ def _ground_truth_mapping(value: object) -> dict[str, GroundTruthFact]:
     return result
 
 
+def _reapproval_mapping(value: object) -> ReapprovalAnswer:
+    raw = _mapping(value, "answer_sheet.reapproval")
+    _unknown(raw, {"answer", "max_uses"}, "answer_sheet.reapproval")
+    if set(raw) != {"answer", "max_uses"}:
+        raise AnswerSheetError(
+            "answer_sheet.reapproval requires exactly answer and max_uses"
+        )
+    max_uses = raw["max_uses"]
+    if isinstance(max_uses, bool) or not isinstance(max_uses, int) or max_uses < 1:
+        raise AnswerSheetError("answer_sheet.reapproval.max_uses must be a positive integer")
+    return ReapprovalAnswer(
+        _string(raw["answer"], "answer_sheet.reapproval.answer"), max_uses
+    )
+
+
 def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
     """Validate and construct an answer sheet from a mapping."""
 
@@ -397,6 +429,9 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         raise AnswerSheetError(
             "answer_sheet.gap_stance must be one of: " + ", ".join(sorted(GAP_STANCES))
         )
+    reapproval = (
+        _reapproval_mapping(raw["reapproval"]) if "reapproval" in raw else None
+    )
     return AnswerSheet(
         version=version,
         scenario_id=_string(raw["scenario_id"], "answer_sheet.scenario_id"),
@@ -411,6 +446,7 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         driver_forbidden_terms=driver_forbidden_terms,
         ground_truth=MappingProxyType(ground_truth),
         gap_stance=gap_stance,
+        reapproval=reapproval,
     )
 
 
@@ -433,6 +469,7 @@ __all__ = [
     "AnswerSheet",
     "AnswerSheetError",
     "DecisionAnswer",
+    "ReapprovalAnswer",
     "GroundTruthFact",
     "answer_sheet_from_mapping",
     "load_answer_sheet",

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.ledger import LedgerStore, Manifest, SupervisorFacts, lint, read_ledger
+from dp_scenarios.failure_reasons import REVIEWER_DEADLINE_EXCEEDED
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.appender import AppenderError, StaticSupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.engine import FAILURE_MODES, OperatorEngine, OperatorScript, TerminalState, operator_script_hash
@@ -137,6 +138,92 @@ def test_generated_surface_leaves_an_approval_turn_verbatim() -> None:
     # The provider was still consulted on the ordinary substitutable turn, so
     # this is a carve-out for approvals rather than the surface being off.
     assert len(seen) == 1
+
+
+def test_review_fix_reaches_agent_before_bounded_reapproval() -> None:
+    """A fixed approval slot cannot swallow a review decision or strand consent."""
+
+    opening = "Can we trust the stock position for this close?"
+    fix = "Choose option 2: disclose the snapshot basis and carry as_of through."
+    reapproval = "Approved after the fresh review; proceed with the revised plan."
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "bounded-reapproval-test",
+            "opening_message": opening,
+            "turns": [
+                opening,
+                {"text": "Approved. Proceed with the original plan.", "approval": True},
+                {"text": "Approved. Proceed with the updated plan.", "approval": True},
+                "Please continue with the final checks.",
+                "Please continue with the final query.",
+                "Please finish the result.",
+            ],
+            "source_answers": {"source": "Use the supplied source."},
+            "decision_answers": {
+                "review_fix_authorization": {
+                    "terms": ["review", "finding"],
+                    "answer": fix,
+                }
+            },
+            "status_answers": {"status": "The work is in progress."},
+            "opening_forbidden_terms": ["source", "secret"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+            "reapproval": {"answer": reapproval, "max_uses": 2},
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/smoke.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turn_budget=6,
+        phase_by_turn={1: 1, 2: 3, 3: 3, 4: 3, 5: 3, 6: 4},
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(
+                agent_message="Do you approve the original blueprint?",
+                approval_artifact="artifact://generation-1",
+            ),
+            TurnResult(
+                agent_message=(
+                    "The independent review found a blocking finding. "
+                    "Which would you like me to change: option 1 or option 2?"
+                )
+            ),
+            TurnResult(
+                agent_message=(
+                    "The generation 2 revised blueprint is ready. "
+                    "Do you approve the updated plan?"
+                ),
+                approval_artifact="artifact://generation-2",
+            ),
+            TurnResult(
+                agent_message="Do you approve the updated plan again?",
+                approval_artifact="artifact://generation-2-retry",
+            ),
+            TurnResult(
+                agent_message="Do you approve the updated plan one more time?",
+                approval_artifact="artifact://generation-2-retry-2",
+            ),
+            TurnResult(agent_message="The published result is ready.", reported=True),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts[1] == "Approved. Proceed with the original plan."
+    assert transport.message_texts[2] == fix
+    assert transport.message_texts[3] == reapproval
+    assert transport.message_texts[4] == reapproval
+    assert transport.message_texts[5] != reapproval
+    approvals = [row for row in result.ledger_rows if row["action_kind"] == "spec_approved"]
+    assert [row["artifact_ref"] for row in approvals] == [
+        "Approved. Proceed with the original plan.",
+        reapproval,
+        reapproval,
+    ]
 
 
 def test_generated_operator_only_renders_the_engine_selected_reply() -> None:
@@ -421,6 +508,25 @@ def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() ->
     ).run()
     assert timeout_with_diagnostic.terminal_state is TerminalState.TURN_TIMEOUT
     assert "environment_wedge" not in timeout_with_diagnostic.failure_modes
+
+
+def test_reviewer_deadline_keeps_turn_timeout_gate_but_names_the_stop_reason() -> None:
+    timed_out = OperatorEngine(
+        make_script(turns=("Improve weekly visibility.",)),
+        InMemoryTransport(
+            [
+                TurnResult(
+                    turn_timed_out=True,
+                    failure_reason=REVIEWER_DEADLINE_EXCEEDED,
+                )
+            ]
+        ),
+    ).run()
+
+    assert timed_out.terminal_state is TerminalState.TURN_TIMEOUT
+    assert "turn_timeout" in timed_out.failure_modes
+    assert timed_out.stop_reason == REVIEWER_DEADLINE_EXCEEDED
+    assert timed_out.failure_reason == REVIEWER_DEADLINE_EXCEEDED
 
 
 def test_rubber_stamper_approval_records_open_decision_marker() -> None:

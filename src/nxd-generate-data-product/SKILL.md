@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.53.0
+  version: 0.53.1
 ---
 
 # nxd-generate-data-product skill
@@ -35,14 +35,11 @@ vocabulary — the Workflow's **policy read-back gate** runs before any file is
 written. A closure whose scoring policy the user never saw is the one failure
 this skill treats as unrecoverable.
 
+Compile faithfully: keep every Model and Output name exactly as approved and cover every clause of every Questions entry; never rename or drop either. If a clause cannot be implemented, return to `nxd-run-job-loop` for an explicit scope decision. Add no Decision from source rows, contracts, or evidence absent from the approved blueprint.
+
 **Connector types** — see the [source types index](reference/source-types.md) for the canonical source matrix and source-specific recipes. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 
-For `api-source`, the only absent companion is the endpoint map, which comes
-from `endpoint_<model>` profile attributes; additionally require the
-closure-local `connectivity_check.py` probe and make it pass before authoring.
-Specialized API profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape. The output is a directory the **desktop supervisor** compiles, pins, boots, and publishes; it compiles `spec.py` into the kernel definition YAML at create time.
-It runs the transform, verifies staging, and stands up the semantic MCP endpoint.
-Return facts and a structured handoff to `nxd-run-job-loop`; internal terms may appear in implementation guidance and structured handoffs. The owning loop translates status, failures, costs, and publication state into plain chat and never copies raw internal output; see [user-facing language](../nxd-run-job-loop/reference/user-facing-language.md).
+For `api-source`, the only absent companion is the endpoint map from `endpoint_<model>` profile attributes; require the closure-local `connectivity_check.py` probe and make it pass before authoring. Specialized API profiles keep the `api-source` service name, add a non-secret `source_kind`, and require an atomic eval covering pagination, credential, authorization, and row shape. The **desktop supervisor** compiles `spec.py` into kernel definition YAML, pins and boots the output directory, runs the transform, verifies staging, and stands up the semantic MCP endpoint. Return facts and a structured handoff to `nxd-run-job-loop`; the owning loop translates status, failures, costs, and publication state into plain chat without copying raw internal output; see [user-facing language](../nxd-run-job-loop/reference/user-facing-language.md).
 ## The closure layout
 
 Choose and normalize one absolute `<dp-root>` — the exact directory submitted through the supervisor's returned `capture` action — **BEFORE authoring any artifact**. Move or recreate existing closure files into it before creating/checking another. Every closure artifact must be inside `<dp-root>`: root-level artifacts are direct children, nested artifacts are descendants. This includes `spec.py`, `models.py`, `transform/`, `requirements.txt`, `infra-profile.yaml`, connector-specific artifacts such as `connectivity_check.py` for API sources, and (for credentialed sources) `.gitignore` and `SENSITIVE`. A declared custom contract additionally requires exactly one verifier under `contracts/expectations/` or `contracts/promises/` plus its matching `spec.py` wiring; an empty inventory has no contract placeholder. For an `api-source`, write the closure-local `connectivity_check.py` first **after** `prepare_workflow` returns its consent subject and the operator's explicit approval has been relayed through `session_decision`; it is the first post-consent closure artifact, not a pre-consent exception. Until its credentialed probe has inspected every configured endpoint successfully, do not write `infra-profile.yaml`, `.gitignore`, `SENSITIVE`, `spec.py`, `models.py`, `transform/`, `requirements.txt`, or `README.md`. Then use it for the payload-inspection gate described in [reference/api-source.md](reference/api-source.md#payload-inspection-gate--before-authoring).
@@ -70,7 +67,7 @@ trusted checker:
     └── data/                    # the connector export: data/<base_model>/*.csv
         └── <base_model>/…       # base models only — derived models have no data dir
 ```
-_(CSV layout, the proven default; other types swap the companion artifact per the [source types index](reference/source-types.md). For 2+ labeled CSV sources, `reference/multi-source.md` also requires a root-level `companion-files` manifest for each non-empty labeled export root and a desktop supervisor with directory-companion support. "No `data/` **export**" there is about the connector, not the closure: a `db-source`/`api-source` closure brings no source export, but may still carry `data/` for reference data it authored — pinned like any other, and landed via its own `@dlt.resource`, not the reader loop. See `reference/api-source.md` § "Landed reference data in an API closure".)_
+_(CSV layout, the proven default; other types swap the companion artifact per the [source types index](reference/source-types.md). For 2+ labeled CSV sources, `reference/multi-source.md` also requires a root-level `companion-files` manifest for each non-empty labeled export root and a desktop supervisor with directory-companion support. `data/` is the CSV/file input layout, not a universal closure requirement. A `db-source`/`api-source` closure has no connector-owned file export; `data/` may be absent or may contain separately approved reference data that the transform explicitly reads through its own `@dlt.resource`. It is never an implicit database or API input. See `reference/database-source.md` and `reference/api-source.md`.)_
 
 **The author NEVER writes `deployment-spec.yaml`, `manifest.yaml`, or
 `models.yaml`.** The supervisor compiles those three from `spec.py` +
@@ -437,10 +434,7 @@ duckdb==1.5.4
 pandas==2.3.3
 ```
 
-`dlt[duckdb]==1.28.2` + `duckdb==1.5.4` are proven against the S0 supervisor — do
-not float them; `pandas` is required by dlt's `read_csv`; Python `>=3.12,<3.13`.
-**Other connector types add to these pins, never replace them** — `reference/` has
-the per-type additions (Parquet extra, `dlt[sql_database]` + a vendor driver, or none).
+`dlt[duckdb]==1.28.2` + `duckdb==1.5.4` are proven against the S0 supervisor — do not float them; `pandas` is required by dlt's `read_csv`; Python `>=3.12,<3.13`. These pins describe runtimes that install the closure's `requirements.txt`. The Desktop runtime does not install that file; it supplies database drivers (an NXD `dlt[sql_database]` + PostgreSQL driver change is in flight). This file is for other runtimes; see `reference/` for connector-specific additions.
 
 ### Step 6a — Declare the capture-owned snapshots
 
