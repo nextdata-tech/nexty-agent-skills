@@ -236,6 +236,44 @@ def test_loader_requires_the_explicit_fixture_plant_declaration(tmp_path: Path) 
         load_scenario(package)
 
 
+def test_inline_route_file_resolves_from_the_scenario_package_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _copy_parent_child_package(tmp_path)
+    (package / "route-rows.json").write_text('[{"id":"package-row"}]\n', encoding="utf-8")
+    other_cwd = tmp_path / "unrelated-cwd"
+    other_cwd.mkdir()
+    (other_cwd / "route-rows.json").write_text('[{"id":"cwd-row"}]\n', encoding="utf-8")
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["route_table"] = {
+        "version": 1,
+        "routes": [{"path": "/events", "response": {"file": "route-rows.json"}}],
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(other_cwd)
+
+    scenario = load_scenario(package)
+
+    assert scenario.route_table is not None
+    assert scenario.route_table.routes[0].response.data == [{"id": "package-row"}]
+    assert scenario.route_table.base_dir == package.resolve()
+
+
+def test_loader_rejects_fixture_source_not_declared_by_dataset(tmp_path: Path) -> None:
+    package = _copy_parent_child_package(tmp_path)
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["route_table"] = {
+        "version": 1,
+        "routes": [{"path": "/events", "response": {"fixture_source": "undeclared"}}],
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ScenarioError, match="fixture_source 'undeclared'.*source_tables"):
+        load_scenario(package)
+
+
 def test_loader_rejects_a_scenario_that_declares_no_plants(tmp_path: Path) -> None:
     package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"

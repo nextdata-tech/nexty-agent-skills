@@ -40,6 +40,7 @@ from .grading import (
 )
 from .grading.statistics import RepeatabilityTier, repeatability_plan
 from .mockrest.config import ConfigError as MockRestConfigError
+from .mockrest.config import fixture_source_tables
 from .mockrest.config import ScenarioConfig as MockRouteTable
 from .mockrest.config import load_config as load_route_table
 from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
@@ -1117,7 +1118,11 @@ def load_scenario(path: str | Path) -> Scenario:
             "follow_up_artifact is required for follow-up kind "
             f"{gates['follow-up'].kind!r}"
         )
-    route_table = _parse_route_table(raw.get("route_table"))
+    route_table = _parse_route_table(
+        raw.get("route_table"),
+        base_dir=root.resolve(),
+        declared_source_tables=frozenset(getattr(get_dataset(dataset), "source_tables", ())),
+    )
     script = OperatorScript.from_components(
         persona,
         answer_sheet,
@@ -1236,7 +1241,12 @@ def _validate_certification_gold(
             )
 
 
-def _parse_route_table(value: object) -> MockRouteTable | None:
+def _parse_route_table(
+    value: object,
+    *,
+    base_dir: Path,
+    declared_source_tables: frozenset[str],
+) -> MockRouteTable | None:
     """Validate an optional inline mockrest route table at load time.
 
     Parsing (not merely storing) the mapping here means a malformed route
@@ -1249,7 +1259,16 @@ def _parse_route_table(value: object) -> MockRouteTable | None:
     if value is None:
         return None
     try:
-        return load_route_table(value)
+        config = load_route_table(value, base_dir=base_dir)
+        for table in sorted(fixture_source_tables(config)):
+            if table not in declared_source_tables:
+                raise ScenarioError(
+                    f"route_table references fixture_source {table!r}, which is not "
+                    "declared in fixture.dataset source_tables"
+                )
+        return config
+    except ScenarioError:
+        raise
     except MockRestConfigError as exc:
         raise ScenarioError(f"route_table is invalid: {exc}") from exc
 
