@@ -245,12 +245,12 @@ def _vendor(closure: Path) -> None:
 def _spec(closure: Path) -> None:
     """Put a real, hashable mapper spec under contracts/."""
     (closure / "contracts").mkdir(parents=True, exist_ok=True)
-    shutil.copy(REAL_SAMPLE / "spec.json", closure / "contracts" / "spec.json")
+    shutil.copy(REAL_SAMPLE / "spec.json", closure / "contracts" / "mapper_spec.json")
 
 
 def _real_spec_id(closure: Path) -> str:
     proc = subprocess.run(
-        [sys.executable, "-m", "nxd.experimental.field_mapper", "spec-id", "contracts/spec.json"],
+        [sys.executable, "-m", "nxd.experimental.field_mapper", "spec-id", "contracts/mapper_spec.json"],
         cwd=closure, capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr
@@ -380,7 +380,7 @@ def test_matching_grant_passes(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
     out = _run_phase_g(tmp_path, expect_exit=0)
     assert [c for c in _codes(out) if c.startswith("grant.")] == [], _codes(out)
     assert "phase G ok" in out
@@ -396,7 +396,7 @@ def test_grant_bound_to_wrong_hash_fails(tmp_path):
     """
     _vendor(tmp_path)
     _spec(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc("0" * 32))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc("0" * 32))
     out = _run_phase_g(tmp_path, expect_exit=1)
     assert _codes(out) == ["grant.spec_mismatch"], _codes(out)
 
@@ -409,7 +409,7 @@ def test_placeholder_derived_id_is_invalid(tmp_path):
     """
     _vendor(tmp_path)
     _spec(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc("<derived>"))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc("<derived>"))
     out = _run_phase_g(tmp_path, expect_exit=1)
     assert _codes(out) == ["grant.invalid"], _codes(out)
     assert "<derived>" in out
@@ -421,7 +421,7 @@ def test_expired_grant_fails(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json",
+    _write(tmp_path, "contracts/mapper_grant.json",
            _grant_doc(spec_id, expires_at="2001-01-01T00:00:00Z"))
     out = _run_phase_g(tmp_path, expect_exit=1)
     assert _codes(out) == ["grant.expired"], _codes(out)
@@ -433,7 +433,7 @@ def test_grant_naming_a_different_model_fails(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json",
+    _write(tmp_path, "contracts/mapper_grant.json",
            _grant_doc(spec_id, model="some-other-model"))
     out = _run_phase_g(tmp_path, expect_exit=1)
     assert _codes(out) == ["grant.spec_mismatch"], _codes(out)
@@ -449,11 +449,96 @@ def test_stray_grant_warns_and_passes(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
     _write(tmp_path, "contracts/stale.json", _grant_doc("a" * 32))
     out = _run_phase_g(tmp_path, expect_exit=0)
     assert _codes(out) == ["grant.unbound"], _codes(out)
     assert "phase G ok" in out
+
+
+# ------------------------------------------- Desktop supervisor grant paths ---
+#
+# The Desktop supervisor reads the spec only at contracts/mapper_spec.json and
+# the grant at exactly one of contracts/mapper_grant.json or
+# contracts/mapper_spec_grant.json (MAPPER_GRANT_CANDIDATES in the supervisor's
+# mapper_approval.rs). Both grant paths at once is a refusal there, before any
+# approval prompt. These run on the stand-in harness too: they assert on the
+# gate's own path logic, not on a consent verdict.
+
+@pytest.mark.parametrize("grant_rel", [
+    "contracts/mapper_grant.json",
+    "contracts/mapper_spec_grant.json",
+])
+def test_either_supervisor_grant_path_passes_clean(tmp_path, grant_rel):
+    """Both accepted paths are first-class: neither may warn or fail."""
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    spec_id = _real_spec_id(tmp_path)
+    _write(tmp_path, grant_rel, _grant_doc(spec_id))
+    out = _run_phase_g(tmp_path, expect_exit=0)
+    assert [c for c in _codes(out) if c.startswith("grant.")] == [], _codes(out)
+    assert "phase G ok" in out
+
+
+def test_both_supervisor_grant_paths_fail(tmp_path):
+    """The supervisor refuses the pair, so the gate must not report green."""
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    spec_id = _real_spec_id(tmp_path)
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_spec_grant.json", _grant_doc(spec_id))
+    out = _run_phase_g(tmp_path, expect_exit=1)
+    assert _codes(out) == ["grant.ambiguous_path"], _codes(out)
+    assert "PHASE G FAILED" in out
+
+
+def test_both_paths_fail_even_when_the_second_is_malformed(tmp_path):
+    """Existence alone decides it: the supervisor refuses whatever the copy holds."""
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    spec_id = _real_spec_id(tmp_path)
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
+    (tmp_path / "contracts" / "mapper_spec_grant.json").write_text(
+        "not json", encoding="utf-8")
+    out = _run_phase_g(tmp_path, expect_exit=1)
+    assert "grant.ambiguous_path" in _codes(out), _codes(out)
+
+
+def test_grant_off_the_supervisor_paths_warns(tmp_path):
+    """The harness binds it; Desktop would refuse it. Warn, do not fail."""
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    spec_id = _real_spec_id(tmp_path)
+    _write(tmp_path, "contracts/consent.json", _grant_doc(spec_id))
+    out = _run_phase_g(tmp_path, expect_exit=0)
+    assert _codes(out) == ["grant.not_at_supervisor_path"], _codes(out)
+    assert "contracts/consent.json" in out
+    assert "phase G ok" in out
+
+
+def test_spec_off_the_supervisor_path_warns(tmp_path):
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    (tmp_path / "contracts" / "mapper_spec.json").rename(
+        tmp_path / "contracts" / "rubric.json")
+    proc = subprocess.run(
+        [sys.executable, "-m", "nxd.experimental.field_mapper", "spec-id",
+         "contracts/rubric.json"],
+        cwd=tmp_path, capture_output=True, text=True)
+    spec_id = json.loads(proc.stdout)["mapper_spec_id"]
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
+    out = _run_phase_g(tmp_path, expect_exit=0)
+    assert _codes(out) == ["grant.not_at_supervisor_path"], _codes(out)
+    assert "contracts/mapper_spec.json" in out
+
+
+def test_placement_warning_waits_for_complete_consent(tmp_path):
+    """A mismatch is one problem; the placement note must not pile on."""
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    _write(tmp_path, "contracts/consent.json", _grant_doc("0" * 32))
+    out = _run_phase_g(tmp_path, expect_exit=1)
+    assert _codes(out) == ["grant.spec_mismatch"], _codes(out)
 
 
 # ------------------------------------------------------------- bypasses ---
@@ -496,7 +581,7 @@ def test_helper_module_with_matching_grant_passes(tmp_path):
         "    return map_inputs([], spec=None, grant=None, run_dir='', call=None)\n",
         encoding="utf-8")
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
     out = _run_phase_g(tmp_path, expect_exit=0,
                        transform_src="from transform.helpers import run\n")
     assert [c for c in _codes(out) if c.startswith("grant.")] == [], _codes(out)
@@ -513,7 +598,7 @@ def test_aliased_map_inputs_import_is_not_ungated(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
     out = _run_phase_g(
         tmp_path, expect_exit=0,
         transform_src=("from nxd.experimental.field_mapper import map_inputs as mi\n"
@@ -534,7 +619,7 @@ def test_transport_direct_without_map_inputs_fails(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
     out = _run_phase_g(
         tmp_path, expect_exit=1,
         transform_src="from nxd.experimental.field_mapper.transport import Client\n",
@@ -589,7 +674,7 @@ def test_broken_harness_package_is_a_finding_not_a_traceback(tmp_path):
     # A well-formed grant is present so the failure cannot be confused with
     # `grant.missing`: the ONLY thing wrong here is that the vendored package
     # cannot answer for its own spec.
-    _write(tmp_path, "contracts/grant.json", _grant_doc("b" * 32))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc("b" * 32))
     out = _run_phase_g(tmp_path, expect_exit=1)
     assert "grant.spec_unreadable" in _codes(out), _codes(out)
     # And the finding must READ like a finding — the subprocess's own traceback
@@ -743,7 +828,7 @@ def test_gate_agrees_with_grant_py_on_malformed_grants(tmp_path):
             harness_rejects = True
         assert harness_rejects, f"harness accepted {doc!r}; update this case"
 
-        _write(tmp_path, "contracts/grant.json", doc)
+        _write(tmp_path, "contracts/mapper_grant.json", doc)
         out = _run_phase_g(tmp_path, expect_exit=1)
         codes = _codes(out)
         assert "grant.invalid" in codes, (
@@ -898,6 +983,6 @@ def test_a_granted_closure_is_not_accused_of_vendoring(tmp_path):
     _vendor(tmp_path)
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
-    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    _write(tmp_path, "contracts/mapper_grant.json", _grant_doc(spec_id))
     out = _run_phase_g(tmp_path, expect_exit=0)
     assert "grant.vendored_harness" not in _codes(out), _codes(out)

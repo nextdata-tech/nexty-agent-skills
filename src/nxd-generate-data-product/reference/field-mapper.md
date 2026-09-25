@@ -132,84 +132,97 @@ an absent one. `max_absent_share` is genuinely optional.
 
 ## Desktop supervisor approval boundary
 
-The grant above remains the **standalone field-mapper harness** contract:
-`map_inputs` requires a user-authored `Grant`, and a matching `Grant.check` is
-required before the harness dispatches a model call. It is not, by itself, a
-Desktop supervisor authorization.
+The grant above is the **standalone field-mapper harness** contract:
+`map_inputs` requires a user-authored `Grant`, and a matching `Grant.check`
+runs before the harness dispatches a model call. On Desktop the grant is also
+the **scope proposal** for the supervisor's formal approval. It is never
+authorization by itself.
 
-The public Desktop construction surface is now workflow-v2 only. The current
-trusted generator-validation path supports non-mapper closures only and rejects
-mapper closures before admission with `validation/mapper_closure_unsupported`;
-formal mapper requirements are likewise reported as `workflow/unsupported_mapper`.
-Do not describe a separate Desktop mapper build, mapper-status tool, or
-approval route as available. Use this section for the standalone harness
-contract, or report the Desktop mapper closure as unsupported until a workflow-v2
-mapper handler is shipped.
+**Where the supervisor looks.** It reads the spec at
+`contracts/mapper_spec.json` and the grant at exactly one of
+`contracts/mapper_grant.json` or `contracts/mapper_spec_grant.json`. When both
+grant files exist it refuses the closure. Phase G reports that as
+`grant.ambiguous_path`, and a grant stored anywhere else as
+`grant.not_at_supervisor_path`.
 
-If a future Desktop mapper handler is supported, `contracts/mapper_grant.json`,
-a mapper request file, and their fields are **untrusted scope proposals**. The
-supervisor derives the actual mapper subject from the definition and is the only
-component that can turn that subject into an approval. An agent must not author `approved`,
-`granted_by`, receipt, signature, or approval-id claims in an attempt to make a
-proposal authoritative; those claims are rejected rather than treated as user
-consent. A green Phase G proves only that the static harness grant check found a
-binding artifact. It is not proof of human authorization in Desktop.
+**The grant must be strictly typed.** The supervisor parses it before any
+prompt and requires:
 
-That future handler would use a supervisor-owned loopback review surface and a
-native OS presence decision. Before it creates a writer, state database, run,
-or provider client, the supervisor would:
+- `provider` exactly `anthropic`. `claude_cli`, `recorded` and `stub` are
+  refused under supervision.
+- a non-empty `model`, and a non-empty `corroboration_model` when one is
+  given;
+- `max_calls` and `max_tokens` as positive integers, and `max_usd` as a
+  positive number;
+- `expires_at` as an RFC3339 time in the future;
+- `recurring` as a bool.
 
-1. freeze and pin the candidate definition;
-2. derive the mapper subject and content manifest from the actual frozen bytes;
-3. create an opaque request ID and token-free loopback status URL;
-4. deliver a one-time browser capability out of band in the URL fragment;
-5. render the supervisor-derived scope and receive approve/decline from the
-   browser; and
-6. require a fresh supervisor-owned OS dialog decision.
+These failures never reach the user as a prompt. You repair them by editing
+the grant (confirming any scope value with the user), recapturing, and
+getting a fresh review:
 
-Only the matching browser capability, OS decision, subject, manifest, and
-budget can produce one-use admission. The MCP peer never receives the
-capability. The browser click alone is insufficient. The OS dialog is local
-presence confirmation, not cryptographic proof of the user's identity.
+| Code | Cause |
+|---|---|
+| `workflow/mapper_scope_invalid` | missing, malformed or loosely typed grant; both grant paths present; spec missing |
+| `workflow/mapper_approval_claims_rejected` | the grant carries `approved`, `approved_by`, `approval_id`, `decision`, `receipt`, `signature` or a similar claim |
+| `workflow/mapper_grant_exceeds_policy` | provider, model, ceilings or `recurring` beyond the installed policy |
+| `workflow/mapper_model_unpriced` | a model with no price entry, so spend cannot be bounded |
 
-The current supervisor has no Desktop mapper admission handler, so it does not
-currently use MCP form elicitation for this path. If a future handler is added,
-its MCP `initialize` request/context would not be an admission input. Do not
-require protocol `2025-06-18` form elicitation or claim that the approval
-surface has no second step. A second LLM turn is not an approval mechanism.
+An agent must never author approval claims. They are rejected, not treated as
+consent. A green Phase G proves only that the static harness check found a
+binding artifact. It is not proof of human authorization on Desktop.
 
-For the documented handler contract, an accepted request admits that exact
-subject for the current supervisor session. An unchanged retry reuses that
-session approval without another interaction; a changed spec or proposed scope
-gets a new subject and must be confirmed again. The supervisor re-derives the
-subject immediately before admission, so a definition changed while it was open fails with
-`mapper_subject_changed` rather than running under the earlier confirmation.
+**The flow.** The workflow-v2 contract carries a `mapper-confirmation-v1`
+formal-approval requirement. It depends on capture and on the conversation
+review, and validation and admission depend on it. When the returned actions
+offer `start_requirement` for it:
 
-**Every non-accept outcome would fail closed.** Browser decline, OS decline,
-cancelled or expired requests, malformed or failed transport, binding mismatch,
-and any unsupported approval-surface state return
-`kind: mapper_approval_required` with `run_admitted: false`. Their
-`confirmation` values are `declined`, `cancelled`, `expired`,
-`failed`, `unsupported`, or the corresponding binding error as applicable.
-The current diagnostic reports `credential_isolation: not_enforced`: the
-transform inherits the MCP process environment, so this gate is not a claim
-that provider egress is brokered or contained. For example:
+1. The supervisor derives the mapper subject from the retained capture, not
+   from anything the agent sends.
+2. It checks the strict grant against policy.
+3. It opens a native OS dialog showing the provider, model, ceilings, expiry,
+   lifetime spend for this spec, and the declared fields. Decline is the
+   default button.
+4. The response to the agent says only that approval is awaiting the user,
+   with an expiry. It contains no URL, token, capability or key.
 
-```json
-{
-  "kind": "mapper_approval_required",
-  "confirmation": "cancelled",
-  "run_admitted": false,
-  "credential_isolation": "not_enforced"
-}
-```
+A decline, cancel, timeout, interrupted prompt or unavailable dialog returns
+the requirement to pending with a `workflow/approval_*` code. The user can be
+asked again, but only when they want to be. The recovery table for every code
+is in the job loop's `reference/workflow-v2.md` § Mapper approval. The OS
+dialog confirms local presence. It is not cryptographic proof of the user's
+identity, and it is the only approval surface: no chat reply, MCP call, file
+or form counts as approval.
 
-Do not retry by adding approval fields or treat an API key in the child
-environment as a workaround. `credential_isolation: not_enforced` means the
-current diagnostic makes no claim that provider egress is brokered or contained.
-Approval records are session-local: they do not persist signed receipts or
-execution attestations, and they do not enforce cumulative call/token/cost
-budgets across build attempts.
+**Declared data scope is not enforced.** The grant's `input_fields`,
+`document_classes` and `pii_category` are declared by the author and reviewed
+by the user. The dialog labels them "Declared by the author (reviewed, not
+enforced)". The supervisor does not restrict what the transform sends to the
+model, and the harness's own `Grant.check` runs inside the closure, so it is
+not a boundary either. Keep the declared list honest, because it is what the
+user reviews.
+
+**What is enforced.** The supervisor holds provider keys in the Keychain and
+reaches the provider only through its broker. The closure gets a one-use
+capability for a local socket, never a key. The broker checks the model,
+expiry, request shape (no server tools, images, documents or thinking) and
+the call, token and USD ceilings before any network call. A refusal reaches
+the harness as `GrantError`, and an exhausted ceiling as
+`BudgetExceededError`. Never put a key, token or base URL in the closure or
+the environment as a workaround. `credential_isolation` reports `brokered`.
+
+**Widening needs a fresh approval.** A new model, higher ceilings, a later
+expiry or `recurring: true` changes the grant. That means recapture, a fresh
+review and a new OS approval. With `recurring: false`, an approval covers one
+workflow instance until it publishes. Editing the spec moves the subject and
+revokes the approval on purpose.
+
+**Validation does not spend.** Trusted validation runs the scratch build
+against a stub broker backend with no network and no charge. Stub values are
+placeholders, so contract or expectation failures confined to columns the
+mapper spec declares as outputs become the advisory
+`validation/mapper_output_unverified`. Every other contract failure still
+fails. Scratch evidence proves wiring, not the quality of mapped values.
 
 ## Evidence modes — what each one proves
 

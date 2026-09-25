@@ -15,6 +15,8 @@ MAPPER_CONTRACT = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "
 FIELD_MAPPER = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "field-mapper.md"
 PREFLIGHT = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "mapper-preflight.md"
 SELF_CHECK = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
+WORKFLOW_V2 = REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "workflow-v2.md"
+REVIEW_CLOSURE = REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md"
 E2E_RUNNER = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "examples" / "e2e" / "run_e2e.py"
 E2E_TRANSFORM = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "examples" / "e2e" / "transform_main.py"
 
@@ -63,56 +65,100 @@ def test_normative_contract_publishes_the_bounded_call_adapter() -> None:
 def test_desktop_treats_mapper_files_as_scope_proposals_not_authorization() -> None:
     field_mapper = _normalized(FIELD_MAPPER)
 
-    assert "**untrusted scope proposals**" in field_mapper
-    assert "only component that can turn that subject into an approval" in field_mapper
-    for claim in ("`approved`", "`granted_by`", "receipt", "signature", "approval-id"):
+    assert "**scope proposal**" in field_mapper
+    assert "It is never authorization by itself" in field_mapper
+    assert "An agent must never author approval claims" in field_mapper
+    for claim in ("`approved`", "`approved_by`", "`approval_id`", "`receipt`", "`signature`"):
         assert claim in field_mapper, f"Desktop contract must forbid {claim} claims"
-    assert "not proof of human authorization in Desktop" in field_mapper
+    assert "not proof of human authorization on Desktop" in field_mapper
 
 
-def test_preflight_and_phase_g_do_not_claim_desktop_authorization() -> None:
-    preflight = _normalized(PREFLIGHT)
-    self_check = _normalized(SELF_CHECK)
-
-    assert "execution reachability only, not Desktop authorization" in preflight
-    assert "never proves Desktop authorization, human consent, or credential isolation" in preflight
-    assert "Desktop supervisor admission:" in preflight
-    assert "`unknown` unless the supervisor returned a structured outcome" in preflight
-    assert "not a protected Desktop human-authorization check" in self_check
-    assert "does **not** prove a human authorization" in self_check
-
-
-def test_supervisor_loopback_and_os_approval_surface_has_exact_subject_reuse_and_fail_closed_paths() -> None:
+def test_desktop_mapper_flow_is_the_shipped_workflow_v2_requirement() -> None:
     field_mapper = _normalized(FIELD_MAPPER)
 
-    assert "supervisor-owned loopback review surface" in field_mapper
-    assert "native OS presence decision" in field_mapper
-    assert "one-time browser capability" in field_mapper
-    assert "MCP form elicitation" in field_mapper
-    assert "does not currently use MCP form elicitation" in field_mapper
-    assert "there is no secondary approval surface" not in field_mapper
-    assert "OS dialog is local presence confirmation" in field_mapper
-    assert "unchanged retry reuses that session approval without another interaction" in field_mapper
-    assert "changed spec or proposed scope gets a new subject and must be confirmed again" in field_mapper
-    assert "`mapper_subject_changed`" in field_mapper
-
-    for confirmation in (
-        "`declined`",
-        "`cancelled`",
-        "`expired`",
-        "`failed`",
-        "`unsupported`",
-    ):
-        assert confirmation in field_mapper, f"missing fail-closed confirmation: {confirmation}"
-    for diagnostic in (
-        "`kind: mapper_approval_required`",
-        "`run_admitted: false`",
+    # The pre-v2 text described the Desktop mapper as unsupported and a future
+    # handler. It must not survive next to the shipped flow.
+    for stale in (
+        "future handler",
+        "until a workflow-v2 mapper handler is shipped",
         "`credential_isolation: not_enforced`",
+        "one-time browser capability",
     ):
-        assert diagnostic in field_mapper
-    assert "Approval records are session-local" in field_mapper
-    assert "do not persist signed receipts or execution attestations" in field_mapper
-    assert "do not enforce cumulative call/token/cost budgets across build attempts" in field_mapper
+        assert stale not in field_mapper, f"stale pre-v2 text: {stale}"
+
+    assert "`mapper-confirmation-v1`" in field_mapper
+    assert "`start_requirement`" in field_mapper
+    assert "native OS dialog" in field_mapper
+    assert "the only approval surface" in field_mapper
+    assert "It contains no URL, token, capability or key" in field_mapper
+    assert "`credential_isolation` reports `brokered`" in field_mapper
+    # Both supervisor grant paths, and the refusal of both at once.
+    assert "`contracts/mapper_grant.json`" in field_mapper
+    assert "`contracts/mapper_spec_grant.json`" in field_mapper
+    assert "When both grant files exist it refuses the closure" in field_mapper
+    # Strict grant, refused before any prompt.
+    assert "`provider` exactly `anthropic`" in field_mapper
+    assert "`claude_cli`, `recorded` and `stub` are refused under supervision" in field_mapper
+    for code in (
+        "`workflow/mapper_scope_invalid`",
+        "`workflow/mapper_approval_claims_rejected`",
+        "`workflow/mapper_grant_exceeds_policy`",
+        "`workflow/mapper_model_unpriced`",
+    ):
+        assert code in field_mapper, f"missing grant refusal code: {code}"
+    assert "These failures never reach the user as a prompt" in field_mapper
+
+
+def test_declared_data_scope_is_never_described_as_enforced() -> None:
+    """D1: fields, document classes and PII are declared, reviewed, not enforced."""
+    field_mapper = _normalized(FIELD_MAPPER)
+    workflow = _normalized(WORKFLOW_V2)
+    review = _normalized(REVIEW_CLOSURE)
+
+    assert "**Declared data scope is not enforced.**" in field_mapper
+    assert "Declared by the author (reviewed, not enforced)" in field_mapper
+    assert "The supervisor does **not** enforce them" in workflow
+    assert "Never tell the user that the declared field list limits what the transform sends" in workflow
+    assert "**Declared fields are not enforced.**" in review
+    assert "The supervisor does **not** restrict what the transform sends" in review
+
+
+def test_scratch_contracts_on_mapper_outputs_are_advisory() -> None:
+    """D4: stub-backed validation cannot verify mapped values."""
+    for text in (_normalized(FIELD_MAPPER), _normalized(WORKFLOW_V2)):
+        assert "`validation/mapper_output_unverified`" in text
+        assert "Every other contract failure still fails" in text
+        assert "proves wiring, not the quality of mapped values" in text
+
+
+def test_workflow_recovery_table_fails_closed() -> None:
+    workflow = _normalized(WORKFLOW_V2)
+
+    for code in (
+        "workflow/approval_declined",
+        "workflow/approval_expired",
+        "workflow/approval_cancelled",
+        "workflow/approval_interrupted",
+        "workflow/approval_cooldown",
+        "workflow/approval_pending",
+        "workflow/approval_ceiling_reached",
+        "workflow/approval_surface_unavailable",
+        "workflow/mapper_subject_changed",
+        "workflow/mapper_integrity",
+        "validation/mapper_approval_missing",
+        "validation/mapper_subject_changed",
+        "validation/mapper_ceiling_exceeded_in_scratch",
+        "validation/mapper_grant_refused",
+        "validation/mapper_provider_unavailable",
+        "mapper_ceiling_reached",
+        "mapper_request_refused",
+    ):
+        assert f"`{code}`" in workflow, f"recovery table misses {code}"
+    assert "Never retry `start_requirement` in a loop" in workflow
+    assert "Never widen a grant yourself" in workflow
+    assert "You cannot approve, decline, extend, widen or reset an approval" in workflow
+    assert "Never substitute a chat \"yes\" for the dialog" in workflow
+    assert "never supply a key, token or base URL yourself" in workflow
 
 
 def test_mapper_review_publication_has_one_deterministic_outcome_per_review() -> None:
