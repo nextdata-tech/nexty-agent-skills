@@ -3256,6 +3256,76 @@ def test_operator_observations_report_unmatched_and_ground_truth_turns(tmp_path:
     assert "backend" not in payload["turns"][1]
 
 
+def test_operator_observations_link_matched_decision_to_next_turn_delivery(tmp_path: Path) -> None:
+    answer = "Suppress the values under the agreed threshold."
+    sheet = answer_sheet_from_mapping(
+        {
+            "version": 1,
+            "scenario_id": "decision-observation-test",
+            "opening_message": "Review this report.",
+            "turns": ["Review this report.", "Please continue.", "Please continue again."],
+            "source_answers": {},
+            "decision_answers": {
+                "B6-suppression-N": {
+                    "terms": ["suppress", "show"],
+                    "answer": answer,
+                }
+            },
+            "status_answers": {},
+            "opening_forbidden_terms": ["source"],
+            "open_decision_markers": ["[DECISION NEEDED]"],
+            "obstacle_terms": [],
+        }
+    )
+    persona = load_persona(ROOT / "scenarios/_personas/rubber-stamper.yaml")
+    event = event_from_mapping(
+        {
+            "version": 1,
+            "id": "observation-e10",
+            "trigger_turn": 3,
+            "type": "raw_rows_request",
+            "content": "Could you show the raw rows?",
+            "outcome": "raw_rows_requested",
+            "plant": False,
+            "required_terms": ["raw rows"],
+        }
+    )
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        events=EventSchedule((event,)),
+        turns=sheet.turns,
+        turn_budget=3,
+        phase_by_turn={1: 1, 2: 2, 3: 3},
+    )
+    result = OperatorEngine(
+        script,
+        InMemoryTransport(
+            [
+                TurnResult(agent_message="Should I pause before publishing?"),
+                TurnResult(agent_message="Should I suppress these values or show them?"),
+                TurnResult(agent_message="Understood."),
+            ]
+        ),
+    ).run()
+
+    tier_module._write_operator_observations(tmp_path, result)
+    payload = json.loads((tmp_path / "operator-observations.json").read_text())
+    turns = payload["turns"]
+
+    assert turns[0]["operator_matched_rule_id"] == "persona.decision_request"
+    assert turns[0]["operator_matched_reply"] == "Yes."
+    assert turns[1]["operator_message"] == "Yes."
+    assert turns[1]["operator_matched_rule_id"] == "decision.answer.B6-suppression-N"
+    assert turns[1]["operator_matched_decision_id"] == "B6-suppression-N"
+    assert turns[1]["operator_matched_reply"] == answer
+    assert answer in turns[2]["operator_message"]
+    assert all(isinstance(turn["fired_event_ids"], list) for turn in turns)
+    assert turns[0]["fired_event_ids"] == []
+    assert turns[1]["fired_event_ids"] == []
+    assert turns[2]["fired_event_ids"] == ["observation-e10"]
+
+
 def test_operator_observations_do_not_count_a_withheld_fact_as_answered(tmp_path: Path) -> None:
     """A suppressed re-serve sent nothing from the brief, so it must not be
 

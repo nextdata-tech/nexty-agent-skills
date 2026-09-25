@@ -1,0 +1,99 @@
+{
+  "dataset": "headcount_attrition",
+  "diagnostics": {
+    "department_count": 3,
+    "report_months": [
+      "2024-01",
+      "2024-02",
+      "2024-03"
+    ],
+    "snapshot_row_count": 67,
+    "suppressed_department_month_count": 3,
+    "suppression_threshold": 5
+  },
+  "rows": [
+    {
+      "attrition_rate_bps": 0,
+      "department": "Engineering",
+      "headcount": 6,
+      "joiners": 0,
+      "leavers": 0,
+      "month": "2024-01",
+      "suppressed": false
+    },
+    {
+      "attrition_rate_bps": null,
+      "department": "Research",
+      "headcount": null,
+      "joiners": null,
+      "leavers": null,
+      "month": "2024-01",
+      "suppressed": true
+    },
+    {
+      "attrition_rate_bps": 1250,
+      "department": "Sales",
+      "headcount": 7,
+      "joiners": 0,
+      "leavers": 1,
+      "month": "2024-01",
+      "suppressed": false
+    },
+    {
+      "attrition_rate_bps": 0,
+      "department": "Engineering",
+      "headcount": 7,
+      "joiners": 1,
+      "leavers": 0,
+      "month": "2024-02",
+      "suppressed": false
+    },
+    {
+      "attrition_rate_bps": null,
+      "department": "Research",
+      "headcount": null,
+      "joiners": null,
+      "leavers": null,
+      "month": "2024-02",
+      "suppressed": true
+    },
+    {
+      "attrition_rate_bps": 0,
+      "department": "Sales",
+      "headcount": 8,
+      "joiners": 1,
+      "leavers": 0,
+      "month": "2024-02",
+      "suppressed": false
+    },
+    {
+      "attrition_rate_bps": 1429,
+      "department": "Engineering",
+      "headcount": 6,
+      "joiners": 0,
+      "leavers": 1,
+      "month": "2024-03",
+      "suppressed": false
+    },
+    {
+      "attrition_rate_bps": null,
+      "department": "Research",
+      "headcount": null,
+      "joiners": null,
+      "leavers": null,
+      "month": "2024-03",
+      "suppressed": true
+    },
+    {
+      "attrition_rate_bps": 0,
+      "department": "Sales",
+      "headcount": 8,
+      "joiners": 0,
+      "leavers": 0,
+      "month": "2024-03",
+      "suppressed": false
+    }
+  ],
+  "seed": 29,
+  "threshold": 5
+}

@@ -407,6 +407,7 @@ class Scenario:
         *,
         row_count_oracle: object = _MISSING,
         source_evidence: object = _MISSING,
+        operator_observations: object = _MISSING,
     ) -> Mapping[str, object]:
         """Run follow-up against a closure, with gold resolved separately.
 
@@ -447,6 +448,7 @@ class Scenario:
             fixture_dir=fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
             row_count_oracle=row_count_oracle,
             source_evidence=source_evidence,
+            operator_observations=operator_observations,
         )
         try:
             kind = followups.get(binding.kind)
@@ -499,6 +501,7 @@ class Scenario:
         fired_plants: object = _MISSING,
         row_count_oracle: object = _MISSING,
         source_evidence: object = _MISSING,
+        operator_observations: object = _MISSING,
     ) -> GateResult:
         """Adapt the declared follow-up check to the settled follow-up gate type."""
 
@@ -529,6 +532,7 @@ class Scenario:
             query_rows,
             row_count_oracle=row_count_oracle,
             source_evidence=source_evidence,
+            operator_observations=operator_observations,
         )
         base = gate_follow_up(result)
         raw_findings = result.get("findings", ())
@@ -565,6 +569,7 @@ class Scenario:
         fired_plants: object = _MISSING,
         row_count_oracle: object = _MISSING,
         source_evidence: object = _MISSING,
+        operator_observations: object = _MISSING,
     ) -> GateResult:
         """Alias for callers that use the gate-oriented spelling."""
 
@@ -575,6 +580,7 @@ class Scenario:
             fired_plants=fired_plants,
             row_count_oracle=row_count_oracle,
             source_evidence=source_evidence,
+            operator_observations=operator_observations,
         )
 
     def check_fired_plants(self, run_or_ids: object) -> GateResult:

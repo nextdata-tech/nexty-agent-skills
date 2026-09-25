@@ -808,6 +808,12 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 "turn": turn.turn,
                 "phase": turn.phase,
                 "agent_message": _json_safe(turn.agent_message),
+                # The operator message is what the agent actually received
+                # on this turn.  The matched rule/reply below describe the
+                # response selected for the current agent message, which is
+                # delivered on the next turn.
+                "operator_message": _json_safe(turn.operator_message.text),
+                "fired_event_ids": list(turn.event_ids),
                 "transcript_delta": _json_safe(turn.transcript_delta),
                 "tool_calls": [
                     {
@@ -826,6 +832,8 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 # off script (matched=False) versus answered from a declared
                 # ground-truth brief, not just read byte-identical replies.
                 "operator_matched_rule_id": turn.match.rule_id,
+                "operator_matched_decision_id": turn.match.decision_id,
+                "operator_matched_reply": _json_safe(turn.match.reply),
                 "operator_matched": turn.match.matched,
                 "operator_answered_from_ground_truth": turn.match.ground_truth and not turn.operator_repeat_suppressed,
                 "operator_repeat_suppressed": turn.operator_repeat_suppressed,
@@ -2907,6 +2915,8 @@ class TierRunner:
             if not isinstance(fired_plants, Sequence) or isinstance(fired_plants, (str, bytes)):
                 fired_plants = ()
             follow_up_kwargs: dict[str, object] = {"fired_plants": fired_plants}
+            if "operator_observations" in follow_up_parameters:
+                follow_up_kwargs["operator_observations"] = observations
             if "row_count_oracle" in follow_up_parameters:
                 follow_up_kwargs["row_count_oracle"] = row_counts
             if "source_evidence" in follow_up_parameters:

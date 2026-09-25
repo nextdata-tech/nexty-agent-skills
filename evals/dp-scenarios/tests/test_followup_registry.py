@@ -40,6 +40,7 @@ EXPECTED_CROSS_CHECKS = {
     "application_reconciliation": (False, False),
     "locale_timezone": (False, False),
     "marketing_attribution": (False, False),
+    "headcount_attrition": (True, True),
 }
 
 # Whether each kind's gold is byte-reproducible by regenerating the CSV
@@ -58,6 +59,7 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "application_reconciliation": True,
     "locale_timezone": True,
     "marketing_attribution": True,
+    "headcount_attrition": True,
 }
 
 

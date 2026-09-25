@@ -13,6 +13,7 @@ from dp_scenarios.followups.capability_shortfall import check as capability_chec
 from dp_scenarios.followups.credential_rotation import check as credential_check
 from dp_scenarios.followups.crm_pipeline import check as crm_check
 from dp_scenarios.followups.finance_close import check as finance_check
+from dp_scenarios.followups.headcount_attrition import check as headcount_check
 from dp_scenarios.followups.inventory_position import check as inventory_check
 from dp_scenarios.followups.optional_required_outputs import check as optional_check
 from dp_scenarios.followups.restart_and_switch import check as restart_check
@@ -30,6 +31,7 @@ ROOT = Path(__file__).parents[1]
         "capability-shortfall",
         "credential-rotation",
         "crm-pipeline",
+        "headcount-attrition",
         "finance-close",
         "inventory-position",
         "parent-child-grain-trap",
@@ -60,6 +62,7 @@ def test_absent_agent_evidence_is_failed_not_ungraded(scenario_name: str) -> Non
         ("credential", "credential-rotation"),
         ("crm", "crm-pipeline"),
         ("finance", "finance-close"),
+        ("headcount", "headcount-attrition"),
         ("inventory", "inventory-position"),
         ("optional", "zero-row-optional-output"),
         ("restart", "restart-and-switch"),
@@ -104,6 +107,10 @@ def test_unreadable_followup_gold_is_ungraded_for_each_gold_backed_kind(
     elif kind == "finance":
         handler = finance_check
         target = {"landed": {}, "promise": {}, "diagnostics": {}, "decision_history": []}
+        context = FollowUpContext()
+    elif kind == "headcount":
+        handler = headcount_check
+        target = {"result_rows": [], "landed_schema": {"department_month": []}}
         context = FollowUpContext()
     elif kind == "inventory":
         handler = inventory_check
