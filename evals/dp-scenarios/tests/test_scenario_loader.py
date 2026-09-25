@@ -712,7 +712,7 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             3
             if scenario.id == "crm-pipeline"
             else 2
-            if scenario.id in {"inventory-position", "marketing-attribution"}
+            if scenario.id in {"inventory-position", "marketing-attribution", "headcount-attrition"}
             else 1
         )
         assert len(approval_turns) == expected_count, scenario.id
