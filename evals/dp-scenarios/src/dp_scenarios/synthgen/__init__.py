@@ -18,7 +18,7 @@ from .generator import (
     pii_promise_holds,
     verify_dataset,
 )
-from .reference import register_reference_builder
+from .reference import read_source_table, register_reference_builder
 from .registry import RegistryError, dataset_definitions, register_dataset, registered_dataset_names
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "dataset_definitions",
     "register_dataset",
     "register_reference_builder",
+    "read_source_table",
     "registered_dataset_names",
     "RegistryError",
     "mutate_dataset",

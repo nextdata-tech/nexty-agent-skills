@@ -13,6 +13,7 @@ from decimal import Decimal
 import importlib
 import random
 import pkgutil
+import re
 from typing import Any, Callable, Mapping, cast
 
 from .defects import Frame
@@ -46,6 +47,29 @@ class DatasetDefinition:
     description: str
     plant: str = ""
     requires_explicit_plant: bool = False
+    source_tables: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate the names of runner-hidden JSON source tables."""
+
+        names = self.source_tables
+        if not isinstance(names, tuple):
+            raise ValueError("source_tables must be a tuple of table names")
+        for name in names:
+            if (
+                not isinstance(name, str)
+                or not name
+                or name in {".", ".."}
+                or re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", name) is None
+            ):
+                raise ValueError(f"source table name is not a safe file stem: {name!r}")
+        if len(set(names)) != len(names):
+            raise ValueError("source_tables names must be unique")
+        overlap = sorted(set(names) & set(self.table_columns))
+        if overlap:
+            raise ValueError(
+                "source_tables must be disjoint from table_columns: " + ", ".join(overlap)
+            )
 
 
 def _timestamp(base: datetime, *, days: int, hours: int) -> str:

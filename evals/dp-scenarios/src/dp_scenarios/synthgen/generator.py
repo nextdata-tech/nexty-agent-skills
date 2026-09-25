@@ -105,7 +105,7 @@ def _reset_generated_area(out_dir: Path) -> None:
     if out_dir.exists() and not out_dir.is_dir():
         raise ValueError(f"output path is not a directory: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
-    for child_name in ("data", "gold"):
+    for child_name in ("data", "gold", "source"):
         child = out_dir / child_name
         if child.exists():
             if not child.is_dir():
@@ -122,7 +122,7 @@ def _reset_generated_area(out_dir: Path) -> None:
 def _owned_files(out_dir: Path) -> list[Path]:
     paths = [
         path
-        for root in (out_dir / "data", out_dir / "gold")
+        for root in (out_dir / "data", out_dir / "gold", out_dir / "source")
         if root.exists()
         for path in root.rglob("*")
         if path.is_file()
@@ -161,6 +161,11 @@ def _write_gitattributes(out_dir: Path) -> None:
     extensions.update(
         path.suffix[1:]
         for path in (out_dir / "gold").rglob("*")
+        if path.is_file() and path.suffix
+    )
+    extensions.update(
+        path.suffix[1:]
+        for path in (out_dir / "source").rglob("*")
         if path.is_file() and path.suffix
     )
     extensions = sorted(extensions)
@@ -494,9 +499,31 @@ def generate_dataset(
             raise ValueError(f"dataset builder omitted table {table_name!r}")
         _write_csv(data_dir / f"{table_name}.csv", columns, tables[table_name])
 
-    reference = reference_gold(dataset_name, data_dir)
-    write_reference_gold(dataset_name, data_dir, gold_dir, reference=reference)
-    write_reference_data(dataset_name, data_dir, reference=reference)
+    source_dir = destination / "source"
+    if definition.source_tables:
+        source_dir.mkdir()
+        for table_name in definition.source_tables:
+            if table_name not in tables:
+                raise ValueError(f"dataset builder omitted source table {table_name!r}")
+            rows = tables[table_name]
+            if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+                raise ValueError(f"source table {table_name!r} must contain mapping rows")
+            path = source_dir / f"{table_name}.json"
+            try:
+                serialized = json.dumps(
+                    rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"source table {table_name!r} is not JSON serializable: {exc}"
+                ) from exc
+            path.write_text(serialized + "\n", encoding="utf-8", newline="\n")
+
+    reference = reference_gold(dataset_name, data_dir, source_dir=source_dir)
+    write_reference_gold(
+        dataset_name, data_dir, gold_dir, reference=reference, source_dir=source_dir
+    )
+    write_reference_data(dataset_name, data_dir, reference=reference, source_dir=source_dir)
     mutation_info: dict[str, Any] = {"enabled": False}
     if mutation:
         mutation_info = _write_pii_mutation(data_dir, pii_markers)
@@ -525,7 +552,7 @@ def generate_dataset(
         "python_implementation": platform.python_implementation(),
         "description": definition.description,
         "table_row_counts": {
-            name: len(rows) for name, rows in sorted(tables.items())
+            name: len(tables[name]) for name in sorted(definition.table_columns)
         },
         "applied_injectors": applied,
         "pii_markers": pii_markers,
@@ -535,6 +562,15 @@ def generate_dataset(
         "file_hashes": file_hashes,
         "fixture_hash": _aggregate_fixture_hash(file_hashes),
     }
+    if definition.source_tables:
+        manifest["source_tables"] = {
+            name: {
+                "path": f"source/{name}.json",
+                "row_count": len(tables[name]),
+                "sha256": hashlib.sha256((source_dir / f"{name}.json").read_bytes()).hexdigest(),
+            }
+            for name in sorted(definition.source_tables)
+        }
     manifest_path = destination / "fixture-manifest.json"
     _write_json(manifest_path, manifest)
     return GenerationResult(
@@ -590,7 +626,7 @@ def verify_dataset(
         regenerated = generate_dataset(
             str(actual_dataset), int(actual_seed), temporary, mutation=mutation
         )
-        for relative in ("data", "gold"):
+        for relative in ("data", "gold", "source"):
             target_snapshot = _snapshot_tree(destination / relative)
             fresh_snapshot = _snapshot_tree(regenerated.out_dir / relative)
             if target_snapshot != fresh_snapshot:

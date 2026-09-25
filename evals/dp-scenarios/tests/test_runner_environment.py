@@ -1956,6 +1956,283 @@ def test_invalid_source_credential_mapping_is_rejected_without_authenticated_sou
     assert transport_calls == 0
 
 
+# --------------------------------------------------------------------------
+# Runner-hidden fixture_source tables.
+
+
+def _p3a_source_tables_builder(seed: int, _rng: object) -> dict[str, list[dict[str, object]]]:
+    marker = "P3A_RUNNER_ONLY_SOURCE_MARKER_46bd71"
+    return {
+        "summary": [{"day": "2024-01-01", "event_count": 5}],
+        "events_v1": [
+            {
+                "id": f"v1-{seed}-{index}",
+                "detail": {"labels": ["signup", index], "context": {"seed": seed}},
+                "note": marker,
+            }
+            for index in range(5)
+        ],
+        "events_v2": [
+            {
+                "id": f"v2-{seed}-{index}",
+                "detail": {"labels": ["usage", index], "context": {"seed": seed}},
+                "note": marker,
+            }
+            for index in range(4)
+        ],
+    }
+
+
+def _p3a_register_source_dataset(monkeypatch: pytest.MonkeyPatch) -> str:
+    from dp_scenarios.synthgen.datasets import BASE_INSTANT, DatasetDefinition
+    from dp_scenarios.synthgen.reference import ReferenceGold, _REFERENCE_BUILDERS, read_source_table
+    from dp_scenarios.synthgen.registry import _DATASETS
+
+    name = "p3a-runner-fixture-source"
+
+    def reference_builder(data_dir: Path, *, source_dir: Path) -> ReferenceGold:
+        del data_dir
+        rows = read_source_table(source_dir, "events_v1")
+        return ReferenceGold(files={"source-gold.json": [{"row_count": len(rows)}]})
+
+    definition = DatasetDefinition(
+        name=name,
+        base_instant=BASE_INSTANT,
+        table_columns={"summary": ("day", "event_count")},
+        injectors=(),
+        builder=_p3a_source_tables_builder,
+        description="Runner fixture-source test dataset.",
+        plant="p3a_runner_source",
+        source_tables=("events_v1", "events_v2"),
+    )
+    monkeypatch.setitem(_DATASETS, name, definition)
+    monkeypatch.setitem(_REFERENCE_BUILDERS, name, reference_builder)
+    return name
+
+
+def _p3a_fixture_scenario(dataset: str):
+    from dataclasses import replace
+
+    from dp_scenarios.scenario import load_scenario
+
+    base = load_scenario(ROOT / "scenarios/crm-pipeline")
+    return replace(base, fixture=replace(base.fixture, dataset=dataset))
+
+
+def _p3a_fixture_source_config():
+    from dp_scenarios.mockrest.config import load_config
+
+    return load_config(
+        {
+            "version": 1,
+            "routes": [
+                {
+                    "path": "/events",
+                    "method": "GET",
+                    "publish_contract": True,
+                    "pagination": {"page_size": 2},
+                    "response": {"fixture_source": "events_v1"},
+                },
+                {
+                    "path": "/catalog",
+                    "method": "GET",
+                    "publish_contract": True,
+                    "state_family": "catalog",
+                    "initial_state": "v1",
+                    "states": {
+                        "v1": {"fixture_source": "events_v1"},
+                        "v2": {"fixture_source": "events_v2"},
+                    },
+                },
+            ],
+        }
+    )
+
+
+def _p3a_get_json(url: str, *, headers: dict[str, str] | None = None) -> object:
+    with urlopen(Request(url, headers=headers or {}), timeout=5) as response:  # noqa: S310 - loopback-only test source
+        assert response.status == 200
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _p3a_get_all_pages(base_url: str) -> list[dict[str, object]]:
+    from urllib.parse import urlencode
+
+    rows: list[dict[str, object]] = []
+    cursor: str | None = None
+    while True:
+        url = base_url + "/events"
+        if cursor is not None:
+            url += "?" + urlencode({"cursor": cursor})
+        page = _p3a_get_json(url)
+        assert isinstance(page, dict)
+        rows.extend(page["data"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return rows
+
+
+def test_fixture_source_is_hidden_resolved_and_served_with_pagination_and_state_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.grading.scans import gold_access_scan
+    from dp_scenarios.runner.tier import _snapshot_source_artifacts
+
+    dataset = _p3a_register_source_dataset(monkeypatch)
+    scenario = _p3a_fixture_scenario(dataset)
+    config = _p3a_fixture_source_config()
+    marker = b"P3A_RUNNER_ONLY_SOURCE_MARKER_46bd71"
+
+    with RunEnvironment(scenario, pins(), root=tmp_path, route_config=config) as environment:
+        source_rows = json.loads(
+            (environment.oracle_dir / "source/events_v1.json").read_text(encoding="utf-8")
+        )
+        version_two_rows = json.loads(
+            (environment.oracle_dir / "source/events_v2.json").read_text(encoding="utf-8")
+        )
+        assert _p3a_get_all_pages(environment.mock_source.server.data_url) == source_rows
+        assert _p3a_get_json(environment.mock_source.server.data_url + "/catalog") == source_rows
+
+        switched = Request(
+            environment.mock_source.server.control_url + "/state",
+            data=json.dumps({"family": "catalog", "state": "v2"}).encode("utf-8"),
+            headers=dict(environment.mock_source.server.control_headers),
+            method="POST",
+        )
+        with urlopen(switched, timeout=5) as response:  # noqa: S310 - loopback-only test source
+            assert response.status == 200
+        assert _p3a_get_json(environment.mock_source.server.data_url + "/catalog") == version_two_rows
+
+        agent_manifest = json.loads(
+            (environment.fixture_dir / "fixture-manifest.json").read_text(encoding="utf-8")
+        )
+        assert "source_tables" not in agent_manifest
+        assert not (environment.fixture_dir / "source").exists()
+        assert (environment.oracle_dir / "source/events_v1.json").is_file()
+        visible_roots = (environment.fixture_dir, environment.workspace_dir, environment.home)
+        oracle_source_path = str(environment.oracle_dir / "source").encode("utf-8")
+        for visible_root in visible_roots:
+            for path in visible_root.rglob("*"):
+                assert not (path.is_dir() and path.name == "source"), path
+                if path.is_file():
+                    contents = path.read_bytes()
+                    assert marker not in contents, path
+                    assert oracle_source_path not in contents, path
+        assert marker not in environment.source_profile_path.read_bytes()
+        evidence_contract = environment.workspace_dir / "scenario-evidence-contract.json"
+        assert evidence_contract.is_file()
+        assert marker not in evidence_contract.read_bytes()
+        assert oracle_source_path not in evidence_contract.read_bytes()
+        assert all(
+            str(environment.oracle_dir / "source") not in value
+            for value in environment.agent_environment.values()
+        )
+
+        artifact_root = tmp_path / "source-artifacts"
+        _snapshot_source_artifacts(environment, artifact_root)
+        assert (artifact_root / "source-evidence.json").is_file()
+        assert marker not in (artifact_root / "source-evidence.json").read_bytes()
+
+        blocked = gold_access_scan(
+            {"turns": [{"files_touched": [{"path": str(environment.oracle_dir / "source/events_v1.json")}]}]},
+            environment.oracle_dir,
+        )
+        assert not blocked.passed
+
+
+def test_fixture_source_digest_tracks_content_not_oracle_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.runner.environment import _mock_route_config_digest
+    from dp_scenarios.synthgen.generator import generate_dataset
+    from dp_scenarios.mockrest.config import resolve_fixture_sources
+
+    dataset = _p3a_register_source_dataset(monkeypatch)
+    first = generate_dataset(dataset, 19, tmp_path / "first")
+    second = generate_dataset(dataset, 20, tmp_path / "second")
+    third = generate_dataset(dataset, 19, tmp_path / "third")
+    config = _p3a_fixture_source_config()
+    first_resolved = resolve_fixture_sources(config, first.out_dir / "source")
+    second_resolved = resolve_fixture_sources(config, second.out_dir / "source")
+    third_resolved = resolve_fixture_sources(config, third.out_dir / "source")
+
+    first_digest = _mock_route_config_digest(first_resolved)
+    assert first_digest != _mock_route_config_digest(second_resolved)
+    assert first_digest == _mock_route_config_digest(third_resolved)
+
+
+def test_native_resume_resolves_fixture_source_from_persisted_oracle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = _p3a_register_source_dataset(monkeypatch)
+    scenario = _p3a_fixture_scenario(dataset)
+    config = _p3a_fixture_source_config()
+    run_root = tmp_path / "native-source-run"
+    with RunEnvironment(
+        scenario,
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        route_config=config,
+    ) as fresh:
+        contract = json.loads(
+            (run_root / environment_module.NATIVE_SOURCE_CONTRACT_FILENAME).read_text(
+                encoding="utf-8"
+            )
+        )
+        expected_digest = contract["route_config_digest"]
+        assert fresh.mock_source.server.config.routes[0].response.data
+
+    with RunEnvironment(
+        scenario,
+        pins(),
+        persistent_root=run_root,
+        native_continuation=True,
+        native_resume=True,
+        route_config=config,
+    ) as resumed:
+        assert resumed.mock_source.server.config.routes[0].response.data
+        assert environment_module._mock_route_config_digest(
+            resumed.mock_source.server.config
+        ) == expected_digest
+
+    source_path = run_root / "oracle/source/events_v1.json"
+    source_path.unlink()
+    with pytest.raises(RunEnvironmentError, match="fixture_source 'events_v1'.*unavailable"):
+        RunEnvironment(
+            scenario,
+            pins(),
+            persistent_root=run_root,
+            native_continuation=True,
+            native_resume=True,
+            route_config=config,
+        ).prepare()
+
+
+def test_missing_declared_fixture_source_fails_prepare_with_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dp_scenarios.synthgen import generator as generator_module
+
+    dataset = _p3a_register_source_dataset(monkeypatch)
+    built = _p3a_source_tables_builder(29, object())
+    monkeypatch.setattr(
+        generator_module,
+        "build_tables",
+        lambda _name, _seed, _rng: {key: value for key, value in built.items() if key != "events_v2"},
+    )
+    environment = RunEnvironment(
+        _p3a_fixture_scenario(dataset),
+        pins(),
+        root=tmp_path,
+        route_config=_p3a_fixture_source_config(),
+    )
+    with pytest.raises(RunEnvironmentError, match="fixture generation failed.*omitted source table"):
+        environment.prepare()
+    assert environment._temporary is None
+    assert environment._base_dir is None
+
+
 def test_workflow_activation_runs_before_mcp_with_the_exact_disposable_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -13,6 +13,7 @@ import csv
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 import importlib
+import inspect
 import json
 from pathlib import Path
 import pkgutil
@@ -244,17 +245,57 @@ def _zero_row_optional_gold(data_dir: Path) -> ReferenceGold:
     )
 
 
-def reference_gold(dataset_name: str, data_dir: str | Path) -> ReferenceGold:
+def _call_reference_builder(
+    builder: ReferenceBuilder, data_path: Path, source_path: Path
+) -> ReferenceGold:
+    """Call legacy builders unchanged and pass the optional hidden source dir when accepted."""
+
+    try:
+        parameters = inspect.signature(builder).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    source_parameter = parameters.get("source_dir")
+    accepts_keywords = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if source_parameter is not None and source_parameter.kind is not inspect.Parameter.POSITIONAL_ONLY:
+        return builder(data_path, source_dir=source_path)
+    if accepts_keywords:
+        return builder(data_path, source_dir=source_path)
+    return builder(data_path)
+
+
+def read_source_table(source_dir: str | Path, name: str) -> list[dict[str, Any]]:
+    """Read one generated JSON source table for an independent reference builder."""
+
+    path = Path(source_dir) / f"{name}.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"could not read source table {name!r}: {exc}") from exc
+    if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+        raise ValueError(f"source table {name!r} must contain a JSON array of objects")
+    return value
+
+
+def reference_gold(
+    dataset_name: str,
+    data_dir: str | Path,
+    *,
+    source_dir: str | Path | None = None,
+) -> ReferenceGold:
     """Return frozen gold content for ``dataset_name`` from source files."""
 
     _discover_reference_plugins()
     data_path = Path(data_dir)
+    resolved_source_dir = Path(source_dir) if source_dir is not None else data_path.parent / "source"
     try:
         builder = _REFERENCE_BUILDERS[dataset_name]
     except KeyError as exc:
         available = ", ".join(sorted(_REFERENCE_BUILDERS))
         raise ValueError(f"unknown dataset {dataset_name!r}; choose one of: {available}") from exc
-    return builder(data_path)
+    return _call_reference_builder(builder, data_path, resolved_source_dir)
 
 
 register_reference_builder("grain_trap", _grain_trap_gold)
@@ -286,10 +327,11 @@ def write_reference_gold(
     gold_dir: str | Path,
     *,
     reference: ReferenceGold | None = None,
+    source_dir: str | Path | None = None,
 ) -> ReferenceGold:
     """Calculate and write gold files with pinned text serialization."""
 
-    result = reference or reference_gold(dataset_name, data_dir)
+    result = reference or reference_gold(dataset_name, data_dir, source_dir=source_dir)
     destination = Path(gold_dir)
     destination.mkdir(parents=True, exist_ok=True)
     for filename, content in result.files.items():
@@ -313,10 +355,11 @@ def write_reference_data(
     data_dir: str | Path,
     *,
     reference: ReferenceGold | None = None,
+    source_dir: str | Path | None = None,
 ) -> ReferenceGold:
     """Write independent reference datasets that closures may land and query."""
 
-    result = reference or reference_gold(dataset_name, data_dir)
+    result = reference or reference_gold(dataset_name, data_dir, source_dir=source_dir)
     destination = Path(data_dir)
     for filename, content in result.data_files.items():
         path = destination / filename
@@ -345,6 +388,7 @@ __all__ = [
     "generate_gold",
     "reference_gold",
     "register_reference_builder",
+    "read_source_table",
     "write_reference_data",
     "write_reference_gold",
 ]

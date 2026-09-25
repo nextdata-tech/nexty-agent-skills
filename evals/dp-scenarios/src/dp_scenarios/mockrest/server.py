@@ -307,6 +307,15 @@ class MockRestServer:
     async def start(self, *, wait_for_ready: bool = True) -> "MockRestServer":
         """Bind both ports and optionally wait until both configured probes answer."""
 
+        if any(
+            spec.deferred
+            for route in self.config.routes
+            for spec in (([route.response] if route.response is not None else []) + list(route.states.values()))
+        ):
+            raise ConfigError(
+                "mock-rest cannot start with unresolved fixture_source responses; "
+                "resolve the fixture sources before starting the server"
+            )
         if self._addresses is not None:
             return self
         data_app = web.Application(middlewares=[_neutral_server_header])

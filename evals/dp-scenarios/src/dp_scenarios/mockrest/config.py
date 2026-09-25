@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import csv
 import copy
+import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -78,6 +79,13 @@ class ResponseSpec:
     item_key: str = "id"
     source: Path | None = None
     serialized_json: bytes | None = None
+    fixture_source: str | None = None
+
+    @property
+    def deferred(self) -> bool:
+        """Whether a hidden fixture source has not yet been resolved."""
+
+        return self.fixture_source is not None and self.data is None
 
     @classmethod
     def from_value(
@@ -86,11 +94,14 @@ class ResponseSpec:
         if not isinstance(value, Mapping):
             raise ConfigError(f"{location} must be a mapping")
         raw = dict(value)
-        _keys(raw, {"json", "file", "format", "item_key", "encoding"}, location)
+        _keys(raw, {"json", "file", "fixture_source", "format", "item_key", "encoding"}, location)
         has_json = "json" in raw
         has_file = "file" in raw
-        if has_json == has_file:
-            raise ConfigError(f"{location} must contain exactly one of json or file")
+        has_fixture_source = "fixture_source" in raw
+        if sum((has_json, has_file, has_fixture_source)) != 1:
+            raise ConfigError(
+                f"{location} must contain exactly one of json, file, or fixture_source"
+            )
         item_key = raw.get("item_key", "id")
         _nonempty_string(item_key, f"{location}.item_key")
         fmt = raw.get("format")
@@ -118,6 +129,25 @@ class ResponseSpec:
                 format=fmt or "json",
                 item_key=item_key,
                 serialized_json=serialized,
+            )
+
+        if has_fixture_source:
+            if "encoding" in raw:
+                raise ConfigError(f"{location}.encoding is not allowed with fixture_source")
+            if fmt not in (None, "json"):
+                raise ConfigError(f"{location}.format must be json with fixture_source")
+            table = _nonempty_string(raw["fixture_source"], f"{location}.fixture_source")
+            if (
+                table in {".", ".."}
+                or re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", table) is None
+            ):
+                raise ConfigError(f"{location}.fixture_source must be a safe table name")
+            return cls(
+                None,
+                format="json",
+                item_key=item_key,
+                serialized_json=None,
+                fixture_source=table,
             )
 
         relative = Path(_nonempty_string(raw["file"], f"{location}.file"))
@@ -500,7 +530,9 @@ class ScenarioConfig:
     source_path: Path | None = None
 
 
-def load_config(source: str | Path | Mapping[str, Any]) -> ScenarioConfig:
+def load_config(
+    source: str | Path | Mapping[str, Any], *, base_dir: Path | None = None
+) -> ScenarioConfig:
     """Load and validate a YAML path or mapping into a :class:`ScenarioConfig`."""
 
     source_path: Path | None = None
@@ -510,10 +542,10 @@ def load_config(source: str | Path | Mapping[str, Any]) -> ScenarioConfig:
             raw_loaded = yaml.safe_load(source_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, yaml.YAMLError) as exc:
             raise ConfigError(f"could not read scenario file {source_path}: {exc}") from exc
-        base_dir = source_path.parent
+        resolved_base_dir = source_path.parent if base_dir is None else Path(base_dir)
     else:
         raw_loaded = source
-        base_dir = Path.cwd()
+        resolved_base_dir = Path.cwd() if base_dir is None else Path(base_dir)
     raw = _mapping(raw_loaded, "scenario")
     _keys(
         raw,
@@ -538,7 +570,7 @@ def load_config(source: str | Path | Mapping[str, Any]) -> ScenarioConfig:
     if not isinstance(raw_routes, list) or not raw_routes:
         raise ConfigError("scenario.routes must be a non-empty list")
     routes = tuple(
-        RouteConfig.from_mapping(item, base_dir=base_dir, index=index)
+        RouteConfig.from_mapping(item, base_dir=resolved_base_dir, index=index)
         for index, item in enumerate(raw_routes)
     )
     identities = [(route.method, route.path) for route in routes]
@@ -617,9 +649,123 @@ def load_config(source: str | Path | Mapping[str, Any]) -> ScenarioConfig:
         data_port=data_port,
         control_host=control_host,
         control_port=control_port,
-        base_dir=base_dir,
+        base_dir=resolved_base_dir,
         source_path=source_path,
     )
+
+
+def fixture_source_tables(config: ScenarioConfig) -> frozenset[str]:
+    """Return every fixture table named by a route response or state."""
+
+    names: set[str] = set()
+    for route in config.routes:
+        specs = ([route.response] if route.response is not None else []) + list(route.states.values())
+        names.update(
+            spec.fixture_source
+            for spec in specs
+            if spec is not None and spec.fixture_source is not None
+        )
+    return frozenset(names)
+
+
+def _validate_resolved_fixture_response(
+    route: RouteConfig, spec: ResponseSpec, location: str
+) -> None:
+    """Validate route behavior that depends on the resolved fixture payload."""
+
+    data = spec.data
+    templated = re.search(r"\{[A-Za-z_][A-Za-z0-9_]*\}", route.path) is not None
+    if (route.pagination is not None or route.fanout is not None or templated) and not isinstance(
+        data, list
+    ):
+        raise ConfigError(f"{location} must resolve to a JSON collection for this route")
+    if route.fanout is not None:
+        for index, row in enumerate(data):
+            if not isinstance(row, Mapping) or route.fanout.child_parent_field not in row:
+                raise ConfigError(
+                    f"{location}[{index}] must contain fanout child field "
+                    f"{route.fanout.child_parent_field!r}"
+                )
+    if templated:
+        for index, row in enumerate(data):
+            if not isinstance(row, Mapping) or spec.item_key not in row:
+                raise ConfigError(
+                    f"{location}[{index}] must contain item_key {spec.item_key!r}"
+                )
+
+
+def resolve_fixture_sources(
+    config: ScenarioConfig,
+    source_dir: Path,
+    *,
+    expected_sha256: Mapping[str, str] | None = None,
+) -> ScenarioConfig:
+    """Load deferred source tables from the private oracle source directory."""
+
+    if not any(
+        spec.deferred
+        for route in config.routes
+        for spec in (([route.response] if route.response is not None else []) + list(route.states.values()))
+    ):
+        return config
+    cache: dict[str, tuple[list[dict[str, Any]], bytes]] = {}
+
+    def resolve_spec(spec: ResponseSpec) -> ResponseSpec:
+        table = spec.fixture_source
+        if table is None or not spec.deferred:
+            return spec
+        if table not in cache:
+            path = Path(source_dir) / f"{table}.json"
+            try:
+                raw_bytes = path.read_bytes()
+            except OSError as exc:
+                raise ConfigError(
+                    f"fixture_source {table!r} is unavailable in the source directory"
+                ) from exc
+            if expected_sha256 is not None and table in expected_sha256:
+                expected = expected_sha256[table]
+                if (
+                    not isinstance(expected, str)
+                    or hashlib.sha256(raw_bytes).hexdigest() != expected
+                ):
+                    raise ConfigError(
+                        f"fixture_source {table!r} sha256 does not match the fixture manifest"
+                    )
+            try:
+                data = json.loads(raw_bytes.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise ConfigError(f"fixture_source {table!r} is not valid UTF-8 JSON") from exc
+            if not isinstance(data, list) or any(not isinstance(row, Mapping) for row in data):
+                raise ConfigError(f"fixture_source {table!r} must contain a JSON array of objects")
+            try:
+                serialized = json.dumps(
+                    data, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"fixture_source {table!r} is not JSON serializable") from exc
+            cache[table] = (data, serialized)
+        data, serialized = cache[table]
+        return replace(spec, data=data, serialized_json=serialized, source=None)
+
+    resolved_routes: list[RouteConfig] = []
+    for route_index, route in enumerate(config.routes):
+        response = resolve_spec(route.response) if route.response is not None else None
+        states = {state: resolve_spec(spec) for state, spec in route.states.items()}
+        if (
+            response is not None
+            and route.response is not None
+            and route.response.deferred
+        ):
+            _validate_resolved_fixture_response(
+                route, response, f"routes[{route_index}].response"
+            )
+        for state, spec in states.items():
+            if route.states[state].deferred:
+                _validate_resolved_fixture_response(
+                    route, spec, f"routes[{route_index}].states.{state}"
+                )
+        resolved_routes.append(replace(route, response=response, states=states))
+    return replace(config, routes=tuple(resolved_routes))
 
 
 parse_config = load_config
