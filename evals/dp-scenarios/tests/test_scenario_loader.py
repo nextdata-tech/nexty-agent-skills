@@ -53,12 +53,14 @@ EXPECTED_TIERS = {
     "application-reconciliation": "core",
     "locale-timezone": "core",
     "marketing-attribution": "full",
+    "headcount-attrition": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
 # query is required only where an `answer` gold row-set is declared, which the
 # tier decides from `has_scoreable_answer_gold`. Leaving it in the base set
-# made this table disagree with the tier for eight of the nine packages.
+# made this table disagree with the tier for packages whose gold is consumed
+# only by their scenario-specific follow-up.
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
     | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
@@ -231,6 +233,44 @@ def test_loader_requires_the_explicit_fixture_plant_declaration(tmp_path: Path) 
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ScenarioError, match="fixture requires dataset, seed, variant, and plant"):
+        load_scenario(package)
+
+
+def test_inline_route_file_resolves_from_the_scenario_package_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _copy_parent_child_package(tmp_path)
+    (package / "route-rows.json").write_text('[{"id":"package-row"}]\n', encoding="utf-8")
+    other_cwd = tmp_path / "unrelated-cwd"
+    other_cwd.mkdir()
+    (other_cwd / "route-rows.json").write_text('[{"id":"cwd-row"}]\n', encoding="utf-8")
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["route_table"] = {
+        "version": 1,
+        "routes": [{"path": "/events", "response": {"file": "route-rows.json"}}],
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(other_cwd)
+
+    scenario = load_scenario(package)
+
+    assert scenario.route_table is not None
+    assert scenario.route_table.routes[0].response.data == [{"id": "package-row"}]
+    assert scenario.route_table.base_dir == package.resolve()
+
+
+def test_loader_rejects_fixture_source_not_declared_by_dataset(tmp_path: Path) -> None:
+    package = _copy_parent_child_package(tmp_path)
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["route_table"] = {
+        "version": 1,
+        "routes": [{"path": "/events", "response": {"fixture_source": "undeclared"}}],
+    }
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ScenarioError, match="fixture_source 'undeclared'.*source_tables"):
         load_scenario(package)
 
 
@@ -476,6 +516,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "capability-shortfall")
     shutil.rmtree(root / "crm-pipeline")
     shutil.rmtree(root / "finance-close")
+    shutil.rmtree(root / "headcount-attrition")
     shutil.rmtree(root / "inventory-position")
     shutil.rmtree(root / "application-reconciliation")
     shutil.rmtree(root / "locale-timezone")
@@ -709,7 +750,7 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             3
             if scenario.id == "crm-pipeline"
             else 2
-            if scenario.id in {"inventory-position", "marketing-attribution"}
+            if scenario.id in {"inventory-position", "marketing-attribution", "headcount-attrition"}
             else 1
         )
         assert len(approval_turns) == expected_count, scenario.id

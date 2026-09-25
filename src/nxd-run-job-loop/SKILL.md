@@ -13,7 +13,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.52.9
+  version: 0.53.0
 ---
 
 # nxd-run-job-loop skill
@@ -95,9 +95,10 @@ are mandatory anyway whenever the session registry exposes them.
 Establish the following (ask the user for whatever is missing). Before asking for a path or claiming no source exists, inspect supplied attachments, declared workspace artifacts, source profiles, and reference files; use a discovered in-scope source and ask only for a genuine gap.
 
 - **Intent** — what the data product is about, in the user's words.
-- **Sources** — where the in-scope local data lives. Preserve each source exactly; if it
-  is not already a connector export, keep any generated export copy separate
-  from the supplied source.
+- **Sources** — where the in-scope local data lives. Preserve each source
+  exactly by default; for an in-scope file, use only the declared projection
+  exception for unneeded personal data. Keep generated exports separate from
+  the supplied source.
 - **Questions** — the natural-language questions the DP must answer. These
   drive the whole inference (right-to-left): the model is judged by whether it
   answers them.
@@ -129,12 +130,10 @@ with that source's label. **If the request supplied a procedure (rubric, gates,
 thresholds, verdicts) with a gap that changes a result, the policy read-back in
 Step 3's skill comes FIRST** — reading a source is always allowed, but copying it
 into a closure is a materialization and waits for the user's reply. Per-kind
-rules — attached file, pasted table, database, REST API, and the host-path
-handoff — plus where credentials land are in
-[reference/source-materialization.md](reference/source-materialization.md),
-which also carries the absolute **fidelity here; derivation downstream** rule —
-landed rows are byte-exact, and every correction is a derived model beside the
-pristine source, never an edit to it.
+rules — attached file, pasted table, database, REST API and host-path handoff —
+plus credential guidance are in [reference/source-materialization.md](reference/source-materialization.md).
+It requires exact-copy landing by default, with one declared projection for
+unneeded personal data; tell the user what was omitted and why without echoing it.
 
 ### Step 1b — Author `dp-blueprint.md`, the prose-first user plan
 
@@ -398,12 +397,13 @@ current owners.
 
 ## Invariants — never violate these
 
-- **Preserve supplied data.** Never modify an input file, its headers, or its
-  rows; never add an identifier or fabricate a key. A generated file-connector
-  export may contain only an exact copy kept separate from the source — this
-  governs **source materialization**, no exception. Treat a live database or REST
-  API source as **read-only**: never write to it, never fabricate a
-  table/endpoint the user didn't name, never invent or narrate a raw credential.
+- **Preserve supplied data.** Never modify the original or add raw identifiers.
+  File exports are exact copies by default; only exception is a declared
+  projection of unneeded personal data, preserving rows/retained values and
+  recording drops, reasons, and both digests. Derive approved non-identifying
+  continuity keys in memory before landing; omit the raw identifiers.
+  Treat database and REST API sources as **read-only**: never write to them,
+  fabricate a table/endpoint, or narrate a raw credential.
   A real credential lands in exactly one place — the generated
   `infra-profile.yaml` connector service's `attributes` — never elsewhere, never
   in chat, never in `dp-blueprint.md`, which names key names only. **"Never in chat"
@@ -421,9 +421,9 @@ current owners.
   nxd-generate-data-product can't resolve for you.
 - **Correct data downstream, never upstream.** Cleaning, dedup, amortization,
   currency normalization, reclassification and regrain belong in **derived models
-  computed from the pristine source** — authored by nxd-generate-data-product,
+  computed from the approved landed source** — authored by nxd-generate-data-product,
   landed through the DuckDB output port, asserted in the transform. Never edit the
-  source export to reach that outcome, never emulate it agent-side.
+  user's original source to reach that outcome, never emulate it agent-side.
 - **A judgement not in the data is confirmed and landed, not hardcoded.** FX
   rates, merchant→category and similar mappings are surfaced, confirmed, and
   landed as their own queryable model — never embedded as transform constants.

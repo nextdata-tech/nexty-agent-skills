@@ -7,7 +7,13 @@ from accidentally using the oracle that is meant to evaluate it.
 """
 
 from .capability import CapabilityManifest, CapabilityError, load_capability_manifest
-from .config import ConfigError, ScenarioConfig, load_config
+from .config import (
+    ConfigError,
+    ScenarioConfig,
+    fixture_source_tables,
+    load_config,
+    resolve_fixture_sources,
+)
 from .counters import RequestCounters
 from .openapi import OpenAPIError, openapi_to_scenario
 from .server import MockRestServer, start_server, wait_until_ready
@@ -22,6 +28,8 @@ __all__ = [
     "ScenarioConfig",
     "load_capability_manifest",
     "load_config",
+    "fixture_source_tables",
+    "resolve_fixture_sources",
     "openapi_to_scenario",
     "start_server",
     "wait_until_ready",

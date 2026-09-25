@@ -27,10 +27,17 @@ from typing import Any, Mapping
 from dp_scenarios.ledger import LedgerRow, LedgerStore, Manifest, fixture_dir_hash
 from dp_scenarios.ledger.manifest import NOT_APPLICABLE, REPLAY_SESSION_PATH_FIELDS
 from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_transform_latency
-from dp_scenarios.mockrest.config import ScenarioConfig, load_config
+from dp_scenarios.mockrest.config import (
+    ConfigError as MockRestConfigError,
+    ScenarioConfig,
+    fixture_source_tables,
+    load_config,
+    resolve_fixture_sources,
+)
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
+from dp_scenarios.synthgen import get_dataset
 from dp_scenarios.runner.review_guard import RETAINED_REVIEW_ROOT_NAMES
 
 
@@ -865,11 +872,15 @@ def _mock_response_material(response: object | None) -> object | None:
 
     if response is None:
         return None
-    return {
+    material = {
         "data": getattr(response, "data"),
         "format": getattr(response, "format"),
         "item_key": getattr(response, "item_key"),
     }
+    fixture_source = getattr(response, "fixture_source", None)
+    if fixture_source is not None:
+        material["fixture_source"] = fixture_source
+    return material
 
 
 def _mock_route_material(route: object) -> dict[str, object]:
@@ -963,6 +974,69 @@ def _as_mock_route_config(value: object) -> ScenarioConfig:
     if isinstance(value, ScenarioConfig):
         return value
     return load_config(value)  # type: ignore[arg-type]
+
+
+def _resolve_route_fixture_sources(
+    route_config: object,
+    *,
+    source_dir: Path,
+    fixture_manifest: Mapping[str, object] | None,
+) -> object:
+    """Resolve only deferred fixture responses, verifying their oracle hashes."""
+
+    def declares_fixture_source(value: object) -> bool:
+        if isinstance(value, Mapping):
+            return "fixture_source" in value or any(
+                declares_fixture_source(item) for item in value.values()
+            )
+        if isinstance(value, (list, tuple)):
+            return any(declares_fixture_source(item) for item in value)
+        return False
+
+    if isinstance(route_config, ScenarioConfig) and not fixture_source_tables(route_config):
+        return route_config
+    if isinstance(route_config, Mapping) and not declares_fixture_source(route_config):
+        return route_config
+    if isinstance(route_config, (str, Path)):
+        try:
+            if "fixture_source" not in Path(route_config).read_text(encoding="utf-8"):
+                return route_config
+        except (OSError, UnicodeError):
+            return route_config
+    try:
+        config = _as_mock_route_config(route_config)
+        deferred_tables = {
+            spec.fixture_source
+            for route in config.routes
+            for spec in (
+                ([route.response] if route.response is not None else [])
+                + list(route.states.values())
+            )
+            if spec.deferred and spec.fixture_source is not None
+        }
+        if not deferred_tables:
+            return route_config
+        source_entries = (
+            fixture_manifest.get("source_tables")
+            if isinstance(fixture_manifest, Mapping)
+            else None
+        )
+        if not isinstance(source_entries, Mapping):
+            raise EnvironmentError("oracle fixture manifest has no source_tables hashes")
+        expected: dict[str, str] = {}
+        for table in deferred_tables:
+            entry = source_entries.get(table)
+            digest = entry.get("sha256") if isinstance(entry, Mapping) else None
+            if not isinstance(digest, str) or not digest:
+                raise EnvironmentError(
+                    f"oracle fixture manifest has no sha256 for source table {table!r}"
+                )
+            expected[table] = digest
+        return resolve_fixture_sources(config, source_dir, expected_sha256=expected)
+    except EnvironmentError:
+        raise
+    except (MockRestConfigError, OSError, ValueError, TypeError) as exc:
+        raise EnvironmentError(f"mock source fixture_source could not be resolved: {exc}") from exc
 
 
 def _mock_route_config_digest(value: object) -> str:
@@ -1223,7 +1297,18 @@ class RunEnvironment:
             for relative in (".nxd", ".config", ".local/share", ".cache", ".state"):
                 (self._home / relative).mkdir(parents=True, exist_ok=True)
             self._fixture = base / "fixture"
-            generation = self.scenario.generate_fixture(self._fixture)
+            try:
+                generation = self.scenario.generate_fixture(self._fixture)
+            except Exception as error:
+                if getattr(get_dataset(self.scenario.dataset), "source_tables", ()):
+                    try:
+                        self.close()
+                    except BaseException as cleanup_error:
+                        error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
+                    raise EnvironmentError(
+                        f"fixture generation failed for declared source tables: {error}"
+                    ) from error
+                raise
             self._generated_fixture_manifest = dict(generation.manifest)
             base_instant = generation.manifest.get("base_instant")
             if not isinstance(base_instant, str) or not base_instant:
@@ -1235,6 +1320,9 @@ class RunEnvironment:
                 oracle_manifest = self._oracle / "fixture-manifest.json"
                 shutil.move(str(generation.manifest_path), str(oracle_manifest))
                 shutil.move(str(generation.gold_dir), str(self._oracle / "gold"))
+                source_dir = self._fixture / "source"
+                if source_dir.exists():
+                    shutil.move(str(source_dir), str(self._oracle / "source"))
                 (self._fixture / "fixture-manifest.json").write_text(
                     json.dumps(_agent_fixture_manifest(generation.manifest, self._oracle), indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
@@ -1268,6 +1356,12 @@ class RunEnvironment:
         try:
             if isinstance(self.attempt, bool) or not isinstance(self.attempt, int) or self.attempt < 1:
                 raise EnvironmentError("attempt must be a positive integer")
+            if route_config is not None:
+                route_config = _resolve_route_fixture_sources(
+                    route_config,
+                    source_dir=(self._oracle / "source") if self._oracle is not None else Path(""),
+                    fixture_manifest=self._generated_fixture_manifest,
+                )
             if self.knobs.transform_window is not None:
                 if route_config is None:
                     raise EnvironmentError("transform_window requires a mock-rest route configuration")

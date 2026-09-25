@@ -15,7 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
-from .config import load_config
+from .config import ConfigError, fixture_source_tables, load_config, resolve_fixture_sources
 from .server import MockRestServer
 
 
@@ -25,11 +25,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-port", type=int, default=None)
     parser.add_argument("--control-port", type=int, default=None)
     parser.add_argument("--control-secret", default=None)
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        default=None,
+        help="runner-private directory containing fixture_source JSON tables",
+    )
     return parser
 
 
 async def _run(args: argparse.Namespace) -> None:
     config = load_config(args.scenario)
+    source_tables = fixture_source_tables(config)
+    if source_tables:
+        if args.source_dir is None:
+            raise ConfigError(
+                "route table uses fixture_source but --source-dir was not provided"
+            )
+        config = resolve_fixture_sources(config, args.source_dir)
     if args.data_port is not None or args.control_port is not None:
         config = replace(
             config,
