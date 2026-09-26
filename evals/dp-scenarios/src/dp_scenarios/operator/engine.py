@@ -1863,8 +1863,27 @@ class OperatorEngine:
                 # an intake turn, or plain narration (or, for the owed case,
                 # get forced out by the three-turn bound)? Only the latter
                 # leaves something owed for reconfirmation.
+                #
+                # ``approval_requested`` alone is not that test: it is
+                # deliberately set whenever the bare vocabulary
+                # ("approve[sd]?", "approval", "sign off") appears anywhere in
+                # the message (see ``MatchResult.approval_requested``), not
+                # only when the message actually solicits approval. A source
+                # answer that merely echoes the scenario's own domain phrase
+                # -- "the approved currency reference" -- trips it too, which
+                # is exactly what B2 run11's turn 2 did: a plain source
+                # clarifying question, classified ``source.answer.source``,
+                # was read as a "genuine prior request" purely because it
+                # repeated that phrase, so the arming below never ran and the
+                # turn-3 scripted approval's text was lost for the rest of the
+                # run instead of staying available to reconfirm. Requiring the
+                # match's own category to be ``APPROVAL_REQUEST`` is the same
+                # guard ``reconfirm_this_turn`` and ``owed_approval_genuine_ask``
+                # already apply below; this is the one place that had fallen
+                # out of step with them.
                 genuine_prior_request = bool(
                     next_match is not None
+                    and next_match.category is Category.APPROVAL_REQUEST
                     and next_match.approval_requested
                     and next_match.solicits_operator
                 )

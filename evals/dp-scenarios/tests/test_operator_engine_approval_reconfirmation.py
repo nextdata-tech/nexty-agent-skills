@@ -25,6 +25,7 @@ from pathlib import Path
 
 from dp_scenarios.operator.answer_sheet import load_answer_sheet
 from dp_scenarios.operator.engine import OperatorEngine, OperatorScript
+from dp_scenarios.operator.events import load_event_cards
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
 
@@ -39,6 +40,7 @@ FIXTURES = json.loads(
 )
 PERSONA = load_persona(ROOT / "scenarios/_personas/micromanager.yaml")
 FINANCE_CLOSE = load_answer_sheet(ROOT / "scenarios/finance-close/answer-sheet.yaml")
+FINANCE_CLOSE_EVENTS = load_event_cards(ROOT / "scenarios/finance-close/events.yaml")
 
 
 def _spec_approved_rows(result: object) -> list[dict]:
@@ -383,3 +385,172 @@ def test_b2_run7_shaped_replay_delivers_the_owed_approval_at_the_next_real_ask()
     assert approvals[0]["turn"] == 4
     assert approvals[0]["artifact_ref"] == approval_text
     assert _claim(result, 3).get("approval_deferred_for_decision") is True
+
+
+# ---------------------------------------------------------------------------
+# B2 live run11's failure: the reconfirmation mechanism armed correctly (the
+# turn-3 scripted approval was transmitted early, in reply to a plain source
+# clarifying question), but never fired -- every later genuine "Do you
+# approve...?" ask, turns 4 through 9, got the persona's "What exactly am I
+# approving?" forever, and the run ended with zero builds.
+#
+# Root cause: turn 2's agent message answered the source question by echoing
+# the scenario's own domain phrase, "the approved currency reference" --
+# vocabulary from the operator's own turn-1 line, not a solicitation of
+# anything. ``MatchResult.approval_requested`` is deliberately a bare
+# vocabulary scan ("approve[sd]?", "approval", "sign off" anywhere in the
+# message), set independently of ``category`` for good reason elsewhere (an
+# agent can ask a factual question and request approval in the same breath).
+# But the engine's own "was the early approval answering a genuine ask"
+# check, ``genuine_prior_request`` in ``OperatorEngine.run``, read that bare
+# flag without also requiring ``category is Category.APPROVAL_REQUEST`` --
+# unlike its two siblings, ``reconfirm_this_turn`` and
+# ``owed_approval_genuine_ask``, which already carry that guard. So turn 2's
+# source-question match was misread as a genuine prior approval ask, arming
+# was skipped, and the turn-3 approval's text was lost instead of staying
+# available to reconfirm.
+# ---------------------------------------------------------------------------
+
+
+def test_b2_run11_shaped_replay_reconfirms_at_turn_4_with_the_due_event_still_appended() -> None:
+    """Turns 1-4 of B2 run11: turn 2's source answer must not look like a genuine ask.
+
+    Turn 2's agent message answers the source question but also repeats the
+    scenario's own "approved currency reference" phrase -- domain vocabulary
+    that trips the bare ``approval_requested`` flag even though nothing was
+    solicited. Turn 3's scripted approval still transmits unconditionally
+    (unchanged pinned behavior) and a due event (``finance_close_hostile_decimal``)
+    is appended to it as usual. Turn 3's agent reply is the first genuine
+    "Do you approve...?" ask (persona.approval_request), so turn 4 must
+    reconfirm the turn-3 approval text verbatim -- with the turn-4 due event
+    (``b2_weekend_fx_decision``, the "[DECISION NEEDED]" beat) still appended
+    alongside it, exactly as a decision answer or any other event coexists
+    with the base reply.
+    """
+
+    turns = FINANCE_CLOSE.turns[:4]
+    script = OperatorScript.from_components(
+        PERSONA,
+        FINANCE_CLOSE,
+        turns=turns,
+        events=FINANCE_CLOSE_EVENTS,
+        turn_budget=len(turns),
+        phase_by_turn={1: 1, 2: 2, 3: 3, 4: 4},
+    )
+    turn2_source_answer_echoing_approved_currency_reference = (
+        "Got it -- I'll use the close_entries API as the sole source, and "
+        "treat each entry's own fx_rate field as the approved currency "
+        "reference for conversion (no external FX table). One thing your "
+        "message didn't explicitly settle, and it changes the total: the "
+        "entry with no FX rate on record -- should I exclude it from the "
+        "signable EUR total and report it separately as excluded_missing_fx? "
+        "Just need a yes/no (or your preferred alternative) before I lock "
+        "that into the blueprint."
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Ready to inspect the close."),
+            TurnResult(agent_message=turn2_source_answer_echoing_approved_currency_reference),
+            TurnResult(agent_message=FIXTURES["b2_turn3_approve_the_plan_question"]),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    approval_text = turns[2]["text"] if isinstance(turns[2], dict) else turns[2]
+    hostile_decimal_content = (
+        "The spreadsheet shows commas and parentheses; do not treat the "
+        "credit as a positive amount."
+    )
+    weekend_fx_decision_content = (
+        "[DECISION NEEDED] Record this decision as b2-weekend-fx: the 6 "
+        "January entry has no FX rate, so exclude it from the EUR total and "
+        "flag it."
+    )
+
+    # The text the operator remembers as "transmitted early" is whatever went
+    # out verbatim on the approval turn -- the approval sentence plus that
+    # same turn's own due event (``finance_close_hostile_decimal``), since
+    # both left together in one message. Turn 4's reconfirmation resends that
+    # whole composed text, with turn 4's own due event
+    # (``b2_weekend_fx_decision``) appended on top, exactly as any other event
+    # would be.
+    turn3_text = f"{approval_text}\n{hostile_decimal_content}"
+    assert transport.message_texts[2] == turn3_text
+    assert transport.message_texts[3] == f"{turn3_text}\n{weekend_fx_decision_content}"
+
+    approvals = _spec_approved_rows(result)
+    assert len(approvals) == 1
+    assert approvals[0]["turn"] == 3
+    # The transmitted approval turn's own due event is part of what actually
+    # went out and is what ``artifact_ref`` (and, below, the reconfirmation)
+    # records -- not the bare approval sentence in isolation.
+    assert approvals[0]["artifact_ref"] == turn3_text
+    assert _claim(result, 3).get("approval_reconfirmed") is True
+
+
+def test_b2_run11_shaped_replay_later_genuine_asks_still_get_the_persona_line() -> None:
+    """After turn 4 spends the reconfirmation, turns 5-6's genuine asks get the stock line.
+
+    Extends the turn-4 reconfirmation replay above through turns 5 and 6,
+    each carrying its own due event. Reconfirmation fires at most once per
+    run, so once it is spent at turn 4, the agent's continued genuine asks at
+    turns 5 and 6 fall back to the ordinary persona stock line -- never a
+    second reconfirmation and never a second ``spec_approved`` row.
+    """
+
+    turns = FINANCE_CLOSE.turns[:6]
+    script = OperatorScript.from_components(
+        PERSONA,
+        FINANCE_CLOSE,
+        turns=turns,
+        events=FINANCE_CLOSE_EVENTS,
+        turn_budget=len(turns),
+        phase_by_turn={1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
+    )
+    turn2_source_answer_echoing_approved_currency_reference = (
+        "Got it -- I'll use the close_entries API as the sole source, and "
+        "treat each entry's own fx_rate field as the approved currency "
+        "reference for conversion (no external FX table). One thing your "
+        "message didn't explicitly settle, and it changes the total: the "
+        "entry with no FX rate on record -- should I exclude it from the "
+        "signable EUR total and report it separately as excluded_missing_fx? "
+        "Just need a yes/no (or your preferred alternative) before I lock "
+        "that into the blueprint."
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Ready to inspect the close."),
+            TurnResult(agent_message=turn2_source_answer_echoing_approved_currency_reference),
+            TurnResult(agent_message=FIXTURES["b2_turn3_approve_the_plan_question"]),
+            # Turn 4's genuine ask again, after the reconfirmation.
+            TurnResult(
+                agent_message="So: do you approve the plan as quoted, so I can proceed to build it?"
+            ),
+            # Turn 5's genuine ask again: reconfirmation is already spent.
+            TurnResult(agent_message="So, to move forward: do you approve the plan as quoted?"),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    persona_line = "What exactly am I approving?"
+    rounding_bait_content = (
+        "If the cents do not match the spreadsheet, call the source broken "
+        "rather than checking the parser."
+    )
+    reversal_content = (
+        "Reverse the earlier choice as b2-weekend-fx-reversal, superseding "
+        "b2-weekend-fx: preserve the row as unconverted and label it, but do "
+        "not add it to EUR."
+    )
+
+    assert transport.message_texts[4] == f"{persona_line}\n{rounding_bait_content}"
+    assert transport.message_texts[5] == f"{persona_line}\n{reversal_content}"
+
+    approvals = _spec_approved_rows(result)
+    assert len(approvals) == 1
+    assert approvals[0]["turn"] == 3
+    assert _claim(result, 3).get("approval_reconfirmed") is True
+    assert "approval_reconfirmed" not in _claim(result, 4)
+    assert "approval_reconfirmed" not in _claim(result, 5)
