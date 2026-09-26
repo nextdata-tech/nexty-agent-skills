@@ -126,14 +126,30 @@ DEFAULT_OBSTACLE_TERMS = (
 # outranks the factual lookups. "looks good" is deliberately absent: it is
 # ordinary conversational filler ("the data looks good so far") and reading it
 # as a request for sign-off is a false positive far more often than not.
-APPROVAL_REQUEST_PATTERN = re.compile(r"\b(approve[sd]?|approval|sign\s*off)\b", re.IGNORECASE)
+#
+# "sign off" is excluded when it immediately follows "to": an infinitive
+# ("safe to sign off", "ready to sign off") describes a business eligibility
+# state, not an address to the operator, and B2's own domain vocabulary
+# ("Which close figures are safe to sign off?") is exactly that shape. A
+# solicited sign-off is phrased differently -- "sign off on the spec",
+# "please sign off", "your sign-off" -- none of which this lookbehind
+# excludes.
+APPROVAL_REQUEST_PATTERN = re.compile(
+    r"\b(?:approve[sd]?|approval)\b|(?<!\bto\s)\bsign\s*off\b", re.IGNORECASE
+)
 _APPROVAL_CONTEXT_PATTERN = re.compile(
     r"\b(?:need|require|requires|cannot|can\s+not|can't|unable\s+to\s+proceed|"
     r"waiting\s+for|awaiting|without)\b.{0,140}\bapproval\b",
     re.IGNORECASE | re.DOTALL,
 )
 _OTHER_ASK_TOPIC_PATTERN = re.compile(
-    r"\b(source|data|field|column|endpoint|resource|record|row|input|table|where\s+did|"
+    # "data" excludes "data product": the platform's own generic deliverable
+    # name ("generate and build the data product") names nothing substantive
+    # of its own, and treating it as a separate ask suppressed a bare
+    # "Do you approve this plan ... build the data product?" from ever
+    # resolving as approval -- the request clause was disqualified for
+    # mentioning the very artifact the approval authorizes building.
+    r"\b(source|data(?!\s+product\b)|field|column|endpoint|resource|record|row|input|table|where\s+did|"
     r"choose|which|should\s+we|prefer|option|decision|decide|yes\s*/\s*no|"
     r"status|done|finished|finish|complete|where\s+are\s+we|what(?:'s|\s+is)\s+next)\b",
     re.IGNORECASE,

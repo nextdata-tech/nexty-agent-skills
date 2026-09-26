@@ -1193,6 +1193,16 @@ class OperatorEngine:
         served_reply_keys: set[str] = set()
         review_fix_authorized = False
         reapproval_uses = 0
+        # A scripted approval transmitted while nothing was actually being
+        # asked for yet (turn 1 clarifying question, an intake question, a
+        # narration turn) is still on record: the operator already granted it,
+        # so the first time the agent genuinely asks for approval afterward,
+        # the operator reconfirms verbatim rather than routing to a stock
+        # persona line or a stale decision term. This never mints a second
+        # ``spec_approved`` row -- it rides the ordinary substitutable-turn
+        # path -- and it fires at most once per run.
+        early_approval_text: str | None = None
+        reconfirm_available = False
         previous_agent_message = ""
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
@@ -1251,7 +1261,13 @@ class OperatorEngine:
                 and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
                 and not scripted_turn.approval
             )
-            approval_turn = (scripted_turn.approval and not defer_scheduled_approval) or dynamic_reapproval
+            # Distinct from ``approval_turn``: this is true only when the
+            # scripted slot itself is what transmits (never for a dynamic
+            # reapproval), which is the one case the reconfirmation mechanism
+            # tracks -- a dynamic reapproval already carries its own declared
+            # text for "asked again", so it needs no reconfirmation of its own.
+            scripted_approval_fired = scripted_turn.approval and not defer_scheduled_approval
+            approval_turn = scripted_approval_fired or dynamic_reapproval
             # Turn one, a non-substitutable turn and an approval turn all
             # transmit their declared line whatever the directive says, so
             # recording one there would put a value in the ledger that governed
@@ -1266,6 +1282,22 @@ class OperatorEngine:
             # whole reason to record the field is that reading these lines is
             # what finds defects here.
             yielding = directive == "yield"
+            # A previously-owed approval is reconfirmed the first time the
+            # agent genuinely asks for approval afterward. Decisions and a
+            # firing ``dynamic_reapproval`` keep priority -- both already
+            # carry their own, more specific, declared text for this exact
+            # moment -- and this must never compete with them or with the
+            # scripted approval slot itself.
+            reconfirm_this_turn = bool(
+                reconfirm_available
+                and early_approval_text is not None
+                and not decision_answer_pending
+                and not dynamic_reapproval
+                and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
             directive_governs = (
                 index > 1
                 and scripted_turn.substitute_reply
@@ -1293,7 +1325,22 @@ class OperatorEngine:
                 or not scripted_turn.substitute_reply
                 or approval_turn
                 or yielding
-                else (next_reply or scripted_turn.text)
+                else (early_approval_text if reconfirm_this_turn and early_approval_text is not None else (next_reply or scripted_turn.text))
+            )
+            # Whether the reconfirmation actually reached this turn's base, as
+            # opposed to ``reconfirm_this_turn`` being true on a turn the
+            # ternary above routed elsewhere first (turn one, a
+            # non-substitutable line, an approval turn, or a yield) -- those
+            # keep priority and the reconfirmation stays owed for a later turn.
+            reconfirm_applied = bool(
+                reconfirm_this_turn
+                and early_approval_text is not None
+                and not (
+                    index == 1
+                    or not scripted_turn.substitute_reply
+                    or approval_turn
+                    or yielding
+                )
             )
             selected_base = base
             operator_mode = "scripted"
@@ -1317,6 +1364,7 @@ class OperatorEngine:
                 and scripted_turn.substitute_reply
                 and not approval_turn
                 and not decision_answer_pending
+                and not reconfirm_this_turn
             )
             if self.driver is not None and not authorable:
                 driver_skip_reason = (
@@ -1326,6 +1374,8 @@ class OperatorEngine:
                     if approval_turn
                     else "decision_answer"
                     if decision_answer_pending
+                    else "reconfirmation"
+                    if reconfirm_this_turn
                     else "non_substitutable"
                 )
             if authorable:
@@ -1431,6 +1481,7 @@ class OperatorEngine:
                 # approval, and that text becomes the ``spec_approved``
                 # ledger row's ``artifact_ref``.
                 and not approval_turn
+                and not reconfirm_this_turn
                 and next_reply
                 # The yield rule is path-independent: a rendered persona line
                 # is still a refusal nobody asked for.
@@ -1659,6 +1710,8 @@ class OperatorEngine:
                 claim["operator_repeat_suppressed"] = True
             if match.ground_truth and not repeat_suppressed:
                 claim["operator_answered_from_ground_truth"] = True
+            if reconfirm_applied:
+                claim["approval_reconfirmed"] = True
             turn_record = TurnRecord(
                 turn=index,
                 phase=phase,
@@ -1719,6 +1772,29 @@ class OperatorEngine:
                 review_fix_authorized = True
             if dynamic_reapproval:
                 reapproval_uses += 1
+            if reconfirm_applied:
+                # Consumed: at most once per run.
+                reconfirm_available = False
+                early_approval_text = None
+            elif scripted_approval_fired:
+                # ``next_match`` here is still the request that preceded this
+                # turn (updated below), so this is exactly the check the
+                # reconfirmation mechanism exists for: was the scripted line
+                # actually answering a genuine ask, or did it transmit into a
+                # clarifying question, an intake turn, or plain narration? Only
+                # the latter leaves something owed.
+                genuine_prior_request = bool(
+                    next_match is not None
+                    and next_match.approval_requested
+                    and next_match.solicits_operator
+                )
+                if not genuine_prior_request:
+                    early_approval_text = message.text
+                    reconfirm_available = True
+                # A genuinely-requested approval sets nothing: it already
+                # answered the ask it was for, and any earlier owed
+                # reconfirmation (rare -- two scripted approvals in a row)
+                # is left exactly as it was.
             # The match is kept even when suppressed; only the *reply* is
             # withdrawn. The directive is resolved from the match, and
             # discarding it here made a suppressed turn indistinguishable from
