@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -61,6 +62,67 @@ _REVISED_PLAN_PATTERN = re.compile(
     r"|\bgeneration\s+\d+\b",
     re.IGNORECASE | re.DOTALL,
 )
+_ASK_BACK_ACCEPTANCE_RULE_ID = "stance.ask_back.accept_recommendation"
+_ASK_BACK_ACCEPTANCE_REPLY = "Yes, go with your recommendation."
+_ASK_BACK_HAND_BACK_PATTERN = re.compile(
+    r"\b(?:you\s+tell\s+me|what\s+(?:do|would|should)\s+you\s+recommend|"
+    r"what\s+is\s+your\s+recommendation|what\s+would\s+you\s+do|"
+    r"your\s+(?:call|decision|judg(?:e)?ment)|you\s+(?:choose|decide|pick)|"
+    r"up\s+to\s+you|tell\s+me\s+what\s+you(?:'d|\s+would)\s+do)\b",
+    re.IGNORECASE,
+)
+_AGENT_OWN_PROPOSAL_PATTERN = re.compile(
+    # Present tense only: "Earlier I recommended X" recaps a stale proposal
+    # and must not let the acceptance answer a different, current question.
+    r"\b(?:i\s+(?:propose|recommend|suggest)|"
+    r"my\s+(?:proposed|proposal|recommendation|suggestion)|"
+    r"proposed\s+(?:decision|rule|policy|approach|default|treatment))\b",
+    re.IGNORECASE,
+)
+_PROPOSAL_CONFIRMATION_PATTERN = re.compile(
+    r"\b(?:approv(?:e|es|ed|al|ing)?|confirm(?:s|ed|ation)?|"
+    r"accept(?:s|ed|ance)?|endorse(?:s|d|ment)?|sign\s*off|okay|ok|"
+    r"would\s+that\s+work|does\s+that\s+work|is\s+that\s+acceptable|"
+    r"are\s+you\s+(?:okay|ok|comfortable)\s+with)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_request_clause(clause: str) -> str:
+    """Strip formatting and punctuation without fuzzy-matching wording."""
+
+    normalized: list[str] = []
+    for character in clause.casefold():
+        if character.isspace():
+            normalized.append(" ")
+        elif character == "_" or unicodedata.category(character).startswith("P"):
+            continue
+        else:
+            normalized.append(character)
+    return " ".join("".join(normalized).split())
+
+
+def _is_ask_back_acceptance_request(match: MatchResult, message: str) -> bool:
+    """Whether this current message asks to accept the agent's own proposal."""
+
+    clause = match.matched_request_clause
+    if clause is None or not match.solicits_operator:
+        return False
+    # The proposal is usually laid out in its own paragraph(s) above the ask
+    # ("here's my proposed rule ... **Proposed decision:** ... Do you approve
+    # this specific rule?"), so the whole reply is searched; the pending
+    # hand-back already scopes this to the answer to that one question.
+    if _AGENT_OWN_PROPOSAL_PATTERN.search(message) is None:
+        return False
+    if not _PROPOSAL_CONFIRMATION_PATTERN.search(clause):
+        return False
+    if match.category is Category.APPROVAL_REQUEST:
+        return match.decision_id is None and match.approval_requested
+    return bool(
+        match.category is Category.DECISION_REQUEST
+        and match.decision_id is None
+        and not match.matched
+    )
 
 
 class TerminalState(str, Enum):
@@ -919,6 +981,8 @@ class OperatorEngine:
 
         if match is None:
             return "answer"
+        if match.rule_id == _ASK_BACK_ACCEPTANCE_RULE_ID:
+            return "answer"
         # ``answer_available`` is false when the reply was repeat-suppressed:
         # the fact is declared but has already been given, so this turn has
         # nothing to convey. Reading ``substantive_answer`` alone handed the
@@ -1054,6 +1118,7 @@ class OperatorEngine:
         phase_status_reason: str | None = None,
         operator_approval: bool = False,
         operator_approval_text: str | None = None,
+        suppress_inferred_approval: bool = False,
         operator_mode: str = "scripted",
         operator_directive: str = "answer",
         operator_beat_id: str | None = None,
@@ -1103,7 +1168,12 @@ class OperatorEngine:
             # indistinguishable from one that presented a spec.
             if not _artifact_text(approval_artifact):
                 claim["approval_without_artifact"] = True
-        elif match is not None and match.approval_requested and not self._script_declares_approval:
+        elif (
+            match is not None
+            and match.approval_requested
+            and not self._script_declares_approval
+            and not suppress_inferred_approval
+        ):
             # Legacy path: the script never declares who approves, so the only
             # available signal is the agent soliciting approval. A script that
             # declares its own approval turn owns approval outright and this
@@ -1209,6 +1279,8 @@ class OperatorEngine:
         next_match: MatchResult | None = None
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
+        delivered_decision_clauses: dict[str, set[str]] = {}
+        pending_ask_back_decision = False
         review_fix_authorized = False
         reapproval_uses = 0
         # A scripted approval transmitted while nothing was actually being
@@ -1269,6 +1341,10 @@ class OperatorEngine:
                 next_reply is not None
                 and next_match is not None
                 and next_match.decision_id is not None
+            )
+            ask_back_acceptance_turn = bool(
+                next_match is not None
+                and next_match.rule_id == _ASK_BACK_ACCEPTANCE_RULE_ID
             )
             defer_scheduled_approval = bool(
                 scripted_turn.approval
@@ -1379,7 +1455,11 @@ class OperatorEngine:
                 or not scripted_turn.substitute_reply
                 or approval_turn
                 or yielding
-                else (early_approval_text if reconfirm_this_turn and early_approval_text is not None else (next_reply or scripted_turn.text))
+                else early_approval_text
+                if reconfirm_this_turn and early_approval_text is not None
+                else _ASK_BACK_ACCEPTANCE_REPLY
+                if ask_back_acceptance_turn
+                else (next_reply or scripted_turn.text)
             )
             # Whether the reconfirmation actually reached this turn's base, as
             # opposed to ``reconfirm_this_turn`` being true on a turn the
@@ -1419,6 +1499,7 @@ class OperatorEngine:
                 and not approval_turn
                 and not decision_answer_pending
                 and not reconfirm_this_turn
+                and not ask_back_acceptance_turn
             )
             if self.driver is not None and not authorable:
                 driver_skip_reason = (
@@ -1536,6 +1617,8 @@ class OperatorEngine:
                 # ledger row's ``artifact_ref``.
                 and not approval_turn
                 and not reconfirm_this_turn
+                and not ask_back_acceptance_turn
+                and not decision_answer_pending
                 and next_reply
                 # The yield rule is path-independent: a rendered persona line
                 # is still a refusal nobody asked for.
@@ -1662,6 +1745,47 @@ class OperatorEngine:
             self.matcher.validate_outgoing_message(message.text)
             prior_operator_messages.append(message.text)
             result = self.transport.send_message(message)
+            ask_back_acceptance_transmitted = bool(
+                ask_back_acceptance_turn
+                and selected_base is next_reply
+                and _ASK_BACK_ACCEPTANCE_REPLY in message.text
+            )
+            decision_answer_delivered = bool(
+                decision_answer_pending
+                and next_match is not None
+                and next_match.decision_id is not None
+                and selected_base is next_reply
+            )
+            if decision_answer_delivered and next_match is not None:
+                if next_match.decision_id == "review_fix_authorization":
+                    # The generic review authorization marks the boundary
+                    # between review generations for this bounded memory.
+                    delivered_decision_clauses.clear()
+                elif next_match.matched_request_clause is not None:
+                    normalized_clause = _normalize_request_clause(
+                        next_match.matched_request_clause
+                    )
+                    if normalized_clause:
+                        delivered_decision_clauses.setdefault(
+                            next_match.decision_id or "", set()
+                        ).add(normalized_clause)
+            if (
+                ask_back_acceptance_transmitted
+            ):
+                pending_ask_back_decision = False
+            elif (
+                self.script.persona.stance_when_unknown == "ask_back"
+                and next_match is not None
+                and next_match.category is Category.DECISION_REQUEST
+                and next_match.decision_id is None
+                and not next_match.matched
+                and _ASK_BACK_HAND_BACK_PATTERN.search(message.text) is not None
+                and not approval_turn
+                and not ask_back_acceptance_turn
+            ):
+                # A match alone is not a hand-back: arm only after the
+                # outgoing message actually carries the ask-back treatment.
+                pending_ask_back_decision = True
             if (
                 decision_answer_pending
                 and next_match is not None
@@ -1699,6 +1823,119 @@ class OperatorEngine:
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
             match = self.matcher.reply_for(agent_message, context=pending_review_context)
+            if (
+                match.decision_id is not None
+                and match.decision_id != "review_fix_authorization"
+                and match.matched_request_clause is not None
+            ):
+                prior_clauses = delivered_decision_clauses.get(match.decision_id, set())
+                normalized_clause = _normalize_request_clause(match.matched_request_clause)
+                # A re-ask repeats the earlier question, possibly with more
+                # words around it ("Which option should I pick, and do you
+                # approve?"), so containment either way counts as the same
+                # question; only a clause that shares none of it is new.
+                re_asked = any(
+                    prior in normalized_clause or normalized_clause in prior
+                    for prior in prior_clauses
+                )
+                if prior_clauses and not re_asked:
+                    # Re-run the ordered matcher with only this decision
+                    # removed. A different rule can then answer the actual
+                    # clause instead of losing the turn to an empty reply.
+                    match = self.matcher.reply_for(
+                        agent_message,
+                        context=pending_review_context,
+                        excluded_decision_ids=frozenset({match.decision_id}),
+                    )
+
+            sheet_key = _served_reply_key(match.rule_id)
+            repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
+
+            next_scripted_turn = (
+                self.script.turns[index]
+                if index < len(self.script.turns)
+                else None
+            )
+            next_turn_number = index + 1
+            next_turn_has_event = any(
+                card.trigger_turn == next_turn_number
+                for card in self.script.events.cards
+            )
+            genuine_prior_request = bool(
+                next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            next_reconfirm_available = reconfirm_available
+            if reconfirm_applied:
+                next_reconfirm_available = False
+            elif scripted_approval_fired or owed_approval_turn:
+                if not genuine_prior_request:
+                    next_reconfirm_available = True
+            next_owed_approval = owed_approval_text is not None
+            if defer_scheduled_approval:
+                next_owed_approval = True
+            elif owed_approval_turn or dynamic_reapproval:
+                next_owed_approval = False
+            declared_reapproval = self.script.answer_sheet.reapproval
+            next_dynamic_reapproval = bool(
+                declared_reapproval is not None
+                and reapproval_uses + int(dynamic_reapproval) < declared_reapproval.max_uses
+                and (
+                    review_fix_authorized
+                    or (
+                        decision_answer_delivered
+                        and next_match is not None
+                        and next_match.decision_id == "review_fix_authorization"
+                    )
+                )
+                and match.category is Category.APPROVAL_REQUEST
+                and match.approval_requested
+                and match.solicits_operator
+                and _REVISED_PLAN_PATTERN.search(agent_message) is not None
+                and next_scripted_turn is not None
+                and not next_scripted_turn.approval
+            )
+            next_reconfirmation = bool(
+                next_reconfirm_available
+                and match.category is Category.APPROVAL_REQUEST
+                and match.approval_requested
+                and match.solicits_operator
+            )
+            next_owed_approval_turn = bool(
+                next_owed_approval
+                and not next_dynamic_reapproval
+                and match.category is Category.APPROVAL_REQUEST
+                and match.approval_requested
+                and match.solicits_operator
+            )
+            next_turn_priority_blocks_acceptance = bool(
+                next_scripted_turn is None
+                or next_scripted_turn.approval
+                or not next_scripted_turn.substitute_reply
+                or next_turn_has_event
+                or next_reconfirmation
+                or next_dynamic_reapproval
+                or next_owed_approval_turn
+            )
+            if (
+                pending_ask_back_decision
+                and self.script.persona.stance_when_unknown == "ask_back"
+                and _is_ask_back_acceptance_request(match, agent_message)
+                and not next_turn_priority_blocks_acceptance
+            ):
+                # This is a behavioral response, not plan approval evidence:
+                # keep it outside both the approval category and its flag.
+                match = MatchResult(
+                    Category.DECISION_REQUEST,
+                    _ASK_BACK_ACCEPTANCE_RULE_ID,
+                    _ASK_BACK_ACCEPTANCE_REPLY,
+                    matched=True,
+                    matched_request_clause=match.matched_request_clause,
+                )
+                sheet_key = None
+                repeat_suppressed = False
             failure_count = max(result.build_failure_count, 1 if result.build_failed else 0)
             if failure_count > 1 or (pending_failure and failure_count > 0):
                 if "one_obstacle_per_turn" not in self.failure_modes:
@@ -1758,8 +1995,6 @@ class OperatorEngine:
             # recorded, because nothing from the brief went out this turn (see
             # qualification._ungraded_reasons for the precedent: a claim the
             # code never checked must not stand).
-            sheet_key = _served_reply_key(match.rule_id)
-            repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
             if repeat_suppressed:
                 claim["operator_repeat_suppressed"] = True
             if match.ground_truth and not repeat_suppressed:
@@ -1816,6 +2051,7 @@ class OperatorEngine:
                 claim=claim or None,
                 operator_approval=approval_turn,
                 operator_approval_text=message.text if approval_turn else None,
+                suppress_inferred_approval=ask_back_acceptance_transmitted,
                 operator_mode=operator_mode,
                 operator_directive=recorded_directive,
                 operator_beat_id=operator_beat_id,
