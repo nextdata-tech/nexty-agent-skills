@@ -569,8 +569,8 @@ def _served_reply_key(rule_id: str) -> str | None:
     declared decision answer is deliberately excluded: a fresh review
     generation may ask for the same authorization again and must receive the
     same answer. Persona replies (``persona.approval_request``) and fallbacks
-    (``fallback.no-leading``) are not facts either: repeating "go ahead" or
-    the no-leading deflection is in character. Memory is keyed to the
+    (``fallback.no-leading``) are not answer-sheet facts, so they do not enter
+    this keyed memory. Memory is keyed to the
     *selected* sheet key, not to the text that went out, because a generated
     operator paraphrases the reply -- no fact text survives as a substring,
     so a text scan would leave the memory permanently empty and the
@@ -803,7 +803,10 @@ class OperatorEngine:
         """Build the one redacted view shared by generated and driver paths."""
 
         markers = self._redaction_markers((*active_sentinels, *pending_sentinels))
-        context = lambda value: _operator_context(value, markers)
+
+        def context(value: str) -> str:
+            return _operator_context(value, markers)
+
         common = {
             "turn": turn,
             "phase": self.phase,
@@ -1194,6 +1197,7 @@ class OperatorEngine:
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
         prior_operator_messages: list[str] = []
+        pending_review_context = ""
 
         for index, scripted_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
@@ -1222,15 +1226,18 @@ class OperatorEngine:
                 # the message the pending reply was selected from.
                 agent_message=previous_agent_message,
             )
-            # A review-fix decision is substantive and must reach the agent
-            # even when this fixed slot was originally marked as an approval.
-            # The approval is deferred to the separately declared, bounded
-            # reapproval answer when the revised plan is presented.
+            # A matched decision is substantive and must reach the agent even
+            # when this fixed slot was authored as a room/approval turn. Its
+            # explicit decision answer takes priority; any due event is then
+            # appended by _message_for so neither message is lost.
+            decision_answer_pending = bool(
+                next_reply is not None
+                and next_match is not None
+                and next_match.decision_id is not None
+            )
             defer_scheduled_approval = bool(
                 scripted_turn.approval
-                and next_reply is not None
-                and next_match is not None
-                and next_match.decision_id == "review_fix_authorization"
+                and decision_answer_pending
             )
             declared_reapproval = self.script.answer_sheet.reapproval
             dynamic_reapproval = bool(
@@ -1238,6 +1245,7 @@ class OperatorEngine:
                 and reapproval_uses < declared_reapproval.max_uses
                 and review_fix_authorized
                 and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
                 and next_match.approval_requested
                 and next_match.solicits_operator
                 and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
@@ -1277,6 +1285,8 @@ class OperatorEngine:
                 declared_reapproval.answer
                 if dynamic_reapproval and declared_reapproval is not None
                 else next_reply
+                if decision_answer_pending and next_reply is not None
+                else next_reply
                 if defer_scheduled_approval and next_reply is not None
                 else scripted_turn.text
                 if index == 1
@@ -1306,6 +1316,7 @@ class OperatorEngine:
                 and index > 1
                 and scripted_turn.substitute_reply
                 and not approval_turn
+                and not decision_answer_pending
             )
             if self.driver is not None and not authorable:
                 driver_skip_reason = (
@@ -1313,6 +1324,8 @@ class OperatorEngine:
                     if index == 1
                     else "approval"
                     if approval_turn
+                    else "decision_answer"
+                    if decision_answer_pending
                     else "non_substitutable"
                 )
             if authorable:
@@ -1481,7 +1494,7 @@ class OperatorEngine:
                 delivered_ids = {injection.card_id for injection in delivered}
                 undelivered_ids = tuple(
                     injection.card_id for injection in injections if injection.card_id not in delivered_ids
-                )
+            )
             # Driver-authored words are never scanned for a fact's ``terms``.
             # ``_authored_text_conveys`` reads the reply's own content instead,
             # for the reason set out here: a
@@ -1544,6 +1557,14 @@ class OperatorEngine:
             self.matcher.validate_outgoing_message(message.text)
             prior_operator_messages.append(message.text)
             result = self.transport.send_message(message)
+            if (
+                decision_answer_pending
+                and next_match is not None
+                and next_match.decision_id == "review_fix_authorization"
+                and selected_base is next_reply
+                and not authorable
+            ):
+                pending_review_context = ""
             if self._scan(result, tuple(active_sentinels)):
                 self.failure_modes.append("sentinel_trip")
                 sentinel_tripped = True
@@ -1565,7 +1586,14 @@ class OperatorEngine:
                 failure_reason = result.failure_reason or INTERRUPTED_UNCLASSIFIED
                 failure_detail = result.environment_detail
 
-            match = self.matcher.reply_for(result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message)
+            agent_message = (
+                result.agent_message.decode("utf-8", errors="replace")
+                if isinstance(result.agent_message, bytes)
+                else result.agent_message
+            )
+            if self.matcher.has_review_finding_context(agent_message):
+                pending_review_context = agent_message
+            match = self.matcher.reply_for(agent_message, context=pending_review_context)
             failure_count = max(result.build_failure_count, 1 if result.build_failed else 0)
             if failure_count > 1 or (pending_failure and failure_count > 0):
                 if "one_obstacle_per_turn" not in self.failure_modes:
@@ -1704,10 +1732,9 @@ class OperatorEngine:
                 pending_sheet_key = sheet_key
             previous_agent_message = result.agent_message.decode("utf-8", errors="replace") if isinstance(result.agent_message, bytes) else result.agent_message
             prior_agent_messages.append(previous_agent_message)
-            # Repeat protection compares against deterministic text that was
-            # selected for earlier turns.  The provider is allowed to render
-            # the same persona sentence on multiple distinct turns; comparing
-            # against prior rendered prose would reject that valid driver use.
+            # The driver's pre-send retry check compares authored text against
+            # deterministic selected text, so authored prose never becomes a
+            # repeat baseline.
             prior_base_texts.append(selected_base)
             if sentinel_tripped or environment_wedged or turn_timed_out:
                 break
