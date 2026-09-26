@@ -235,7 +235,15 @@ def ingest(secrets):
     assert not evidence["auth"]
 
 
-def test_active_rest_config_binds_auth_endpoint_pagination_and_selector() -> None:
+@pytest.mark.parametrize(
+    "return_statement",
+    [
+        "return rest_api_resources(config)",
+    ],
+)
+def test_active_rest_config_binds_auth_endpoint_pagination_and_selector(
+    return_statement: str,
+) -> None:
     source = '''
 from dlt.sources.rest_api import rest_api_resources
 
@@ -263,8 +271,8 @@ def ingest(secrets):
             },
         }],
     }
-    return rest_api_resources(config)
-'''
+    RETURN_STATEMENT
+'''.replace("RETURN_STATEMENT", return_statement)
     evidence = checker.active_rest_api_contract(
         [checker.ast.parse(source)],
         resource_name="orders",
@@ -547,6 +555,259 @@ def check(secrets):
     )
 
 
+def test_auth_scanner_allows_only_the_named_runtime_probe_token() -> None:
+    probe_source = '''
+import os
+
+PLACEHOLDER = "${ORDERS_READ_TOKEN}"
+
+def check():
+    token = os.environ.get("ORDERS_READ_TOKEN", "")
+    if not token or token == PLACEHOLDER:
+        return False
+    return {"Authorization": f"Bearer {token}"}
+'''
+    probe = checker.ast.parse(probe_source)
+    assert not checker.has_no_hardcoded_auth_literals([probe])
+    assert checker.has_no_hardcoded_auth_literals(
+        [probe], allow_runtime_probe_token=True
+    )
+
+    helper_probe = checker.ast.parse('''
+import os
+
+PLACEHOLDER = "${ORDERS_READ_TOKEN}"
+
+def check():
+    token = os.environ.get("ORDERS_READ_TOKEN", "")
+    if not token or token == PLACEHOLDER:
+        return False
+    return _probe(token=token)
+
+def _probe(token):
+    return {"Authorization": f"Bearer {token}"}
+''')
+    assert checker.has_no_hardcoded_auth_literals(
+        [helper_probe], allow_runtime_probe_token=True
+    )
+
+    wrong_variable_source = '''
+import os
+def check():
+    token = os.environ.get("OTHER_TOKEN", "")
+    return {"Authorization": f"Bearer {token}"}
+'''
+    wrong_variable = checker.ast.parse(wrong_variable_source)
+    assert not checker.has_no_hardcoded_auth_literals(
+        [wrong_variable], allow_runtime_probe_token=True
+    )
+    assert not checker.has_no_hardcoded_auth_literals(
+        [checker.ast.parse(probe_source.replace('""', '"invented-token"'))],
+        allow_runtime_probe_token=True,
+    )
+
+
+def test_auth_scanner_preserves_inert_placeholder_and_allowlisted_probe_imports() -> None:
+    module = checker.ast.parse('''
+"""Use ${ORDERS_READ_TOKEN} locally; this placeholder is documentation only."""
+from __future__ import annotations
+import json
+import os
+import sys
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+PLACEHOLDER = "${ORDERS_READ_TOKEN}"
+def check() -> Any:
+    token = os.getenv("ORDERS_READ_TOKEN", "")
+    if not token or token == PLACEHOLDER:
+        sys.exit(2)
+    return {"Authorization": f"Bearer {token}"}
+
+def exception_name(exc: Exception) -> str:
+    return type(exc).__name__
+
+def row_type(value: Any) -> str:
+    return type(value).__name__
+''')
+    assert checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        'os.getenv("ORDERS_READ_TOKEN")',
+        'os.getenv("ORDERS_READ_TOKEN", "")',
+        'os.getenv("ORDERS_READ_TOKEN", None)',
+        'os.environ.get("ORDERS_READ_TOKEN")',
+        'os.environ.get("ORDERS_READ_TOKEN", "")',
+        'os.environ.get("ORDERS_READ_TOKEN", None)',
+    ],
+)
+def test_auth_scanner_accepts_only_supported_direct_probe_reads(read: str) -> None:
+    module = checker.ast.parse(f'''
+import os
+def check():
+    token = {read}
+    return {{"Authorization": f"Bearer {{token}}"}}
+''')
+    assert checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        '''match urllib.request:\n    case urllib.request(os=environ):\n        pass''',
+        '''match urlopen:\n    case urlopen(__globals__=global_map):\n        pass''',
+    ],
+)
+def test_auth_scanner_rejects_probe_match_attribute_lookup_patterns(
+    pattern: str,
+) -> None:
+    module = checker.ast.parse(f'''
+import os
+import urllib.request
+from urllib.request import urlopen
+TOKEN = os.getenv("ORDERS_READ_TOKEN", "")
+{pattern}
+''')
+    assert not checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'os.environ.setdefault("ORDERS_READ_TOKEN", "")',
+        'os.environ.update({"ORDERS_READ_TOKEN": ""})',
+        'os.environ["ORDERS_READ_TOKEN"] = ""',
+        'os.environ["ORDERS_READ_TOKEN"] = os.getenv("ORDERS_READ_TOKEN")',
+        'os.putenv("ORDERS_READ_TOKEN", "")',
+        'os.unsetenv("ORDERS_READ_TOKEN")',
+        'os.getenv("ORDERS_READ_TOKEN", "", encoding="utf-8")',
+        'os.getenv(key="ORDERS_READ_TOKEN")',
+        'os.environ.get("ORDERS_READ_TOKEN", default="")',
+        'reader = os.getenv',
+        'env = os.environ',
+        'runtime_os = os\nruntime_os.getenv("ORDERS_READ_TOKEN")',
+        'getattr(os, "environ").setdefault("ORDERS_READ_TOKEN", "")',
+        'from os import getenv as read_token\nread_token("ORDERS_READ_TOKEN")',
+        'OTHER = "ORDERS_READ_TOKEN"',
+        'os.getenv(b"ORDERS_READ_TOKEN")',
+        'os.environ.get("ORDERS_" + "READ_TOKEN")',
+        'os.getenv("ORDERS_" + "READ_TOKEN")',
+        'os.environb[b"ORDERS_READ_TOKEN"] = b""',
+    ],
+)
+def test_auth_scanner_rejects_probe_environment_writes_and_indirect_access(
+    extra: str,
+) -> None:
+    module = checker.ast.parse(f'''
+import os
+_token = os.getenv("ORDERS_READ_TOKEN", "")
+{extra}
+''')
+    assert not checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_import",
+    [
+        "import posix",
+        "import posix as p",
+        "import nt",
+        "import ctypes",
+        "from ctypes import CDLL",
+        "import dotenv",
+        "from dotenv import load_dotenv",
+    ],
+)
+def test_auth_scanner_rejects_non_allowlisted_probe_imports(bad_import: str) -> None:
+    module = checker.ast.parse(f'''
+import os
+{bad_import}
+TOKEN = os.environ.get("ORDERS_READ_TOKEN", "")
+
+def exception_name(exc: Exception) -> str:
+    return type(exc).__name__
+''')
+    assert not checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'os = object()',
+        'def shadow(os):\n    return os.getenv("ORDERS_READ_TOKEN")',
+        'def shadow():\n    os = object()\n    return os.getenv("ORDERS_READ_TOKEN")',
+        'def shadow():\n    import os\n    return os.getenv("ORDERS_READ_TOKEN")',
+        'import os as runtime_os',
+        'runtime_os = os',
+        'def shadow():\n    global os',
+    ],
+)
+def test_auth_scanner_rejects_probe_os_rebinding_and_shadowing(extra: str) -> None:
+    module = checker.ast.parse(f'''
+import os
+_token = os.getenv("ORDERS_READ_TOKEN", "")
+{extra}
+''')
+    assert not checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        'probe(token="sk-live-test-credential")',
+        'probe("sk-live-test-credential")',
+    ],
+)
+def test_auth_scanner_rejects_literal_credentials_passed_to_probe_helpers(
+    call: str,
+) -> None:
+    source = f'''
+import os
+_unused = os.getenv("ORDERS_READ_TOKEN")
+
+def probe(token):
+    return {{"Authorization": f"Bearer {{token}}"}}
+
+{call}
+'''
+    module = checker.ast.parse(source)
+    assert not checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
+def test_auth_scanner_rejects_aliased_probe_helpers() -> None:
+    module = checker.ast.parse('''
+import os
+_unused = os.getenv("ORDERS_READ_TOKEN")
+
+def probe(token):
+    return {"Authorization": f"Bearer {token}"}
+
+probe_alias = probe
+probe_alias(token="sk-live-test-credential")
+''')
+    assert not checker.has_no_hardcoded_auth_literals(
+        [module], allow_runtime_probe_token=True
+    )
+
+
 def test_auth_scanner_still_rejects_literal_credentials_in_connectivity_check() -> None:
     hardcoded_header = checker.ast.parse('''
 def check():
@@ -710,6 +971,7 @@ def test_intentional_placeholder_may_be_documented_but_credentials_may_not(tmp_p
         "No live API request was made.",
         "No live API request was made. Authentication has not been verified.",
         "The connectivity check was not run; connectivity has not been verified against the live API.",
+        "- Connectivity check (`connectivity_check.py`): **not run**, **unverified**",
     ],
 )
 def test_readme_accepts_equivalent_no_live_check_statements(readme: str) -> None:
@@ -1415,3 +1677,565 @@ def test_profile_scope_gate_requires_exact_scope_tokens() -> None:
     assert not checker.profile_scopes_match(
         "orders:read orders:write", ["orders:read"]
     )
+
+
+def _desktop_rest_flow_source() -> str:
+    return '''
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+import dlt
+from dlt.sources.rest_api import RESTAPIConfig, rest_api_resources
+from nxd import data_product
+from nxd.core.context import DuckDbOutput
+
+PHYSICAL_MODELS = ("orders",)
+OPTIONAL_EMPTY_MODELS = ()
+
+def _orders_resources(secrets):
+    client_config: dict[str, Any] = {
+        "base_url": secrets["base_url"],
+        "paginator": {
+            "type": "cursor",
+            "cursor_path": "next_cursor",
+            "cursor_param": "after",
+        },
+    }
+    auth_type = secrets.get("auth_type")
+    if auth_type == "bearer":
+        client_config["auth"] = {"type": "bearer", "token": secrets["auth_token"]}
+    else:
+        raise ValueError(f"unsupported auth type {auth_type!r}")
+    config: RESTAPIConfig = {
+        "client": client_config,
+        "resources": [{
+            "name": "orders",
+            "endpoint": {
+                "path": secrets["endpoint_orders"],
+                "method": "GET",
+                "data_selector": "results",
+            },
+        }],
+    }
+    return rest_api_resources(config)
+
+
+@data_product.on_transform()
+def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
+    run_dir = Path(duckdb.path).parent
+    pipelines_dir = run_dir / "dlt-pipelines"
+    pipelines_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["DLT_DATA_DIR"] = str(run_dir / "dlt-data")
+    pipeline = dlt.pipeline(
+        pipelines_dir=str(pipelines_dir),
+        destination=dlt.destinations.duckdb(credentials=duckdb.path),
+        dataset_name=duckdb.schema,
+    )
+    res = _orders_resources(secrets)
+    pipeline.run(res, write_disposition="replace")
+    actual = set(pipeline.default_schema.data_table_names())
+    expected = {duckdb.model_tables[model] for model in PHYSICAL_MODELS}
+    optional = {duckdb.model_tables[model] for model in OPTIONAL_EMPTY_MODELS}
+    missing = expected - actual
+    absent_optional = missing & optional
+    if actual != expected - absent_optional:
+        raise RuntimeError(
+            f"dlt produced tables {sorted(actual)!r}, expected "
+            f"{sorted(expected - optional)!r}; optional absent tables "
+            f"{sorted(absent_optional)!r}; unexpected tables "
+            f"{sorted(actual - expected)!r}"
+        )
+    (run_dir / ".transform-complete").touch()
+
+
+if __name__ == "__main__":
+    data_product.main()
+'''
+
+
+def _desktop_rest_flow_accepts(source: str) -> bool:
+    module = checker.ast.parse(source)
+    active_config = checker.active_rest_api_contract(
+        [module],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    return checker.active_desktop_source_flow(
+        [module],
+        [module],
+        active_config,
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+def test_desktop_source_flow_accepts_helper_direct_run_and_required_readback() -> None:
+    source = _desktop_rest_flow_source()
+    module = checker.ast.parse(source)
+    active_config = checker.active_rest_api_contract(
+        [module],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert all(active_config.values())
+    assert checker.active_desktop_source_flow(
+        [module],
+        [module],
+        active_config,
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    # The production checker parses transform sources and the whole closure
+    # separately; duplicated but equivalent ASTs must retain the same result.
+    assert checker.active_desktop_source_flow(
+        [module],
+        [checker.ast.parse(source)],
+        active_config,
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "@data_product.on_transform()",
+            "helper_alias = _orders_resources\n\n@data_product.on_transform()",
+        ),
+        (
+            "from nxd.core.context import DuckDbOutput",
+            "from test_helpers import _orders_resources as source_helper\nfrom nxd.core.context import DuckDbOutput",
+        ),
+        (
+            "res = _orders_resources(secrets)",
+            "res = _orders_resources(dict(secrets))",
+        ),
+        (
+            "res = _orders_resources(secrets)",
+            "res = []",
+        ),
+        (
+            "    pipeline.run(res, write_disposition=\"replace\")",
+            "    res.add_map(lambda row: row)\n    pipeline.run(res, write_disposition=\"replace\")",
+        ),
+        (
+            "os.environ[\"DLT_DATA_DIR\"] = str(run_dir / \"dlt-data\")",
+            "os.environ[\"AUTH_TOKEN\"] = secrets[\"auth_token\"]",
+        ),
+        (
+            "os.environ[\"DLT_DATA_DIR\"] = str(run_dir / \"dlt-data\")",
+            "os.environ[\"DLT_DATA_DIR\"] = str(run_dir / \"dlt-data\")\n    os.environ.get(\"AUTH_TOKEN\")",
+        ),
+        (
+            "os.environ[\"DLT_DATA_DIR\"] = str(run_dir / \"dlt-data\")",
+            "os.getenv(\"DLT_DATA_DIR\")",
+        ),
+        (
+            '"name": "orders",\n            "endpoint": {',
+            '"name": model,\n            "endpoint": {',
+        ),
+        (
+            "duckdb.model_tables[model] for model in PHYSICAL_MODELS",
+            'duckdb.model_tables["other"] for model in PHYSICAL_MODELS',
+        ),
+        (
+            'if actual != expected - absent_optional:',
+            'if False:',
+        ),
+        (
+            '    else:\n        raise ValueError(f"unsupported auth type {auth_type!r}")',
+            '    else:\n        pass',
+        ),
+        (
+            '    else:\n        raise ValueError(f"unsupported auth type {auth_type!r}")',
+            '    else:\n        if auth_type is not None:\n            raise ValueError(f"unsupported auth type {auth_type!r}")',
+        ),
+        (
+            '    (run_dir / ".transform-complete").touch()\n',
+            "",
+        ),
+        (
+            'return rest_api_resources(config)',
+            'return {resource.name: resource for resource in rest_api_resources(config)}',
+        ),
+        (
+            'if __name__ == "__main__":',
+            'if True:\n    pass\n\nif __name__ == "__main__":',
+        ),
+        (
+            "import os\n",
+            "import os\nimport subprocess\n",
+        ),
+        (
+            "def _orders_resources(secrets):",
+            "def _orders_resources(secrets: unsafe_annotation()):",
+        ),
+        (
+            "def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:",
+            "def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> unsafe_annotation():",
+        ),
+        (
+            'f"dlt produced tables {sorted(actual)!r}',
+            'f"{pipeline.credentials!r} dlt produced tables {sorted(actual)!r}',
+        ),
+    ],
+)
+def test_desktop_source_flow_rejects_unsafe_or_incomplete_variants(
+    old: str, new: str
+) -> None:
+    source = _desktop_rest_flow_source()
+    assert old in source
+    assert not _desktop_rest_flow_accepts(source.replace(old, new, 1))
+
+
+def test_desktop_source_flow_rejects_dynamic_environment_access() -> None:
+    source = _desktop_rest_flow_source().replace(
+        'PHYSICAL_MODELS = ("orders",)',
+        'PHYSICAL_MODELS = ("orders",)\ngetattr(os.environ, "update")',
+    )
+    assert not _desktop_rest_flow_accepts(source)
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse('import os\nTOKEN = os.getenv("AUTH_TOKEN")')]
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse('import os\nTOKEN = os.getenv("AUTH_TOKEN")')],
+        allow_runtime_environment_reads=True,
+    )
+    assert not checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse('import os\nTOKEN = os.getenv("ORDERS_READ_TOKEN", "")')],
+        allow_runtime_environment_reads=True,
+    )
+    assert not checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse('import os\nTOKEN = os.environ.get("ORDERS_READ_TOKEN", "")')],
+        allow_runtime_environment_reads=True,
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse('import os\nos.putenv("ORDERS_READ_TOKEN", "")')],
+        allow_runtime_environment_reads=True,
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("import os\nread_token = os.getenv")]
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("import os as runtime_os\nTOKEN = runtime_os.getenv(\"AUTH_TOKEN\")")]
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("from builtins import eval as run_code")]
+    )
+    assert not checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("import sys\nsys.exit(0)")]
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("import sys\nmodule_path = sys.path")]
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("import sys as runtime_sys\nruntime_sys.path")]
+    )
+    assert checker._reflective_or_dynamic_import_access(
+        [checker.ast.parse("import sys\nruntime_sys = sys\nruntime_sys.path")]
+    )
+
+
+def test_desktop_source_flow_allows_probe_environment_token_outside_transform() -> None:
+    transform = checker.ast.parse(_desktop_rest_flow_source())
+    probe = checker.ast.parse('''
+from __future__ import annotations
+import json
+import os
+import sys
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+TOKEN = os.environ.get("ORDERS_READ_TOKEN", "")
+
+def exception_name(exc: Exception) -> str:
+    return type(exc).__name__
+
+def row_type(value: Any) -> str:
+    return type(value).__name__
+''')
+    active_config = checker.active_rest_api_contract(
+        [transform],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    flow_args = dict(
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert not checker.active_desktop_source_flow(
+        [transform],
+        [transform, probe],
+        active_config,
+        **flow_args,
+    )
+    assert checker.active_desktop_source_flow(
+        [transform],
+        [transform, probe],
+        active_config,
+        connectivity_probe_modules=[probe],
+        **flow_args,
+    )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        'os.putenv("ORDERS_READ_TOKEN", "")',
+        'os.unsetenv("ORDERS_READ_TOKEN")',
+    ],
+)
+def test_desktop_source_flow_rejects_probe_putenv_and_unsetenv(mutator: str) -> None:
+    transform = checker.ast.parse(_desktop_rest_flow_source())
+    probe = checker.ast.parse(f'''
+import os
+TOKEN = os.getenv("ORDERS_READ_TOKEN", "")
+{mutator}
+''')
+    active_config = checker.active_rest_api_contract(
+        [transform],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert not checker.active_desktop_source_flow(
+        [transform],
+        [transform, probe],
+        active_config,
+        connectivity_probe_modules=[probe],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+@pytest.mark.parametrize(
+    "escape",
+    [
+        'urllib.request.os.environ.setdefault("ORDERS_READ_TOKEN", "")',
+        'urllib.request.os.putenv("ORDERS_READ_TOKEN", "")',
+        "urlopen.__globals__",
+        "object.__class__.__base__.__subclasses__()",
+        "type(other).__name__",
+    ],
+)
+def test_probe_attribute_and_dunder_escapes_fail_both_gates(escape: str) -> None:
+    probe = checker.ast.parse(f'''
+import os
+import urllib.request
+from urllib.request import urlopen
+TOKEN = os.getenv("ORDERS_READ_TOKEN", "")
+{escape}
+''')
+    assert not checker.has_no_hardcoded_auth_literals(
+        [probe], allow_runtime_probe_token=True
+    )
+
+    transform = checker.ast.parse(_desktop_rest_flow_source())
+    active_config = checker.active_rest_api_contract(
+        [transform],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert not checker.active_desktop_source_flow(
+        [transform],
+        [transform, probe],
+        active_config,
+        connectivity_probe_modules=[probe],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        '''match urllib.request:\n    case urllib.request(os=environ):\n        pass''',
+        '''match urlopen:\n    case urlopen(__globals__=global_map):\n        pass''',
+        '''match sys.modules:\n    case {"os": module}:\n        match module:\n            case module(putenv=setter):\n                setter("ORDERS_READ_TOKEN", "")''',
+    ],
+    ids=["urllib-os-environ", "urlopen-globals", "sys-modules-os-putenv"],
+)
+def test_desktop_source_flow_rejects_probe_match_attribute_lookup_patterns(
+    pattern: str,
+) -> None:
+    transform = checker.ast.parse(_desktop_rest_flow_source())
+    probe = checker.ast.parse(f'''
+import os
+import sys
+import urllib.request
+from urllib.request import urlopen
+TOKEN = os.getenv("ORDERS_READ_TOKEN", "")
+{pattern}
+''')
+    active_config = checker.active_rest_api_contract(
+        [transform],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert not checker.active_desktop_source_flow(
+        [transform],
+        [transform, probe],
+        active_config,
+        connectivity_probe_modules=[probe],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'import os\nTOKEN = os.getenv("OTHER_TOKEN", "")',
+        'import os\nTOKEN = os.environ.get("OTHER_TOKEN", "")',
+        'import os\nruntime_os = os\nTOKEN = runtime_os.getenv("OTHER_TOKEN", "")',
+        'import shutil\nTOKEN = shutil.os.environ.get("OTHER_TOKEN", "")',
+        '''match shutil:\n    case shutil(os=environ):\n        pass''',
+        'from os import environb',
+        'from os import getenvb',
+    ],
+    ids=[
+        "spec-py-getenv",
+        "models-py-environ-get",
+        "closure-os-alias",
+        "shutil-os-environ",
+        "shutil-os-pattern",
+        "from-os-environb",
+        "from-os-getenvb",
+    ],
+)
+def test_desktop_source_flow_keeps_non_probe_modules_environment_strict(
+    source: str,
+) -> None:
+    transform = checker.ast.parse(_desktop_rest_flow_source())
+    spec_or_models = checker.ast.parse(source)
+    probe = checker.ast.parse(
+        'import os\nTOKEN = os.environ.get("ORDERS_READ_TOKEN", "")'
+    )
+    active_config = checker.active_rest_api_contract(
+        [transform],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert not checker.active_desktop_source_flow(
+        [transform],
+        [transform, spec_or_models, probe],
+        active_config,
+        connectivity_probe_modules=[probe],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import posix",
+        "import posix as posix_module",
+        "import nt",
+        "import ctypes as native",
+        "from ctypes import CDLL",
+        "from dotenv import load_dotenv",
+    ],
+)
+def test_desktop_source_flow_rejects_alternate_environment_apis(
+    source: str,
+) -> None:
+    transform = checker.ast.parse(_desktop_rest_flow_source())
+    alternate_api = checker.ast.parse(source)
+    active_config = checker.active_rest_api_contract(
+        [transform],
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+    assert not checker.active_desktop_source_flow(
+        [transform],
+        [transform, alternate_api],
+        active_config,
+        resource_name="orders",
+        endpoint_key="endpoint_orders",
+        items_field="results",
+        cursor_path="next_cursor",
+        cursor_param="after",
+    )
+
+
+def test_forbidden_dlt_config_check_rejects_local_files_and_paths(tmp_path: Path) -> None:
+    assert not checker.closure_has_forbidden_dlt_config(tmp_path, [])
+    (tmp_path / ".dlt").mkdir()
+    assert checker.closure_has_forbidden_dlt_config(tmp_path, [])
+
+    tmp_path2 = tmp_path / "second"
+    tmp_path2.mkdir()
+    module = checker.ast.parse('CONFIG = "~/.dlt/config.toml"')
+    assert checker.closure_has_forbidden_dlt_config(tmp_path2, [module])
+
+
+def test_empty_profile_auth_default_is_safe_but_nonempty_is_not() -> None:
+    empty_default = checker.ast.parse(
+        'token = secrets.get("auth_token", "")', mode="exec"
+    )
+    nonempty_default = checker.ast.parse(
+        'token = secrets.get("auth_token", "example-token")', mode="exec"
+    )
+    empty_read = empty_default.body[0].value
+    nonempty_read = nonempty_default.body[0].value
+    assert checker._direct_profile_secret_key(empty_read) == "auth_token"
+    assert checker._direct_profile_secret_key(nonempty_read) is None
+
+    module = checker.ast.parse('''
+def connectivity(secrets):
+    token = secrets.get("auth_token", "")
+    headers = {"Authorization": f"Bearer {token}"}
+''')
+    assert checker.has_no_hardcoded_auth_literals([module])
