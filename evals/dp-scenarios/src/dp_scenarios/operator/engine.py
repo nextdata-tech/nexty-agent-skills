@@ -25,6 +25,7 @@ from dp_scenarios.failure_reasons import (
     INTERRUPTED_UNCLASSIFIED,
     REVIEWER_DEADLINE_EXCEEDED,
 )
+from dp_scenarios.grading.gates import _authored_closure
 
 from .answer_sheet import AnswerSheet
 from .appender import (
@@ -1060,9 +1061,26 @@ class OperatorEngine:
         driver_obstacle_rejected: bool = False,
         driver_repeat_rejected: bool = False,
         driver_beat_substituted: bool = False,
+        files_touched: Sequence[TouchedFile] = (),
     ) -> None:
         detail = "operator response selected" if match is not None else (phase_status_reason or "phase not reached")
         action_kind = self._DEFAULT_ACTION_KIND_BY_PHASE[phase]
+        if action_kind == "codegen" and not _authored_closure(
+            [{"path": touched.path} for touched in files_touched]
+        ):
+            # The phase-4 default is "codegen", but a phase default is a label
+            # of convenience, not an observation. When this turn's own
+            # files_touched show no write into the authored closure --
+            # ``_authored_closure`` is gate_intake's own predicate, reused
+            # here so the two can never drift -- nothing was actually
+            # generated. The turn's real content at that point in the
+            # protocol is presenting (or re-presenting) the plan for
+            # approval, which is what "spec_presented" means and which
+            # PHASE_ACTION_KINDS[4] already allows. This does not touch the
+            # operator-approval branches below: an approval turn still
+            # promotes straight to "spec_approved" regardless of this
+            # fallback.
+            action_kind = "spec_presented"
         artifact_ref: str | None = None
         if operator_approval:
             # The operator approved. The evidence is what the operator
@@ -1805,6 +1823,7 @@ class OperatorEngine:
                 driver_obstacle_rejected=driver_obstacle_rejected,
                 driver_repeat_rejected=driver_repeat_rejected,
                 driver_beat_substituted=driver_beat_substituted,
+                files_touched=result.files_touched,
             )
             if match.decision_id == "review_fix_authorization" and not repeat_suppressed:
                 review_fix_authorized = True
