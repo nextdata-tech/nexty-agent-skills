@@ -229,7 +229,13 @@ _NON_PROSE = re.compile(
     re.DOTALL,
 )
 
-_REQUEST_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n\s*\n+")
+# A sentence can end inside markdown emphasis ("**Approve these fixes?** A
+# yes/no is all I need."), so the split also fires after one or two emphasis
+# closers; otherwise the bold question and its trailer fuse into one clause
+# that ends in neither "?" nor an ask.
+_REQUEST_CLAUSE_SPLIT = re.compile(
+    r"(?<=[.!?])\s+|(?<=[.!?][*_])\s+|(?<=[.!?][*_]{2})\s+|\n\s*\n+"
+)
 # A trailing ``**`` or ``*`` closes markdown emphasis wrapped around the
 # question itself ("**Do you authorize that fix?**"), not a quote, paren, or
 # bracket. Without it here, a bold-wrapped question is invisible to every
@@ -280,23 +286,35 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         return None
     request_clauses = _operator_request_clauses(message)
     for candidate in request_clauses:
-        if candidate and (
-            _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
-            or _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None
-        ):
+        if not candidate:
+            continue
+        has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
+        if has_review_fix_action:
+            # "Proceed with all three, some subset, or none?" has no repair
+            # noun in the request clause. Accept that one enumerated choice
+            # only when the preceding prose explicitly labels the list as
+            # proposed fixes; otherwise it could authorize unrelated work.
+            if _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN.search(candidate) is not None:
+                preceding_prose = prose[: prose.find(candidate)]
+                if _PROPOSED_FIX_LIST_PATTERN.search(preceding_prose) is None:
+                    continue
+            return candidate
+        if _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None:
             return candidate
     # Some agents request authorization with an imperative such as
     # "type Approved to authorize applying fix A" rather than a question.
     for candidate in _REQUEST_CLAUSE_SPLIT.split(prose):
         candidate = candidate.strip()
-        if (
-            candidate
-            and SOLICITATION_PATTERN.search(candidate)
-            and (
-                _REVIEW_FIX_ACTION_PATTERN.search(candidate)
-                or _REVIEW_FIX_CHOICE_PATTERN.search(candidate)
-            )
-        ):
+        if not candidate or SOLICITATION_PATTERN.search(candidate) is None:
+            continue
+        has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
+        if has_review_fix_action:
+            if _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN.search(candidate) is not None:
+                preceding_prose = prose[: prose.find(candidate)]
+                if _PROPOSED_FIX_LIST_PATTERN.search(preceding_prose) is None:
+                    continue
+            return candidate
+        if _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None:
             return candidate
     return None
 
@@ -326,17 +344,26 @@ CHOICE_PATTERN = re.compile(
 #
 # ``fix(?:es|ing)?`` (not just ``fix(?:es)?``) so "authorize fixing #1" is
 # recognized -- a bare ``\bfix\b`` boundary does not match the gerund "fixing".
-# The last two alternatives cover an ask that names no noun after "authorize"
-# beyond the repair verb itself: "authorize catching the parse error ...?" and
-# the bare "fix it -- yes or no?" / "fix the crash -- yes or no?" shape, both
-# from live review-fix authorization asks that named their fix only as a verb.
+# Apply is listed with its inflections because ``\bapply\b`` misses the live
+# "applying" asks. Repair-verb-only alternatives also cover "authorize
+# catching the parse error ...?" and "fix it -- yes or no?" asks.
 _REVIEW_FIX_ACTION_PATTERN = re.compile(
-    r"\b(?:apply|proceed\s+with|make|go\s+ahead\s+with|add|authorize)\b"
+    r"\b(?:apply|applies|applying|applied|proceed\s+with|"
+    r"make|go\s+ahead\s+with|add|authorize)\b"
     r"[^?\n]{0,140}\b(?:fix(?:es|ing)?|correction(?:s)?|change(?:s)?|comments?)\b"
+    # Live follow-ups refer to fixes already enumerated immediately above:
+    # "Approve applying these two as well?" and "apply both/neither". The
+    # finding-context gate in _review_fix_request keeps these from becoming
+    # generic spec/intake approval patterns.
+    r"|\bappl(?:y|ies|ying)\s+(?:these|those|them|both|all|neither)\b"
+    # A choice over the enumerated items ("proceed with all three, some
+    # subset, or none?") names no repair noun; _review_fix_request accepts it
+    # only when the preceding prose presents the list as fixes.
+    r"|\bproceed\s+with\s+(?:all|both|some|none|either|any)\b"
     r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
     r"wording|description|field)\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
-    r"(?:applied|apply|leave|left|keep|skip|defer)\b"
+    r"(?:applied|apply|applies|applying|leave|left|keep|skip|defer)\b"
     r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
     r"exclud(?:e|ing)|flag(?:ging)?|treat(?:ing)?|handl(?:e|ing))\b"
     r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b"
@@ -353,11 +380,15 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
 _REVIEW_FIX_CHOICE_PATTERN = re.compile(
     r"\b(?:which\s+(?:(?:would|do)\s+you\s+like|option\s+do\s+you\s+want)|pick\s+one)\b"
     r"|\b(?:fix|correction|change)\b[^?]{0,160}\b(?:or|versus|vs\.?)\b"
-    r"[^?]{0,160}\b(?:apply|leave|left|keep|skip|defer|proceed)\b"
-    r"|\b(?:apply|leave|left|keep|skip|defer|proceed)\b[^?]{0,160}\b"
+    r"[^?]{0,160}\b(?:apply|applies|applying|applied|leave|left|keep|skip|defer|proceed)\b"
+    r"|\b(?:apply|applies|applying|applied|leave|left|keep|skip|defer|proceed)\b[^?]{0,160}\b"
     r"(?:fix|correction|change)\b",
     re.IGNORECASE,
 )
+_REVIEW_FIX_ENUMERATED_CHOICE_PATTERN = re.compile(
+    r"\bproceed\s+with\s+(?:all|both|some|none|either|any)\b", re.IGNORECASE
+)
+_PROPOSED_FIX_LIST_PATTERN = re.compile(r"\bfix(?:es)?\b", re.IGNORECASE)
 _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
     r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:found|finding|findings|issue|issues|"
     r"correction|corrections|flagged|reported|surfaced|identified|raised)\b"
