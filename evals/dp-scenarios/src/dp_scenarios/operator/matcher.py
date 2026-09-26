@@ -6,9 +6,11 @@ scenario's planted judgement cannot be shadowed by incidental infrastructure
 vocabulary. The exemption is per question: an obstacle term is exempt only
 when that same message matches every term of a declared decision; declaring a
 compound decision does not globally remove its words from unrelated questions.
-The same declared decision answer is intentionally selected again when a
-later review turn asks for that authorization again; repeat suppression is an
-engine delivery policy for source, ground-truth, and status answers only.
+The matcher identifies a declared decision from one request clause and
+returns that clause with the answer. The engine uses delivered clauses to
+repeat an answer for the same question while letting a different question
+fall through to the next rule; review-fix authorization starts a new review
+generation.
 """
 
 from __future__ import annotations
@@ -74,6 +76,9 @@ class MatchResult:
     mandate and the operator declines a decision nobody requested -- which is
     how a live run spent eight of its fifteen turns refusing.
     """
+
+    matched_request_clause: str | None = None
+    """Exact request clause selecting the answer, when a clause applies."""
 
     @property
     def matched_rule_id(self) -> str:
@@ -593,16 +598,35 @@ class MatcherBank:
             return result
         return replace(result, approval_requested=approval, solicits_operator=asked)
 
-    def classify(self, message: str, *, context: str = "") -> MatchResult:
+    def classify(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 
         if not isinstance(message, str):
             raise TypeError("agent message must be a string")
         if not isinstance(context, str):
             raise TypeError("matcher context must be a string")
-        return self._with_approval_flag(self._classify(message, context=context), message)
+        return self._with_approval_flag(
+            self._classify(
+                message,
+                context=context,
+                excluded_decision_ids=excluded_decision_ids,
+            ),
+            message,
+        )
 
-    def _classify(self, message: str, *, context: str = "") -> MatchResult:
+    def _classify(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         prose = _NON_PROSE.sub(" ", message)
         request_clauses = _operator_request_clauses(message)
@@ -641,18 +665,23 @@ class MatcherBank:
             # choice, retain scenario-specific decisions described in the
             # finding; an explicit fix action still wins over recap terms.
             repair_text = review_fix_request.casefold()
-            specific = self.answer_sheet.answer_for_decision(repair_text)
+            specific = self.answer_sheet.answer_for_decision(
+                repair_text, excluded=excluded_decision_ids
+            )
             if (
                 specific is None
                 and _REVIEW_FIX_ACTION_PATTERN.search(repair_text) is None
             ):
-                specific = self.answer_sheet.answer_for_decision(message)
+                specific = self.answer_sheet.answer_for_decision(
+                    message, excluded=excluded_decision_ids
+                )
             if specific is not None and specific.decision_id != "review_fix_authorization":
                 return MatchResult(
                     Category.DECISION_REQUEST,
                     f"decision.answer.{specific.decision_id}",
                     specific.answer,
                     decision_id=specific.decision_id,
+                    matched_request_clause=review_fix_request,
                 )
             return MatchResult(
                 Category.DECISION_REQUEST,
@@ -660,6 +689,7 @@ class MatcherBank:
                 review_fix.answer,
                 decision_id="review_fix_authorization",
                 matched=True,
+                matched_request_clause=review_fix_request,
             )
 
         # A declared decision is more specific than the generic approval
@@ -668,9 +698,13 @@ class MatcherBank:
         # match from unrelated questions (for example, "approve PyYAML?" and
         # "approve the install?").
         request_decision = None
+        request_decision_clause = None
         for clause in request_clauses:
-            request_decision = self.answer_sheet.answer_for_decision(clause)
+            request_decision = self.answer_sheet.answer_for_decision(
+                clause, excluded=excluded_decision_ids
+            )
             if request_decision is not None:
+                request_decision_clause = clause
                 break
         if (
             request_decision is not None
@@ -682,6 +716,7 @@ class MatcherBank:
                 f"decision.answer.{request_decision.decision_id}",
                 request_decision.answer,
                 decision_id=request_decision.decision_id,
+                matched_request_clause=request_decision_clause,
             )
 
         # An explicit approval question is decided by its ask clause. A
@@ -689,19 +724,47 @@ class MatcherBank:
         # an unrelated factual answer (especially one already repeat-suppressed).
         if approval_rule is not None:
             if _CORRECTION_INVITATION_PATTERN.search(prose) is not None:
-                correction_decision = self.answer_sheet.answer_for_decision(prose)
+                correction_decision = self.answer_sheet.answer_for_decision(
+                    prose, excluded=excluded_decision_ids
+                )
                 if correction_decision is not None:
                     return MatchResult(
                         Category.DECISION_REQUEST,
                         f"decision.answer.{correction_decision.decision_id}",
                         correction_decision.answer,
                         decision_id=correction_decision.decision_id,
+                        matched_request_clause=next(
+                            (
+                                clause
+                                for clause in request_clauses
+                                if _CORRECTION_INVITATION_PATTERN.search(clause)
+                            ),
+                            None,
+                        ),
                     )
-            return MatchResult(Category.APPROVAL_REQUEST, approval_rule, "")
+            return MatchResult(
+                Category.APPROVAL_REQUEST,
+                approval_rule,
+                "",
+                matched_request_clause=(
+                    approval_clauses[0]
+                    if approval_clauses
+                    else next(
+                        (
+                            clause
+                            for clause in request_clauses
+                            if _APPROVAL_CONTEXT_PATTERN.search(clause)
+                        ),
+                        None,
+                    )
+                ),
+            )
 
         decision = request_decision
         if decision is None:
-            decision = self.answer_sheet.answer_for_decision(message)
+            decision = self.answer_sheet.answer_for_decision(
+                message, excluded=excluded_decision_ids
+            )
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
         # "no review finding was reported" cannot consume a later decision.
@@ -715,6 +778,13 @@ class MatcherBank:
                 f"decision.answer.{decision.decision_id}",
                 decision.answer,
                 decision_id=decision.decision_id,
+                matched_request_clause=(
+                    request_decision_clause
+                    or next(
+                        (clause for clause in request_clauses if solicits_operator(clause)),
+                        None,
+                    )
+                ),
             )
         if is_question and _contains_term(message, self.question_obstacle_terms):
             return MatchResult(
@@ -733,18 +803,51 @@ class MatcherBank:
             # fact the operator had previously been expected to provide.
             routing_text = message if rule.rule_id == "source.question" else request_text or message
             if rule.pattern.search(routing_text):
-                return MatchResult(rule.category, rule.rule_id, "", matched=True)
+                matched_clause = next(
+                    (clause for clause in request_clauses if rule.pattern.search(clause)),
+                    None,
+                )
+                return MatchResult(
+                    rule.category,
+                    rule.rule_id,
+                    "",
+                    matched=True,
+                    matched_request_clause=matched_clause,
+                )
         return MatchResult(Category.OTHER, "fallback.no-leading", self.persona.no_leading_fallback, matched=False)
 
-    def reply_for(self, message: str, *, context: str = "") -> MatchResult:
+    def reply_for(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
         """Classify one message and choose its fixed reply."""
 
         if not isinstance(context, str):
             raise TypeError("matcher context must be a string")
-        return self._with_approval_flag(self._reply_for(message, context=context), message)
+        return self._with_approval_flag(
+            self._reply_for(
+                message,
+                context=context,
+                excluded_decision_ids=excluded_decision_ids,
+            ),
+            message,
+        )
 
-    def _reply_for(self, message: str, *, context: str = "") -> MatchResult:
-        classified = self.classify(message, context=context)
+    def _reply_for(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
+        classified = self.classify(
+            message,
+            context=context,
+            excluded_decision_ids=excluded_decision_ids,
+        )
         if classified.category is Category.OTHER:
             return classified
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
@@ -771,6 +874,7 @@ class MatcherBank:
                     fact,
                     answer_key=key,
                     ground_truth=True,
+                    matched_request_clause=classified.matched_request_clause,
                 )
             source = self.answer_sheet.answer_for_source(lookup_text)
             if source is None and lookup_text != message:
@@ -782,6 +886,7 @@ class MatcherBank:
                     f"source.answer.{key}",
                     answer,
                     answer_key=key,
+                    matched_request_clause=classified.matched_request_clause,
                 )
             return self._unmatched(classified, message)
         if classified.category is Category.STATUS_QUERY:
@@ -790,14 +895,25 @@ class MatcherBank:
                 status = self.answer_sheet.answer_for_status(message)
             if status is not None:
                 key, answer = status
-                return MatchResult(Category.STATUS_QUERY, f"status.answer.{key}", answer, answer_key=key)
+                return MatchResult(
+                    Category.STATUS_QUERY,
+                    f"status.answer.{key}",
+                    answer,
+                    answer_key=key,
+                    matched_request_clause=classified.matched_request_clause,
+                )
             return self._unmatched(classified, message, lookup_text=lookup_text)
         if classified.category is Category.DECISION_REQUEST:
             return self._unmatched(classified, message)
         # APPROVAL_REQUEST has no declared-fact lookup: whether to approve is
         # a persona behavioral choice, not a fact a ground-truth brief holds.
         bank = self.persona.replies_for(classified.category.value)
-        return MatchResult(classified.category, f"persona.{classified.category.value}", bank[0])
+        return MatchResult(
+            classified.category,
+            f"persona.{classified.category.value}",
+            bank[0],
+            matched_request_clause=classified.matched_request_clause,
+        )
 
     def _unmatched(
         self, classified: MatchResult, message: str, *, lookup_text: str | None = None
@@ -822,6 +938,7 @@ class MatcherBank:
                 f"persona.{classified.category.value}",
                 bank[0],
                 matched=False,
+                matched_request_clause=classified.matched_request_clause,
             )
         candidate = lookup_text or message
         found = self.answer_sheet.answer_for_ground_truth(candidate)
@@ -835,12 +952,14 @@ class MatcherBank:
                 fact,
                 answer_key=key,
                 ground_truth=True,
+                matched_request_clause=classified.matched_request_clause,
             )
         return MatchResult(
             classified.category,
             f"unmatched.{classified.category.value}",
             self.persona.no_leading_fallback,
             matched=False,
+            matched_request_clause=classified.matched_request_clause,
         )
 
 

@@ -50,6 +50,7 @@ FACT_CATEGORIES = (
 SCALAR_FACT_KEYS = frozenset({"run_id", "artifact_id", "publish_sequence", "lifecycle_state"})
 MATCHED_RULE_ID_RE = re.compile(
     r"(?:fallback\.no-leading|persona\.(?:source_question|approval_request|decision_request|status_query|other)|"
+    r"stance\.ask_back\.accept_recommendation|"
     r"unmatched\.(?:source_question|decision_request|status_query)|"
     r"(?:source|decision|status)\.answer\.[A-Za-z0-9][A-Za-z0-9_.-]*|"
     r"ground_truth\.[A-Za-z0-9][A-Za-z0-9_.-]*)\Z"
