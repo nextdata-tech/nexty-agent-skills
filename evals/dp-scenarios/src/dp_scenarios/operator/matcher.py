@@ -339,7 +339,15 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"(?:applied|apply|leave|left|keep|skip|defer)\b"
     r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
     r"exclud(?:e|ing)|flag(?:ging)?|treat(?:ing)?|handl(?:e|ing))\b"
-    r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b",
+    r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b"
+    # A live turn asked "How would you like me to proceed on the two blocking
+    # items?" with no "fix" vocabulary at all -- the repair itself was named
+    # only in the finding recap, not in this clause. This alternative is
+    # reached only through ``_review_fix_request``, which already requires
+    # ``_REVIEW_FINDING_CONTEXT_PATTERN`` to match first, so a bare "how would
+    # you like me to proceed" with no review finding in play never reaches
+    # here and is not read as a fix-authorization ask.
+    r"|\bhow\s+(?:would\s+you\s+like\s+me|should\s+i)\s+to\s+(?:proceed|handle)\b",
     re.IGNORECASE | re.DOTALL,
 )
 _REVIEW_FIX_CHOICE_PATTERN = re.compile(

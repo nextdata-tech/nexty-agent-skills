@@ -15,6 +15,7 @@ the sentence(s) that matter for routing.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,11 @@ from dp_scenarios.operator.persona import load_persona
 ROOT = Path(__file__).parents[1]
 PERSONA = load_persona(ROOT / "scenarios/_personas/micromanager.yaml")
 FINANCE_CLOSE = load_answer_sheet(ROOT / "scenarios/finance-close/answer-sheet.yaml")
+B2B5_FIXTURES = json.loads(
+    (ROOT / "tests/fixtures/operator-matcher-b2b5-regressions.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 # Live turn 5: the finding is reported in the same message as the ask, and the
 # ask names its fix only as a gerund ("authorize fixing #1"), which a bare
@@ -161,3 +167,65 @@ def test_a_non_review_fix_request_without_finding_context_is_not_authorization()
     result = bank.reply_for(message)
 
     assert result.decision_id != "review_fix_authorization"
+
+
+# Live run 12 turn 7: the review flagged two findings (a date-parsing
+# ambiguity and a missing verifier check for `weekend_close`), and the ask
+# itself names no "fix" vocabulary at all -- "How would you like me to
+# proceed on the two blocking items?" -- so it matched neither the original
+# action/choice patterns nor any request-clause-scoped decision. It fell
+# through to a whole-message substring scan, where "weekend" (from the
+# finding's own identifier) and "rate" (an incidental hit inside
+# "sepaRATEly", three sentences away) jointly satisfied weekend_fx even
+# though the ask has nothing to do with the missing-FX-rate policy.
+B2_RUN12_TURN7_HOW_WOULD_YOU_LIKE_TO_PROCEED = (
+    "What the review then flagged -- needs your decision:\n\n"
+    "1. `weekend-close-date-format-ambiguity` (blocking) -- my fix silently "
+    "tries US-style before day-first for any ambiguous date. Do you want "
+    "that, or do you know the source's actual date format?\n"
+    "2. `weekend-close-has-no-independent-verifier` (blocking) -- "
+    "Separately, `weekend_close` has no independent check in the verifier.\n\n"
+    "How would you like me to proceed on the two blocking items?"
+)
+
+
+def test_run12_turn7_how_would_you_like_me_to_proceed_routes_to_authorization() -> None:
+    bank = MatcherBank(PERSONA, FINANCE_CLOSE)
+
+    result = bank.reply_for(B2_RUN12_TURN7_HOW_WOULD_YOU_LIKE_TO_PROCEED)
+
+    assert result.category is Category.DECISION_REQUEST
+    assert result.rule_id == "decision.answer.review_fix_authorization"
+    assert result.decision_id == "review_fix_authorization"
+    assert (
+        result.reply
+        == FINANCE_CLOSE.decision_answers["review_fix_authorization"].answer
+    )
+
+
+def test_how_would_you_like_me_to_proceed_without_finding_context_is_not_authorization() -> None:
+    """The same closing question, with no review finding reported anywhere,
+    must not be read as a fix-authorization ask -- the broadened pattern is
+    reached only through ``_review_fix_request``'s existing finding-context
+    gate, so this bare status-style question should fall elsewhere.
+    """
+
+    bank = MatcherBank(PERSONA, FINANCE_CLOSE)
+    message = "How would you like me to proceed on the two blocking items?"
+
+    result = bank.reply_for(message)
+
+    assert result.decision_id != "review_fix_authorization"
+
+
+def test_run12_missing_fx_clarifying_question_still_routes_to_weekend_fx() -> None:
+    """The genuine, two-sentence weekend/rate ask this fix must not disturb."""
+
+    bank = MatcherBank(PERSONA, FINANCE_CLOSE)
+    message = B2B5_FIXTURES["b2_turn1_missing_fx_clarifying_question"]
+
+    result = bank.reply_for(message)
+
+    assert result.category is Category.DECISION_REQUEST
+    assert result.decision_id == "weekend_fx"
+    assert result.reply == FINANCE_CLOSE.decision_answers["weekend_fx"].answer
