@@ -156,3 +156,23 @@ def test_runner_handover_exposes_the_close_source_and_evidence_contract(tmp_path
         assert "endpoint_close_entries" in profile
         assert "evidence/finance_close.json" in contract
         assert "total_eur" in contract
+
+
+def test_the_weekend_fx_decision_event_names_the_graded_policy_token() -> None:
+    """The graded promise token reaches the agent with the decision itself.
+
+    The follow-up grades ``promise.missing_fx_policy`` by exact equality, and
+    evidence contracts may not predeclare decision values, so the decision
+    event is the only place the agent can learn the token.
+    """
+
+    import yaml
+
+    from _repo_paths import REPO_ROOT
+
+    scenario_dir = REPO_ROOT / "evals/dp-scenarios/scenarios/finance-close"
+    events = yaml.safe_load((scenario_dir / "events.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((scenario_dir / "scenario.yaml").read_text(encoding="utf-8"))
+    token = config["gates"]["follow-up"]["promise_fields"]["missing_fx_policy"]
+    decision = next(card for card in events if card["id"] == "b2_weekend_fx_decision")
+    assert token in decision["content"]

@@ -463,7 +463,8 @@ def test_b2_run11_shaped_replay_reconfirms_at_turn_4_with_the_due_event_still_ap
         "credit as a positive amount."
     )
     weekend_fx_decision_content = (
-        "[DECISION NEEDED] Record this decision as b2-weekend-fx: the 6 "
+        "[DECISION NEEDED] Record this decision as b2-weekend-fx, with "
+        "missing_fx_policy exclude_and_warn: the 6 "
         "January entry has no FX rate, so exclude it from the EUR total and "
         "flag it."
     )
