@@ -26,6 +26,29 @@ from api_connector_gate import (  # noqa: E402
 
 _AMBIGUOUS_STATIC_VALUE = object()
 AUTH_TOKEN_PLACEHOLDER = "${ORDERS_READ_TOKEN}"
+PROBE_ALLOWED_MODULE_IMPORTS = {
+    "json",
+    "os",
+    "sys",
+    "urllib.error",
+    "urllib.request",
+}
+PROBE_ALLOWED_FROM_IMPORTS = {
+    "__future__": {"annotations"},
+    "typing": {"Any"},
+    "urllib.error": {"HTTPError", "URLError"},
+    "urllib.request": {"Request", "urlopen"},
+}
+ALTERNATE_ENVIRONMENT_API_ROOTS = {
+    "posix",
+    "nt",
+    "ctypes",
+    "dotenv",
+    "decouple",
+    "dynaconf",
+    "environs",
+    "envparse",
+}
 
 
 def fail(message: str) -> None:
@@ -233,6 +256,12 @@ def _direct_profile_secret_key(node: ast.AST | None) -> str | None:
                     and isinstance(default_node, ast.Constant)
                     and default == "header"
                 )
+                or (
+                    isinstance(value, str)
+                    and value.startswith("auth_")
+                    and isinstance(default_node, ast.Constant)
+                    and default == ""
+                )
             )
             return value if isinstance(value, str) and default_is_safe else None
     return None
@@ -285,6 +314,354 @@ def _reads_profile_secret(
         isinstance(node, ast.Name)
         and aliases is not None
         and aliases.get(node.id) == key
+    )
+
+
+def _runtime_probe_token_read(node: ast.AST | None) -> bool:
+    """Recognize the probe's narrowly scoped runtime token input."""
+    if (
+        not isinstance(node, ast.Call)
+        or _dotted_name(node.func) not in {"os.getenv", "os.environ.get"}
+        or node.keywords
+        or len(node.args) not in {1, 2}
+        or _constant(node.args[0]) != "ORDERS_READ_TOKEN"
+    ):
+        return False
+    return len(node.args) == 1 or (
+        isinstance(node.args[1], ast.Constant)
+        and node.args[1].value in {"", None}
+    )
+
+
+def _runtime_probe_os_access_is_safe(module: ast.Module) -> bool:
+    """Allow only direct reads through one unshadowed ``import os`` binding."""
+    parents = {
+        child: parent
+        for parent in ast.walk(module)
+        for child in ast.iter_child_nodes(parent)
+    }
+    allowed_imports = 0
+    for node in ast.walk(module):
+        if isinstance(node, ast.Match):
+            return False
+        if isinstance(node, ast.Import):
+            if node not in module.body:
+                return False
+            for alias in node.names:
+                if (
+                    alias.asname is not None
+                    or alias.name not in PROBE_ALLOWED_MODULE_IMPORTS
+                ):
+                    return False
+                if alias.name == "os":
+                    allowed_imports += 1
+        elif isinstance(node, ast.ImportFrom):
+            allowed_names = PROBE_ALLOWED_FROM_IMPORTS.get(node.module or "")
+            if (
+                node not in module.body
+                or node.level != 0
+                or allowed_names is None
+                or not node.names
+                or any(
+                    alias.asname is not None or alias.name not in allowed_names
+                    for alias in node.names
+                )
+            ):
+                return False
+        elif isinstance(node, ast.Name) and node.id == "os":
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            parent = parents.get(node)
+            if not isinstance(parent, ast.Attribute) or parent.value is not node:
+                return False
+            if parent.attr == "getenv":
+                call = parents.get(parent)
+                if not (
+                    isinstance(call, ast.Call)
+                    and call.func is parent
+                    and _runtime_probe_token_read(call)
+                ):
+                    return False
+            elif parent.attr == "environ":
+                get_attribute = parents.get(parent)
+                call = parents.get(get_attribute) if get_attribute is not None else None
+                if not (
+                    isinstance(get_attribute, ast.Attribute)
+                    and get_attribute.value is parent
+                    and get_attribute.attr == "get"
+                    and isinstance(call, ast.Call)
+                    and call.func is get_attribute
+                    and _runtime_probe_token_read(call)
+                ):
+                    return False
+            else:
+                return False
+        elif isinstance(node, ast.arg) and node.arg == "os":
+            return False
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == "os":
+                return False
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and "os" in node.names:
+            return False
+        elif isinstance(node, ast.ExceptHandler) and node.name == "os":
+            return False
+        elif isinstance(node, ast.MatchAs) and node.name == "os":
+            return False
+        elif isinstance(node, ast.MatchStar) and node.name == "os":
+            return False
+        elif isinstance(node, ast.MatchMapping) and node.rest == "os":
+            return False
+
+    if allowed_imports != 1:
+        return False
+
+    # The key literal is privileged: it may occur only as the first argument
+    # of one of the exact direct-read forms recognized above.
+    for node in ast.walk(module):
+        if not isinstance(node, ast.Constant) or node.value != "ORDERS_READ_TOKEN":
+            continue
+        parent = parents.get(node)
+        if not (
+            isinstance(parent, ast.Call)
+            and parent.args
+            and parent.args[0] is node
+            and _runtime_probe_token_read(parent)
+        ):
+            return False
+    return True
+
+
+def _uses_alternate_environment_api(module: ast.Module) -> bool:
+    """Reject known environment-mutating libraries throughout the closure."""
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            if any(
+                alias.name.split(".", 1)[0] in ALTERNATE_ENVIRONMENT_API_ROOTS
+                for alias in node.names
+            ):
+                return True
+        elif isinstance(node, ast.ImportFrom) and (
+            (node.module or "").split(".", 1)[0]
+            in ALTERNATE_ENVIRONMENT_API_ROOTS
+        ):
+            return True
+    return False
+
+
+def _os_module_is_not_aliased(module: ast.Module) -> bool:
+    """Reject escaping the direct ``os`` name in modules with no env exception."""
+    parents = {
+        child: parent
+        for parent in ast.walk(module)
+        for child in ast.iter_child_nodes(parent)
+    }
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound_name = alias.asname or alias.name.split(".", 1)[0]
+                if alias.name == "os" or bound_name == "os":
+                    if not (
+                        node in module.body
+                        and alias.name == "os"
+                        and alias.asname is None
+                    ):
+                        return False
+        elif isinstance(node, ast.ImportFrom):
+            if any((alias.asname or alias.name) == "os" for alias in node.names):
+                return False
+        elif isinstance(node, ast.Name) and node.id == "os":
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            parent = parents.get(node)
+            if not isinstance(parent, ast.Attribute) or parent.value is not node:
+                return False
+        elif isinstance(node, ast.arg) and node.arg == "os":
+            return False
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == "os":
+                return False
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and "os" in node.names:
+            return False
+        elif isinstance(node, ast.ExceptHandler) and node.name == "os":
+            return False
+        elif isinstance(node, ast.MatchAs) and node.name == "os":
+            return False
+        elif isinstance(node, ast.MatchStar) and node.name == "os":
+            return False
+        elif isinstance(node, ast.MatchMapping) and node.rest == "os":
+            return False
+    return True
+
+
+def _runtime_probe_token_aliases(scope: ast.AST) -> set[str]:
+    """Resolve aliases from the named environment input, never profile/literals."""
+    assignments: dict[str, list[ast.AST | None]] = {}
+    store_counts = _stored_name_counts([scope])
+    for node in _scope_nodes(scope):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                assignments.setdefault(target.id, []).append(node.value)
+
+    aliases: set[str] = set()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        positional = scope.args.posonlyargs + scope.args.args
+        defaulted = {
+            argument.arg
+            for argument in positional[len(positional) - len(scope.args.defaults):]
+        } if scope.args.defaults else set()
+        defaulted.update(
+            argument.arg
+            for argument, default in zip(scope.args.kwonlyargs, scope.args.kw_defaults)
+            if default is not None
+        )
+        aliases.update(
+            argument.arg
+            for argument in positional + scope.args.kwonlyargs
+            if argument.arg not in defaulted
+            and store_counts.get(argument.arg) == 1
+            and _profile_key_for_auth_name(argument.arg) == "auth_token"
+        )
+
+    unique = {
+        name: values[0]
+        for name, values in assignments.items()
+        if len(values) == 1 and store_counts.get(name) == 1
+    }
+    for _ in range(len(unique) + 1):
+        changed = False
+        for name, value in unique.items():
+            if name not in aliases and (
+                _runtime_probe_token_read(value)
+                or isinstance(value, ast.Name) and value.id in aliases
+            ):
+                aliases.add(name)
+                changed = True
+        if not changed:
+            break
+    return aliases
+
+
+def _runtime_probe_token_calls_are_safe(modules: list[ast.Module]) -> bool:
+    """Require named token parameters to receive an approved runtime value."""
+    for module in modules:
+        top_level_functions = {
+            node.name: node
+            for node in module.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        signatures: dict[str, list[tuple[str, int | None]]] = {}
+        for node in ast.walk(module):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            all_args = node.args.posonlyargs + node.args.args
+            defaulted = {
+                argument.arg
+                for argument in all_args[len(all_args) - len(node.args.defaults):]
+            } if node.args.defaults else set()
+            defaulted.update(
+                argument.arg
+                for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults)
+                if default is not None
+            )
+            auth_args = [
+                argument
+                for argument in all_args + node.args.kwonlyargs
+                if _profile_key_for_auth_name(argument.arg) == "auth_token"
+            ]
+            if not auth_args:
+                continue
+            if (
+                top_level_functions.get(node.name) is not node
+                or node.name in signatures
+                or node.args.vararg is not None
+                or node.args.kwarg is not None
+                or any(argument.arg in defaulted for argument in auth_args)
+                or any(argument in node.args.posonlyargs for argument in auth_args)
+            ):
+                return False
+            signatures[node.name] = [
+                (
+                    argument.arg,
+                    all_args.index(argument) if argument in node.args.args else None,
+                )
+                for argument in auth_args
+            ]
+
+        if not signatures:
+            continue
+        parents = {
+            child: parent
+            for parent in ast.walk(module)
+            for child in ast.iter_child_nodes(parent)
+        }
+        for node in ast.walk(module):
+            if isinstance(node, ast.Name) and node.id in signatures:
+                parent = parents.get(node)
+                if not isinstance(parent, ast.Call) or parent.func is not node:
+                    return False
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            params = signatures.get(node.func.id)
+            if params is None:
+                continue
+            if (
+                any(keyword.arg is None for keyword in node.keywords)
+                or any(isinstance(argument, ast.Starred) for argument in node.args)
+            ):
+                return False
+            caller_scope: ast.AST = module
+            parent = parents.get(node)
+            while parent is not None:
+                if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                    caller_scope = parent
+                    break
+                parent = parents.get(parent)
+            aliases = _runtime_probe_token_aliases(caller_scope)
+            for name, position in params:
+                values = [keyword.value for keyword in node.keywords if keyword.arg == name]
+                if (
+                    len(values) != 1
+                    or position is not None and len(node.args) > position
+                ):
+                    return False
+                value = values[0]
+                if not (
+                    _runtime_probe_token_read(value)
+                    or isinstance(value, ast.Name) and value.id in aliases
+                ):
+                    return False
+    return True
+
+
+def _auth_source_aliases(
+    scope: ast.AST, *, allow_runtime_probe_token: bool = False
+) -> dict[str, str]:
+    """Resolve profile secrets plus the single approved runtime probe token."""
+    aliases = _profile_secret_aliases(scope)
+    if allow_runtime_probe_token:
+        aliases.update(
+            {name: "auth_token" for name in _runtime_probe_token_aliases(scope)}
+        )
+    return aliases
+
+
+def _reads_auth_credential(
+    node: ast.AST | None,
+    key: str,
+    aliases: dict[str, str],
+    *,
+    allow_runtime_probe_token: bool = False,
+) -> bool:
+    return _reads_profile_secret(node, key, aliases) or (
+        allow_runtime_probe_token
+        and key == "auth_token"
+        and _runtime_probe_token_read(node)
     )
 
 
@@ -916,45 +1293,21 @@ def _active_bearer_branch(
         )
 
     def is_safe_unsupported_raise(statement: ast.AST) -> bool:
-        if not isinstance(statement, ast.Raise) or statement.cause is not None:
-            return False
-        exception = statement.exc
-        if (
-            not isinstance(exception, ast.Call)
-            or not isinstance(exception.func, ast.Name)
-            or exception.func.id != "ValueError"
-            or len(exception.args) != 1
-            or exception.keywords
-            or function_store_counts.get("ValueError", 0) != 0
-            or any(
-                _stored_name_counts([module]).get("ValueError", 0) != 0
+        return (
+            _safe_unsupported_auth_raise(statement)
+            and function_store_counts.get("ValueError", 0) == 0
+            and all(
+                _stored_name_counts([module]).get("ValueError", 0) == 0
                 for module in modules
             )
-        ):
-            return False
-
-        def safe_message(node: ast.AST) -> bool:
-            if isinstance(node, ast.Constant):
-                return isinstance(node.value, str)
-            if not isinstance(node, ast.JoinedStr):
-                return False
-            return all(
-                isinstance(part, ast.Constant)
-                and isinstance(part.value, str)
-                or (
-                    isinstance(part, ast.FormattedValue)
-                    and isinstance(part.value, ast.Name)
-                    and part.value.id == "auth_type"
-                    and part.conversion in {-1, ord("r"), ord("s")}
-                    and part.format_spec is None
-                )
-                for part in node.values
-            )
-
-        return safe_message(exception.args[0])
+        )
 
     def raises_for_unsupported(suite: list[ast.stmt]) -> bool:
-        if len(suite) != 1 or not isinstance(suite[0], ast.If):
+        if len(suite) != 1:
+            return False
+        if isinstance(suite[0], ast.Raise):
+            return is_safe_unsupported_raise(suite[0])
+        if not isinstance(suite[0], ast.If):
             return False
         branch = suite[0]
         seen_modes: set[str] = {"bearer"}
@@ -973,9 +1326,13 @@ def _active_bearer_branch(
             ):
                 return False
             seen_modes.add(mode)
-            if len(branch.orelse) != 1 or not isinstance(branch.orelse[0], ast.If):
+            if len(branch.orelse) != 1:
                 return False
-            branch = branch.orelse[0]
+            fallback = branch.orelse[0]
+            if isinstance(fallback, ast.If):
+                branch = fallback
+            else:
+                return is_safe_unsupported_raise(fallback)
 
     def statement_containing_call() -> ast.stmt | None:
         child: ast.AST = call
@@ -993,9 +1350,6 @@ def _active_bearer_branch(
     if call_statement is None or call_statement not in function_statements:
         return None
     call_index = function_statements.index(call_statement)
-    # This scenario returns the dlt source directly. Requiring the call to be
-    # the final statement prevents later mutation of the config object from
-    # invalidating the statically checked auth/resource values.
     if (
         call_index != len(function_statements) - 1
         or not isinstance(call_statement, ast.Return)
@@ -1161,6 +1515,1123 @@ def active_rest_api_contract(
     return evidence
 
 
+def _dotted_name(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else None
+    return None
+
+
+def _literal_string_mapping(node: ast.AST | None) -> dict[str, ast.AST] | None:
+    if not isinstance(node, ast.Dict):
+        return None
+    result: dict[str, ast.AST] = {}
+    for key, value in zip(node.keys, node.values):
+        name = _constant(key)
+        if not isinstance(name, str) or name in result:
+            return None
+        result[name] = value
+    return result
+
+
+def _name_is(node: ast.AST | None, name: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == name
+
+
+def _secret_read_is(node: ast.AST | None, key: str) -> bool:
+    return (
+        isinstance(node, ast.Subscript)
+        and _name_is(node.value, "secrets")
+        and _constant(node.slice) == key
+    )
+
+
+def _attribute_is(node: ast.AST | None, value: str, attribute: str) -> bool:
+    return isinstance(node, ast.Attribute) and node.attr == attribute and _name_is(
+        node.value, value
+    )
+
+
+def _keyword_map(call: ast.Call) -> dict[str, ast.AST] | None:
+    result: dict[str, ast.AST] = {}
+    for keyword in call.keywords:
+        if keyword.arg is None or keyword.arg in result:
+            return None
+        result[keyword.arg] = keyword.value
+    return result
+
+
+def _is_on_transform_decorator(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and _dotted_name(node.func) == "data_product.on_transform"
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _direct_import_count(
+    modules: list[ast.Module], module_name: str, imported_name: str
+) -> int:
+    return sum(
+        1
+        for module in modules
+        for statement in module.body
+        if isinstance(statement, ast.ImportFrom)
+        and statement.module == module_name
+        for alias in statement.names
+        if alias.name == imported_name and alias.asname is None
+    )
+
+
+def _plain_import_count(modules: list[ast.Module], module_name: str) -> int:
+    return sum(
+        1
+        for module in modules
+        for statement in module.body
+        if isinstance(statement, ast.Import)
+        for alias in statement.names
+        if alias.name == module_name and alias.asname is None
+    )
+
+
+def _is_approved_probe_read_attribute(
+    node: ast.Attribute, parents: dict[ast.AST, ast.AST]
+) -> bool:
+    if _dotted_name(node) == "os.getenv":
+        call = parents.get(node)
+        return (
+            isinstance(call, ast.Call)
+            and call.func is node
+            and _runtime_probe_token_read(call)
+        )
+    if _dotted_name(node) == "os.environ":
+        get_attribute = parents.get(node)
+        call = parents.get(get_attribute) if get_attribute is not None else None
+        return (
+            isinstance(get_attribute, ast.Attribute)
+            and get_attribute.value is node
+            and get_attribute.attr == "get"
+            and isinstance(call, ast.Call)
+            and call.func is get_attribute
+            and _runtime_probe_token_read(call)
+        )
+    return False
+
+
+def _has_static_cursor(node: ast.AST | None, cursor_path: str, cursor_param: str) -> bool:
+    values = _literal_string_mapping(node)
+    return values is not None and set(values) == {
+        "type", "cursor_path", "cursor_param",
+    } and _constant(values["type"]) == "cursor" and _constant(
+        values["cursor_path"]
+    ) == cursor_path and _constant(values["cursor_param"]) == cursor_param
+
+
+def _is_safe_type_name_attribute(node: ast.Attribute) -> bool:
+    """Allow only the probe's safe ``type(value|exc).__name__`` forms."""
+    call = node.value
+    return (
+        node.attr == "__name__"
+        and isinstance(call, ast.Call)
+        and _name_is(call.func, "type")
+        and len(call.args) == 1
+        and isinstance(call.args[0], ast.Name)
+        and call.args[0].id in {"value", "exc"}
+        and not call.keywords
+    )
+
+
+def _reflective_or_dynamic_import_access(
+    modules: list[ast.Module],
+    *,
+    allow_runtime_environment_reads: bool = False,
+    allow_os_environ_access: bool = False,
+) -> bool:
+    reflective_names = {
+        "globals", "locals", "vars", "getattr", "setattr", "exec", "eval",
+        "compile", "__import__", "__dict__", "__builtins__",
+    }
+    sensitive_environment_attributes = {
+        "os", "posix", "nt", "environ", "environb", "getenv", "getenvb",
+        "putenv", "unsetenv",
+    }
+    for module in modules:
+        parents = {
+            child: parent
+            for parent in ast.walk(module)
+            for child in ast.iter_child_nodes(parent)
+        }
+        for node in ast.walk(module):
+            if isinstance(node, ast.Match):
+                return True
+            if isinstance(node, ast.Name) and node.id in reflective_names:
+                return True
+            if isinstance(node, ast.Attribute):
+                dotted = _dotted_name(node)
+                bare_os_base = _name_is(node.value, "os")
+                if (
+                    node.attr in reflective_names
+                    or (
+                        node.attr.startswith("__")
+                        and node.attr.endswith("__")
+                        and not _is_safe_type_name_attribute(node)
+                    )
+                    or (
+                        node.attr in sensitive_environment_attributes
+                        and not (
+                            bare_os_base
+                            and node.attr in {"environ", "getenv"}
+                        )
+                    )
+                    or dotted in {"sys.modules", "sys.path"}
+                    or dotted in {
+                        "os.putenv", "os.unsetenv", "os.getenvb", "os.environb"
+                    }
+                    or (
+                        dotted == "os.getenv"
+                        and not (
+                            allow_runtime_environment_reads
+                            and _is_approved_probe_read_attribute(node, parents)
+                        )
+                    )
+                    or (
+                        dotted == "os.environ"
+                        and not allow_os_environ_access
+                        and not (
+                            allow_runtime_environment_reads
+                            and _is_approved_probe_read_attribute(node, parents)
+                        )
+                    )
+                    or (
+                    dotted is not None
+                    and dotted.startswith("sys.")
+                    and dotted != "sys.exit"
+                    )
+                ):
+                    return True
+            if isinstance(node, ast.Import):
+                if any(
+                    alias.name == "importlib"
+                    or alias.name.startswith("importlib.")
+                    or (alias.name == "sys" and alias.asname is not None)
+                    or (alias.name == "os" and alias.asname is not None)
+                    for alias in node.names
+                ):
+                    return True
+            if isinstance(node, ast.ImportFrom):
+                if (node.module or "").startswith("importlib") or (
+                    node.module == "sys"
+                    and any(alias.name in {"*", "modules", "path"} for alias in node.names)
+                ) or (
+                    (node.module or "").split(".", 1)[0] == "os"
+                ) or (
+                    node.module in {"builtins", "__builtins__"}
+                    and any(alias.name == "*" or alias.name in reflective_names for alias in node.names)
+                ):
+                    return True
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                value = node.value
+                if isinstance(value, ast.Name) and value.id == "sys":
+                    return True
+    return False
+
+
+def _is_docstring(statement: ast.stmt) -> bool:
+    return (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Constant)
+        and isinstance(statement.value.value, str)
+    )
+
+
+def _safe_unsupported_auth_raise(statement: ast.AST) -> bool:
+    if not isinstance(statement, ast.Raise) or statement.cause is not None:
+        return False
+    exception = statement.exc
+    if (
+        not isinstance(exception, ast.Call)
+        or not _name_is(exception.func, "ValueError")
+        or len(exception.args) != 1
+        or exception.keywords
+    ):
+        return False
+    message = exception.args[0]
+    if isinstance(message, ast.Constant):
+        return isinstance(message.value, str)
+    if not isinstance(message, ast.JoinedStr):
+        return False
+    return all(
+        isinstance(part, ast.Constant)
+        and isinstance(part.value, str)
+        or (
+            isinstance(part, ast.FormattedValue)
+            and _name_is(part.value, "auth_type")
+            and part.conversion in {-1, ord("r"), ord("s")}
+            and part.format_spec is None
+        )
+        for part in message.values
+    )
+
+
+def _safe_annotation(node: ast.AST | None) -> bool:
+    if node is None:
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in {
+            "Any", "DuckDbOutput", "None", "bool", "dict", "float", "int",
+            "list", "str", "tuple",
+        }
+    if isinstance(node, ast.Constant):
+        return node.value is None or isinstance(node.value, str)
+    if isinstance(node, ast.Subscript):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id in {"dict", "list", "tuple"}
+            and _safe_annotation(node.slice)
+        )
+    if isinstance(node, ast.Tuple):
+        return all(_safe_annotation(element) for element in node.elts)
+    return False
+
+
+def _transform_import_surface_is_safe(module: ast.Module) -> bool:
+    allowed_from = {
+        "__future__": {"annotations"},
+        "pathlib": {"Path"},
+        "typing": {"Any"},
+        "dlt.sources.rest_api": {"RESTAPIConfig", "rest_api_resources"},
+        "nxd": {"data_product"},
+        "nxd.core.context": {"DuckDbOutput"},
+    }
+    seen: set[tuple[str, str]] = set()
+    for statement in module.body:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if alias.name not in {"dlt", "os"} or alias.asname is not None:
+                    return False
+                binding = ("import", alias.name)
+                if binding in seen:
+                    return False
+                seen.add(binding)
+        elif isinstance(statement, ast.ImportFrom):
+            if statement.level or statement.module not in allowed_from:
+                return False
+            for alias in statement.names:
+                if alias.name not in allowed_from[statement.module] or alias.asname is not None:
+                    return False
+                binding = (statement.module, alias.name)
+                if binding in seen:
+                    return False
+                seen.add(binding)
+        elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        elif _is_docstring(statement):
+            continue
+        elif _name_assignment(statement, "PHYSICAL_MODELS") is not None:
+            continue
+        elif _name_assignment(statement, "OPTIONAL_EMPTY_MODELS") is not None:
+            continue
+        elif _main_guard(statement):
+            continue
+        else:
+            return False
+    return ("import", "dlt") in seen and ("import", "os") in seen
+
+
+def _static_helper_shape(
+    helper: ast.FunctionDef,
+    *,
+    resource_name: str,
+    endpoint_key: str,
+    items_field: str,
+    cursor_path: str,
+    cursor_param: str,
+) -> bool:
+    args = helper.args
+    if (
+        helper.decorator_list
+        or args.posonlyargs
+        or len(args.args) != 1
+        or args.args[0].arg != "secrets"
+        or not _safe_annotation(args.args[0].annotation)
+        or not _safe_annotation(helper.returns)
+        or args.vararg is not None
+        or args.kwonlyargs
+        or args.kwarg is not None
+        or args.defaults
+        or args.kw_defaults
+        or any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda,
+                              ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
+            for node in ast.walk(helper)
+            if node is not helper
+        )
+    ):
+        return False
+
+    statements = list(helper.body)
+    if statements and _is_docstring(statements[0]):
+        statements.pop(0)
+    if len(statements) != 5:
+        return False
+    client_stmt, auth_stmt, dispatch, config_stmt, return_stmt = statements
+    client_value = _annotated_name_assignment(client_stmt, "client_config")
+
+    if not (
+        client_value is not None
+        and isinstance(auth_stmt, ast.Assign)
+        and len(auth_stmt.targets) == 1
+        and _name_is(auth_stmt.targets[0], "auth_type")
+        and _direct_profile_secret_key(auth_stmt.value) == "auth_type"
+        and isinstance(config_stmt, ast.AnnAssign)
+        and config_stmt.simple == 1
+        and _name_is(config_stmt.target, "config")
+        and _name_is(config_stmt.annotation, "RESTAPIConfig")
+        and isinstance(return_stmt, ast.Return)
+        and isinstance(return_stmt.value, ast.Call)
+        and _dotted_name(return_stmt.value.func) == "rest_api_resources"
+        and len(return_stmt.value.args) == 1
+        and not return_stmt.value.keywords
+        and _name_is(return_stmt.value.args[0], "config")
+    ):
+        return False
+
+    client_values = _literal_string_mapping(client_value)
+    if client_values is None or _constant(client_values.get("base_url")) is not None:
+        # The profile value must be the direct runtime secret, never a literal.
+        return False
+    if not _secret_read_is(client_values.get("base_url"), "base_url"):
+        return False
+
+    if not isinstance(dispatch, ast.If):
+        return False
+    bearer_test = dispatch.test
+    if not (
+        isinstance(bearer_test, ast.Compare)
+        and _name_is(bearer_test.left, "auth_type")
+        and len(bearer_test.ops) == 1
+        and isinstance(bearer_test.ops[0], ast.Eq)
+        and len(bearer_test.comparators) == 1
+        and _constant(bearer_test.comparators[0]) == "bearer"
+        and len(dispatch.body) == 1
+        and len(dispatch.orelse) == 1
+    ):
+        return False
+    auth_write = dispatch.body[0]
+    auth_values = _literal_string_mapping(auth_write.value) if isinstance(
+        auth_write, ast.Assign
+    ) else None
+    unsupported = dispatch.orelse[0]
+    # This scenario requires bearer auth, so the fallback must raise even when
+    # auth_type is absent (for example, when it was read with secrets.get()).
+    unsupported_branch_ok = _safe_unsupported_auth_raise(unsupported)
+    if not (
+        isinstance(auth_write, ast.Assign)
+        and len(auth_write.targets) == 1
+        and isinstance(auth_write.targets[0], ast.Subscript)
+        and _name_is(auth_write.targets[0].value, "client_config")
+        and _constant(auth_write.targets[0].slice) == "auth"
+        and auth_values is not None
+        and set(auth_values) == {"type", "token"}
+        and _constant(auth_values["type"]) == "bearer"
+        and _secret_read_is(auth_values["token"], "auth_token")
+        and unsupported_branch_ok
+    ):
+        return False
+
+    config_values = _literal_string_mapping(config_stmt.value)
+    if (
+        config_values is None
+        or set(config_values) != {"client", "resources"}
+        or not _name_is(config_values["client"], "client_config")
+        or not isinstance(config_values["resources"], ast.List)
+        or len(config_values["resources"].elts) != 1
+    ):
+        return False
+    resource = _literal_string_mapping(config_values["resources"].elts[0])
+    if resource is None or set(resource) != {"name", "endpoint"} or _constant(
+        resource["name"]
+    ) != resource_name:
+        return False
+    endpoint = _literal_string_mapping(resource["endpoint"])
+    if endpoint is None or set(endpoint) not in (
+        {"path", "method", "data_selector", "paginator"},
+        {"path", "method", "data_selector"},
+    ):
+        return False
+    if not (
+        _secret_read_is(endpoint["path"], endpoint_key)
+        and _constant(endpoint["method"]) == "GET"
+        and _constant(endpoint["data_selector"]) == items_field
+    ):
+        return False
+
+    client_paginator = client_values.get("paginator")
+    endpoint_paginator = endpoint.get("paginator")
+    if (client_paginator is None) == (endpoint_paginator is None):
+        return False
+    if not _has_static_cursor(
+        client_paginator or endpoint_paginator, cursor_path, cursor_param
+    ):
+        return False
+    return set(client_values) in ({"base_url", "paginator"}, {"base_url"})
+
+
+def _name_assignment(statement: ast.stmt, name: str) -> ast.AST | None:
+    if (
+        isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and _name_is(statement.targets[0], name)
+    ):
+        return statement.value
+    return None
+
+
+def _annotated_name_assignment(statement: ast.stmt, name: str) -> ast.AST | None:
+    if isinstance(statement, ast.AnnAssign) and statement.simple == 1:
+        return (
+            statement.value
+            if _name_is(statement.target, name) and _safe_annotation(statement.annotation)
+            else None
+        )
+    return _name_assignment(statement, name)
+
+
+def _actual_tables_expression(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and _name_is(node.func, "set")
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Call)
+        and _dotted_name(node.args[0].func) == "pipeline.default_schema.data_table_names"
+        and not node.args[0].args
+        and not node.args[0].keywords
+    )
+
+
+def _model_table_set(
+    node: ast.AST | None,
+    *,
+    collection_name: str,
+    literal_model: str | None = None,
+) -> bool:
+    if isinstance(node, ast.SetComp) and len(node.generators) == 1:
+        generator = node.generators[0]
+        target = generator.target
+        return (
+            isinstance(node.elt, ast.Subscript)
+            and _attribute_is(node.elt.value, "duckdb", "model_tables")
+            and isinstance(node.elt.slice, ast.Name)
+            and _name_is(target, node.elt.slice.id)
+            and _name_is(generator.iter, collection_name)
+            and not generator.ifs
+            and not generator.is_async
+        )
+    return (
+        literal_model is not None
+        and isinstance(node, ast.Set)
+        and len(node.elts) == 1
+        and isinstance(node.elts[0], ast.Subscript)
+        and _attribute_is(node.elts[0].value, "duckdb", "model_tables")
+        and _constant(node.elts[0].slice) == literal_model
+    )
+
+
+def _readback_condition(statement: ast.If, *, optional_models: bool) -> bool:
+    test = statement.test
+    if not (
+        isinstance(test, ast.Compare)
+        and _name_is(test.left, "actual")
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.NotEq)
+        and len(test.comparators) == 1
+    ):
+        return False
+    expected = test.comparators[0]
+    if optional_models:
+        return (
+            isinstance(expected, ast.BinOp)
+            and isinstance(expected.op, ast.Sub)
+            and _name_is(expected.left, "expected")
+            and _name_is(expected.right, "absent_optional")
+        )
+    return _name_is(expected, "expected")
+
+
+def _readback_tail_is_safe(statements: list[ast.stmt]) -> bool:
+    """Accept the required-table shorthand or the canonical optional-table check."""
+    if len(statements) == 4:
+        actual_stmt, expected_stmt, check_stmt, marker_stmt = statements
+        expected_value = _name_assignment(expected_stmt, "expected")
+        optional_value = None
+        expected_ok = _model_table_set(
+            expected_value,
+            collection_name="PHYSICAL_MODELS",
+            literal_model="orders",
+        )
+        optional_models = False
+    elif len(statements) == 7:
+        actual_stmt, expected_stmt, optional_stmt, missing_stmt, absent_stmt, check_stmt, marker_stmt = statements
+        expected_value = _name_assignment(expected_stmt, "expected")
+        optional_value = _name_assignment(optional_stmt, "optional")
+        missing_value = _name_assignment(missing_stmt, "missing")
+        absent_value = _name_assignment(absent_stmt, "absent_optional")
+        expected_ok = _model_table_set(
+            expected_value, collection_name="PHYSICAL_MODELS"
+        )
+        optional_models = (
+            _model_table_set(optional_value, collection_name="OPTIONAL_EMPTY_MODELS")
+            and isinstance(missing_value, ast.BinOp)
+            and isinstance(missing_value.op, ast.Sub)
+            and _name_is(missing_value.left, "expected")
+            and _name_is(missing_value.right, "actual")
+            and isinstance(absent_value, ast.BinOp)
+            and isinstance(absent_value.op, ast.BitAnd)
+            and _name_is(absent_value.left, "missing")
+            and _name_is(absent_value.right, "optional")
+        )
+        if not optional_models:
+            return False
+    else:
+        return False
+
+    actual_value = _name_assignment(actual_stmt, "actual")
+    if not (
+        _actual_tables_expression(actual_value)
+        and expected_ok
+        and isinstance(check_stmt, ast.If)
+        and _readback_condition(check_stmt, optional_models=optional_models)
+        and len(check_stmt.body) == 1
+        and not check_stmt.orelse
+        and isinstance(check_stmt.body[0], ast.Raise)
+        and check_stmt.body[0].cause is None
+        and isinstance(check_stmt.body[0].exc, ast.Call)
+        and _name_is(check_stmt.body[0].exc.func, "RuntimeError")
+        and len(check_stmt.body[0].exc.args) == 1
+        and not check_stmt.body[0].exc.keywords
+    ):
+        return False
+
+    marker_call = marker_stmt.value if isinstance(marker_stmt, ast.Expr) else None
+    if not (
+        isinstance(marker_call, ast.Call)
+        and isinstance(marker_call.func, ast.Attribute)
+        and marker_call.func.attr == "touch"
+        and isinstance(marker_call.func.value, ast.BinOp)
+        and isinstance(marker_call.func.value.op, ast.Div)
+        and _name_is(marker_call.func.value.left, "run_dir")
+        and _constant(marker_call.func.value.right) == ".transform-complete"
+        and not marker_call.args
+        and not marker_call.keywords
+    ):
+        return False
+
+    allowed_names = {
+        "PHYSICAL_MODELS", "OPTIONAL_EMPTY_MODELS", "RuntimeError", "absent_optional",
+        "actual", "duckdb", "expected", "missing", "model", "optional", "pipeline",
+        "run_dir", "set", "sorted",
+    }
+    if any(
+        isinstance(node, ast.Name) and node.id not in allowed_names
+        for statement in statements
+        for node in ast.walk(statement)
+    ):
+        return False
+
+    verified_expressions = [actual_value, expected_value]
+    if optional_value is not None:
+        verified_expressions.append(optional_value)
+    allowed_attributes = {
+        node
+        for expression in verified_expressions
+        for node in ast.walk(expression)
+        if isinstance(node, ast.Attribute)
+    }
+    allowed_attributes.add(marker_call.func)
+    if any(
+        isinstance(node, ast.Attribute) and node not in allowed_attributes
+        for statement in statements
+        for node in ast.walk(statement)
+    ):
+        return False
+
+    allowed_calls = {
+        "set", "pipeline.default_schema.data_table_names", "RuntimeError", "sorted",
+    }
+    for statement in statements:
+        for node in ast.walk(statement):
+            if not isinstance(node, ast.Call) or node is marker_call:
+                continue
+            if _dotted_name(node.func) not in allowed_calls:
+                return False
+    return not any(
+        isinstance(node, ast.Name) and node.id in {"secrets", "res"}
+        for statement in statements
+        for node in ast.walk(statement)
+    )
+
+
+def _main_guard(statement: ast.stmt) -> bool:
+    return (
+        isinstance(statement, ast.If)
+        and isinstance(statement.test, ast.Compare)
+        and _name_is(statement.test.left, "__name__")
+        and len(statement.test.ops) == 1
+        and isinstance(statement.test.ops[0], ast.Eq)
+        and len(statement.test.comparators) == 1
+        and _constant(statement.test.comparators[0]) == "__main__"
+        and len(statement.body) == 1
+        and isinstance(statement.body[0], ast.Expr)
+        and isinstance(statement.body[0].value, ast.Call)
+        and _dotted_name(statement.body[0].value.func) == "data_product.main"
+        and not statement.body[0].value.args
+        and not statement.body[0].value.keywords
+        and not statement.orelse
+    )
+
+
+def _model_constant(statement: ast.stmt, name: str, expected: tuple[str, ...]) -> bool:
+    value = _name_assignment(statement, name)
+    return (
+        isinstance(value, ast.Tuple)
+        and tuple(_constant(item) for item in value.elts) == expected
+    )
+
+
+def _desktop_transform_shape(ingest: ast.FunctionDef) -> bool:
+    args = ingest.args
+    if (
+        args.posonlyargs
+        or [argument.arg for argument in args.args] != ["duckdb", "secrets"]
+        or not _name_is(args.args[0].annotation, "DuckDbOutput")
+        or not _safe_annotation(args.args[1].annotation)
+        or not _safe_annotation(ingest.returns)
+        or args.vararg is not None
+        or args.kwonlyargs
+        or args.kwarg is not None
+        or args.defaults
+        or args.kw_defaults
+        or len(ingest.decorator_list) != 1
+        or not _is_on_transform_decorator(ingest.decorator_list[0])
+    ):
+        return False
+    statements = list(ingest.body)
+    if statements and _is_docstring(statements[0]):
+        statements.pop(0)
+    if len(statements) < 8:
+        return False
+    run_dir_stmt, pipelines_stmt, mkdir_stmt, env_stmt, pipeline_stmt, res_stmt, run_stmt = statements[:7]
+    tail = statements[7:]
+
+    run_dir_value = (
+        run_dir_stmt.value
+        if isinstance(run_dir_stmt, ast.Assign)
+        and len(run_dir_stmt.targets) == 1
+        and _name_is(run_dir_stmt.targets[0], "run_dir")
+        else None
+    )
+    path_call = run_dir_value.value if isinstance(run_dir_value, ast.Attribute) else None
+    if not (
+        isinstance(run_dir_value, ast.Attribute)
+        and run_dir_value.attr == "parent"
+        and isinstance(path_call, ast.Call)
+        and _name_is(path_call.func, "Path")
+        and len(path_call.args) == 1
+        and not path_call.keywords
+        and _attribute_is(path_call.args[0], "duckdb", "path")
+    ):
+        return False
+
+    if not (
+        isinstance(pipelines_stmt, ast.Assign)
+        and len(pipelines_stmt.targets) == 1
+        and _name_is(pipelines_stmt.targets[0], "pipelines_dir")
+        and isinstance(pipelines_stmt.value, ast.BinOp)
+        and isinstance(pipelines_stmt.value.op, ast.Div)
+        and _name_is(pipelines_stmt.value.left, "run_dir")
+        and _constant(pipelines_stmt.value.right) == "dlt-pipelines"
+    ):
+        return False
+    mkdir_call = mkdir_stmt.value if isinstance(mkdir_stmt, ast.Expr) else None
+    mkdir_keywords = _keyword_map(mkdir_call) if isinstance(mkdir_call, ast.Call) else None
+    if not (
+        isinstance(mkdir_call, ast.Call)
+        and _attribute_is(mkdir_call.func, "pipelines_dir", "mkdir")
+        and not mkdir_call.args
+        and mkdir_keywords is not None
+        and set(mkdir_keywords) == {"parents", "exist_ok"}
+        and all(isinstance(value, ast.Constant) and value.value is True for value in mkdir_keywords.values())
+    ):
+        return False
+
+    env_value = env_stmt.value if isinstance(env_stmt, ast.Assign) else None
+    env_target = env_stmt.targets[0] if isinstance(env_stmt, ast.Assign) and len(env_stmt.targets) == 1 else None
+    env_data = (
+        env_value.args[0]
+        if isinstance(env_value, ast.Call) and len(env_value.args) == 1
+        else None
+    )
+    env_path = env_data
+    if not (
+        isinstance(env_target, ast.Subscript)
+        and _attribute_is(env_target.value, "os", "environ")
+        and _constant(env_target.slice) == "DLT_DATA_DIR"
+        and isinstance(env_value, ast.Call)
+        and _name_is(env_value.func, "str")
+        and not env_value.keywords
+        and isinstance(env_path, ast.BinOp)
+        and isinstance(env_path.op, ast.Div)
+        and _name_is(env_path.left, "run_dir")
+        and _constant(env_path.right) == "dlt-data"
+    ):
+        return False
+
+    pipeline_call = pipeline_stmt.value if isinstance(pipeline_stmt, ast.Assign) else None
+    pipeline_keywords = _keyword_map(pipeline_call) if isinstance(pipeline_call, ast.Call) else None
+    if not (
+        isinstance(pipeline_stmt, ast.Assign)
+        and len(pipeline_stmt.targets) == 1
+        and _name_is(pipeline_stmt.targets[0], "pipeline")
+        and isinstance(pipeline_call, ast.Call)
+        and _dotted_name(pipeline_call.func) == "dlt.pipeline"
+        and not pipeline_call.args
+        and pipeline_keywords is not None
+        and set(pipeline_keywords) == {"pipelines_dir", "destination", "dataset_name"}
+    ):
+        return False
+    pipelines_arg = pipeline_keywords["pipelines_dir"]
+    destination = pipeline_keywords["destination"]
+    destination_keywords = _keyword_map(destination) if isinstance(destination, ast.Call) else None
+    if not (
+        isinstance(pipelines_arg, ast.Call)
+        and _name_is(pipelines_arg.func, "str")
+        and len(pipelines_arg.args) == 1
+        and _name_is(pipelines_arg.args[0], "pipelines_dir")
+        and not pipelines_arg.keywords
+        and isinstance(destination, ast.Call)
+        and _dotted_name(destination.func) == "dlt.destinations.duckdb"
+        and not destination.args
+        and destination_keywords is not None
+        and set(destination_keywords) == {"credentials"}
+        and _attribute_is(destination_keywords["credentials"], "duckdb", "path")
+        and _attribute_is(pipeline_keywords["dataset_name"], "duckdb", "schema")
+    ):
+        return False
+
+    res_call = res_stmt.value if isinstance(res_stmt, ast.Assign) else None
+    if not (
+        isinstance(res_stmt, ast.Assign)
+        and len(res_stmt.targets) == 1
+        and _name_is(res_stmt.targets[0], "res")
+        and isinstance(res_call, ast.Call)
+        and _name_is(res_call.func, "_orders_resources")
+        and len(res_call.args) == 1
+        and _name_is(res_call.args[0], "secrets")
+        and not res_call.keywords
+    ):
+        return False
+
+    run_call = run_stmt.value if isinstance(run_stmt, ast.Expr) else None
+    run_keywords = _keyword_map(run_call) if isinstance(run_call, ast.Call) else None
+    if not (
+        isinstance(run_call, ast.Call)
+        and _attribute_is(run_call.func, "pipeline", "run")
+        and len(run_call.args) == 1
+        and _name_is(run_call.args[0], "res")
+        and run_keywords is not None
+        and set(run_keywords) == {"write_disposition"}
+        and _constant(run_keywords["write_disposition"]) == "replace"
+    ):
+        return False
+
+    if not _readback_tail_is_safe(tail):
+        return False
+
+    names = [node for node in ast.walk(ingest) if isinstance(node, ast.Name)]
+    res_nodes = [node for node in names if node.id == "res"]
+    pipeline_nodes = [node for node in names if node.id == "pipeline"]
+    secrets_loads = [
+        node for node in names
+        if node.id == "secrets" and isinstance(node.ctx, ast.Load)
+    ]
+    return (
+        len(res_nodes) == 2
+        and any(node is res_stmt.targets[0] and isinstance(node.ctx, ast.Store) for node in res_nodes)
+        and any(node is run_call.args[0] and isinstance(node.ctx, ast.Load) for node in res_nodes)
+        and len(pipeline_nodes) == 3
+        and any(node is pipeline_stmt.targets[0] and isinstance(node.ctx, ast.Store) for node in pipeline_nodes)
+        and any(node is run_call.func.value and isinstance(node.ctx, ast.Load) for node in pipeline_nodes)
+        and len(secrets_loads) == 1
+        and secrets_loads[0] is res_call.args[0]
+    )
+
+
+def active_desktop_source_flow(
+    transform_modules: list[ast.Module],
+    closure_modules: list[ast.Module],
+    active_config: dict[str, bool],
+    *,
+    resource_name: str,
+    endpoint_key: str,
+    items_field: str,
+    cursor_path: str,
+    cursor_param: str,
+    connectivity_probe_modules: list[ast.Module] | None = None,
+) -> bool:
+    """Fail closed on the one-resource helper and local Desktop dlt dataflow."""
+    connectivity_probe_modules = connectivity_probe_modules or []
+    probe_ids = {id(module) for module in connectivity_probe_modules}
+    transform_fingerprints = {
+        ast.dump(module, include_attributes=False) for module in transform_modules
+    }
+    if (
+        len(probe_ids) != len(connectivity_probe_modules)
+        or any(
+            not any(module is closure_module for closure_module in closure_modules)
+            for module in connectivity_probe_modules
+        )
+        or any(
+            any(module is transform_module for transform_module in transform_modules)
+            for module in connectivity_probe_modules
+        )
+        or any(
+            not _runtime_probe_os_access_is_safe(module)
+            for module in connectivity_probe_modules
+        )
+        or any(_uses_alternate_environment_api(module) for module in closure_modules)
+        or any(
+            not _os_module_is_not_aliased(module)
+            for module in closure_modules
+            if id(module) not in probe_ids
+        )
+        or any(
+            _reflective_or_dynamic_import_access(
+                [module],
+                allow_runtime_environment_reads=id(module) in probe_ids,
+                allow_os_environ_access=ast.dump(module, include_attributes=False)
+                in transform_fingerprints,
+            )
+            for module in closure_modules
+        )
+        or len(transform_modules) != 1
+        or _reflective_or_dynamic_import_access(
+            transform_modules, allow_os_environ_access=True
+        )
+        or not _transform_import_surface_is_safe(transform_modules[0])
+    ):
+        return False
+    module = transform_modules[0]
+    top_level_functions = [
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef)
+    ]
+    helpers = [node for node in top_level_functions if node.name == "_orders_resources"]
+    ingests = [node for node in top_level_functions if node.name == "ingest"]
+    if len(helpers) != 1 or len(ingests) != 1:
+        return False
+    helper, ingest = helpers[0], ingests[0]
+    transforms = [
+        node
+        for candidate in transform_modules
+        for node in ast.walk(candidate)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_is_on_transform_decorator(decorator) for decorator in node.decorator_list)
+    ]
+    if transforms != [ingest]:
+        return False
+
+    # Preserve the Desktop template surfaces while keeping this fixture to one
+    # required physical model and no optional/derived models.
+    model_constants = [
+        statement
+        for statement in module.body
+        if _name_assignment(statement, "PHYSICAL_MODELS") is not None
+        or _name_assignment(statement, "OPTIONAL_EMPTY_MODELS") is not None
+    ]
+    if (
+        len(model_constants) != 2
+        or sum(_model_constant(node, "PHYSICAL_MODELS", (resource_name,)) for node in model_constants) != 1
+        or sum(_model_constant(node, "OPTIONAL_EMPTY_MODELS", ()) for node in model_constants) != 1
+    ):
+        return False
+
+    # The transform module is intentionally a tiny, self-contained closure:
+    # direct imports, the required model constants, helper/entrypoint, and main guard.
+    main_guards = 0
+    for statement in module.body:
+        if statement in {helper, ingest} or isinstance(statement, (ast.Import, ast.ImportFrom)):
+            continue
+        if _is_docstring(statement):
+            continue
+        if statement in model_constants:
+            continue
+        if _main_guard(statement):
+            main_guards += 1
+            continue
+        return False
+    if main_guards != 1:
+        return False
+
+    rest_aliases = [
+        alias
+        for candidate in closure_modules
+        for statement in candidate.body
+        if isinstance(statement, ast.ImportFrom)
+        and statement.module == "dlt.sources.rest_api"
+        for alias in statement.names
+        if alias.name in {"rest_api_resources", "RESTAPIConfig"}
+        or alias.asname in {"rest_api_resources", "RESTAPIConfig"}
+    ]
+    if (
+        len(rest_aliases) != 2
+        or {alias.name for alias in rest_aliases} != {"rest_api_resources", "RESTAPIConfig"}
+        or any(alias.asname is not None for alias in rest_aliases)
+        or _direct_import_count(closure_modules, "dlt.sources.rest_api", "rest_api_resources") != 1
+        or _direct_import_count(closure_modules, "dlt.sources.rest_api", "RESTAPIConfig") != 1
+        or _plain_import_count([module], "dlt") != 1
+        or _plain_import_count([module], "os") != 1
+        or _direct_import_count([module], "pathlib", "Path") != 1
+        or _direct_import_count([module], "nxd", "data_product") != 1
+        or _direct_import_count([module], "nxd.core.context", "DuckDbOutput") != 1
+    ):
+        return False
+
+    protected_names = {
+        "_orders_resources", "RESTAPIConfig", "rest_api_resources", "dlt",
+        "os", "Path", "data_product", "DuckDbOutput",
+    }
+    for candidate in closure_modules:
+        for node in ast.walk(candidate):
+            if isinstance(node, ast.Name) and node.id in protected_names and isinstance(node.ctx, ast.Store):
+                return False
+            if isinstance(node, ast.arg) and node.arg in protected_names:
+                return False
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name in protected_names
+            ):
+                if not (
+                    node.name == "_orders_resources"
+                    and node.lineno == helper.lineno
+                    and ast.dump(node, include_attributes=False)
+                    == ast.dump(helper, include_attributes=False)
+                ):
+                    return False
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                aliases = node.names
+                if any(
+                    alias.name == "_orders_resources" or alias.asname == "_orders_resources"
+                    for alias in aliases
+                ):
+                    return False
+
+    if not _static_helper_shape(
+        helper,
+        resource_name=resource_name,
+        endpoint_key=endpoint_key,
+        items_field=items_field,
+        cursor_path=cursor_path,
+        cursor_param=cursor_param,
+    ) or not _desktop_transform_shape(ingest):
+        return False
+
+    helper_calls = [
+        node
+        for candidate in transform_modules
+        for node in ast.walk(candidate)
+        if isinstance(node, ast.Call) and _name_is(node.func, "_orders_resources")
+    ]
+    rest_calls = [
+        node
+        for candidate in transform_modules
+        for node in ast.walk(candidate)
+        if isinstance(node, ast.Call) and _name_is(node.func, "rest_api_resources")
+    ]
+    if len(helper_calls) != 1 or len(rest_calls) != 1:
+        return False
+    pipeline_calls = [
+        node
+        for candidate in closure_modules
+        for node in ast.walk(candidate)
+        if isinstance(node, ast.Call) and _dotted_name(node.func) == "dlt.pipeline"
+    ]
+    if len(pipeline_calls) != 1:
+        return False
+    if not all(active_config.values()):
+        return False
+
+    # The transform may touch process environment only to isolate dlt state;
+    # the sibling authoring-time connectivity probe may read its runtime token.
+    allowed_env = next(
+        (
+            node.targets[0].value
+            for node in ast.walk(ingest)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and _attribute_is(node.targets[0].value, "os", "environ")
+            and _constant(node.targets[0].slice) == "DLT_DATA_DIR"
+        ),
+        None,
+    )
+    env_attributes = [
+        node
+        for candidate in transform_modules
+        for node in ast.walk(candidate)
+        if isinstance(node, ast.Attribute) and _dotted_name(node) == "os.environ"
+    ]
+    if (
+        allowed_env is None
+        or len(env_attributes) != 1
+        or (
+            env_attributes[0].lineno,
+            env_attributes[0].col_offset,
+            env_attributes[0].end_lineno,
+            env_attributes[0].end_col_offset,
+        )
+        != (
+            allowed_env.lineno,
+            allowed_env.col_offset,
+            allowed_env.end_lineno,
+            allowed_env.end_col_offset,
+        )
+    ):
+        return False
+    for candidate in closure_modules:
+        for node in ast.walk(candidate):
+            dotted = _dotted_name(node) if isinstance(node, ast.Attribute) else None
+            if dotted is not None and (
+                dotted == "dlt.config"
+                or dotted.startswith("dlt.config.")
+                or dotted == "dlt.secrets"
+                or dotted.startswith("dlt.secrets.")
+            ):
+                return False
+    return True
+
+
+def closure_has_forbidden_dlt_config(root: Path, modules: list[ast.Module]) -> bool:
+    for path in root.rglob("*"):
+        if path.is_dir() and path.name == ".dlt":
+            return True
+        if path.is_file() and path.name in {"secrets.toml", "config.toml"}:
+            return True
+    for module in modules:
+        for node in ast.walk(module):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                value = node.value.replace("\\", "/").lower()
+                if (
+                    re.search(r"(?:^|/)\.dlt(?:/|$)", value)
+                    or re.search(r"(?:^|/)(?:secrets|config)\.toml(?:/|$)", value)
+                ):
+                    return True
+    return False
+
+
 def _profile_key_for_auth_name(name: str) -> str | None:
     normalized = name.casefold().replace("-", "_")
     if normalized.endswith(("_url", "_uri", "_endpoint")):
@@ -1178,8 +2649,13 @@ def _profile_key_for_auth_name(name: str) -> str | None:
     return None
 
 
-def _profile_bearer_header(node: ast.AST, aliases: dict[str, str]) -> bool:
-    """Accept only a Bearer header assembled from the private profile token."""
+def _profile_bearer_header(
+    node: ast.AST,
+    aliases: dict[str, str],
+    *,
+    allow_runtime_probe_token: bool = False,
+) -> bool:
+    """Accept only a Bearer header assembled from an approved runtime token."""
     if isinstance(node, ast.JoinedStr):
         literals = [value.value for value in node.values if isinstance(value, ast.Constant)]
         formatted = [value for value in node.values if isinstance(value, ast.FormattedValue)]
@@ -1188,15 +2664,30 @@ def _profile_bearer_header(node: ast.AST, aliases: dict[str, str]) -> bool:
             and len(formatted) == 1
             and formatted[0].conversion == -1
             and formatted[0].format_spec is None
-            and _reads_profile_secret(formatted[0].value, "auth_token", aliases)
+            and _reads_auth_credential(
+                formatted[0].value,
+                "auth_token",
+                aliases,
+                allow_runtime_probe_token=allow_runtime_probe_token,
+            )
         )
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         return (
             _static_string(node.left) == "Bearer "
-            and _reads_profile_secret(node.right, "auth_token", aliases)
+            and _reads_auth_credential(
+                node.right,
+                "auth_token",
+                aliases,
+                allow_runtime_probe_token=allow_runtime_probe_token,
+            )
         ) or (
             _static_string(node.right) == "Bearer "
-            and _reads_profile_secret(node.left, "auth_token", aliases)
+            and _reads_auth_credential(
+                node.left,
+                "auth_token",
+                aliases,
+                allow_runtime_probe_token=allow_runtime_probe_token,
+            )
         )
     return False
 
@@ -1207,10 +2698,26 @@ def _is_boolean_or_none(value: ast.AST) -> bool:
     )
 
 
-def has_no_hardcoded_auth_literals(modules: list[ast.Module]) -> bool:
-    """Reject literal credentials while allowing labels and profile-derived auth."""
+def has_no_hardcoded_auth_literals(
+    modules: list[ast.Module], *, allow_runtime_probe_token: bool = False
+) -> bool:
+    """Reject literals, with a narrow runtime-env exception for the API probe."""
     auth_headers = {"authorization", "proxy-authorization"}
     redaction_markers = {"<redacted>", "redacted", "[redacted]", "***", "..."}
+
+    if allow_runtime_probe_token and (
+        not any(
+            _runtime_probe_token_read(node)
+            for module in modules
+            for node in ast.walk(module)
+        )
+        or any(not _runtime_probe_os_access_is_safe(module) for module in modules)
+        or not _runtime_probe_token_calls_are_safe(modules)
+        or _reflective_or_dynamic_import_access(
+            modules, allow_runtime_environment_reads=True
+        )
+    ):
+        return False
 
     def is_redaction_value(value: ast.AST) -> bool:
         if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
@@ -1230,7 +2737,9 @@ def has_no_hardcoded_auth_literals(modules: list[ast.Module]) -> bool:
             )
         ]
         for scope in scopes:
-            aliases = _profile_secret_aliases(scope)
+            aliases = _auth_source_aliases(
+                scope, allow_runtime_probe_token=allow_runtime_probe_token
+            )
             for node in _scope_nodes(scope):
                 if isinstance(node, ast.Dict):
                     for key, value in zip(node.keys, node.values):
@@ -1242,18 +2751,29 @@ def has_no_hardcoded_auth_literals(modules: list[ast.Module]) -> bool:
                             if (
                                 not _is_boolean_or_none(value)
                                 and not is_redaction_value(value)
-                                and not _profile_bearer_header(value, aliases)
+                                and not _profile_bearer_header(
+                                    value,
+                                    aliases,
+                                    allow_runtime_probe_token=allow_runtime_probe_token,
+                                )
                             ):
                                 return False
                             continue
                         profile_key = _profile_key_for_auth_name(name)
-                        if profile_key and not _reads_profile_secret(value, profile_key, aliases):
+                        if profile_key and not _reads_auth_credential(
+                            value,
+                            profile_key,
+                            aliases,
+                            allow_runtime_probe_token=allow_runtime_probe_token,
+                        ):
                             return False
                 if isinstance(node, ast.Tuple) and len(node.elts) == 2:
                     header_name = _static_string(node.elts[0])
                     if header_name and header_name.casefold() in auth_headers:
                         if not is_redaction_value(node.elts[1]) and not _profile_bearer_header(
-                            node.elts[1], aliases
+                            node.elts[1],
+                            aliases,
+                            allow_runtime_probe_token=allow_runtime_probe_token,
                         ):
                             return False
                 if isinstance(node, ast.Call):
@@ -1265,13 +2785,20 @@ def has_no_hardcoded_auth_literals(modules: list[ast.Module]) -> bool:
                             if (
                                 not _is_boolean_or_none(keyword.value)
                                 and not is_redaction_value(keyword.value)
-                                and not _profile_bearer_header(keyword.value, aliases)
+                                and not _profile_bearer_header(
+                                    keyword.value,
+                                    aliases,
+                                    allow_runtime_probe_token=allow_runtime_probe_token,
+                                )
                             ):
                                 return False
                             continue
                         profile_key = _profile_key_for_auth_name(keyword.arg)
-                        if profile_key and not _reads_profile_secret(
-                            keyword.value, profile_key, aliases
+                        if profile_key and not _reads_auth_credential(
+                            keyword.value,
+                            profile_key,
+                            aliases,
+                            allow_runtime_probe_token=allow_runtime_probe_token,
                         ):
                             return False
                 if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
@@ -1283,14 +2810,21 @@ def has_no_hardcoded_auth_literals(modules: list[ast.Module]) -> bool:
                             if (
                                 header_name in auth_headers
                                 and not is_redaction_value(value)
-                                and not _profile_bearer_header(value, aliases)
+                                and not _profile_bearer_header(
+                                    value,
+                                    aliases,
+                                    allow_runtime_probe_token=allow_runtime_probe_token,
+                                )
                             ):
                                 return False
                             profile_key = _profile_key_for_auth_name(
                                 _static_string(target.slice) or ""
                             )
-                            if profile_key and not _reads_profile_secret(
-                                value, profile_key, aliases
+                            if profile_key and not _reads_auth_credential(
+                                value,
+                                profile_key,
+                                aliases,
+                                allow_runtime_probe_token=allow_runtime_probe_token,
                             ):
                                 return False
                         profile_key = (
@@ -1298,7 +2832,12 @@ def has_no_hardcoded_auth_literals(modules: list[ast.Module]) -> bool:
                             if isinstance(target, ast.Name)
                             else None
                         )
-                        if profile_key and not _reads_profile_secret(value, profile_key, aliases):
+                        if profile_key and not _reads_auth_credential(
+                            value,
+                            profile_key,
+                            aliases,
+                            allow_runtime_probe_token=allow_runtime_probe_token,
+                        ):
                             return False
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     if (
@@ -1364,7 +2903,15 @@ def readme_reports_no_live_check(readme: str) -> bool:
         r"\bno\s+(?:live\s+)?(?:api\s+)?(?:request|connection|call)\s+"
         r"(?:was\s+)?(?:made|performed|attempted|sent)\b"
     )
-    return bool(re.search(contextual_negation, text) or re.search(no_request, text))
+    explicit_status = re.compile(
+        r"(?im)^\s*(?:[-*]\s*)?(?:connectivity check|live api request|api request)"
+        r"\b[^\n]*\b(?:not run|not executed|not tested|unverified)\b"
+    )
+    return bool(
+        re.search(contextual_negation, text)
+        or re.search(no_request, text)
+        or explicit_status.search(readme)
+    )
 
 
 def read_only_operation(modules: list[ast.Module], expected_method: str) -> bool:
@@ -1417,7 +2964,8 @@ def main() -> int:
         root, expected_token=AUTH_TOKEN_PLACEHOLDER
     )
     check("profile:structured-bearer-auth", auth_ok, auth_detail)
-    check("profile:source-kind", fields.get("source_kind") == "rest_api")
+    # The source-types index defines generic REST as plain `api-source`;
+    # `source_kind` is for provider-specific API adapters, not this scenario.
     check("profile:base-url", fields.get("base_url", "").rstrip("/") == expected["base_url"])
     check("profile:base-url-public", public_flags.get("base_url") == "true")
     endpoint_key = f"endpoint_{expected['resource_name']}"
@@ -1465,17 +3013,54 @@ def main() -> int:
     check("connector:active-call-is-dlt", active_config["connector"])
     check("auth:dispatches-from-private-profile", active_config["auth"])
     generated_python_modules: list[ast.Module] = []
+    connectivity_probe_modules: list[ast.Module] = []
+    connectivity_probe_parse_errors: list[str] = []
     for path in root.rglob("*.py"):
         try:
-            generated_python_modules.append(
-                ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=path.name)
+            module = ast.parse(
+                path.read_text(encoding="utf-8", errors="replace"),
+                filename=path.name,
             )
+            generated_python_modules.append(module)
+            if path.resolve() == (root / "connectivity_check.py").resolve():
+                connectivity_probe_modules.append(module)
         except SyntaxError:
             if path in transform_paths:
                 continue  # The transform parse gate above reports this precisely.
+            if path.resolve() == (root / "connectivity_check.py").resolve():
+                connectivity_probe_parse_errors.append(path.name)
+    check(
+        "connectivity-probe:parses",
+        len(connectivity_probe_modules) == 1 and not connectivity_probe_parse_errors,
+        ", ".join(connectivity_probe_parse_errors),
+    )
+    desktop_flow_ok = active_desktop_source_flow(
+        modules,
+        generated_python_modules,
+        active_config,
+        resource_name=expected["resource_name"],
+        endpoint_key=endpoint_key,
+        items_field=str(pagination["items_field"]),
+        cursor_path=str(pagination["cursor_path"]),
+        cursor_param=str(pagination["cursor_param"]),
+        connectivity_probe_modules=connectivity_probe_modules,
+    )
+    check("transform:desktop-dlt-source-flow", desktop_flow_ok)
+    check(
+        "secrets:no-dlt-local-config",
+        not closure_has_forbidden_dlt_config(root, generated_python_modules),
+    )
     check(
         "auth:no-hardcoded-credential",
-        has_no_hardcoded_auth_literals(generated_python_modules),
+        has_no_hardcoded_auth_literals(
+            [
+                module for module in generated_python_modules
+                if module not in connectivity_probe_modules
+            ]
+        )
+        and has_no_hardcoded_auth_literals(
+            connectivity_probe_modules, allow_runtime_probe_token=True
+        ),
     )
     check("pagination:cursor", active_config["pagination"])
     check("payload:response-envelope", active_config["data_selector"])

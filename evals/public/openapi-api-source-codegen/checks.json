@@ -19,20 +19,24 @@
       "check": "Ingestion uses dlt RESTAPIConfig/rest_api_resources; it does not hand-roll HTTP or use a client library beside the connector."
     },
     {
+      "id": "desktop-output-contract",
+      "check": "The single orders resource flows unchanged to one replace-mode dlt run through the typed Desktop DuckDB output port; the transform compares actual tables with duckdb.model_tables for PHYSICAL_MODELS and touches .transform-complete only after the read-back check succeeds. The no-renaming shortcut is specific to this one-model fixture, not a general Desktop recipe."
+    },
+    {
       "id": "cursor-and-envelope",
       "check": "The orders resource selects results and explicitly follows next_cursor using the after query parameter."
     },
     {
       "id": "profile-driven-auth",
-      "check": "The API endpoint topology, bearer auth and exact required_scopes metadata are driven by flat api-source profile attributes; auth_token is private and the transform passes that secret into dlt's structured bearer auth."
+      "check": "The API endpoint topology, bearer auth and exact required_scopes metadata are driven by flat api-source profile attributes; the bearer-required contract rejects missing or unsupported auth_type, auth_token is private, and the transform passes that secret into dlt's structured bearer auth."
     },
     {
       "id": "read-only-and-secret-safe",
-      "check": "The generated resource remains read-only, contains no credential literal, and clearly marks the profile placeholder as requiring a locally supplied credential."
+      "check": "The generated resource remains read-only and contains no credential literal. The private profile placeholder is clearly non-usable; the standalone connectivity probe accepts a runtime credential only from ORDERS_READ_TOKEN, refuses missing/placeholder values, never prints or logs the credential, and passes it to any helper only by an explicit token= keyword."
     },
     {
       "id": "no-live-claims",
-      "check": "The agent does not claim to have run dlt, materialized the product, executed the connectivity probe, or contacted an API."
+      "check": "The agent does not claim to have run dlt, materialized the product, executed the connectivity probe, or contacted an API; README explicitly marks both payload inspection and connectivity as not run and unverified."
     }
   ]
 }
