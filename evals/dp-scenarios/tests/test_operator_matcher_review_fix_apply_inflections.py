@@ -107,3 +107,29 @@ def test_enumerated_proceed_choice_needs_a_fix_list() -> None:
 
     assert result.decision_id != "review_fix_authorization"
     assert result.rule_id != "decision.answer.review_fix_authorization"
+
+
+B2_RUN16_TURN8_FIX_FINDINGS_ASK = (
+    "The adversarial review surfaced findings that block admission. Two are "
+    "behavior-affecting and need your decision before I fix anything.\n\n"
+    "I haven't touched the closure yet. Do you want me to fix the two blocking "
+    "findings (and optionally the advisory ones) and go through a fresh capture "
+    "+ review round? Please confirm which finding IDs to apply."
+)
+
+
+def test_asking_to_fix_the_review_findings_routes_to_the_review_fix_answer() -> None:
+    bank = MatcherBank(PERSONA, FINANCE_CLOSE)
+
+    result = bank.reply_for(B2_RUN16_TURN8_FIX_FINDINGS_ASK)
+
+    assert result.category is Category.DECISION_REQUEST
+    assert result.rule_id == "decision.answer.review_fix_authorization"
+
+
+def test_fixing_findings_without_review_context_is_not_a_review_fix_ask() -> None:
+    bank = MatcherBank(PERSONA, FINANCE_CLOSE)
+
+    result = bank.reply_for("Do you want me to fix the findings in the source table?")
+
+    assert result.rule_id != "decision.answer.review_fix_authorization"
