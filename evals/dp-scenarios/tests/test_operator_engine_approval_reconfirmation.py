@@ -196,3 +196,190 @@ def test_b2_shaped_replay_reconfirms_at_the_first_real_approval_ask() -> None:
     assert len(approvals) == 1
     assert approvals[0]["turn"] == 3
     assert _claim(result, 3).get("approval_reconfirmed") is True
+
+
+# ---------------------------------------------------------------------------
+# The "owed approval" defer mechanism.
+#
+# B2's live run7 hit a different failure than run6's: the scripted
+# ``approval: true`` turn landed while a *decision* answer was pending (from
+# an unrelated weekend-FX question), so ``defer_scheduled_approval`` correctly
+# chose to send the decision reply instead -- but the approval text itself was
+# then simply dropped. Intake failed with ``intake_spec_approval_missing`` and
+# every later "Do you approve?" got the persona's "What exactly am I
+# approving?" forever, because the reconfirmation mechanism above only arms
+# when an approval was actually transmitted early; here nothing was ever
+# transmitted at all.
+#
+# The fix below keeps the deferred approval's text owed until it can actually
+# be sent: at the next turn where the agent's previous message is a genuine
+# approval request (and no decision answer is pending, and a dynamic
+# reapproval is not itself firing), the owed text goes out as a real approval
+# turn -- minting the ``spec_approved`` row for the first time, not a
+# reconfirmation. If nothing genuine comes up, a three-turn bound forces it
+# through at the next turn that is not itself carrying a pending decision, so
+# a run can never simply lose its declared approval.
+# ---------------------------------------------------------------------------
+
+
+def test_a_deferred_approval_is_delivered_at_the_next_genuine_approval_ask() -> None:
+    """The owed approval fires the first time the agent genuinely asks again."""
+
+    turns = (
+        "Improve weekly visibility.",
+        "Please continue.",
+        {"text": "Approved. Proceed.", "approval": True, "substitute_reply": False},
+        "Please continue again.",
+        "Please continue once more.",
+    )
+    script = make_script(turns=turns)
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Status update."),
+            # Sets up a pending decision answer for the scripted approval turn.
+            TurnResult(agent_message="Which option should I pick?"),
+            # The deferred turn sent the decision reply instead of the
+            # approval; this is the first genuine ask afterward.
+            TurnResult(agent_message="Do you approve this plan?"),
+            TurnResult(agent_message="Building now."),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts[2] == "Yes."
+    assert transport.message_texts[3] == "Approved. Proceed."
+
+    approvals = _spec_approved_rows(result)
+    assert len(approvals) == 1
+    assert approvals[0]["turn"] == 4
+    assert approvals[0]["artifact_ref"] == "Approved. Proceed."
+    assert _claim(result, 3).get("approval_deferred_for_decision") is True
+    # This was a genuine ask, fully answered by the owed delivery -- nothing
+    # is left to reconfirm afterward.
+    assert "approval_reconfirmed" not in _claim(result, 4)
+
+
+def test_a_pending_decision_still_goes_first_ahead_of_an_owed_approval() -> None:
+    """A fresh decision answer keeps priority even while an approval is owed."""
+
+    turns = (
+        "Improve weekly visibility.",
+        "Please continue.",
+        {"text": "Approved. Proceed.", "approval": True, "substitute_reply": False},
+        "Please continue again.",
+        "Please continue once more.",
+        "Please continue further.",
+    )
+    script = make_script(turns=turns)
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Status update."),
+            TurnResult(agent_message="Which option should I pick?"),
+            # Sent instead of the deferred approval: "Yes.". The next agent
+            # message carries both a fresh decision term and approval
+            # vocabulary in the same breath -- the decision must still win,
+            # and the owed approval must survive to fire later.
+            TurnResult(agent_message="Which option should I pick, and do you approve?"),
+            # Nothing pending now: the owed approval is still there.
+            TurnResult(agent_message="Do you approve this plan?"),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts[2] == "Yes."
+    assert transport.message_texts[3] == "Yes."
+    assert transport.message_texts[4] == "Approved. Proceed."
+    assert "approval_deferred_for_decision" not in _claim(result, 3)
+    assert _claim(result, 4).get("approval_deferred_for_decision") is True
+    assert len(_spec_approved_rows(result)) == 1
+
+
+def test_the_three_turn_bound_delivers_an_owed_approval_without_a_genuine_ask() -> None:
+    """If nothing genuine ever asks again, the bound still delivers it."""
+
+    turns = (
+        "Improve weekly visibility.",
+        "Please continue.",
+        {"text": "Approved. Proceed.", "approval": True, "substitute_reply": False},
+        "Please continue again.",
+        "Please continue once more.",
+        "Please continue further.",
+        "Please continue still.",
+    )
+    script = make_script(turns=turns)
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Status update."),
+            TurnResult(agent_message="Which option should I pick?"),
+            # Deferred turn sends "Yes." here. None of the next three agent
+            # messages solicit approval at all -- ordinary narration.
+            TurnResult(agent_message="Building now."),
+            TurnResult(agent_message="Still building."),
+            TurnResult(agent_message="Almost done."),
+            TurnResult(agent_message="Nearly there."),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts[2] == "Yes."
+    # Turns 4, 5 and 6 stay owed (three further turns); the bound forces
+    # delivery on turn 7, the next turn without a pending decision answer.
+    assert transport.message_texts[3] == "Please continue again."
+    assert transport.message_texts[4] == "Please continue once more."
+    assert transport.message_texts[5] == "Please continue further."
+    assert transport.message_texts[6] == "Approved. Proceed."
+
+    approvals = _spec_approved_rows(result)
+    assert len(approvals) == 1
+    assert approvals[0]["turn"] == 7
+    assert approvals[0]["artifact_ref"] == "Approved. Proceed."
+    assert _claim(result, 6).get("approval_deferred_for_decision") is True
+
+
+def test_b2_run7_shaped_replay_delivers_the_owed_approval_at_the_next_real_ask() -> None:
+    """Turns 1-5 of B2 run7: a decision swallows the scripted approval turn.
+
+    Reproduces ``conversation-finance-close-epoch-1.md``'s
+    ``intake_spec_approval_missing`` failure: turn 3's scripted
+    ``approval: true`` line lands while the ``weekend_fx`` decision is
+    pending (from turn 2's agent reply), so it is deferred and the decision
+    answer goes out instead. Turn 4's agent message is the exact live
+    "Do you approve this plan ... build the data product?" shape -- the first
+    genuine approval ask afterward -- so the owed approval text is delivered
+    there instead of being lost.
+    """
+
+    turns = FINANCE_CLOSE.turns[:4]
+    script = OperatorScript.from_components(
+        PERSONA,
+        FINANCE_CLOSE,
+        turns=turns,
+        turn_budget=len(turns),
+        phase_by_turn={1: 1, 2: 2, 3: 3, 4: 4},
+    )
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="Ready to inspect the close."),
+            # Mentions "weekend" and "rate": arms the weekend_fx decision
+            # pending for turn 3, the scripted approval slot.
+            TurnResult(agent_message=FIXTURES["b2_turn1_missing_fx_clarifying_question"]),
+            # The genuine approval ask the deferred approval answers at turn 4.
+            TurnResult(agent_message=FIXTURES["b2_turn3_approve_the_plan_question"]),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+
+    approval_text = turns[2]["text"] if isinstance(turns[2], dict) else turns[2]
+    decision_text = FINANCE_CLOSE.decision_answers["weekend_fx"].answer
+    assert transport.message_texts[2] == decision_text
+    assert transport.message_texts[3] == approval_text
+
+    approvals = _spec_approved_rows(result)
+    assert len(approvals) == 1
+    assert approvals[0]["turn"] == 4
+    assert approvals[0]["artifact_ref"] == approval_text
+    assert _claim(result, 3).get("approval_deferred_for_decision") is True
