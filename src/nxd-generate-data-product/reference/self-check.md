@@ -431,10 +431,25 @@ and only protected supervisor confirmation can admit a run. Specifically not:
   yesterday fails after its grant's `expires_at`. That is consent lapsing, not
   flakiness — re-ask rather than extending the date to make the check quiet.
 
-`grant.unbound` is the one warning: a grant binding no spec in the closure
+`grant.unbound` warns about a grant binding no spec in the closure. It
 authorizes nothing and fails nothing, but left on disk it reads as coverage it
 does not provide. It is reported only when every spec *did* find its grant —
 otherwise the same files are already the subject of a mismatch error.
+
+Two codes cover the Desktop supervisor's fixed paths. The supervisor reads the
+spec only at `contracts/mapper_spec.json` and the grant at exactly one of
+`contracts/mapper_grant.json` or `contracts/mapper_spec_grant.json`.
+
+- `grant.ambiguous_path` is an error: both grant paths exist, and the
+  supervisor refuses that before any prompt. Keep the user's grant at one path
+  and delete the other copy.
+- `grant.not_at_supervisor_path` is a warning, reported only once consent is
+  otherwise complete: the standalone harness binds the files where they are,
+  but a Desktop build would fail with `workflow/mapper_scope_invalid`. Move the
+  files; moving a file does not change the spec id or the grant.
+
+Neither code, nor a green Phase G, is a Desktop approval. See
+[field-mapper.md](field-mapper.md#desktop-supervisor-approval-boundary).
 
 ## Where an expected value may come from
 

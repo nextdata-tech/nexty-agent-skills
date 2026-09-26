@@ -11,6 +11,7 @@ do not fall back to a direct CLI or local substitute.
 - [Relay consent and capture](#relay-consent-and-capture)
 - [Run and report the review](#run-and-report-the-review)
 - [Follow returned actions through admission](#follow-returned-actions-through-admission)
+- [Mapper approval](#mapper-approval)
 - [When validation fails](#when-validation-fails)
 - [Reset after behavior changes](#reset-after-behavior-changes)
 
@@ -644,6 +645,87 @@ hash, or completion claim. Do not claim completion from closure files, a local
 DuckDB, `build-record.json`, or a successful local self-check. Claim readiness
 only from the supervisor's structured response and its admitted publication
 state.
+
+## Mapper approval
+
+A closure whose transform calls `nxd.experimental.field_mapper` needs a
+formal approval before validation and admission. The activated contract
+carries a `mapper-confirmation-v1` requirement that depends on capture and on
+the conversation review. When `next_actions` offers `start_requirement` for it,
+the supervisor returns the pending code `workflow/approval_required`. For a
+closure that does not map, the same `start_requirement` completes at once as
+`not_present`, with no prompt.
+
+Before you call it, tell the user what the prompt will show and that the
+decision is theirs. It shows the provider, the model, the call, token and USD
+ceilings, the expiry, the lifetime spend for this spec, and the fields the
+grant declares. Then call `start_requirement` with the returned requirement
+id and the current revision. The supervisor opens a native OS dialog. That
+dialog is the only approval surface. The response says only
+`approval: {state: "awaiting_user", expires_at}`. It carries no URL, token,
+capability or key, and you must not look for one. You cannot approve, decline,
+extend, widen or reset an approval. Do not click the dialog, type into it, or
+drive it with any automation tool. Wait for the user, then read the new state
+with `inspect_workflow`.
+
+The grant's `input_fields`, `document_classes` and `pii_category` are
+declared by the author and reviewed by the user. The supervisor does **not** enforce them. It
+enforces the provider (exactly `anthropic`), the models, the expiry, the
+request shape and the ceilings. Never tell the user that the declared field
+list limits what the transform sends.
+
+A grant is fixed once the user approves it. Any wider scope (a new model,
+higher ceilings, a later expiry, `recurring: true`) needs a grant the user
+edits or confirms, a recapture, a fresh review and a fresh OS approval. Never
+widen a grant yourself to get past a refusal. Never retry `start_requirement`
+in a loop: each call can put a dialog in front of the user.
+
+| Code | Meaning | Tell the user | Next action |
+|---|---|---|---|
+| `workflow/mapper_scope_invalid` | The grant is missing, malformed, or not strictly typed. `provider` must be exactly `anthropic`, `max_calls` and `max_tokens` positive integers, `max_usd` positive, `expires_at` a future RFC3339 time, `recurring` a bool. Also raised when both grant paths exist. No prompt was shown. | The grant needs correcting before it can be shown for approval. | Fix the grant shape in the authoring closure (confirm any scope value with the user), reset capture, recapture, review, then request approval again. |
+| `workflow/mapper_approval_claims_rejected` | The grant carries approval claims such as `approved`, `approved_by`, `receipt` or `signature`. | Nothing was approved; the grant tried to assert approval. | Remove the claims, reset capture, recapture, review, request approval again. Never add approval fields. |
+| `workflow/mapper_grant_exceeds_policy` | The grant asks for more than the installed policy allows (ceilings, provider, model, recurring). | The request is larger than this install permits. | Ask the user to narrow the scope, then edit, recapture, review and request again. Do not look for a way to raise the policy. |
+| `workflow/mapper_model_unpriced` | The model has no price entry, so spend cannot be bounded. | That model cannot be used under supervision. | Ask the user to choose a priced model; edit the spec and grant, recapture, review, request again. |
+| `workflow/approval_pending` | An approval request for this requirement is already open. | A prompt is already waiting for their decision. | Wait. Do not call `start_requirement` again; read state with `inspect_workflow`. |
+| `workflow/approval_declined` | The user declined in the OS dialog. The requirement is pending again. | They declined; nothing ran and nothing was spent. | Stop and ask what they want to change. Request again only when they ask for it. |
+| `workflow/approval_cancelled` | The dialog was cancelled. | The prompt was cancelled; nothing was approved. | Ask whether to prompt again; request again only on their yes. |
+| `workflow/approval_expired` | The dialog timed out, or at admission the approval's `expires_at` has passed. | The approval window ran out. | Ask whether to prompt again. If the grant's own `expires_at` is past, the user must set a new expiry: edit, recapture, review, request again. |
+| `workflow/approval_cooldown` | A request for the same mapper subject came too soon after a decline or cancel. | A short wait applies after a decline. | Do not poll. Tell the user, and request again only when they ask after the cooldown. |
+| `workflow/approval_interrupted` | The supervisor restarted while a prompt was open. | The prompt was lost when the supervisor restarted. | Ask whether to prompt again; request again only on their yes. |
+| `workflow/approval_surface_unavailable` | The OS dialog could not be shown. | Approval cannot be collected on this machine right now. | Stop and report the code. Never substitute a chat "yes" for the dialog. |
+| `workflow/approval_ceiling_reached` | The approved call, token or USD ceiling is spent. | The approved budget is used up. | Stop and report spend. A new budget needs a fresh approval that the user asks for; follow only the returned actions. |
+| `workflow/mapper_subject_changed` | The approved capture no longer matches what is being admitted. | The approved closure changed, so the approval no longer applies. | Stop and report. Do not retry; a legitimate change goes through reset, recapture, review and fresh approval. |
+| `workflow/mapper_integrity` | The approval or spend ledger failed its integrity check. The supervisor fails closed. | Approval records could not be verified. | Stop and report the code. Do not edit or delete supervisor state. |
+| `workflow/mapper_ledger_revoked` | A non-recurring approval was already used by a published instance. | That approval covered one publication only. | Stop and report. A new run needs a fresh approval. |
+| `workflow/mapper_provider_unavailable` | The provider is not usable under supervision. | Model calls are not available on this install. | Stop and report. |
+
+Validation in mapper mode runs the scratch build against a stub: it makes no
+network call and charges nothing. Stub answers are placeholders, so contract
+or expectation failures confined to columns the mapper spec declares as
+outputs become the advisory `validation/mapper_output_unverified`. Scratch
+validation proves wiring, not the quality of mapped values; say so when you
+report. Every other contract failure still fails.
+
+| Validation code | Recovery | Next action |
+|---|---|---|
+| `validation/mapper_approval_missing` | `stop` | The mapper closure reached validation with no approval binding. Report it; do not work around it. |
+| `validation/mapper_subject_changed` | `stop` | The pinned closure does not match the approved one. Report it as a bug or tampering; do not retry. |
+| `validation/mapper_ceiling_exceeded_in_scratch` | `repair_then_retry` | The scratch run would exceed the approved ceilings. Reduce what the transform maps, or ask the user whether they want to approve a larger budget (edit, recapture, review, fresh approval). |
+| `validation/mapper_grant_refused` | `repair_then_retry` | The transform asked for a model outside the grant. Make the transform use the granted model; a different model needs the user's fresh approval. |
+| `validation/mapper_provider_unavailable` | `stop` | Report it. `claude_cli`, `recorded` and `stub` providers are refused under supervision. |
+| `validation/mapper_output_unverified` | advisory | Not a failure. Report that mapper outputs were not checked against their contracts in scratch. |
+| `validation/mapper_closure_unsupported` | `stop` | The activated contract predates mapper approval. Report it and ask the user to update the Desktop install. |
+
+Run diagnostics can carry a mapper code. `mapper_ceiling_reached` means the
+live run hit the approved ceiling and was refused before the network; the
+mapper raised `BudgetExceededError`. `mapper_request_refused` means the broker
+refused a request outside the grant (wrong model, expired grant, or a
+disallowed request shape such as server tools or images); the mapper raised
+`GrantError`. `mapper_provider_credential_missing` means no provider key is
+installed for the supervisor; the user fixes it through Desktop setup, never
+by pasting a key into chat or into the closure. For all three, stop and report.
+Do not rerun to "try again", and never supply a key, token or base URL
+yourself.
 
 ## When validation fails
 

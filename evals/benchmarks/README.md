@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-26 | document the workflow-v2 mapper approval and cover both supervisor grant paths | NO_EVAL | — | [`2026-09-26-desktop-mapper-approval-docs`](entries/2026-09-26-desktop-mapper-approval-docs.md) |
 | 2026-09-24 | trusted proposal validator reports object-valued provenance instead of crashing | NO_EVAL | — | [`2026-09-24-validator-provenance-crash`](entries/2026-09-24-validator-provenance-crash.md) |
 | 2026-09-24 | repair reported failed contracts and exception class first | NO_EVAL | — | [`2026-09-24-validation-failure-facts`](entries/2026-09-24-validation-failure-facts.md) |
 | 2026-09-24 | registry-unique metric names, required pre-capture check, validation-failure recovery | NO_EVAL | — | [`2026-09-24-metric-names-and-preflight-recovery`](entries/2026-09-24-metric-names-and-preflight-recovery.md) |
