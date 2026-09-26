@@ -1,0 +1,347 @@
+{
+  "id": "2026-09-26-b1-crm-pipeline-live-sonnet-pass-on-current-main",
+  "date": "2026-09-26",
+  "label": "B1 crm-pipeline live Sonnet pass on current main",
+  "notes": "Two live Claude Sonnet runs of B1 crm-pipeline on identical code (main 95e85763, skills 0.53.1, after #338 and #341) with the same pinned supervisor and session config. The before/after tags only satisfy the pairing rule: no code changed between the arms. Both passed clean at 70, with intake, capability, construction, build and follow-up passing, replay verified and QUALIFIED. Two passes in two same-code epochs is a small sample, not a repeatability rate.",
+  "plugin_version": "0.53.1",
+  "report_tags": {
+    "before-run1": "before-run1",
+    "after-run2": "after-run2"
+  },
+  "reports": {
+    "before-run1": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "crm-pipeline",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "crm-pipeline",
+              "result": "PASS",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "points": 10,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "capability": {
+                    "points": 15,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "narrowing": {
+                    "points": 0,
+                    "examined": false,
+                    "ungraded": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "required": false,
+                    "passed": false
+                  },
+                  "construction": {
+                    "points": 10,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "build": {
+                    "points": 20,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "query": {
+                    "points": 0,
+                    "examined": false,
+                    "ungraded": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "required": false,
+                    "passed": false
+                  },
+                  "follow-up": {
+                    "points": 15,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  }
+                },
+                "total": 70,
+                "scoreable_max": 70,
+                "threshold": 56,
+                "waived_gates": {
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": true,
+                  "sentinel": false
+                },
+                "state": "passed",
+                "findings": [
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 22,
+                "observed_calls": 554
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.53.1",
+                "supervisor_version": "sha256:e1c5c30459ccdc1c40af4bbb8d16d82c15503160be05e1925a7fedd67719a4b8",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "0afdbcf9055192cc824338b05c7fd390f63dc96fcca36b48daf7ba13cfa03ad5",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "d9664d77e9a88cc75a62fee6041bbc1b40ff452c8c2a23833fc79359426fd07f",
+                "turn_budget": 22,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "crm-pipeline",
+                "tier": "core",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "crm-pipeline-trial-0",
+                "session_config_sha256": "sha256:fc09a53e7b6b875e8127943b3e327886feba333c70d5acc42ccb0cac19b39071",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "QUALIFIED",
+                "operator_mode": "scripted",
+                "reasons": [
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "verified"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "advance_workflow"
+              },
+              "route_fidelity": {
+                "status": "examined"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "after-run2": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "crm-pipeline",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "crm-pipeline",
+              "result": "PASS",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "points": 10,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "capability": {
+                    "points": 15,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "narrowing": {
+                    "points": 0,
+                    "examined": false,
+                    "ungraded": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "required": false,
+                    "passed": false
+                  },
+                  "construction": {
+                    "points": 10,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "build": {
+                    "points": 20,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  },
+                  "query": {
+                    "points": 0,
+                    "examined": false,
+                    "ungraded": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "required": false,
+                    "passed": false
+                  },
+                  "follow-up": {
+                    "points": 15,
+                    "examined": true,
+                    "ungraded": false,
+                    "codes": [],
+                    "required": true,
+                    "passed": true
+                  }
+                },
+                "total": 70,
+                "scoreable_max": 70,
+                "threshold": 56,
+                "waived_gates": {
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": true,
+                  "sentinel": false
+                },
+                "state": "passed",
+                "findings": [
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 22,
+                "observed_calls": 378
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.53.1",
+                "supervisor_version": "sha256:e1c5c30459ccdc1c40af4bbb8d16d82c15503160be05e1925a7fedd67719a4b8",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "0afdbcf9055192cc824338b05c7fd390f63dc96fcca36b48daf7ba13cfa03ad5",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "d9664d77e9a88cc75a62fee6041bbc1b40ff452c8c2a23833fc79359426fd07f",
+                "turn_budget": 22,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "crm-pipeline",
+                "tier": "core",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "crm-pipeline-trial-0",
+                "session_config_sha256": "sha256:fc09a53e7b6b875e8127943b3e327886feba333c70d5acc42ccb0cac19b39071",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "QUALIFIED",
+                "operator_mode": "scripted",
+                "reasons": [
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "verified"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "prepare_workflow"
+              },
+              "route_fidelity": {
+                "status": "examined"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
