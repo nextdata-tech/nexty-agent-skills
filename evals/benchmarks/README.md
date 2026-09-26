@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-09-26 | B5 inventory-position first live Sonnet pass | MIXED | inventory-position | [`2026-09-26-b5-inventory-position-first-live-sonnet-pass`](entries/2026-09-26-b5-inventory-position-first-live-sonnet-pass.md) |
+| 2026-09-26 | B2 finance-close first live Sonnet pass | MIXED | finance-close | [`2026-09-26-b2-finance-close-first-live-sonnet-pass`](entries/2026-09-26-b2-finance-close-first-live-sonnet-pass.md) |
 | 2026-09-26 | B1 crm-pipeline live Sonnet pass on current main | PASS | crm-pipeline | [`2026-09-26-b1-crm-pipeline-live-sonnet-pass-on-current-main`](entries/2026-09-26-b1-crm-pipeline-live-sonnet-pass-on-current-main.md) |
 | 2026-09-24 | trusted proposal validator reports object-valued provenance instead of crashing | NO_EVAL | — | [`2026-09-24-validator-provenance-crash`](entries/2026-09-24-validator-provenance-crash.md) |
 | 2026-09-24 | repair reported failed contracts and exception class first | NO_EVAL | — | [`2026-09-24-validation-failure-facts`](entries/2026-09-24-validation-failure-facts.md) |
