@@ -230,7 +230,13 @@ _NON_PROSE = re.compile(
 )
 
 _REQUEST_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n\s*\n+")
-_QUESTION_CLAUSE_END = re.compile(r"\?\s*[\"')\]]*$")
+# A trailing ``**`` or ``*`` closes markdown emphasis wrapped around the
+# question itself ("**Do you authorize that fix?**"), not a quote, paren, or
+# bracket. Without it here, a bold-wrapped question is invisible to every
+# downstream ask-clause check -- neither a question nor (unless it happens to
+# also match ``SOLICITATION_PATTERN``) an explicit ask -- which dropped live
+# review-fix authorization asks entirely.
+_QUESTION_CLAUSE_END = re.compile(r"\?\s*[\"')\]*_]*$")
 
 
 def _operator_request_clauses(message: str) -> list[str]:
@@ -317,13 +323,31 @@ CHOICE_PATTERN = re.compile(
 # A review's implementation findings can recap an earlier decision while the
 # direct question asks the operator to authorize a separate repair. The helper
 # above scopes these action/choice patterns to actual ask clauses.
+#
+# ``fix(?:es|ing)?`` (not just ``fix(?:es)?``) so "authorize fixing #1" is
+# recognized -- a bare ``\bfix\b`` boundary does not match the gerund "fixing".
+# The last two alternatives cover an ask that names no noun after "authorize"
+# beyond the repair verb itself: "authorize catching the parse error ...?" and
+# the bare "fix it -- yes or no?" / "fix the crash -- yes or no?" shape, both
+# from live review-fix authorization asks that named their fix only as a verb.
 _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"\b(?:apply|proceed\s+with|make|go\s+ahead\s+with|add|authorize)\b"
-    r"[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|comments?)\b"
+    r"[^?\n]{0,140}\b(?:fix(?:es|ing)?|correction(?:s)?|change(?:s)?|comments?)\b"
     r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
     r"wording|description|field)\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
-    r"(?:applied|apply|leave|left|keep|skip|defer)\b",
+    r"(?:applied|apply|leave|left|keep|skip|defer)\b"
+    r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
+    r"exclud(?:e|ing)|flag(?:ging)?|treat(?:ing)?|handl(?:e|ing))\b"
+    r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b"
+    # A live turn asked "How would you like me to proceed on the two blocking
+    # items?" with no "fix" vocabulary at all -- the repair itself was named
+    # only in the finding recap, not in this clause. This alternative is
+    # reached only through ``_review_fix_request``, which already requires
+    # ``_REVIEW_FINDING_CONTEXT_PATTERN`` to match first, so a bare "how would
+    # you like me to proceed" with no review finding in play never reaches
+    # here and is not read as a fix-authorization ask.
+    r"|\bhow\s+(?:would\s+you\s+like\s+me|should\s+i)\s+to\s+(?:proceed|handle)\b",
     re.IGNORECASE | re.DOTALL,
 )
 _REVIEW_FIX_CHOICE_PATTERN = re.compile(
