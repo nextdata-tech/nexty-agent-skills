@@ -362,6 +362,11 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"|\bproceed\s+with\s+(?:all|both|some|none|either|any)\b"
     r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
     r"wording|description|field)\b"
+    # "Do you want me to fix the two blocking findings ...?" names the review
+    # findings themselves as the thing to fix, and "which finding IDs to
+    # apply?" picks among them; both stay behind the finding-context gate.
+    r"|\bfix(?:es|ing)?\b[^?\n]{0,140}\bfindings?\b"
+    r"|\bfindings?\b[^?\n]{0,60}\bto\s+appl(?:y|ies|ying)\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
     r"(?:applied|apply|applies|applying|leave|left|keep|skip|defer)\b"
     r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
