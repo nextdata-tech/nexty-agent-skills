@@ -26,7 +26,7 @@ source_answers:
 decision_answers:
   review_fix_authorization:
     terms: [review, finding]
-    answer: "Choose option 2: disclose that the API returns one snapshot per position and add as_of as a queryable dimension on inventory_position_landed. Make only those review corrections, reset, recapture, and run one fresh independent review. Do not validate, admit, or publish until that review is clear; ask me again before any new behavior-changing decision."
+    answer: "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, or publish until that review is clear; ask me again before any new behavior-changing decision."
   missing_warehouse:
     terms: [warehouse, missing]
     answer: Report the orphan identifier as a warning; it is not evidence that the infrastructure is unavailable.
@@ -34,7 +34,7 @@ decision_answers:
     terms: [negative, stock]
     answer: Preserve the negative quantity and label it as a warning rather than clamping it to zero.
 reapproval:
-  answer: "Approved. Proceed with generation 2 as revised after the review: retain the single-snapshot explanation, carry as_of through inventory_position_landed, and preserve orphan and negative-stock warnings. Make no other behavior changes; rebuild, recapture, run one fresh independent review, then validate, admit, publish, query, and write the evidence artifact."
+  answer: "Approved. Proceed with the revised plan incorporating only the corrections already authorized. Make no other behavior changes; rebuild, recapture, run one fresh independent review, then validate, admit, publish, query, and write the evidence artifact."
   max_uses: 1
 status_answers:
   status: The landed result preserves the quality findings, uses profile-only access, and does not expose credentials.
