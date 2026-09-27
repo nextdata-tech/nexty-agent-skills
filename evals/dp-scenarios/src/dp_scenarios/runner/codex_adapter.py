@@ -88,17 +88,30 @@ _CHECKER_SKEW_SCHEMA = "nxd-checker-skew-v1"
 _CHECKER_SKEW_MAX_BYTES = 1024 * 1024
 
 
+_TURN_PROGRESS_MARKER = "turn_elapsed="
+
+
 def _codex_timeout_failure_reason(
     error: TimeoutError,
     detail: str,
     *,
     root_turn_id: str | None,
 ) -> str:
-    """Classify a Codex timeout without changing provider-neutral fallbacks."""
+    """Classify a Codex timeout without changing provider-neutral fallbacks.
+
+    The adapter appends its own progress summary (``turn_elapsed=...``) to a
+    timeout. That summary names app-server notifications such as
+    ``account/rateLimits/updated``, a routine quota snapshot, which the
+    provider-limit pattern would otherwise read as a rate limit and turn an
+    ordinary turn timeout into ``provider_session_limit``. Provider failures
+    reach this function through their own retry-pending text or stderr, never
+    through the progress summary, so only the text before it is classified.
+    """
 
     if CODEX_PROVIDER_RETRY_PENDING in str(error):
         return CODEX_PROVIDER_RETRY_PENDING
-    classified = classify_failure_reason(str(error) + detail)
+    own_text = str(error).split(_TURN_PROGRESS_MARKER, 1)[0]
+    classified = classify_failure_reason(own_text, detail)
     if classified is not None:
         return classified
     if "Codex reviewer child did not complete" in str(error):
@@ -1065,7 +1078,7 @@ def _codex_turn_progress_detail(
         )
     )
     return (
-        f"turn_elapsed={elapsed:.1f}s; idle_for={idle:.1f}s; "
+        f"{_TURN_PROGRESS_MARKER}{elapsed:.1f}s; idle_for={idle:.1f}s; "
         f"last_event={last_event_label}@+{last_event_offset:.1f}s; "
         "reviewer=" + ",".join(reviewer)
     )
