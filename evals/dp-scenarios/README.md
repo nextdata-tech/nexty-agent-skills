@@ -240,8 +240,14 @@ explicit `--desktop-python` is supplied. The supervisor's directory must also ho
 `nxd-desktop-kernel-host`: the supervisor spawns that sibling only when
 validation starts, so the runner checks for it before any agent turn rather
 than letting a partial build (such as a `target/ci` holding only the
-supervisor) surface mid-run as `workflow/execution_unavailable`. It does not use the platform CLI or a
-Kubernetes cluster.
+supervisor) surface mid-run as `workflow/execution_unavailable`. The supervisor
+also embeds the skill pack's `src/nxd-run-job-loop/scripts/self_check.py` at
+build time (from its `external/nexty-agent-skills` submodule) and retains that
+copy in every capture, so the runner refuses a supervisor whose binary does not
+contain the staged checker's exact bytes. Without that preflight the run spends
+its agent turns and is then invalidated as `checker_skew_mismatch` by the
+post-capture comparison, which remains the authoritative check. It does not use
+the platform CLI or a Kubernetes cluster.
 
 Before each disposable MCP server starts, the runner activates the bundled
 workflow-v2 contract in that trial's supervisor data directory. Activation is

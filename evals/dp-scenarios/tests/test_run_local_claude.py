@@ -282,6 +282,9 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     monkeypatch.setattr(module, "load_scenarios", fake_load_scenarios)
     monkeypatch.setattr(module, "run_drift_canary", fake_canary)
     monkeypatch.setattr(module, "require_kernel_host_sibling", lambda supervisor: supervisor)
+    monkeypatch.setattr(
+        module, "require_supervisor_embeds_checker", lambda supervisor, root: "digest"
+    )
     monkeypatch.setattr(module, "TierRunner", fake_tier_runner)
     monkeypatch.setattr(module, "write_report", lambda *args, **kwargs: (None, None, ()))
 
@@ -1063,3 +1066,95 @@ def test_live_runner_requires_the_kernel_host_next_to_the_supervisor(tmp_path: P
 
     kernel_host.chmod(0o755)
     assert module.require_kernel_host_sibling(supervisor) == kernel_host
+
+
+def _checker_pack(root: Path, content: bytes) -> Path:
+    checker = root.joinpath("src", "nxd-run-job-loop", "scripts", "self_check.py")
+    checker.parent.mkdir(parents=True)
+    checker.write_bytes(content)
+    return root
+
+
+def test_supervisor_checker_preflight_accepts_the_embedded_staged_checker(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    module = _load_runner_module()
+    checker = b"#!/usr/bin/env python3\nprint('current checker')\n"
+    pack = _checker_pack(tmp_path / "pack", checker)
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    # include_bytes! places the file verbatim inside the binary's data.
+    supervisor.write_bytes(b"\x7fELF-prefix" + checker + b"-suffix\x00")
+
+    assert module.require_supervisor_embeds_checker(supervisor, pack) == (
+        hashlib.sha256(checker).hexdigest()
+    )
+
+
+def test_supervisor_checker_preflight_refuses_a_supervisor_built_from_another_checker(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    module = _load_runner_module()
+    current = b"#!/usr/bin/env python3\nprint('current checker')\n"
+    retained = b"#!/usr/bin/env python3\nprint('older checker')\n"
+    pack = _checker_pack(tmp_path / "pack", current)
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_bytes(b"\x7fELF-prefix" + retained + b"-suffix\x00")
+
+    with pytest.raises(TierError, match="checker skew") as raised:
+        module.require_supervisor_embeds_checker(supervisor, pack)
+    assert hashlib.sha256(current).hexdigest() in str(raised.value)
+    assert "checker_skew_mismatch" in str(raised.value)
+
+
+def test_supervisor_checker_preflight_fails_closed_on_unreadable_inputs(
+    tmp_path: Path,
+) -> None:
+    module = _load_runner_module()
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_bytes(b"binary")
+
+    with pytest.raises(TierError, match="skill-pack checker is unreadable"):
+        module.require_supervisor_embeds_checker(supervisor, tmp_path / "missing-pack")
+
+    pack = _checker_pack(tmp_path / "pack", b"print('checker')\n")
+    empty = tmp_path / "empty-supervisor"
+    empty.write_bytes(b"")
+    with pytest.raises(TierError, match="could not read the supervisor binary"):
+        module.require_supervisor_embeds_checker(empty, pack)
+
+
+def test_live_runner_refuses_checker_skew_before_any_agent_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_runner_module()
+    pack = tmp_path / "pack"
+    shutil.copytree(module.REPO_ROOT / "src", pack / "src")
+    (pack / ".claude-plugin").mkdir()
+    shutil.copy2(
+        module.REPO_ROOT / ".claude-plugin" / "plugin.json",
+        pack / ".claude-plugin" / "plugin.json",
+    )
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_bytes(b"a supervisor built from another skills commit")
+    supervisor.chmod(0o755)
+
+    def no_agent_spend(*_args, **_kwargs):
+        raise AssertionError("the tier runner must not start after a checker skew")
+
+    monkeypatch.setattr(module, "require_kernel_host_sibling", lambda value: value)
+    monkeypatch.setattr(module, "TierRunner", no_agent_spend)
+    monkeypatch.setattr(module, "run_drift_canary", no_agent_spend)
+
+    with pytest.raises(TierError, match="checker skew"):
+        module.main([
+            "--skill-pack-root", str(pack),
+            "--claude", "/usr/bin/true",
+            "--supervisor", str(supervisor),
+            "--desktop-python", "/usr/bin/true",
+            "--output-dir", str(tmp_path / "output"),
+        ])
+    assert not (tmp_path / "output").exists()
