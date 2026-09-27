@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import mmap
 import os
 from pathlib import Path
 import shutil
@@ -104,6 +105,50 @@ def require_kernel_host_sibling(supervisor: Path) -> Path:
             "build the desktop supervisor crate's bins into the same directory"
         )
     return candidate
+
+
+TRUSTED_CHECKER_PARTS = ("src", "nxd-run-job-loop", "scripts", "self_check.py")
+
+
+def require_supervisor_embeds_checker(supervisor: Path, skill_pack_root: Path) -> str:
+    """Fail before any agent turn when the supervisor retains another checker.
+
+    The desktop supervisor embeds the skill pack's ``self_check.py`` verbatim
+    at build time and writes that copy into every retained capture. The
+    adapters compare the retained copy with the staged pack's copy after each
+    capture and invalidate the run on a mismatch (``checker_skew_mismatch``).
+    That post-capture check stays authoritative; this preflight only moves the
+    predictable failure ahead of the agent spend. A supervisor that does not
+    contain the staged checker's exact bytes would retain a different one, so
+    the run is refused here instead of being invalidated after its capture.
+    Returns the staged checker's sha256.
+    """
+
+    checker = skill_pack_root.joinpath(*TRUSTED_CHECKER_PARTS)
+    try:
+        expected = checker.read_bytes()
+    except OSError as exc:
+        raise TierError(f"skill-pack checker is unreadable: {checker}") from exc
+    digest = hashlib.sha256(expected).hexdigest()
+    if not expected:
+        raise TierError(f"skill-pack checker is empty: {checker}")
+    try:
+        with supervisor.open("rb") as handle, mmap.mmap(
+            handle.fileno(), 0, access=mmap.ACCESS_READ
+        ) as image:
+            embedded = image.find(expected) != -1
+    except (OSError, ValueError) as exc:
+        raise TierError(f"could not read the supervisor binary {supervisor}: {exc}") from exc
+    if not embedded:
+        raise TierError(
+            "checker skew: the supervisor does not embed the staged skill pack's "
+            f"self_check.py (sha256 {digest}), so every capture would retain a "
+            "different checker and the run would be invalidated as "
+            "checker_skew_mismatch. Rebuild the supervisor with its "
+            "external/nexty-agent-skills submodule at the staged skill pack's "
+            f"commit: {supervisor}"
+        )
+    return digest
 
 
 def _resolve_executable(explicit: Path | None, name: str) -> Path:
@@ -666,6 +711,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     supervisor = resolve_supervisor(args.supervisor)
     require_kernel_host_sibling(supervisor)
+    require_supervisor_embeds_checker(supervisor, skill_pack_root)
     desktop_python = resolve_desktop_python(args.desktop_python)
     claude: Path | None = None
     codex: Path | None = None
