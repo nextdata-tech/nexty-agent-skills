@@ -1995,6 +1995,54 @@ def test_codex_root_turn_timeout_is_not_reported_as_a_child_timeout() -> None:
     )
 
 
+def test_codex_turn_timeout_is_not_a_provider_limit_because_of_a_rate_limit_notification() -> None:
+    """B1 xhigh: a 1620s turn timeout was reported as provider_session_limit.
+
+    Its last app-server event was the routine ``account/rateLimits/updated``
+    snapshot, which the progress summary names verbatim.
+    """
+
+    from dp_scenarios.runner.codex_adapter import _codex_turn_progress_detail
+
+    progress = _codex_turn_progress_detail(
+        turn_started_at=0.0,
+        now=1620.0,
+        last_event_at=1619.0,
+        last_event_label="account/rateLimits/updated",
+        reviewer_spawned_at=1400.0,
+        reviewer_wait_started_at=1401.0,
+        reviewer_completed_at=None,
+        reviewer_result_ready=False,
+        reviewer_deadline_at=None,
+        reviewer_wait_count=1,
+        reviewer_wait_target="missing",
+        reviewer_child_status="unreported",
+        reviewer_child_started=False,
+    )
+    error = TimeoutError("Codex app-server turn deadline expired; " + progress)
+    assert "rateLimits" in str(error)
+
+    assert (
+        _codex_timeout_failure_reason(error, "", root_turn_id="root-turn")
+        == CODEX_ROOT_TURN_NO_TERMINAL_RESULT
+    )
+    reviewer = TimeoutError(
+        "Codex reviewer child did not complete before the 600.0-second reviewer "
+        "deadline; " + progress
+    )
+    assert (
+        _codex_timeout_failure_reason(reviewer, "", root_turn_id="root-turn")
+        == CHILD_NO_TERMINAL_RESULT
+    )
+    # Provider text outside the adapter's own progress summary still counts.
+    assert (
+        _codex_timeout_failure_reason(
+            error, "stderr: 429 Too Many Requests; rate limited", root_turn_id="root-turn"
+        )
+        == PROVIDER_SESSION_LIMIT
+    )
+
+
 def test_codex_reviewer_timeout_keeps_the_child_timeout_reason() -> None:
     assert (
         _codex_timeout_failure_reason(
