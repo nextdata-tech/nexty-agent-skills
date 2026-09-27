@@ -8,14 +8,16 @@ actually been asked for approval yet. Every later genuine "Do you approve
 fixed, the operator's canned "What exactly am I approving?" persona line
 demanded specifics the agent had already supplied, over and over.
 
-Unconditional transmission of the scripted approval at its declared slot is
-kept exactly as it was (see ``test_operator_engine_driver.py`` and
-``test_scenario_capability_shortfall.py``, which are regression suites for
-that exact property and are not touched here). What is added is narrower: the
-engine remembers the text it transmitted early, and the first time afterward
-that the agent genuinely asks for approval, it reconfirms that same text
-verbatim instead of running the ordinary matcher/persona path. This never
-mints a second ``spec_approved`` row and fires at most once per run.
+The scripted approval still transmits at its declared slot when the agent's
+last message asked nothing, or asked for approval. When that message asks the
+operator something else (a clarifying question), or a declared decision answer
+is pending, the slot is owed instead and delivered at the next genuine approval
+ask: an "Approved." sent in answer to a question lands before any plan exists
+(B2 run17: ``intake_workflow_prepare_not_before_approval``). For an approval
+that did go out early to a statement, the engine remembers the text, and the
+first time afterward that the agent genuinely asks for approval, it reconfirms
+that same text verbatim instead of running the ordinary matcher/persona path.
+This never mints a second ``spec_approved`` row and fires at most once per run.
 """
 
 from __future__ import annotations
@@ -67,9 +69,10 @@ def test_an_early_scripted_approval_is_reconfirmed_once_then_falls_back_to_the_p
     transport = InMemoryTransport(
         [
             TurnResult(agent_message="Which milestone is next?"),
-            # The clarifying question before the scripted approval turn: no
-            # approval was actually asked for yet.
-            TurnResult(agent_message="What exactly do you need from me before I continue?"),
+            # A status line before the scripted approval turn: no approval was
+            # asked for yet, and no question is open (an open question would
+            # defer the approval instead; see the deferral tests below).
+            TurnResult(agent_message="Still drafting the plan."),
             TurnResult(agent_message="Building now."),
             # The first genuine approval ask after the early approval.
             TurnResult(agent_message="Do you approve this plan?"),
@@ -143,7 +146,7 @@ def test_a_pending_decision_answer_keeps_priority_over_reconfirmation() -> None:
     transport = InMemoryTransport(
         [
             TurnResult(agent_message="Which milestone is next?"),
-            TurnResult(agent_message="What exactly do you need from me before I continue?"),
+            TurnResult(agent_message="Still drafting the plan."),
             TurnResult(agent_message="Building now."),
             # This message carries the declared decision term *and* approval
             # vocabulary in the same breath; the decision must still win.
@@ -412,20 +415,40 @@ def test_b2_run7_shaped_replay_delivers_the_owed_approval_at_the_next_real_ask()
 # ---------------------------------------------------------------------------
 
 
-def test_b2_run11_shaped_replay_reconfirms_at_turn_4_with_the_due_event_still_appended() -> None:
-    """Turns 1-4 of B2 run11: turn 2's source answer must not look like a genuine ask.
+TURN2_SOURCE_ANSWER_WITH_AN_OPEN_QUESTION = (
+    "Got it -- I'll use the close_entries API as the sole source, and "
+    "treat each entry's own fx_rate field as the approved currency "
+    "reference for conversion (no external FX table). One thing your "
+    "message didn't explicitly settle, and it changes the total: the "
+    "entry with no FX rate on record -- should I exclude it from the "
+    "signable EUR total and report it separately as excluded_missing_fx? "
+    "Just need a yes/no (or your preferred alternative) before I lock "
+    "that into the blueprint."
+)
+HOSTILE_DECIMAL_CONTENT = (
+    "The spreadsheet shows commas and parentheses; do not treat the "
+    "credit as a positive amount."
+)
+WEEKEND_FX_DECISION_CONTENT = (
+    "[DECISION NEEDED] Record this decision as b2-weekend-fx, with "
+    "missing_fx_policy exclude_and_warn: the 6 "
+    "January entry has no FX rate, so exclude it from the EUR total and "
+    "flag it."
+)
 
-    Turn 2's agent message answers the source question but also repeats the
-    scenario's own "approved currency reference" phrase -- domain vocabulary
-    that trips the bare ``approval_requested`` flag even though nothing was
-    solicited. Turn 3's scripted approval still transmits unconditionally
-    (unchanged pinned behavior) and a due event (``finance_close_hostile_decimal``)
-    is appended to it as usual. Turn 3's agent reply is the first genuine
-    "Do you approve...?" ask (persona.approval_request), so turn 4 must
-    reconfirm the turn-3 approval text verbatim -- with the turn-4 due event
-    (``b2_weekend_fx_decision``, the "[DECISION NEEDED]" beat) still appended
-    alongside it, exactly as a decision answer or any other event coexists
-    with the base reply.
+
+def test_b2_run11_shaped_replay_defers_the_approval_past_the_open_question() -> None:
+    """Turns 1-4 of B2 run11: turn 3's approval slot meets an open question.
+
+    Turn 2's agent message answers the source question and then asks one:
+    should the entry with no FX rate be excluded? Sending the scripted
+    "Approved." at turn 3 would answer nothing and land before any plan
+    existed -- live B2 run17 failed intake exactly that way
+    (``intake_workflow_prepare_not_before_approval``). The slot is owed
+    instead: turn 3 answers the question (with its due event), and turn 3's
+    agent reply, the first genuine "Do you approve this plan?", receives the
+    approval at turn 4 alongside turn 4's due event. That turn-4 message is
+    the one ``spec_approved`` row, so the plan was prepared before it.
     """
 
     turns = FINANCE_CLOSE.turns[:4]
@@ -437,20 +460,10 @@ def test_b2_run11_shaped_replay_reconfirms_at_turn_4_with_the_due_event_still_ap
         turn_budget=len(turns),
         phase_by_turn={1: 1, 2: 2, 3: 3, 4: 4},
     )
-    turn2_source_answer_echoing_approved_currency_reference = (
-        "Got it -- I'll use the close_entries API as the sole source, and "
-        "treat each entry's own fx_rate field as the approved currency "
-        "reference for conversion (no external FX table). One thing your "
-        "message didn't explicitly settle, and it changes the total: the "
-        "entry with no FX rate on record -- should I exclude it from the "
-        "signable EUR total and report it separately as excluded_missing_fx? "
-        "Just need a yes/no (or your preferred alternative) before I lock "
-        "that into the blueprint."
-    )
     transport = InMemoryTransport(
         [
             TurnResult(agent_message="Ready to inspect the close."),
-            TurnResult(agent_message=turn2_source_answer_echoing_approved_currency_reference),
+            TurnResult(agent_message=TURN2_SOURCE_ANSWER_WITH_AN_OPEN_QUESTION),
             TurnResult(agent_message=FIXTURES["b2_turn3_approve_the_plan_question"]),
         ]
     )
@@ -458,46 +471,26 @@ def test_b2_run11_shaped_replay_reconfirms_at_turn_4_with_the_due_event_still_ap
     result = OperatorEngine(script, transport).run()
 
     approval_text = turns[2]["text"] if isinstance(turns[2], dict) else turns[2]
-    hostile_decimal_content = (
-        "The spreadsheet shows commas and parentheses; do not treat the "
-        "credit as a positive amount."
-    )
-    weekend_fx_decision_content = (
-        "[DECISION NEEDED] Record this decision as b2-weekend-fx, with "
-        "missing_fx_policy exclude_and_warn: the 6 "
-        "January entry has no FX rate, so exclude it from the EUR total and "
-        "flag it."
-    )
-
-    # The text the operator remembers as "transmitted early" is whatever went
-    # out verbatim on the approval turn -- the approval sentence plus that
-    # same turn's own due event (``finance_close_hostile_decimal``), since
-    # both left together in one message. Turn 4's reconfirmation resends that
-    # whole composed text, with turn 4's own due event
-    # (``b2_weekend_fx_decision``) appended on top, exactly as any other event
-    # would be.
-    turn3_text = f"{approval_text}\n{hostile_decimal_content}"
-    assert transport.message_texts[2] == turn3_text
-    assert transport.message_texts[3] == f"{turn3_text}\n{weekend_fx_decision_content}"
+    assert approval_text not in transport.message_texts[2]
+    assert transport.message_texts[2].endswith(HOSTILE_DECIMAL_CONTENT)
+    turn4_text = f"{approval_text}\n{WEEKEND_FX_DECISION_CONTENT}"
+    assert transport.message_texts[3] == turn4_text
 
     approvals = _spec_approved_rows(result)
     assert len(approvals) == 1
-    assert approvals[0]["turn"] == 3
-    # The transmitted approval turn's own due event is part of what actually
-    # went out and is what ``artifact_ref`` (and, below, the reconfirmation)
-    # records -- not the bare approval sentence in isolation.
-    assert approvals[0]["artifact_ref"] == turn3_text
-    assert _claim(result, 3).get("approval_reconfirmed") is True
+    assert approvals[0]["turn"] == 4
+    assert approvals[0]["artifact_ref"] == turn4_text
+    assert _claim(result, 3).get("approval_deferred_for_decision") is True
+    assert "approval_reconfirmed" not in _claim(result, 3)
 
 
 def test_b2_run11_shaped_replay_later_genuine_asks_still_get_the_persona_line() -> None:
-    """After turn 4 spends the reconfirmation, turns 5-6's genuine asks get the stock line.
+    """After the owed approval is delivered, later genuine asks get the stock line.
 
-    Extends the turn-4 reconfirmation replay above through turns 5 and 6,
-    each carrying its own due event. Reconfirmation fires at most once per
-    run, so once it is spent at turn 4, the agent's continued genuine asks at
-    turns 5 and 6 fall back to the ordinary persona stock line -- never a
-    second reconfirmation and never a second ``spec_approved`` row.
+    Extends the replay above through turns 5 and 6, each carrying its own due
+    event. The owed approval is delivered once, at turn 4; the agent's
+    continued asks at turns 5 and 6 fall back to the ordinary persona stock
+    line -- never a reconfirmation and never a second ``spec_approved`` row.
     """
 
     turns = FINANCE_CLOSE.turns[:6]
@@ -509,26 +502,14 @@ def test_b2_run11_shaped_replay_later_genuine_asks_still_get_the_persona_line() 
         turn_budget=len(turns),
         phase_by_turn={1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
     )
-    turn2_source_answer_echoing_approved_currency_reference = (
-        "Got it -- I'll use the close_entries API as the sole source, and "
-        "treat each entry's own fx_rate field as the approved currency "
-        "reference for conversion (no external FX table). One thing your "
-        "message didn't explicitly settle, and it changes the total: the "
-        "entry with no FX rate on record -- should I exclude it from the "
-        "signable EUR total and report it separately as excluded_missing_fx? "
-        "Just need a yes/no (or your preferred alternative) before I lock "
-        "that into the blueprint."
-    )
     transport = InMemoryTransport(
         [
             TurnResult(agent_message="Ready to inspect the close."),
-            TurnResult(agent_message=turn2_source_answer_echoing_approved_currency_reference),
+            TurnResult(agent_message=TURN2_SOURCE_ANSWER_WITH_AN_OPEN_QUESTION),
             TurnResult(agent_message=FIXTURES["b2_turn3_approve_the_plan_question"]),
-            # Turn 4's genuine ask again, after the reconfirmation.
             TurnResult(
                 agent_message="So: do you approve the plan as quoted, so I can proceed to build it?"
             ),
-            # Turn 5's genuine ask again: reconfirmation is already spent.
             TurnResult(agent_message="So, to move forward: do you approve the plan as quoted?"),
         ]
     )
@@ -551,7 +532,5 @@ def test_b2_run11_shaped_replay_later_genuine_asks_still_get_the_persona_line() 
 
     approvals = _spec_approved_rows(result)
     assert len(approvals) == 1
-    assert approvals[0]["turn"] == 3
-    assert _claim(result, 3).get("approval_reconfirmed") is True
-    assert "approval_reconfirmed" not in _claim(result, 4)
-    assert "approval_reconfirmed" not in _claim(result, 5)
+    assert approvals[0]["turn"] == 4
+    assert all("approval_reconfirmed" not in _claim(result, turn) for turn in (3, 4, 5))
