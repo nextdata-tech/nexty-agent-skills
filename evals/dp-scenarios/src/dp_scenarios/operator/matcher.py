@@ -139,8 +139,19 @@ DEFAULT_OBSTACLE_TERMS = (
 # solicited sign-off is phrased differently -- "sign off on the spec",
 # "please sign off", "your sign-off" -- none of which this lookbehind
 # excludes.
+# "approved" after "as"/"is"/"are"/"was"/"were" describes the state of data
+# ("should a populated fx_rate count as approved?", "the rate is approved"),
+# and "approval" followed by is/was/indicator/field/... names a source
+# attribute ("unless approval is established elsewhere", "no approval
+# indicator"). Neither asks the operator to approve anything; live B2 (Luna
+# run 1) got the scripted "Approved." in answer to exactly that question,
+# before any plan existed.
 APPROVAL_REQUEST_PATTERN = re.compile(
-    r"\b(?:approve[sd]?|approval)\b|(?<!\bto\s)\bsign\s*off\b", re.IGNORECASE
+    r"\bapproves?\b"
+    r"|(?<!\bas\s)(?<!\bis\s)(?<!\bare\s)(?<!\bwas\s)(?<!\bwere\s)\bapproved\b"
+    r"|\bapproval\b(?!\s+(?:is|was|indicator|field|flag|status|column|marker)\b)"
+    r"|(?<!\bto\s)\bsign\s*off\b",
+    re.IGNORECASE,
 )
 _APPROVAL_CONTEXT_PATTERN = re.compile(
     r"\b(?:need|require|requires|cannot|can\s+not|can't|unable\s+to\s+proceed|"
