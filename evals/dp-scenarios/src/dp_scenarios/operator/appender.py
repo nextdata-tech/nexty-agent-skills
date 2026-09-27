@@ -104,6 +104,8 @@ _NON_FACT_CLAIM_KEYS = frozenset(
         "operator_unmatched",
         "operator_answered_from_ground_truth",
         "operator_repeat_suppressed",
+        "approval_reconfirmed",
+        "approval_deferred_for_decision",
         "operator_mode",
         "operator_directive",
         "operator_beat_id",
@@ -158,6 +160,12 @@ def _validate_non_fact_claim(value: object) -> None:
         raise AppenderError("operator_answered_from_ground_truth must be a boolean")
     if "operator_repeat_suppressed" in value and not isinstance(value["operator_repeat_suppressed"], bool):
         raise AppenderError("operator_repeat_suppressed must be a boolean")
+    if "approval_reconfirmed" in value and not isinstance(value["approval_reconfirmed"], bool):
+        raise AppenderError("approval_reconfirmed must be a boolean")
+    if "approval_deferred_for_decision" in value and not isinstance(
+        value["approval_deferred_for_decision"], bool
+    ):
+        raise AppenderError("approval_deferred_for_decision must be a boolean")
     for key in (
         "driver_leading_rejected",
         "driver_obstacle_rejected",

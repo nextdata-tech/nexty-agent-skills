@@ -112,6 +112,42 @@ def test_planted_decision_is_answered_by_declared_id() -> None:
     assert result.reply == "Yes."
 
 
+def test_decision_matching_the_approval_ask_clause_precedes_persona_approval() -> None:
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["decision_answers"]["pyyaml_install"] = {
+        "terms": ["PyYAML", "install"],
+        "answer": "Hold the interpreter change for explicit environment authorization.",
+    }
+    bank = MatcherBank(
+        load_persona(ROOT / "scenarios/_personas/rubber-stamper.yaml"),
+        answer_sheet_from_mapping(raw),
+    )  # type: ignore[arg-type]
+
+    result = bank.reply_for("Do you approve installing PyYAML in the supervisor interpreter?")
+
+    assert result.rule_id == "decision.answer.pyyaml_install"
+    assert result.decision_id == "pyyaml_install"
+    assert result.reply == "Hold the interpreter change for explicit environment authorization."
+
+
+def test_decision_terms_split_across_approval_asks_do_not_shadow_persona_approval() -> None:
+    raw = sheet().to_mapping()  # type: ignore[union-attr]
+    raw["decision_answers"]["pyyaml_install"] = {
+        "terms": ["PyYAML", "install"],
+        "answer": "Hold the interpreter change for explicit environment authorization.",
+    }
+    bank = MatcherBank(
+        load_persona(ROOT / "scenarios/_personas/rubber-stamper.yaml"),
+        answer_sheet_from_mapping(raw),
+    )  # type: ignore[arg-type]
+
+    result = bank.reply_for("Do you approve PyYAML? Do you approve the install?")
+
+    assert result.rule_id == "persona.approval_request"
+    assert result.decision_id is None
+    assert result.reply == "Sure."
+
+
 def test_adjudicate_is_an_explicit_operator_solicitation() -> None:
     raw = sheet().to_mapping()  # type: ignore[union-attr]
     raw["decision_answers"] = {

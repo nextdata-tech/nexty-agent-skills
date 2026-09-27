@@ -253,11 +253,19 @@ class AnswerSheet:
 
         return answer_sheet_from_mapping(value)
 
-    def answer_for_decision(self, question: str) -> DecisionAnswer | None:
-        """Return the declared decision answer whose terms match the question."""
+    def answer_for_decision(
+        self, question: str, *, excluded: frozenset[str] = frozenset()
+    ) -> DecisionAnswer | None:
+        """Return the declared decision answer whose terms match the question.
+
+        ``excluded`` skips decisions the caller has already answered, so the
+        next declared decision (if any) can match the same text.
+        """
 
         lowered = question.casefold()
         for decision_id in sorted(self.decision_answers):
+            if decision_id in excluded:
+                continue
             decision = self.decision_answers[decision_id]
             if all(term.casefold() in lowered for term in decision.terms):
                 return decision

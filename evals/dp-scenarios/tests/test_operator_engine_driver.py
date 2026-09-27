@@ -650,7 +650,10 @@ def test_an_approval_turn_does_not_consume_the_reply_it_never_transmits() -> Non
     transport = InMemoryTransport(
         [
             TurnResult(agent_message="Status update."),
-            TurnResult(agent_message="What is the source?"),
+            # Selects the source reply without asking anything: a message
+            # that *asks* the operator a question now defers the scripted
+            # approval rather than being overridden by it.
+            TurnResult(agent_message="I still need the source."),
             TurnResult(agent_message="What is the source?"),
             TurnResult(agent_message="Done.", reported=True),
         ]
