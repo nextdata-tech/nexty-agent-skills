@@ -544,6 +544,22 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --output-dir /tmp/dp-scenarios-codex-b1
 ```
 
+The adversarial reviewer runs as a Codex collaboration child, and Codex picks
+the collaboration runtime from the model catalog's `multi_agent_version`.
+Under v1 (`gpt-5.6-luna`), `spawnAgent` exposes the dispatch prompt and `wait`
+takes `{"targets":[id]}`. Under v2 (`gpt-6-luna` and the other gpt-6 models),
+the tools are `spawn_agent` and `wait_agent`. `wait_agent` takes only
+`timeout_ms`, and the child's lifecycle arrives as `subAgentActivity` items.
+The runner reads the child's final answer from the child thread
+(`thread/turns/list`) and records it with the child's thread id. v2 delivers
+the spawn message to the child only as provider-encrypted content, so the
+dispatch prompt cannot be observed. The canonical reviewer-dispatch gate
+therefore cannot credit a v2 reviewer, and
+`construction_adversarial_review_not_observed` remains. The optional
+`--codex-force-multi-agent-v1` flag stages a copy of the host's cached model
+catalog (`$CODEX_HOME/models_cache.json`) with only the selected model switched
+to v1, and records that choice in the run's sampling parameters.
+
 Codex sessions use one long-lived `codex app-server --stdio` child per live
 run. This keeps the runner-owned MCP connection and opaque provider thread
 identity across operator turns; a fresh Codex process is not started for each

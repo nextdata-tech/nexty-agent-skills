@@ -210,10 +210,14 @@ Collaboration tool argument discipline: for `spawnAgent`, send the complete
 review request in exactly one `message` string; do not also send `items`.
 Never send both `message` and `items` in one collaboration call. For the
 owning parent’s one-shot reviewer lifecycle, use only `spawnAgent` and `wait`;
-never use `sendInput`, `resumeAgent`, or `closeAgent`. The reviewer child
+never use `sendInput`, `resumeAgent`, or `closeAgent` (in the multi-agent v2
+runtime described below: use only `spawn_agent` and `wait_agent`, and never
+`send_message`, `followup_task`, `interrupt_agent`, `list_agents`, or
+`close_agent`). The reviewer child
 may use only its allowed read-only inspection tools, but may not call another
 collaboration or supervisor tool. If a collaboration call is rejected, do
-not repeat the rejected argument shape; report an incomplete handoff. If
+not repeat the rejected argument shape; report an incomplete handoff. In the
+v1 runtime, if
 `spawnAgent` returns no receiver thread id or leaves the child in
 `pendingInit`, do not call `wait` with an empty id set; report an incomplete
 handoff immediately.
@@ -244,11 +248,32 @@ matching review_input is in the same supervisor response under
 dispatch the child immediately. Do not call `list_mcp_resources` or any other
 resource-discovery tool to locate retained inputs. The owning parent must not
 call `mcp__nxd-desktop__read_review_input`; that runner-owned reader is exposed
-only for the `CODEX_REVIEW_CHILD` handoff. The
+only for the `CODEX_REVIEW_CHILD` handoff.
+Identify your collaboration runtime from your tool list before dispatching.
+The multi-agent v2 runtime exposes `spawn_agent` and `wait_agent` in the
+`collaboration` namespace; call them directly as tools, never from inside
+`exec`, and note that no v2 collaboration tool accepts a `targets` argument.
+In v2 the required sequence is: call `spawn_agent` with exactly
+`{"task_name":"<lowercase_with_underscores>","fork_turns":"none","message":"<complete review request>"}`,
+where the message begins with `CODEX_REVIEW_CHILD` and carries the exact
+review_input and everything else the reviewer needs (`fork_turns` `none`
+keeps the reviewer independent of this conversation, so it sees only that
+message). It returns the child's canonical task name, such as
+`/root/<task_name>`. Then immediately call `wait_agent` with only
+`{"timeout_ms":<milliseconds>}`, never with `targets`, `target`, `ids`, or a
+task name, and with a timeout no longer than the retained reviewer deadline.
+`wait_agent` returns only a status summary such as
+`{"message":"Wait completed.","timed_out":false}`; the child's terminal
+claims arrive separately as its `FINAL_ANSWER` message, sent from its task
+name. If `wait_agent` reports `timed_out: true` or returns before that
+`FINAL_ANSWER` arrives, call `wait_agent` once more; if there is still no
+`FINAL_ANSWER`, leave the review incomplete and report the missing child
+claims. The receiver-thread-id and `targets` rules that follow apply only to
+the v1 runtime, whose `spawnAgent` returns a receiver thread id. In v1 the
 required sequence is: call spawnAgent with the exact review_input and a
 read-only review request whose prompt begins with `CODEX_REVIEW_CHILD`, wait
 for that child immediately using the returned receiver thread id. The native
-collaboration argument shapes are strict: call `wait` as
+v1 collaboration argument shapes are strict: call `wait` as
 `{"targets":["<exact non-empty receiver thread id>"]}` (use the `targets`
 array key, never `target` or `ids`, and never an empty array). Do not make
 another Bash/MCP call or produce a final answer before that wait completes.
@@ -258,7 +283,8 @@ If the repeated wait is still empty, leave the review incomplete and report
 the missing child claims rather than closing the child or fabricating a result.
 Do not call `sendInput`, `resumeAgent`, or `closeAgent` for this one-shot
 reviewer: its spawn prompt is final, and `wait` is the only follow-up
-operation. After the wait returns terminal claims, pass the child's returned
+operation (in v2, `wait_agent` is the only follow-up operation). After the
+wait returns terminal claims, pass the child's returned
 claims and the exact review_input fields to
 report_requirement. Copy every field from the current review_input as a
 sibling of `report` in the action parameters: `requirement_id`, `generation`,
@@ -885,6 +911,30 @@ def _collab_receiver_ids(item: Mapping[str, object]) -> set[str]:
     return result
 
 
+_SUBAGENT_ACTIVITY_TYPE = "sub_agent_activity"
+_SUBAGENT_RESULT_TYPE = "codex_subagent_result"
+_SUBAGENT_TERMINAL_KINDS = frozenset({"completed", "interrupted"})
+
+
+def _subagent_activity(item: Mapping[str, object]) -> tuple[str, str, str | None] | None:
+    """Return ``(kind, child_thread_id, agent_path)`` for a multi-agent v2 item.
+
+    Multi-agent v2 (``spawn_agent``/``wait_agent`` in the ``collaboration``
+    namespace) reports a child's lifecycle as ``subAgentActivity`` items on the
+    parent thread, not as ``collabAgentToolCall`` spawn items. Its ``wait``
+    item names no receivers and carries no child state or message.
+    """
+
+    if item.get("type") != _SUBAGENT_ACTIVITY_TYPE:
+        return None
+    kind = item.get("kind")
+    child = item.get("agentThreadId")
+    path = item.get("agentPath")
+    if not isinstance(kind, str) or not isinstance(child, str) or not child:
+        return None
+    return kind, child, path if isinstance(path, str) and path else None
+
+
 def _collab_status_label(item: Mapping[str, object]) -> str:
     """Return only allow-listed child lifecycle labels, never ids or messages."""
 
@@ -961,6 +1011,20 @@ def _update_reviewer_deadline(
     if event.get("type") not in {"item.started", "item.completed"}:
         return receiver_ids, deadline_at
     item = event.get("item")
+    activity = _subagent_activity(item) if isinstance(item, Mapping) else None
+    if activity is not None:
+        kind, child, _path = activity
+        if kind == "started":
+            receiver_ids.add(child)
+            if deadline_at is None:
+                deadline_at = now + review_deadline_ms / 1000.0
+        elif kind in _SUBAGENT_TERMINAL_KINDS and child in receiver_ids:
+            # The v2 child's turn is over; its claims are read from the child
+            # thread after the parent turn, not from a wait item.
+            receiver_ids.discard(child)
+            if not receiver_ids:
+                deadline_at = None
+        return receiver_ids, deadline_at
     if not isinstance(item, Mapping) or item.get("type") not in {
         "collabAgentToolCall",
         "collab_agent_tool_call",
@@ -1468,6 +1532,17 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
                 or item.get("status") in _FILE_CHANGE_FAILURE_STATUSES
             )
             return {"type": method.replace("/", "."), "item": normalized}
+        if item_type in {"subAgentActivity", "SubAgentActivity", "sub_agent_activity"}:
+            return {
+                "type": method.replace("/", "."),
+                "item": {
+                    "type": _SUBAGENT_ACTIVITY_TYPE,
+                    "id": item.get("id"),
+                    "kind": item.get("kind"),
+                    "agentThreadId": item.get("agentThreadId", item.get("agent_thread_id")),
+                    "agentPath": item.get("agentPath", item.get("agent_path")),
+                },
+            }
         if item_type in {"collabAgentToolCall", "collab_tool_call"}:
             normalized = dict(item)
             normalized["type"] = "collab_agent_tool_call"
@@ -1560,6 +1635,10 @@ def parse_codex_events(
     environment_details: list[str] = []
     partial_answer: list[str] = []
     seen_collab_receiver_ids: set[str] = set()
+    # Multi-agent v2 children started on this root turn, keyed by thread id,
+    # in spawn order. Only these may be bound to a child-thread result.
+    v2_children: dict[str, dict[str, object]] = {}
+    v2_recorded: set[str] = set()
 
     def record_collab_call(
         started: Mapping[str, object], completed: Mapping[str, object]
@@ -1585,6 +1664,45 @@ def parse_codex_events(
             + redact_text(json.dumps(result_value, default=str)[:1500])
         )
 
+    def record_subagent_result(child: str, event: Mapping[str, object]) -> None:
+        started = v2_children[child]
+        arguments = {
+            "subagent_type": "general-purpose",
+            # Multi-agent v2 delivers the spawn ``message`` to the child as
+            # provider-encrypted content, so neither the app-server stream nor
+            # the rollout carries the dispatch prompt. Recording ``None``
+            # keeps the reviewer visible without inventing a prompt; the
+            # canonical dispatch gate therefore cannot credit it.
+            "prompt": None,
+            "prompt_observable": False,
+            "codex_collaboration": "multi_agent_v2",
+            "codex_child_thread_id": child,
+            "codex_agent_path": started.get("agentPath"),
+        }
+        status = event.get("status")
+        message = event.get("message")
+        claims = message if isinstance(message, str) and message.strip() else None
+        result_value = {
+            "is_error": status not in _COLLAB_SUCCESS_STATUSES or claims is None,
+            "content": [claims] if claims is not None else [],
+        }
+        calls.append(ToolCall("Agent", redact_json_rpc(arguments), result_value))
+        flat_results.append(redact_json_rpc(result_value))
+        transcript.append(
+            "[tool_use:Agent] "
+            + redact_text(json.dumps(arguments, default=str)[:600])
+        )
+        transcript.append(
+            "[tool_result] "
+            + redact_text(json.dumps(result_value, default=str)[:1500])
+        )
+        if result_value["is_error"]:
+            environment_details.append(
+                "Codex reviewer child had no matching completion "
+                f"(multi_agent_v2,status={status if isinstance(status, str) else 'unreported'},"
+                f"claims={'present' if claims is not None else 'missing'})"
+            )
+
     for event in events:
         if root_turn_id is not None and not _codex_event_matches_root_turn(
             event, thread_id=thread_id, turn_id=root_turn_id
@@ -1592,6 +1710,12 @@ def parse_codex_events(
             continue
         event = _normalise_app_server_event(event)
         event_type = event.get("type")
+        if event_type == _SUBAGENT_RESULT_TYPE:
+            child = event.get("agentThreadId")
+            if isinstance(child, str) and child in v2_children and child not in v2_recorded:
+                v2_recorded.add(child)
+                record_subagent_result(child, event)
+            continue
         if event_type == "thread.started":
             value = event.get("thread_id")
             if isinstance(value, str) and value and not thread_id:
@@ -1687,6 +1811,14 @@ def parse_codex_events(
                 # parent can correct the operation; if it never recovers, the
                 # normal turn deadline classifies the incomplete turn.
                 transcript.append("[tool_result:file_change] " + CODEX_FILE_CHANGE_FAILURE)
+            continue
+        if item_type == _SUBAGENT_ACTIVITY_TYPE:
+            activity = _subagent_activity(item)
+            if activity is not None:
+                kind, child, path = activity
+                state = v2_children.setdefault(child, {"agentPath": path, "kind": kind})
+                if kind != "started":
+                    state["kind"] = kind
             continue
         if item_type == "collab_agent_tool_call":
             tool = item.get("tool")
@@ -1805,6 +1937,29 @@ def parse_codex_events(
             + ")"
         )
 
+    for child, state in v2_children.items():
+        if child in v2_recorded:
+            continue
+        arguments = {
+            "subagent_type": "general-purpose",
+            "prompt": None,
+            "prompt_observable": False,
+            "codex_collaboration": "multi_agent_v2",
+            "codex_child_thread_id": child,
+            "codex_agent_path": state.get("agentPath"),
+        }
+        calls.append(
+            ToolCall(
+                "Agent",
+                redact_json_rpc(arguments),
+                {"is_error": True, "content": []},
+            )
+        )
+        environment_details.append(
+            "Codex reviewer child had no matching completion "
+            f"(multi_agent_v2,kind={state.get('kind')})"
+        )
+
     if not final_answer and partial_answer:
         final_answer = "".join(partial_answer)
         transcript.append("[assistant] " + redact_text(final_answer))
@@ -1834,6 +1989,55 @@ def parse_codex_events(
     return result, observations
 
 
+MODEL_CATALOG_FILENAME = "dp-scenarios-model-catalog.json"
+
+
+def _write_multi_agent_v1_catalog(
+    host_codex_home: str | None, codex_home: Path, *, model: str
+) -> Path:
+    """Stage a model catalog that runs ``model`` with multi-agent v1 tools.
+
+    Codex chooses the collaboration runtime from the model catalog's
+    ``multi_agent_version``. Under v2 the ``spawn_agent`` message reaches the
+    child only as provider-encrypted content, so no observer can read the
+    reviewer dispatch prompt that the construction gate binds. This copies the
+    host's cached catalog and changes only that one field for the selected
+    model; it fails closed rather than guessing a catalog.
+    """
+
+    if not isinstance(host_codex_home, str) or not host_codex_home:
+        raise CodexAdapterError(
+            "--force-multi-agent-v1 needs the host CODEX_HOME model catalog cache"
+        )
+    source = Path(host_codex_home).expanduser() / "models_cache.json"
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CodexAdapterError(
+            f"host Codex model catalog cache is unreadable: {source}"
+        ) from exc
+    models = payload.get("models") if isinstance(payload, Mapping) else None
+    if not isinstance(models, list):
+        raise CodexAdapterError(f"host Codex model catalog cache has no models: {source}")
+    matched = False
+    catalog: list[object] = []
+    for entry in models:
+        if isinstance(entry, Mapping) and entry.get("slug") == model:
+            entry = {**entry, "multi_agent_version": "v1"}
+            matched = True
+        catalog.append(entry)
+    if not matched:
+        raise CodexAdapterError(
+            f"host Codex model catalog cache has no entry for model {model!r}: {source}"
+        )
+    target = codex_home / MODEL_CATALOG_FILENAME
+    if target.is_symlink():
+        raise CodexAdapterError("staged Codex model catalog path must not be a symlink")
+    target.write_text(json.dumps({"models": catalog}), encoding="utf-8")
+    target.chmod(0o600)
+    return target
+
+
 class CodexAdapter:
     """One Codex thread resumed across the scripted operator turns."""
 
@@ -1858,6 +2062,7 @@ class CodexAdapter:
         allowed_tools: str | None = None,
         supervisor_data_dir: Path | None = None,
         multi_agent_v2: bool = False,
+        force_multi_agent_v1: bool = False,
         review_timeout_seconds: float | None = None,
         native_continuation: bool = False,
         resume_session_id: str | None = None,
@@ -1879,6 +2084,12 @@ class CodexAdapter:
         self.allowed_tools = allowed_tools
         self.supervisor_data_dir = supervisor_data_dir
         self.multi_agent_v2 = bool(multi_agent_v2)
+        self.force_multi_agent_v1 = bool(force_multi_agent_v1)
+        if self.multi_agent_v2 and self.force_multi_agent_v1:
+            raise CodexAdapterError(
+                "--force-multi-agent-v1 cannot be combined with --multi-agent-v2"
+            )
+        self._model_catalog_path: Path | None = None
         self.review_timeout_seconds = validate_review_timeout_seconds(
             REVIEW_DEADLINE_MS / 1000.0
             if review_timeout_seconds is None
@@ -1951,6 +2162,7 @@ class CodexAdapter:
             "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
         ):
             environment.pop(key, None)
+        host_codex_home = environment.get("CODEX_HOME")
         if self.native_continuation:
             assert self.native_state_dir is not None
             codex_home = self._persistent_native_codex_home(
@@ -1963,6 +2175,12 @@ class CodexAdapter:
             self._codex_home_temp = self._isolated_codex_home(environment)
             environment["CODEX_HOME"] = self._codex_home_temp.name
         try:
+            if self.force_multi_agent_v1:
+                self._model_catalog_path = _write_multi_agent_v1_catalog(
+                    host_codex_home,
+                    Path(environment["CODEX_HOME"]),
+                    model=self.model,
+                )
             self._process = subprocess.Popen(
                 self._app_server_command(),
                 cwd=Path.cwd(),
@@ -2104,6 +2322,10 @@ class CodexAdapter:
         ]
         if self.multi_agent_v2:
             command[3:3] = ["--enable", "multi_agent_v2"]
+        if self._model_catalog_path is not None:
+            command.extend(
+                ("-c", f"model_catalog_json={_toml_string(str(self._model_catalog_path))}")
+            )
         command.extend(
             (
                 "-c",
@@ -2151,6 +2373,9 @@ class CodexAdapter:
             + "\n\nThe skill pack is available at: "
             + str(self.skill_pack_root)
             + "\nRead the relevant SKILL.md and reference files from that path."
+            + "\nThe retained reviewer deadline for this run is "
+            + f"{int(self.review_timeout_seconds * 1000)} milliseconds; a "
+            + "reviewer wait must not use a longer timeout."
         )
 
     def _thread_params(self) -> dict[str, object]:
@@ -2433,6 +2658,25 @@ class CodexAdapter:
             nonlocal reviewer_child_started
 
             item = event.get("item")
+            activity = _subagent_activity(item) if isinstance(item, Mapping) else None
+            if activity is not None:
+                kind, child, _path = activity
+                if kind == "started" and child not in seen_reviewer_receiver_ids:
+                    seen_reviewer_receiver_ids.add(child)
+                    reviewer_spawned_at = event_at
+                    reviewer_wait_started_at = None
+                    reviewer_completed_at = None
+                    reviewer_result_ready = False
+                    reviewer_wait_count = 0
+                    reviewer_wait_target = "mailbox"
+                    reviewer_child_status = "running"
+                    reviewer_child_started = True
+                elif kind in _SUBAGENT_TERMINAL_KINDS:
+                    reviewer_completed_at = event_at
+                    reviewer_child_status = kind
+                    # Claims are read from the child thread after the turn.
+                    reviewer_result_ready = False
+                return
             if not isinstance(item, Mapping) or item.get("type") not in {
                 "collabAgentToolCall",
                 "collab_agent_tool_call",
@@ -2496,7 +2740,10 @@ class CodexAdapter:
                 # Remember even unmatched targets so a stale wait cannot later
                 # be rebound to a new id-less spawn.
                 seen_reviewer_receiver_ids.update(targets)
-                if not targets:
+                if not targets and reviewer_wait_target == "mailbox":
+                    # A v2 ``wait_agent`` waits on the mailbox, not on ids.
+                    pass
+                elif not targets:
                     reviewer_wait_target = "missing"
                 elif not reviewer_receiver_ids:
                     reviewer_wait_target = "unknown"
@@ -2861,6 +3108,115 @@ class CodexAdapter:
                 )
         return events
 
+    SUBAGENT_READ_TIMEOUT_S = 30.0
+
+    def _subagent_rpc(
+        self, method: str, params: Mapping[str, object]
+    ) -> Mapping[str, object] | None:
+        """Issue one read-only app-server request between turns."""
+
+        request_id = self._next_rpc_id()
+        self._write_rpc(method, params, request_id=request_id)
+        # Late notifications for the finished turn are not part of any turn.
+        response, _late = self._read_until_response(
+            request_id,
+            time.monotonic() + min(self.timeout_s, self.SUBAGENT_READ_TIMEOUT_S),
+        )
+        result = response.get("result")
+        if "error" in response or not isinstance(result, Mapping):
+            return None
+        return result
+
+    def _subagent_result(self, child: str) -> dict[str, object]:
+        """Read one v2 child's terminal claims from its own provider thread.
+
+        The parent receives the child's final answer as an inter-agent message
+        that the app-server stream does not surface as an item. The child
+        thread is the provider-owned record of that answer: the latest
+        completed turn's ``final_answer`` agent message. The thread must name
+        this adapter's thread as its parent, so a result can never be bound to
+        an unrelated thread id.
+        """
+
+        value: dict[str, object] = {
+            "type": _SUBAGENT_RESULT_TYPE,
+            "agentThreadId": child,
+            "status": "unavailable",
+            "message": None,
+        }
+        thread_result = self._subagent_rpc(
+            "thread/read", {"threadId": child, "includeTurns": False}
+        )
+        thread = thread_result.get("thread") if thread_result is not None else None
+        if not isinstance(thread, Mapping) or thread.get("id") != child:
+            return value
+        if thread.get("parentThreadId") != self._thread_id:
+            value["status"] = "unrelated"
+            return value
+        turns_result = self._subagent_rpc(
+            "thread/turns/list",
+            {
+                "threadId": child,
+                "itemsView": "full",
+                "sortDirection": "desc",
+                "limit": 8,
+            },
+        )
+        turns = turns_result.get("data") if turns_result is not None else None
+        if not isinstance(turns, Sequence) or isinstance(turns, (str, bytes)):
+            return value
+        for turn in turns:
+            if not isinstance(turn, Mapping):
+                continue
+            status = turn.get("status")
+            if status == "inProgress":
+                value["status"] = "running"
+                return value
+            items = turn.get("items")
+            if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+                continue
+            answers = [
+                item.get("text")
+                for item in items
+                if isinstance(item, Mapping)
+                and item.get("type") == "agentMessage"
+                and item.get("phase") == "final_answer"
+                and isinstance(item.get("text"), str)
+                and item.get("text").strip()
+            ]
+            value["status"] = status if isinstance(status, str) else "unreported"
+            if answers:
+                value["message"] = answers[-1]
+            return value
+        return value
+
+    def _subagent_results(
+        self, events: Sequence[Mapping[str, object]]
+    ) -> list[dict[str, object]]:
+        """Return one result event per v2 child started on this root turn."""
+
+        children: list[str] = []
+        for event in events:
+            normalized = _normalise_app_server_event(event)
+            item = normalized.get("item")
+            activity = _subagent_activity(item) if isinstance(item, Mapping) else None
+            if activity is not None and activity[1] not in children:
+                children.append(activity[1])
+        results: list[dict[str, object]] = []
+        for child in children:
+            try:
+                results.append(self._subagent_result(child))
+            except (TimeoutError, CodexAdapterError, OSError, ValueError):
+                results.append(
+                    {
+                        "type": _SUBAGENT_RESULT_TYPE,
+                        "agentThreadId": child,
+                        "status": "unavailable",
+                        "message": None,
+                    }
+                )
+        return results
+
     def _prompt(self, text: str, attachment_paths: Sequence[str]) -> str:
         text += (
             "\n\nRun-local source handoff:\n"
@@ -3022,6 +3378,7 @@ class CodexAdapter:
                 request_id=request_id,
             )
             events = self._collect_turn(request_id, prompt, events)
+            events.extend(self._subagent_results(events))
         except TimeoutError as exc:
             failure_reason = _codex_timeout_failure_reason(
                 exc,
@@ -3154,6 +3511,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict-mcp-config", action="store_true")
     parser.add_argument("--supervisor-data-dir", type=Path, required=True)
     parser.add_argument(
+        "--force-multi-agent-v1",
+        action="store_true",
+        help=(
+            "run the model with Codex's multi-agent v1 collaboration tools even "
+            "when its catalog entry declares v2 (v2 encrypts the spawn message, "
+            "so the reviewer dispatch prompt cannot be observed)"
+        ),
+    )
+    parser.add_argument(
         "--multi-agent-v2",
         action="store_true",
         help="enable Codex's experimental multi-agent-v2 collaboration backend",
@@ -3204,6 +3570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         allowed_tools=args.allowedTools,
         supervisor_data_dir=args.supervisor_data_dir.expanduser().resolve(),
         multi_agent_v2=args.multi_agent_v2,
+        force_multi_agent_v1=args.force_multi_agent_v1,
         review_timeout_seconds=args.review_timeout,
         native_continuation=args.native_continuation,
         resume_session_id=args.resume_session_id,
