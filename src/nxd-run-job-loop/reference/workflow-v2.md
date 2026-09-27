@@ -651,12 +651,28 @@ state.
 A closure whose transform calls `nxd.experimental.field_mapper` needs a
 formal approval before validation and admission. That approval exists only
 when the activated contract carries a `mapper-confirmation-v1` requirement,
-which depends on capture and on the conversation review. The workflow
-activation bundled with Desktop today does not carry it. There, a mapper
-closure is never prompted for and stops at validation with
-`validation/mapper_closure_unsupported`. Report that and stop. Do not remove
-the mapper to get past it. Mapper builds also run only on macOS, because
-mapper-mode compute needs the macOS sandbox.
+which depends on capture and on the conversation review. Read which contract
+the install has from the requirements `prepare_workflow` returns:
+
+- Current Desktop installs activate five requirements: consent, capture,
+  review, `approval` (`mapper-confirmation-v1`), validation. Every build takes
+  the approval step, and a closure without a mapper completes it with no
+  prompt (below).
+- Older supervisors activate four requirements with no approval step. There a
+  mapper closure is never prompted for and stops at validation with
+  `validation/mapper_closure_unsupported`. Report that and stop. Do not
+  remove the mapper to get past it.
+- An upgraded install whose data directory still held workflows keeps its
+  previous contract: setup does not replace it while instances exist, and says
+  to use `remove_workflow` or an empty `--data-dir` to adopt the new one. Only
+  the operator does that; never remove workflows to change the contract.
+
+Mapper builds also run only on macOS, because mapper-mode compute needs the
+macOS sandbox. The shipped policy limits a grant to provider `anthropic`;
+priced haiku, sonnet, opus or fable model ids (exact ids, dated aliases
+included); 1000 calls, 2,000,000 tokens and 25 USD per approval; 100 USD
+lifetime per mapper spec; and no recurring grants. The approval window is
+300 s, the dialog times out after 120 s, and a decline starts a 30 s cooldown.
 
 When the contract does carry the requirement and `next_actions` offers
 `start_requirement` for it, the pending code is `workflow/approval_required`.
@@ -723,7 +739,7 @@ report. Every other contract failure still fails.
 
 | Validation code | Recovery | Next action |
 |---|---|---|
-| `validation/mapper_closure_unsupported` | `stop` | The activated contract has no mapper approval requirement, which is the case for the bundled Desktop activation. Report it; mapper closures cannot be built on this install. |
+| `validation/mapper_closure_unsupported` | `stop` | The activated contract has no mapper approval requirement: an older supervisor, or an upgraded install that kept its previous contract because workflows existed. Report it; mapper closures cannot be built on this install as activated. |
 | `validation/mapper_scope_invalid` | `repair_then_retry` | The supervisor could not read the mapper proposal (spec or grant). Fix the files in the authoring closure, then reset capture, recapture, review and validate again. |
 | `validation/mapper_approval_missing` | `stop` | The mapper closure reached validation with no approval binding. Report it; do not work around it. |
 | `validation/mapper_subject_changed` | `stop` | The pinned closure does not match the approved one. Report it as a bug or tampering; do not retry. |

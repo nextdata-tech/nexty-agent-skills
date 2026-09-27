@@ -94,8 +94,17 @@ def test_desktop_mapper_flow_is_the_shipped_workflow_v2_requirement() -> None:
     assert "native OS dialog" in field_mapper
     assert "the only approval surface" in field_mapper
     assert "It contains no URL, token, capability or key" in field_mapper
-    # The bundled Desktop activation does not register the requirement
-    # (the activation bundle never shipped), and mapper compute is macOS-only.
+    # nxd #7997 ships the five-requirement activation; older supervisors (and
+    # upgrades that kept a contract because workflows existed) still stop at
+    # validation. The docs must describe both, keyed on the returned
+    # requirements, and mapper compute is macOS-only.
+    assert "registers only consent, capture, review" not in field_mapper
+    assert "activation bundled with Desktop today" not in field_mapper
+    assert "consent, capture, review, `approval` (`mapper-confirmation-v1`), then validation" in field_mapper
+    assert "completes that step at once as `not_present`, with no prompt" in field_mapper
+    assert "fable families" in field_mapper
+    assert "25 USD per approval, 100 USD lifetime per mapper spec" in field_mapper
+    assert "setup keeps the previously activated contract" in field_mapper
     assert "`validation/mapper_closure_unsupported`" in field_mapper
     assert "Mapper builds also run only on macOS" in field_mapper
     # The dialog shows no expiry or recurring flag; the agent must say them.
@@ -181,7 +190,12 @@ def test_workflow_docs_match_the_shipped_supervisor_codes() -> None:
     # The run diagnostic's closed mapper code set.
     for code in ("mapper_ceiling_reached", "mapper_grant_refused", "mapper_request_refused", "mapper_integrity"):
         assert f"`{code}`" in workflow, f"run diagnostic code missing: {code}"
-    # Availability on the bundled activation, and macOS-only mapper compute.
+    # Availability by activated contract (current five-requirement bundle vs.
+    # older supervisors), and macOS-only mapper compute.
+    assert "activation bundled with Desktop today" not in workflow
+    assert "Current Desktop installs activate five requirements" in workflow
+    assert "Older supervisors activate four requirements" in workflow
+    assert "never remove workflows to change the contract" in workflow
     assert "`validation/mapper_closure_unsupported`" in workflow
     assert "Mapper builds also run only on macOS" in workflow
     assert "`validation/mapper_scope_invalid`" in workflow
