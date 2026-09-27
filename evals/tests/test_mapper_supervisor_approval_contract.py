@@ -83,6 +83,9 @@ def test_desktop_mapper_flow_is_the_shipped_workflow_v2_requirement() -> None:
         "until a workflow-v2 mapper handler is shipped",
         "`credential_isolation: not_enforced`",
         "one-time browser capability",
+        # nxd never reports `brokered`: the only credential_isolation value it
+        # emits is the legacy MCP path's `not_enforced`.
+        "`credential_isolation` reports `brokered`",
     ):
         assert stale not in field_mapper, f"stale pre-v2 text: {stale}"
 
@@ -91,7 +94,12 @@ def test_desktop_mapper_flow_is_the_shipped_workflow_v2_requirement() -> None:
     assert "native OS dialog" in field_mapper
     assert "the only approval surface" in field_mapper
     assert "It contains no URL, token, capability or key" in field_mapper
-    assert "`credential_isolation` reports `brokered`" in field_mapper
+    # The bundled Desktop activation does not register the requirement
+    # (the activation bundle never shipped), and mapper compute is macOS-only.
+    assert "`validation/mapper_closure_unsupported`" in field_mapper
+    assert "Mapper builds also run only on macOS" in field_mapper
+    # The dialog shows no expiry or recurring flag; the agent must say them.
+    assert "It does not show the grant's expiry or `recurring` flag" in field_mapper
     # Both supervisor grant paths, and the refusal of both at once.
     assert "`contracts/mapper_grant.json`" in field_mapper
     assert "`contracts/mapper_spec_grant.json`" in field_mapper
@@ -158,7 +166,28 @@ def test_workflow_recovery_table_fails_closed() -> None:
     assert "Never widen a grant yourself" in workflow
     assert "You cannot approve, decline, extend, widen or reset an approval" in workflow
     assert "Never substitute a chat \"yes\" for the dialog" in workflow
-    assert "never supply a key, token or base URL yourself" in workflow
+    assert "Never supply a key, token or base URL yourself" in workflow
+
+
+def test_workflow_docs_match_the_shipped_supervisor_codes() -> None:
+    """Only codes nxd main actually emits, with the WP10/WP11 semantics."""
+    workflow = _normalized(WORKFLOW_V2)
+
+    # Allow-listed in nxd but never emitted to the agent: a revoked ledger or a
+    # spent non-recurring approval is reported as workflow/approval_expired.
+    for code in ("workflow/mapper_ledger_revoked", "workflow/mapper_provider_unavailable"):
+        assert f"`{code}`" not in workflow, f"{code} is not an agent-facing code"
+    assert "a non-recurring approval was already spent by the publication it admitted" in workflow
+    # The run diagnostic's closed mapper code set.
+    for code in ("mapper_ceiling_reached", "mapper_grant_refused", "mapper_request_refused", "mapper_integrity"):
+        assert f"`{code}`" in workflow, f"run diagnostic code missing: {code}"
+    # Availability on the bundled activation, and macOS-only mapper compute.
+    assert "`validation/mapper_closure_unsupported`" in workflow
+    assert "Mapper builds also run only on macOS" in workflow
+    assert "`validation/mapper_scope_invalid`" in workflow
+    # WP11 inspection: settled plus reserved, omitted rather than zero.
+    assert "`settled_and_reserved_usd_micros`" in workflow
+    assert "never as zero" in workflow
 
 
 def test_mapper_review_publication_has_one_deterministic_outcome_per_review() -> None:

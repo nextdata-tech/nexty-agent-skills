@@ -445,8 +445,10 @@ spec only at `contracts/mapper_spec.json` and the grant at exactly one of
   and delete the other copy.
 - `grant.not_at_supervisor_path` is a warning, reported only once consent is
   otherwise complete: the standalone harness binds the files where they are,
-  but a Desktop build would fail with `workflow/mapper_scope_invalid`. Move the
-  files; moving a file does not change the spec id or the grant.
+  but a Desktop build would fail closed with `workflow/mapper_scope_invalid`
+  (`validation/mapper_scope_invalid` under a contract without the mapper
+  approval requirement). Move the files; moving a file does not change the
+  spec id or the grant.
 
 Neither code, nor a green Phase G, is a Desktop approval. See
 [field-mapper.md](field-mapper.md#desktop-supervisor-approval-boundary).

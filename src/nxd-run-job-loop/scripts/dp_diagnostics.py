@@ -783,7 +783,7 @@ _register(
 
 # A warning, not an error: the standalone harness binds a grant wherever it
 # sits. Only the Desktop supervisor reads the fixed paths, and it fails closed
-# (workflow/mapper_scope_invalid, no prompt) rather than running unconsented.
+# (mapper_scope_invalid, no prompt) rather than running unconsented.
 _register(
     "grant.not_at_supervisor_path",
     stage="s1_structure",

@@ -1507,7 +1507,7 @@ if mapper_import:
     # Both supervisor grant paths at once. Checked on existence alone, not on
     # shape: the supervisor refuses the pair whatever either file contains, so
     # a malformed second copy is still a refusal. An error rather than a
-    # warning because the Desktop outcome is certain (workflow/mapper_scope_invalid
+    # warning because the Desktop outcome is certain (mapper_scope_invalid
     # before any prompt) and the repair is the agent's: delete the copy that
     # is not the user's grant.
     _grant_paths_present = [p for p in SUPERVISOR_GRANT_PATHS if Path(p).exists()]
@@ -1740,7 +1740,7 @@ if mapper_import:
         # problem reported twice. A WARNING, because the standalone harness
         # binds a grant wherever it sits; only the Desktop supervisor reads the
         # fixed paths, and there a misplaced grant fails closed as
-        # workflow/mapper_scope_invalid before any prompt, never as a silent run.
+        # mapper_scope_invalid before any prompt, never as a silent run.
         if _all_bound:
             _sup_grant = matched.get(SUPERVISOR_SPEC_PATH, (None, None))[0]
             if _sup_grant not in SUPERVISOR_GRANT_PATHS:
@@ -1754,7 +1754,7 @@ if mapper_import:
                      f"{SUPERVISOR_GRANT_PATHS[0]} or "
                      f"{SUPERVISOR_GRANT_PATHS[1]}; {_where}. The standalone "
                      f"harness binds it, but a Desktop build refuses it as "
-                     f"workflow/mapper_scope_invalid before asking the user."))
+                     f"mapper_scope_invalid before asking the user."))
 
 for _gc, _gp, _gm in gwarnings:
     diag("s1_structure", _gc, _gm, path=cpath(_gp))

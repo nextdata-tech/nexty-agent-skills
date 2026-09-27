@@ -11,10 +11,15 @@ record: null
 
 ## Notes
 
-WP14 of the Desktop workflow-v2 mapper admission design. The runtime (the
-`mapper-confirmation-v1` formal-approval requirement, OS-dialog approval,
-brokered provider key, durable ledger, stub-backed validation) ships in the nxd
-monorepo in WP0-WP13. This change documents that runtime for the agent:
+WP14 of the Desktop workflow-v2 mapper admission design. It documents the
+runtime that shipped on nxd main in WP0-WP11: the `mapper-confirmation-v1`
+formal-approval handler, the strict grant, the OS-dialog approval, every mapper
+call through the broker with the key in the Keychain, the MAC-checked durable
+ledger, stub-backed validation and the inspection projection. WP12 (an
+activation bundle registering the requirement) and WP13 (a headless eval) were
+not implemented. The docs therefore say that the bundled Desktop activation
+stops a mapper closure at `validation/mapper_closure_unsupported`, and that
+mapper builds run only on macOS. This change covers:
 
 - `field-mapper.md` § Desktop supervisor approval boundary replaces the
   "unsupported / future handler" text with the shipped flow, the strict grant,
@@ -29,9 +34,10 @@ monorepo in WP0-WP13. This change documents that runtime for the agent:
   complete but the files are not at the paths the supervisor reads.
 
 No public `evals/run.py` scenario can exercise this. The approval needs the
-supervisor's OS dialog, which only the nxd-side headless eval (WP13, feature
-`synthetic-evaluation`) can answer, and that scenario lives in the nxd
-monorepo, not here. Its `run-evals` run is the qualification check.
+supervisor's OS dialog and a workflow contract that registers the mapper
+requirement. The bundled activation does not register it, and the headless nxd
+eval planned as WP13 was never built. Every documented code was checked against
+nxd main source instead.
 
 ## Evidence
 
@@ -47,3 +53,7 @@ monorepo, not here. Its `run-evals` run is the qualification check.
   `test_declared_data_scope_is_never_described_as_enforced`,
   `test_scratch_contracts_on_mapper_outputs_are_advisory` and
   `test_workflow_recovery_table_fails_closed` fail against the previous docs.
+  `test_workflow_docs_match_the_shipped_supervisor_codes` fails against the
+  first draft of this change, which documented codes nxd never emits
+  (`workflow/mapper_ledger_revoked`, `workflow/mapper_provider_unavailable`)
+  and omitted the `mapper_grant_refused` and `mapper_integrity` run codes.

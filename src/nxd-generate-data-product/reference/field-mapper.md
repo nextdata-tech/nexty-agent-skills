@@ -138,6 +138,17 @@ runs before the harness dispatches a model call. On Desktop the grant is also
 the **scope proposal** for the supervisor's formal approval. It is never
 authorization by itself.
 
+**Availability.** The supervisor can collect a mapper approval only when the
+activated workflow contract carries a `mapper-confirmation-v1` requirement and
+the install's policy has a formal-approval entry for it. The workflow
+activation bundled with Desktop today registers only consent, capture, review
+and validation. Under that contract a mapper closure is not prompted for. It
+stops at trusted validation with `validation/mapper_closure_unsupported`
+(recovery `stop`). Report that code and stop. Do not strip the mapper to get
+past it, and do not describe mapper approval as available on that install.
+Mapper builds also run only on macOS. Mapper-mode compute needs the macOS
+sandbox, and the supervisor refuses it on any other platform.
+
 **Where the supervisor looks.** It reads the spec at
 `contracts/mapper_spec.json` and the grant at exactly one of
 `contracts/mapper_grant.json` or `contracts/mapper_spec_grant.json`. When both
@@ -146,14 +157,14 @@ grant files exist it refuses the closure. Phase G reports that as
 `grant.not_at_supervisor_path`.
 
 **The grant must be strictly typed.** The supervisor parses it before any
-prompt and requires:
+prompt. It rejects unknown keys and requires:
 
 - `provider` exactly `anthropic`. `claude_cli`, `recorded` and `stub` are
   refused under supervision.
 - a non-empty `model`, and a non-empty `corroboration_model` when one is
   given;
 - `max_calls` and `max_tokens` as positive integers, and `max_usd` as a
-  positive number;
+  positive decimal with at most six decimal places;
 - `expires_at` as an RFC3339 time in the future;
 - `recurring` as a bool.
 
@@ -163,28 +174,38 @@ getting a fresh review:
 
 | Code | Cause |
 |---|---|
-| `workflow/mapper_scope_invalid` | missing, malformed or loosely typed grant; both grant paths present; spec missing |
-| `workflow/mapper_approval_claims_rejected` | the grant carries `approved`, `approved_by`, `approval_id`, `decision`, `receipt`, `signature` or a similar claim |
+| `workflow/mapper_scope_invalid` | missing, malformed or loosely typed grant; an unknown key; both grant paths present; spec missing |
+| `workflow/mapper_approval_claims_rejected` | the grant carries `approved`, `approval`, `approved_by`, `approval_id`, `approval_hash`, `user_approved`, `decision`, `receipt` or `signature` |
 | `workflow/mapper_grant_exceeds_policy` | provider, model, ceilings or `recurring` beyond the installed policy |
 | `workflow/mapper_model_unpriced` | a model with no price entry, so spend cannot be bounded |
+
+Under a contract without the mapper requirement, a proposal the supervisor
+cannot read surfaces at validation as `validation/mapper_scope_invalid`
+instead.
 
 An agent must never author approval claims. They are rejected, not treated as
 consent. A green Phase G proves only that the static harness check found a
 binding artifact. It is not proof of human authorization on Desktop.
 
-**The flow.** The workflow-v2 contract carries a `mapper-confirmation-v1`
-formal-approval requirement. It depends on capture and on the conversation
+**The flow.** Where the contract carries the `mapper-confirmation-v1`
+formal-approval requirement, it depends on capture and on the conversation
 review, and validation and admission depend on it. When the returned actions
 offer `start_requirement` for it:
 
 1. The supervisor derives the mapper subject from the retained capture, not
    from anything the agent sends.
 2. It checks the strict grant against policy.
-3. It opens a native OS dialog showing the provider, model, ceilings, expiry,
-   lifetime spend for this spec, and the declared fields. Decline is the
-   default button.
-4. The response to the agent says only that approval is awaiting the user,
-   with an expiry. It contains no URL, token, capability or key.
+3. It opens a native OS dialog. The dialog shows the workflow, provider,
+   model and corroboration model, the call, token and USD ceilings for this
+   approval, the lifetime USD ceiling and lifetime spend for this mapper spec
+   (settled plus reserved, or "unavailable" when it cannot be verified), the
+   reason for a re-approval, and the declared fields. It does not show the
+   grant's expiry or `recurring` flag, so tell the user those yourself. Decline
+   is the default button.
+4. The response to the agent carries
+   `approval: {state: "awaiting_user", expires_at}`. That expiry is the
+   earlier of the policy's approval window and the grant's `expires_at`. It
+   contains no URL, token, capability or key.
 
 A decline, cancel, timeout, interrupted prompt or unavailable dialog returns
 the requirement to pending with a `workflow/approval_*` code. The user can be
@@ -202,20 +223,29 @@ model, and the harness's own `Grant.check` runs inside the closure, so it is
 not a boundary either. Keep the declared list honest, because it is what the
 user reviews.
 
-**What is enforced.** The supervisor holds provider keys in the Keychain and
-reaches the provider only through its broker. The closure gets a one-use
-capability for a local socket, never a key. The broker checks the model,
-expiry, request shape (no server tools, images, documents or thinking) and
-the call, token and USD ceilings before any network call. A refusal reaches
-the harness as `GrantError`, and an exhausted ceiling as
+**What is enforced.** The supervisor holds the provider key in the macOS
+Keychain, and every mapper call goes through its broker. The closure gets a
+per-run capability for a local socket, never a key. Before any network call
+the broker checks that:
+
+- the provider and model are the granted ones, the model is priced, and the
+  approval has not expired;
+- the request shape is allowed: no beta headers, no streaming, custom tools
+  only (no server tools), no images or documents, and extended thinking only
+  as `adaptive` or `disabled`;
+- the reservation fits the approval's call, token and USD ceilings.
+
+Admission also enforces the lifetime USD ceiling for the mapper spec. A
+refusal reaches the harness as `GrantError`, and an exhausted ceiling as
 `BudgetExceededError`. Never put a key, token or base URL in the closure or
-the environment as a workaround. `credential_isolation` reports `brokered`.
+the environment as a workaround.
 
 **Widening needs a fresh approval.** A new model, higher ceilings, a later
 expiry or `recurring: true` changes the grant. That means recapture, a fresh
-review and a new OS approval. With `recurring: false`, an approval covers one
-workflow instance until it publishes. Editing the spec moves the subject and
-revokes the approval on purpose.
+review and a new OS approval. With `recurring: false`, an approval is spent by
+the first publication it admits. After that, admission reports it as
+`workflow/approval_expired`. Recapturing a changed closure moves the subject
+and invalidates the approval on purpose.
 
 **Validation does not spend.** Trusted validation runs the scratch build
 against a stub broker backend with no network and no charge. Stub values are
