@@ -169,7 +169,11 @@ a runtime one, and the gap is real:
 - **It cannot see dynamic constructs.** A schema entry built from a variable, a
   comprehension, or a `**` spread is reported as `unverified:
   <model>.<column>` and is NOT checked. The printed unverified list is the
-  honest scope boundary — read it.
+  honest scope boundary — read it. The transform's model tuples are the one
+  place this matters beyond the report: `PHYSICAL_MODELS` (and `BASE_MODELS`,
+  `DERIVED_MODELS`) must be a literal, a module-level name bound once to one,
+  or a `+` of those. A computed one is `unverified` here and fails the
+  supervisor's trusted read-back after scratch.
 - **It says nothing about whether the semantics are right.** Whether a column
   should be a dimension, whether a metric's aggregation answers the question,
   whether the key is the real grain — no static check can know. Only closed-set

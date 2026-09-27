@@ -713,3 +713,84 @@ def test_pre_transform_contracts_on_a_csv_source_are_fine():
 
 def test_no_pre_transform_contracts_is_fine():
     assert not _run_rule(set(), {"api-source"})
+
+
+# --- model-constant aliases ---------------------------------------------------
+#
+# A live B5 closure declared `API_MODELS = (...)` and then
+# `PHYSICAL_MODELS = API_MODELS + DERIVED_MODELS`. The reader collected only the
+# four canonical names, could not resolve `API_MODELS`, and reported
+# "PHYSICAL_MODELS is not a literal" — which the supervisor's trusted gate then
+# refused. A module-level alias bound once to a literal is as static as the
+# literal itself; a computed value is not, and must stay unverified.
+
+def _unverified_details(report: dict) -> list[str]:
+    return [d.get("detail") or d.get("message") or json.dumps(d)
+            for d in report["diagnostics"] if d["code"] == "struct.unverified"]
+
+
+def _alias_transform(declarations: str) -> str:
+    return CSV_TRANSFORM.replace(
+        'BASE_MODELS = ("orders",)\nDERIVED_MODELS = ()\n'
+        'PHYSICAL_MODELS = ("orders",)\n',
+        declarations,
+    )
+
+
+def _alias_report(tmp_path, declarations):
+    transform = _alias_transform(declarations)
+    assert transform != CSV_TRANSFORM, "the declaration block moved"
+    return _run(
+        tmp_path,
+        MODELS_HEAD + _model("orders"),
+        _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+        transform,
+        ("orders",),
+    )
+
+
+def test_b5_shaped_module_alias_resolves(tmp_path):
+    report = _alias_report(
+        tmp_path,
+        'API_MODELS = ("orders",)\nDERIVED_MODELS = ()\n'
+        'PHYSICAL_MODELS = API_MODELS + DERIVED_MODELS\n'
+        'OPTIONAL_EMPTY_MODELS: tuple[str, ...] = ()\n',
+    )
+    details = _unverified_details(report)
+    assert not [d for d in details if "MODELS" in d], details
+
+
+def test_annotated_and_chained_aliases_resolve(tmp_path):
+    report = _alias_report(
+        tmp_path,
+        'SOURCE_MODELS: tuple[str, ...] = ("orders",)\n'
+        'API_MODELS = SOURCE_MODELS\nDERIVED_MODELS = ()\n'
+        'BASE_MODELS = API_MODELS\n'
+        'PHYSICAL_MODELS: tuple[str, ...] = BASE_MODELS + DERIVED_MODELS\n',
+    )
+    details = _unverified_details(report)
+    assert not [d for d in details if "MODELS" in d], details
+
+
+@pytest.mark.parametrize("declarations", [
+    # A call is not a literal, even over literal aliases.
+    'API_MODELS = ("orders",)\nDERIVED_MODELS = ()\n'
+    'PHYSICAL_MODELS = tuple(sorted(API_MODELS + DERIVED_MODELS))\n',
+    # A comprehension is computed.
+    'API_MODELS = ("orders",)\nDERIVED_MODELS = ()\n'
+    'PHYSICAL_MODELS = tuple(m for m in API_MODELS)\n',
+    # An imported name has no value this reader can see.
+    'from models import API_MODELS\nDERIVED_MODELS = ()\n'
+    'PHYSICAL_MODELS = API_MODELS + DERIVED_MODELS\n',
+    # A rebound alias depends on execution order.
+    'API_MODELS = ("orders",)\nAPI_MODELS += ("returns",)\nDERIVED_MODELS = ()\n'
+    'PHYSICAL_MODELS = API_MODELS + DERIVED_MODELS\n',
+    # An alias bound only inside a branch is not a module-level declaration.
+    'if True:\n    API_MODELS = ("orders",)\nDERIVED_MODELS = ()\n'
+    'PHYSICAL_MODELS = API_MODELS + DERIVED_MODELS\n',
+])
+def test_computed_model_constants_stay_unverified(tmp_path, declarations):
+    report = _alias_report(tmp_path, declarations)
+    details = _unverified_details(report)
+    assert [d for d in details if "PHYSICAL_MODELS is not a literal" in d], (
+        report["diagnostics"])

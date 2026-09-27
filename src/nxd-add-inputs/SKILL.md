@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.54.1
+  version: 0.54.2
 ---
 
 # NXD Adding Inputs

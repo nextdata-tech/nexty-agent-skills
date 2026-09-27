@@ -733,14 +733,42 @@ def parse_spec(src, path, var_name, var_kind):
 def model_constants(src):
     """Read transform model declarations without importing the transform."""
     tree, out = ast.parse(src, "transform/main.py"), {}
+    canonical = ("BASE_MODELS", "DERIVED_MODELS", "PHYSICAL_MODELS",
+                 "OPTIONAL_EMPTY_MODELS")
+
+    def single_target(node):
+        # `X = ...` and `X: T = ...` with one plain-name target; anything else
+        # (tuple unpacking, chained targets, attribute stores) is not a
+        # declaration this reader can attribute to one name.
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                isinstance(node.targets[0], ast.Name):
+            return node.targets[0].id, node.value
+        if isinstance(node, ast.AnnAssign) and node.value is not None and \
+                isinstance(node.target, ast.Name):
+            return node.target.id, node.value
+        return None, None
+
     assignments = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
-                isinstance(node.targets[0], ast.Name) and \
-                node.targets[0].id in ("BASE_MODELS", "DERIVED_MODELS",
-                                       "PHYSICAL_MODELS",
-                                       "OPTIONAL_EMPTY_MODELS"):
-            assignments[node.targets[0].id] = node.value
+        name, value = single_target(node)
+        if name in canonical:
+            assignments[name] = value
+    # Module-level helper aliases (`API_MODELS = ("a", "b")` then
+    # `PHYSICAL_MODELS = API_MODELS + DERIVED_MODELS`). Only a name bound
+    # exactly once at module level is usable: a rebinding, an augmented
+    # assignment or a store inside a loop/branch/function makes its value
+    # depend on execution, and such a name stays unresolvable (unverified).
+    bindings = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bindings[node.id] = bindings.get(node.id, 0) + 1
+        elif isinstance(node, ast.alias):
+            bound = node.asname or node.name.split(".")[0]
+            bindings[bound] = bindings.get(bound, 0) + 1
+    for node in tree.body:
+        name, value = single_target(node)
+        if name and name not in canonical and bindings.get(name) == 1:
+            assignments[name] = value
 
     def resolve_model_value(value, seen=()):
         try:
