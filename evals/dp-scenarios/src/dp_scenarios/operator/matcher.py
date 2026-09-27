@@ -195,7 +195,9 @@ SOLICITING_OPENER_PATTERN = re.compile(r"\s*which\b", re.IGNORECASE)
 # only to decide whether a stock reply should be handed to a driver as its
 # mandate for the turn.
 SOLICITATION_PATTERN = re.compile(
-    r"\b(please\s+(approve|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
+    # "Please explicitly authorize repairs for X" (live B2, Luna) is as much an
+    # ask as "please approve"; the adverb and "authorize" were both missing.
+    r"\b(please\s+(?:explicitly\s+)?(approve|authori[sz]e|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
     r"|please\s+adjudicate"
     r"|can\s+you|could\s+you|would\s+you|do\s+you\s+want|what\s+would\s+you\s+like"
     r"|let\s+me\s+know|up\s+to\s+you|sign\s*off\s+on|go-?ahead"
@@ -383,6 +385,12 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     # apply?" picks among them; both stay behind the finding-context gate.
     r"|\bfix(?:es|ing)?\b[^?\n]{0,140}\bfindings?\b"
     r"|\bfindings?\b[^?\n]{0,60}\bto\s+appl(?:y|ies|ying)\b"
+    # "Repair" is the same ask as "fix": "Please explicitly authorize these
+    # review findings for repair", "approve repairs to status-confirmation",
+    # "May I repair the cents and diagnostic-count issues?" (live B2, Luna).
+    r"|\b(?:authorize|approve)\b[^?\n]{0,160}\b(?:findings?|repairs?)\b"
+    r"|\brepair(?:s|ing)?\b[^?\n]{0,140}\b(?:findings?|issues?|blockers?)\b"
+    r"|\bmay\s+i\s+repair\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
     r"(?:applied|apply|applies|applying|leave|left|keep|skip|defer)\b"
     r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
