@@ -1342,13 +1342,24 @@ class OperatorEngine:
                 and next_match is not None
                 and next_match.decision_id is not None
             )
+            # The agent's last message asked the operator something other than
+            # approval (a clarifying question about the rubric, the output
+            # shape...). "Approved." answers nothing there, and sent now it
+            # lands before any plan exists, so the grader rightly finds no
+            # prepare_workflow before it. Owe it to the next genuine ask
+            # instead, exactly as a pending decision answer does.
+            open_question_pending = bool(
+                next_match is not None
+                and next_match.solicits_operator
+                and next_match.category is not Category.APPROVAL_REQUEST
+            )
             ask_back_acceptance_turn = bool(
                 next_match is not None
                 and next_match.rule_id == _ASK_BACK_ACCEPTANCE_RULE_ID
             )
             defer_scheduled_approval = bool(
                 scripted_turn.approval
-                and decision_answer_pending
+                and (decision_answer_pending or open_question_pending)
             )
             declared_reapproval = self.script.answer_sheet.reapproval
             dynamic_reapproval = bool(
