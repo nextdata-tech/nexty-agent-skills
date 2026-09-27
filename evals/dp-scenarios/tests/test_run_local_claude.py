@@ -1158,3 +1158,16 @@ def test_live_runner_refuses_checker_skew_before_any_agent_turn(
             "--output-dir", str(tmp_path / "output"),
         ])
     assert not (tmp_path / "output").exists()
+
+
+def test_forced_codex_multi_agent_v1_requires_codex_and_excludes_v2() -> None:
+    module = _load_runner_module()
+
+    with pytest.raises(TierError, match="requires --agent-backend codex"):
+        module.main(["--codex-force-multi-agent-v1"])
+    with pytest.raises(TierError, match="cannot be combined"):
+        module.main([
+            "--agent-backend", "codex",
+            "--codex-force-multi-agent-v1",
+            "--codex-multi-agent-v2",
+        ])

@@ -585,6 +585,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude", type=Path, help="Claude Code executable (default: claude on PATH)")
     parser.add_argument("--codex", type=Path, help="Codex executable (default: codex on PATH)")
     parser.add_argument(
+        "--codex-force-multi-agent-v1",
+        action="store_true",
+        help=(
+            "run the Codex model with multi-agent v1 collaboration tools even when "
+            "its catalog declares v2; v2 encrypts the reviewer spawn message, so "
+            "its dispatch prompt cannot be observed by the construction gate"
+        ),
+    )
+    parser.add_argument(
         "--codex-multi-agent-v2",
         action="store_true",
         help="enable Codex's experimental multi-agent-v2 backend",
@@ -701,6 +710,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.codex_multi_agent_v2 and args.agent_backend != "codex":
         raise TierError("--codex-multi-agent-v2 requires --agent-backend codex")
+    if args.codex_force_multi_agent_v1 and args.agent_backend != "codex":
+        raise TierError("--codex-force-multi-agent-v1 requires --agent-backend codex")
+    if args.codex_force_multi_agent_v1 and args.codex_multi_agent_v2:
+        raise TierError(
+            "--codex-force-multi-agent-v1 cannot be combined with --codex-multi-agent-v2"
+        )
     agent_model = args.model or ("sonnet" if args.agent_backend == "claude" else "gpt-5.6-luna")
     repo_root = REPO_ROOT
     skill_pack_root = _validated_skill_pack_root(args.skill_pack_root)
@@ -751,6 +766,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "backend": args.agent_backend,
             "temperature": "provider-default",
             "effort": args.effort,
+            # A forced collaboration runtime changes the agent's tools, so it
+            # is part of the run identity rather than an invisible knob.
+            **(
+                {"codex_collaboration": "multi_agent_v1_forced"}
+                if args.codex_force_multi_agent_v1
+                else {}
+            ),
         },
     )
     pins, operator_factory = driver_configuration(
@@ -808,6 +830,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "desktop-python": str(desktop_python),
             "timeout": str(_adapter_timeout(args.turn_timeout)),
             "multi-agent-v2": "" if args.codex_multi_agent_v2 else None,
+            "force-multi-agent-v1": "" if args.codex_force_multi_agent_v1 else None,
             "review-timeout": f"{review_timeout_seconds:.15g}",
         }
     if args.native_continuation:
