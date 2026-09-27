@@ -6,7 +6,7 @@ allowed-tools:
   - Read
 metadata:
   author: nextdata
-  version: 0.54.0
+  version: 0.54.1
 ---
 
 # nxd Setup

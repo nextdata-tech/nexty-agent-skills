@@ -140,12 +140,36 @@ authorization by itself.
 
 **Availability.** The supervisor can collect a mapper approval only when the
 activated workflow contract carries a `mapper-confirmation-v1` requirement and
-the install's policy has a formal-approval entry for it. The workflow
-activation bundled with Desktop today registers only consent, capture, review
-and validation. Under that contract a mapper closure is not prompted for. It
-stops at trusted validation with `validation/mapper_closure_unsupported`
-(recovery `stop`). Report that code and stop. Do not strip the mapper to get
-past it, and do not describe mapper approval as available on that install.
+the install's policy has a formal-approval entry for it. Which contract an
+install has depends on its supervisor, so read it from the requirements that
+`prepare_workflow` returns rather than assuming:
+
+- **Current Desktop installs** activate a five-requirement contract: consent,
+  capture, review, `approval` (`mapper-confirmation-v1`), then validation.
+  Validation depends on the approval. A closure without a field mapper
+  completes that step at once as `not_present`, with no prompt, so it only
+  costs one extra `start_requirement`. The policy allows provider `anthropic`
+  only; models by exact id, limited to the priced ids of the Claude haiku,
+  sonnet, opus and fable families (dated aliases included, anything unpriced
+  is `workflow/mapper_model_unpriced`); at most 1000 calls, 2,000,000 tokens
+  and 25 USD per approval, 100 USD lifetime per mapper spec; no recurring
+  grants; a 300 s approval window, a 120 s dialog timeout and a 30 s cooldown
+  after a decline. A grant beyond any of these is
+  `workflow/mapper_grant_exceeds_policy`, so size it inside them.
+- **Older supervisors** activate a four-requirement contract (consent,
+  capture, review, validation) with no approval step. There a mapper closure
+  is never prompted for and stops at trusted validation with
+  `validation/mapper_closure_unsupported` (recovery `stop`). Report that code
+  and stop. Do not strip the mapper to get past it, and do not describe mapper
+  approval as available on that install.
+
+Upgrading does not switch an existing data directory over while it still holds
+workflow instances: setup keeps the previously activated contract, registers
+the plugin anyway, and says to remove the existing workflows
+(`remove_workflow`) or use an empty `--data-dir` to adopt the new one. So an
+upgraded install can still report the four-requirement contract; trust the
+returned requirements, not the version.
+
 Mapper builds also run only on macOS. Mapper-mode compute needs the macOS
 sandbox, and the supervisor refuses it on any other platform.
 

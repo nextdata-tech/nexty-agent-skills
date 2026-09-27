@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-27 | document the shipped five-requirement mapper activation (nxd #7997) | NO_EVAL | — | [`2026-09-27-desktop-mapper-activation-docs`](entries/2026-09-27-desktop-mapper-activation-docs.md) |
 | 2026-09-26 | document the workflow-v2 mapper approval and cover both supervisor grant paths | NO_EVAL | — | [`2026-09-26-desktop-mapper-approval-docs`](entries/2026-09-26-desktop-mapper-approval-docs.md) |
 | 2026-09-26 | B5 inventory-position first live Sonnet pass | MIXED | inventory-position | [`2026-09-26-b5-inventory-position-first-live-sonnet-pass`](entries/2026-09-26-b5-inventory-position-first-live-sonnet-pass.md) |
 | 2026-09-26 | B2 finance-close first live Sonnet pass | MIXED | finance-close | [`2026-09-26-b2-finance-close-first-live-sonnet-pass`](entries/2026-09-26-b2-finance-close-first-live-sonnet-pass.md) |
