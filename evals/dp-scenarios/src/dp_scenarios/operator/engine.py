@@ -62,6 +62,39 @@ _REVISED_PLAN_PATTERN = re.compile(
     r"|\bgeneration\s+\d+\b",
     re.IGNORECASE | re.DOTALL,
 )
+# A revised plan that the agent actually re-bound with the supervisor after
+# the operator's approval went out. Only a successful ``prepare_workflow`` or
+# ``reset_workflow`` counts: either one invalidates the approval the agent was
+# holding (the workflow returns to ``workflow/consent_pending``), so a fresh
+# "please approve this revised plan" after it is a genuine new ask, not a
+# re-ask of something already granted. Bounded per run so an agent that keeps
+# re-preparing can never turn the operator into an approval loop.
+_REVISION_REAPPROVAL_LIMIT = 2
+_WORKFLOW_REBIND_TOOL_PATTERN = re.compile(
+    r"(?:^|__)(?:prepare|reset)_workflow$", re.IGNORECASE
+)
+
+
+def _rebinds_workflow(call: ToolCall) -> bool:
+    """Whether ``call`` is a successful ``prepare_workflow``/``reset_workflow``.
+
+    Backends record results in two shapes: the Claude adapter keeps the
+    ``tool_result`` envelope (``{"is_error": ..., "content": ...}``); the Codex
+    adapter decodes the content and records a failure as ``{"error": ...}``.
+    An unanswered call (``result is None``), an error in either shape, or an
+    empty payload is not a re-bound plan.
+    """
+
+    if not isinstance(call.name, str) or _WORKFLOW_REBIND_TOOL_PATTERN.search(call.name) is None:
+        return False
+    payload = call.result
+    if isinstance(payload, Mapping) and "is_error" in payload:
+        if payload.get("is_error") is not False:
+            return False
+        payload = payload.get("content")
+    return isinstance(payload, Mapping) and bool(payload) and "error" not in payload
+
+
 _ASK_BACK_ACCEPTANCE_RULE_ID = "stance.ask_back.accept_recommendation"
 _ASK_BACK_ACCEPTANCE_REPLY = "Yes, go with your recommendation."
 _ASK_BACK_HAND_BACK_PATTERN = re.compile(
@@ -1300,6 +1333,16 @@ class OperatorEngine:
         # it has stayed owed, undelivered, since the deferral.
         owed_approval_text: str | None = None
         owed_approval_wait = 0
+        # Re-approval of a revised plan. ``revision_approval_text`` is the
+        # declared approval line last actually transmitted (scripted, owed or
+        # reconfirmed); ``plan_rebound_since_approval`` records that the agent
+        # successfully ran ``prepare_workflow``/``reset_workflow`` on or after
+        # the turn that approval (or a later re-approval) went out. Both must
+        # hold, together with a genuine approval ask, for the operator to
+        # approve the revision -- at most ``_REVISION_REAPPROVAL_LIMIT`` times.
+        revision_approval_text: str | None = None
+        plan_rebound_since_approval = False
+        revision_reapproval_uses = 0
         previous_agent_message = ""
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
@@ -1437,6 +1480,34 @@ class OperatorEngine:
                 and next_match.approval_requested
                 and next_match.solicits_operator
             )
+            # The agent re-bound a revised plan after the operator's approval
+            # and is genuinely asking for approval of that revision. Every
+            # more specific mechanism keeps precedence: a scripted approval
+            # slot, an owed approval, a reconfirmation, a declared dynamic
+            # reapproval, a pending decision answer and the ask-back
+            # acceptance. Turn one, a ``substitute_reply: false`` line and a
+            # yield also keep their declared text; the trigger stays armed for
+            # a later turn. Due events are appended by ``_message_for`` as on
+            # any other turn.
+            revision_reapproval_turn = bool(
+                revision_approval_text is not None
+                and plan_rebound_since_approval
+                and revision_reapproval_uses < _REVISION_REAPPROVAL_LIMIT
+                and index > 1
+                and scripted_turn.substitute_reply
+                and not yielding
+                and not scripted_turn.approval
+                and not decision_answer_pending
+                and not dynamic_reapproval
+                and not owed_approval_turn
+                and not reconfirm_this_turn
+                and not ask_back_acceptance_turn
+                and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            approval_turn = approval_turn or revision_reapproval_turn
             directive_governs = (
                 index > 1
                 and scripted_turn.substitute_reply
@@ -1461,6 +1532,8 @@ class OperatorEngine:
                 if decision_answer_pending and next_reply is not None
                 else next_reply
                 if defer_scheduled_approval and next_reply is not None
+                else revision_approval_text
+                if revision_reapproval_turn and revision_approval_text is not None
                 else scripted_turn.text
                 if index == 1
                 or not scripted_turn.substitute_reply
@@ -2014,6 +2087,8 @@ class OperatorEngine:
                 claim["approval_reconfirmed"] = True
             if owed_approval_turn:
                 claim["approval_deferred_for_decision"] = True
+            if revision_reapproval_turn:
+                claim["approval_reapproved_revision"] = True
             turn_record = TurnRecord(
                 turn=index,
                 phase=phase,
@@ -2076,6 +2151,25 @@ class OperatorEngine:
                 review_fix_authorized = True
             if dynamic_reapproval:
                 reapproval_uses += 1
+            if revision_reapproval_turn:
+                revision_reapproval_uses += 1
+            # Any approval that actually went out this turn answers whatever
+            # plan was current; only a re-bind the agent performs from here on
+            # (this turn's own tool calls included -- they follow the
+            # operator's message) can make a later ask a new revision.
+            if approval_turn or reconfirm_applied:
+                plan_rebound_since_approval = False
+                if scripted_approval_fired or owed_approval_turn or reconfirm_applied:
+                    # The declared approval line this turn carried, before any
+                    # due event was appended; a revision re-approval resends
+                    # exactly that line. A declared dynamic ``reapproval``
+                    # answer is scenario-specific text for its own moment and
+                    # is never recycled here.
+                    revision_approval_text = selected_base
+            if revision_approval_text is not None and any(
+                _rebinds_workflow(call) for call in result.tool_calls
+            ):
+                plan_rebound_since_approval = True
             if defer_scheduled_approval:
                 # The scripted approval for this turn was swallowed by a
                 # pending decision answer; keep its text owed rather than
