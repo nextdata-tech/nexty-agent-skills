@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from dp_scenarios.operator.answer_sheet import load_answer_sheet
-from dp_scenarios.operator.engine import OperatorEngine, OperatorScript
+from dp_scenarios.operator.engine import OperatorEngine, OperatorScript, TerminalState
 from dp_scenarios.operator.events import load_event_cards
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
@@ -21,7 +21,7 @@ FIXTURES = json.loads(
 )
 
 
-def test_b3_cpa_answer_precedes_the_fixed_instruction_and_all_beats_arrive() -> None:
+def test_b3_cpa_answer_precedes_fixed_instruction_without_premature_review_repair() -> None:
     sheet = load_answer_sheet(ROOT / "scenarios/marketing-attribution/answer-sheet.yaml")
     persona = load_persona(ROOT / "scenarios/_personas/micromanager.yaml")
     turns = sheet.turns[:8]
@@ -52,9 +52,10 @@ def test_b3_cpa_answer_precedes_the_fixed_instruction_and_all_beats_arrive() -> 
     assert script.turns[1].text == transport.message_texts[2]
     assert script.turns[2].text in transport.message_texts[3]
     assert script.turns[3].text in transport.message_texts[4]
-    assert script.turns[4].text in transport.message_texts[5]
-    assert script.turns[5].text in transport.message_texts[6]
-    assert script.turns[6].text in transport.message_texts[7]
+    assert script.turns[4].text not in transport.message_texts
+    assert script.turns[5].text not in transport.message_texts
+    assert script.turns[6].text not in transport.message_texts
+    assert result.terminal_state is TerminalState.SCRIPT_EXHAUSTED
     assert "marketing_attribution_unmatched_cpa" in result.fired_plant_ids
     assert set(result.fired_event_ids) == {
         "marketing_attribution_case_drift",

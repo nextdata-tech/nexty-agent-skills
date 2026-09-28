@@ -42,6 +42,14 @@ def _identity(value: object) -> object:
     return value
 
 
+def test_claude_attestation_reference_follows_captured_closure_path() -> None:
+    prompt = adapter_module.DEFAULT_SYSTEM_PROMPT
+    assert "Derive it from the captured closure path" in prompt
+    assert "review-record.json#review_rounds/0" in prompt
+    assert "nxd-jobs/<workflow>/review-record.json#review_rounds/0" in prompt
+    assert "Do not add a workflow prefix unless it is part of the captured closure path" in prompt
+
+
 def test_parse_stream_events_keeps_tool_observations_structured() -> None:
     events = [
         {

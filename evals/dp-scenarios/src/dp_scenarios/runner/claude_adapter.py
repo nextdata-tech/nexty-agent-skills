@@ -280,13 +280,14 @@ review_round_index. A legacy turn field may be included as informational
 metadata, but it is optional and must be a positive JSON integer, never a
 boolean; the harness does not use it to pair review evidence. The
 review_round_index is a non-negative JSON integer, never a boolean. outcome is
-non-empty text. evidence_ref is the exact normalized relative evidence
-reference: self-check uses the published closure's
-build-record.json#self_check, while review uses the adjacent job-level
-review-record.json#review_rounds/<review_round_index> as shown, prefixed with
-nxd-jobs/<workflow>/ for a later workflow id (for example
-nxd-jobs/<workflow>/review-record.json#review_rounds/0 and
-nxd-jobs/<workflow>/closure/build-record.json#self_check). Do not add keys,
+non-empty text. evidence_ref is the exact normalized workspace-relative
+evidence reference. Derive it from the captured closure path: self-check uses
+that closure's build-record.json#self_check, and review uses
+review-record.json#review_rounds/<review_round_index> in the closure's parent.
+For a root closure, use review-record.json#review_rounds/0; for a closure under
+nxd-jobs/<workflow>/, use nxd-jobs/<workflow>/review-record.json#review_rounds/0.
+Do not add a workflow prefix unless it is part of the captured closure path.
+Do not add keys,
 use an object wrapper, or use a different reference.
 
 If scenario-evidence-contract.json exists at the workspace root, read it
