@@ -146,6 +146,14 @@ maps the parser source path to a typed proposal path; omit it when the paths
 already match. Do not calculate spans from memory; rerun the parser after every
 blueprint edit and validate the exact proposal before calling `prepare_workflow`.
 
+Bound `prepare_workflow` retries. When it rejects a proposal, fix the named
+finding from the parser's source map, not by estimating offsets or trying
+variants. If a proposal rebuilt from a fresh recovery map
+(`inspect_prepare_recovery`) is still rejected, stop calling
+`prepare_workflow`: report the exact rejection codes and the blueprint section
+they point to, and ask the user how to proceed. Repeated guessed calls do not
+converge and consume the turn.
+
 Treat source paths as opaque strings. Copy the exact parser key returned by the
 source map, including the `v3:` prefix; do not independently slugify, snake-case,
 or otherwise normalize it. The parser may normalize Markdown subsection ids to
@@ -327,14 +335,20 @@ exact path in `NXD_EVAL_ATTESTATIONS_PATH` (or, when the variable cannot be
 expanded by the file tool, `agent-attestations.json` at the agent workspace
 root). Do not place it under `closure/`, `artifacts/`, or the review ledger.
 Use only these objects: self-check is exactly
-`{"action_kind":"self_check","outcome":"pass","evidence_ref":"nxd-jobs/<workflow>/closure/build-record.json#self_check"}`;
+`{"action_kind":"self_check","outcome":"pass","evidence_ref":"<closure>/build-record.json#self_check"}`;
 each retained-input review adds exactly
-`{"action_kind":"adversarial_review","outcome":"complete","evidence_ref":"nxd-jobs/<workflow>/review-record.json#review_rounds/<index>","review_round_index":<index>}`.
-Replace only `<workflow>` and `<index>`. `<index>` is zero-based within the
-current workflow's `review-record.json`; reset it to `0` when a repair moves to
-a new workflow id. The review ledger is the captured
-closure's sibling, and every `evidence_ref` is relative to the agent workspace
-root; do not shorten it to a bare filename.
+`{"action_kind":"adversarial_review","outcome":"complete","evidence_ref":"<job>/review-record.json#review_rounds/<index>","review_round_index":<index>}`.
+`<closure>` is the captured closure's path relative to the agent workspace
+root, and `<job>` is that path's parent directory; the review ledger is the
+captured closure's sibling. Derive both from the path you actually captured:
+for `nxd-jobs/<workflow>/closure` they are `nxd-jobs/<workflow>/closure` and
+`nxd-jobs/<workflow>`; for a closure captured at `closure` in the workspace
+root, `<job>` is empty and the references are
+`closure/build-record.json#self_check` and
+`review-record.json#review_rounds/<index>`. Never add a directory prefix the
+captured path does not have. `<index>` is zero-based within the current
+workflow's `review-record.json`; reset it to `0` when a repair moves to a new
+workflow id.
 The root array may also carry a positive-integer `turn` on an object, but no
 other keys. Keep one indexed review attestation for every external
 `review_rounds[]` entry, including after resets. This sidecar is a
