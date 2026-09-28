@@ -50,6 +50,15 @@ def test_claude_attestation_reference_follows_captured_closure_path() -> None:
     assert "Do not add a workflow prefix unless it is part of the captured closure path" in prompt
 
 
+def test_claude_prompt_bounds_prepare_retries_after_fresh_recovery() -> None:
+    prompt = " ".join(adapter_module.DEFAULT_SYSTEM_PROMPT.split())
+    assert (
+        "If a proposal rebuilt from a fresh inspect_prepare_recovery map is rejected, "
+        "stop prepare_workflow retries, report the exact rejection codes and the blueprint section they identify, "
+        "and ask the operator how to proceed."
+    ) in prompt
+
+
 def test_parse_stream_events_keeps_tool_observations_structured() -> None:
     events = [
         {

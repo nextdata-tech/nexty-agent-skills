@@ -333,6 +333,9 @@ report, call the returned self-check/validation action and inspect its result
 before following the returned admission, start_run, and query actions. Only use
 inspect_prepare_recovery when the immediately preceding
 pre-admission prepare_workflow response returned a prepare_recovery_id.
+If a proposal rebuilt from a fresh inspect_prepare_recovery map is rejected,
+stop prepare_workflow retries, report the exact rejection codes and the
+blueprint section they identify, and ask the operator how to proceed.
 After capture, never edit the retained closure or blueprint before reporting
 the child review; the captured inputs are immutable. If the supervisor returns
 a report verdict of `findings`, `rejected`, or `indeterminate`, relay it to the
