@@ -3596,14 +3596,12 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     original_snapshot = codex_adapter_module._snapshot_workspace
     snapshot_calls = 0
 
-    def snapshot_once(*args, **kwargs):
+    def count_snapshots(*args, **kwargs):
         nonlocal snapshot_calls
         snapshot_calls += 1
-        if snapshot_calls > 1:
-            raise AssertionError("timeout finalization performed an unbounded workspace scan")
         return original_snapshot(*args, **kwargs)
 
-    monkeypatch.setattr(codex_adapter_module, "_snapshot_workspace", snapshot_once)
+    monkeypatch.setattr(codex_adapter_module, "_snapshot_workspace", count_snapshots)
 
     result = adapter.send({"message": {"text": "one", "attachments": []}})
     adapter.close()
@@ -3613,6 +3611,109 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     assert result.session_id == "00000000-0000-4000-8000-000000000020"
     assert result.agent_message == "partial"
     assert result.last_mcp_call == "inspect_run:unanswered"
+    assert snapshot_calls == 2  # initial baseline and the timeout evidence snapshot
     assert "event_tail=item/started[mcpToolCall]:nxd-desktop/inspect_run=inProgress" in (
         result.environment_detail or ""
     )
+
+
+def test_codex_timeout_retains_answered_publication_and_codegen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "runner-only.json").write_text("{}", encoding="utf-8")
+    adapter = object.__new__(CodexAdapter)
+    adapter.artifact_dir = artifact_dir
+    adapter.supervisor_data_dir = tmp_path / "supervisor"
+    adapter.skill_pack_root = tmp_path / "pack"
+    adapter._redact_json_rpc = _identity
+    adapter._redact_text = _identity
+    adapter._thread_id = "root-thread"
+    adapter._active_turn_id = "root-turn"
+    adapter._last_mcp_call = None
+    adapter._review_capture = None
+    adapter._review_pending = False
+    adapter._before = codex_adapter_module._snapshot_workspace(
+        tmp_path, artifact_dir=artifact_dir
+    )
+    adapter._facts = {}
+    adapter._build_context = {}
+    adapter._lifecycles = {}
+    adapter._built_runs = set()
+    adapter._query_history = []
+
+    closure = tmp_path / "nxd-jobs" / "workflow-a" / "closure" / "model.py"
+    closure.parent.mkdir(parents=True)
+    closure.write_text("MODEL = 1\n", encoding="utf-8")
+
+    def answered(tool: str, identifier: str, arguments: dict, content: dict) -> dict:
+        return {
+            "type": "item.completed",
+            "item": {
+                "id": identifier,
+                "type": "mcp_tool_call",
+                "server": "nxd-desktop",
+                "tool": tool,
+                "arguments": arguments,
+                "result": {"structured_content": content},
+            },
+        }
+
+    events = [
+        answered(
+            "advance_workflow",
+            "run",
+            {"workflow": "workflow-a", "action": {"type": "start_run"}},
+            {"workflow": "workflow-a", "admission": {"run_id": "run-a", "artifact_id": "artifact-a"}},
+        ),
+        answered(
+            "list_data_products",
+            "products",
+            {},
+            {
+                "products": [
+                    {
+                        "workflow": "workflow-a",
+                        "run_id": "run-a",
+                        "artifact_id": "artifact-a",
+                        "publish_seq": 3,
+                        "models": [{"dataset": "sales", "table": "orders", "row_count": 7}],
+                    }
+                ]
+            },
+        ),
+        answered(
+            "inspect_run",
+            "inspect",
+            {"run_id": "run-a"},
+            {"run": {"run_id": "run-a", "lifecycle": "terminal"}},
+        ),
+        {
+            "type": "item.started",
+            "item": {
+                "id": "in-flight",
+                "type": "mcp_tool_call",
+                "server": "nxd-desktop",
+                "tool": "list_data_products",
+                "arguments": {},
+            },
+        },
+    ]
+
+    result = adapter._finish(events, turn_timed_out=True, lightweight=True)
+
+    assert result.turn_timed_out is True
+    assert result.terminal_result_count == 0
+    assert result.last_mcp_call == "list_data_products:unanswered"
+    assert [(file.path, file.content) for file in result.files_touched] == [
+        ("nxd-jobs/workflow-a/closure/model.py", b"MODEL = 1\n")
+    ]
+    assert json.loads((artifact_dir / "supervisor-facts.json").read_text(encoding="utf-8")) == {
+        "run_id": "run-a",
+        "artifact_id": "artifact-a",
+        "publish_sequence": "3",
+        "per_model_row_counts": {"sales.orders": "7"},
+        "lifecycle_state": "terminal",
+    }

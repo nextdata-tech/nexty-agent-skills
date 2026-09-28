@@ -22,7 +22,11 @@ from dp_scenarios.runner.review_guard import (
     review_budget_line,
     review_inspection_cutoff_line,
 )
-from dp_scenarios.runner.tier import _published_closure, _review_input_from_capture
+from dp_scenarios.runner.tier import (
+    _checker_skew_outcome,
+    _published_closure,
+    _review_input_from_capture,
+)
 from dp_scenarios.grading.gates import _successful_unbound_check_positions
 
 
@@ -163,6 +167,76 @@ def test_native_codex_mcp_envelope_matches_claude(
     }
     assert codex.tool_calls[0].result == expected
     assert {key: claude.tool_calls[0].result[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize("backend", ["claude", "codex"])
+@pytest.mark.parametrize(
+    ("status", "source_digest", "retained_digest", "expected"),
+    [
+        ("match", "a" * 64, "a" * 64, ("match", ())),
+        ("mismatch", "a" * 64, "b" * 64, ("mismatch", ("checker_skew_mismatch",))),
+        ("unreadable", None, None, ("ungraded", ("checker_skew_unreadable",))),
+    ],
+)
+def test_checker_skew_reads_successful_capture_envelopes_for_both_backends(
+    backend: str,
+    status: str,
+    source_digest: str | None,
+    retained_digest: str | None,
+    expected: tuple[str | None, tuple[str, ...]],
+) -> None:
+    arguments = {
+        "workflow": _WORKFLOW,
+        "action": {"type": "capture", "parameters": {}},
+    }
+    if backend == "claude":
+        parsed, _ = parse_claude_events(
+            _claude_events("advance_workflow", arguments, _CAPTURE, error=False),
+            redact_json_rpc=_identity,
+            redact_text=_identity,
+            session_id="claude-session",
+        )
+    else:
+        parsed, _ = parse_codex_events(
+            [
+                _codex_event("advance_workflow", arguments, _CAPTURE),
+                {"type": "turn.completed"},
+            ],
+            redact_json_rpc=_identity,
+            redact_text=_identity,
+            session_id="codex-session",
+        )
+
+    marker: dict[str, object] = {
+        "kind": "checker_skew",
+        "schema": "nxd-checker-skew-v1",
+        "status": status,
+    }
+    if status in {"match", "mismatch"}:
+        marker["source_sha256"] = source_digest
+        marker["retained_sha256"] = retained_digest
+    call = parsed.tool_calls[0]
+    observations = {
+        "turns": [
+            {
+                "backend": backend,
+                "tool_calls": [
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "observation": marker,
+                    }
+                ],
+            }
+        ]
+    }
+    # B3 run2 stores the review requirement under result.content.requirements.
+    assert {key: call.result[key] for key in ("is_error", "content")} == {
+        "is_error": False,
+        "content": _CAPTURE,
+    }
+    assert _checker_skew_outcome(observations) == expected
 
 
 def test_codex_mcp_error_flag_is_authoritative_even_with_completed_status() -> None:

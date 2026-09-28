@@ -506,13 +506,18 @@ def _checker_capture_call(marker: Mapping[str, object] | None) -> ToolCall:
         "mcp__nxd-desktop__advance_workflow",
         arguments={"workflow": "workflow-a", "action": {"type": "capture"}},
         result={
-            "requirements": [
-                {
-                    "id": "review",
-                    "status": "pending",
-                    "review_input": {"retained_capture_root": "/captures/workflow-a"},
-                }
-            ]
+            "is_error": False,
+            "content": {
+                "requirements": [
+                    {
+                        "id": "review",
+                        "status": "pending",
+                        "review_input": {
+                            "retained_capture_root": "/captures/workflow-a"
+                        },
+                    }
+                ]
+            },
         },
         observation=marker,
     )
