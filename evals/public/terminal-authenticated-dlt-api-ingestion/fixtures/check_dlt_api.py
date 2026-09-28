@@ -1270,6 +1270,7 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
     mentions_old_companion = False
     forbidden_http_import = False
     hardcoded_topology = False
+    topology_kinds: set[str] = set()
     for path, payload in files.items():
         if not path.endswith(".py"):
             continue
@@ -1286,6 +1287,12 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
                 value = body[0].value
                 if isinstance(value, ast.Constant) and isinstance(value.value, str):
                     docstrings.add(id(value))
+        # Diagnostic text is not topology: strings inside a raised exception or
+        # an assert message never reach the connector.
+        for parent in ast.walk(tree):
+            message = parent.exc if isinstance(parent, ast.Raise) else parent.msg if isinstance(parent, ast.Assert) else None
+            if message is not None:
+                docstrings.update(id(child) for child in ast.walk(message))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 if any(alias.name.split(".", 1)[0] in {"requests", "urllib", "httpx"} for alias in node.names):
@@ -1337,8 +1344,14 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
             # Topology means a concrete host or the fixture path; a bare scheme
             # prefix in a "must be a path" guard is not an endpoint.
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
-                if re.search(r"(?:https?://[A-Za-z0-9\[]|127\.0\.0\.1|localhost|/v1/orders)", node.value):
-                    hardcoded_topology = True
+                for kind, pattern in (
+                    ("url-host", r"https?://[A-Za-z0-9\[]"),
+                    ("loopback", r"127\.0\.0\.1|localhost"),
+                    ("fixture-path", r"/v1/orders"),
+                ):
+                    if re.search(pattern, node.value):
+                        hardcoded_topology = True
+                        topology_kinds.add(kind)
     gaps = [
         label for label, missing in (
             ("rest-connector-missing", not found_rest_connector),
@@ -1351,6 +1364,7 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
         )
         if missing
     ]
+    gaps.extend(f"hard-coded-topology-{kind}" for kind in sorted(topology_kinds))
     return gaps
 
 

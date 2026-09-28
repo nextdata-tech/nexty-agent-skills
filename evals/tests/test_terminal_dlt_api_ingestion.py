@@ -647,6 +647,15 @@ def test_transform_contract_accepts_the_skill_template_shape() -> None:
         'secrets[f"endpoint_{m}"]', '"http://127.0.0.1:8000/v1/orders"'
     )
     assert not checker._nex_transform_contract({"transform/main.py": hard_coded.encode()})
+    diagnostic = _TEMPLATE_TRANSFORM.replace(
+        'raise ValueError("endpoint must be a path")',
+        'raise ValueError(f"endpoint {path!r} must be a path like /v1/orders, not http://127.0.0.1")',
+    )
+    assert diagnostic != _TEMPLATE_TRANSFORM
+    assert checker._nex_transform_contract({"transform/main.py": diagnostic.encode()})
+    assert "hard-coded-topology-loopback" in checker._nex_transform_contract_gaps(
+        {"transform/main.py": hard_coded.encode()}
+    )
 
 
 def test_checker_requires_the_review_requirement_id() -> None:
