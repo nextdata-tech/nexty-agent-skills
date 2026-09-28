@@ -76,12 +76,19 @@ def _canonical(path: Path) -> str:
         resolved = resolved / part
     value = os.path.normpath(os.fspath(resolved))
     # macOS commonly exposes /tmp and /var through /private aliases. Resolve
-    # these lexically too, including paths whose final components are missing.
+    # these lexically too, including paths whose final components are missing,
+    # but only where the host really aliases them (never on Linux).
     for prefix in ("/tmp/", "/var/"):
-        if value.startswith(prefix):
+        if value.startswith(prefix) and _private_alias(prefix):
             value = "/private" + value
             break
     return value
+
+
+def _private_alias(prefix: str) -> bool:
+    """Whether ``prefix`` (``/tmp/`` or ``/var/``) resolves under ``/private``."""
+    top = prefix.rstrip("/")
+    return os.path.realpath(top) == "/private" + top
 
 
 def _existing_ancestor(path: str) -> str:
