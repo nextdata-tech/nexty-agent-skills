@@ -1579,7 +1579,12 @@ def _is_checker_skew_capture(call: Mapping[str, object]) -> bool:
     ):
         return False
     result = call.get("result")
-    requirements = result.get("requirements") if isinstance(result, Mapping) else None
+    if not isinstance(result, Mapping) or result.get("is_error") is not False:
+        return False
+    content = result.get("content")
+    requirements = (
+        content.get("requirements") if isinstance(content, Mapping) else None
+    )
     if not isinstance(requirements, Sequence) or isinstance(
         requirements, (str, bytes, bytearray)
     ):
