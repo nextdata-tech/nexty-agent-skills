@@ -28,6 +28,7 @@ from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.probe import resolve_supervisor
 from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.operator.driver import DriverOperator
+from dp_scenarios.operator.codex_driver import CodexDriverProvider
 from dp_scenarios.operator.openai_driver import (
     DriverConfigError,
     OpenAIDriverProvider,
@@ -430,20 +431,23 @@ def driver_configuration(
     scripted and the pins keep ``driver_model_id`` not-applicable, which is
     what makes a scripted ledger byte-stable.
 
-    With it, the provider is constructed **first**, before the drift canary
-    runs and before any scenario fixture is generated. A missing
-    ``OPENAI_API_KEY`` is then a refusal that costs nothing, rather than one
-    discovered after a canary build and a live agent session have already been
-    paid for.
+    With it, the provider is constructed before the drift canary and scenario
+    fixtures. Missing OpenAI credentials or a missing Codex executable fail
+    before model turns are spent.
     """
 
     model = getattr(args, "driver_model", None)
+    backend = getattr(args, "driver_backend", "openai")
+    effort = getattr(args, "driver_effort", "medium")
     if model is None:
+        if backend != "openai":
+            raise TierError("--driver-backend codex requires --driver-model")
         return pins, None
     if not isinstance(model, str) or not model.strip():
         raise TierError("--driver-model must be a non-empty model id")
     temperature = float(getattr(args, "driver_temperature", 1.0))
-    timeout = float(getattr(args, "driver_timeout", 60.0))
+    timeout_arg = getattr(args, "driver_timeout", None)
+    timeout = float(timeout_arg if timeout_arg is not None else (300.0 if backend == "codex" else 60.0))
     max_tokens = getattr(args, "driver_max_tokens", 400)
     if not 0 <= temperature <= 2:
         raise TierError("--driver-temperature must be between 0 and 2")
@@ -451,28 +455,41 @@ def driver_configuration(
         raise TierError("--driver-timeout must be positive")
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
         raise TierError("--driver-max-tokens must be a positive integer")
-    provider = OpenAIDriverProvider.from_environment(
-        model=model,
-        temperature=temperature,
-        api_key=openai_api_key,
-        timeout_seconds=timeout,
-        max_tokens=max_tokens,
-    )
+    if backend == "codex":
+        if temperature != 1.0 or max_tokens != 400:
+            raise TierError("--driver-temperature and --driver-max-tokens do not apply to codex; use their defaults")
+        provider = CodexDriverProvider(model=model, effort=effort, timeout_seconds=timeout)
+        sampling_params: dict[str, object] = {
+            "backend": "codex",
+            "effort": effort,
+            # The manifest and TierRunner currently require a numeric
+            # temperature matching DriverOperator even for a CLI backend.
+            "temperature": 1.0,
+            "temperature_applicability": "not-applicable",
+            "max_tokens": "not-applicable",
+            "prompt_hash": driver_prompt_hash(),
+        }
+    else:
+        if effort != "medium":
+            raise TierError("--driver-effort applies only to --driver-backend codex")
+        provider = OpenAIDriverProvider.from_environment(
+            model=model,
+            temperature=temperature,
+            api_key=openai_api_key,
+            timeout_seconds=timeout,
+            max_tokens=max_tokens,
+        )
+        # Keep the historical OpenAI pin format stable for old ledgers. The
+        # absence of a backend field means the original OpenAI API path.
+        sampling_params = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "prompt_hash": driver_prompt_hash(),
+        }
     driver_pins = replace(
         pins,
         driver_model_id=model,
-        # The prompt is part of the operator's identity: two runs with the
-        # same model and temperature but different system prompts are two
-        # different operators and must not pair.
-        driver_sampling_params={
-            "temperature": temperature,
-            # The cap decides whether a turn produces text at all --
-            # on GPT-5-class models it spans reasoning tokens -- so two
-            # runs that differ by it are two different operators and
-            # must not pair, exactly like the prompt hash.
-            "max_tokens": max_tokens,
-            "prompt_hash": driver_prompt_hash(),
-        },
+        driver_sampling_params=sampling_params,
     )
 
     def factory(scenario: Any, environment: Any, epoch: int) -> DriverOperator:
@@ -661,13 +678,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--driver-model",
         default=None,
         help=(
-            "OpenAI model id that authors each substitutable operator turn "
-            "(default: none, the operator stays scripted). Requires OPENAI_API_KEY "
-            "in the environment and driver_forbidden_terms in the answer sheet"
+            "model id that authors substitutable operator turns (default: scripted). "
+            "OpenAI requires OPENAI_API_KEY; every driven scenario requires driver_forbidden_terms"
         ),
     )
+    parser.add_argument("--driver-backend", choices=("openai", "codex"), default="openai")
+    parser.add_argument("--driver-effort", choices=("low", "medium", "high", "xhigh", "max"), default="medium", help="Codex driver reasoning effort")
     parser.add_argument("--driver-temperature", type=float, default=1.0, help="sampling temperature for --driver-model")
-    parser.add_argument("--driver-timeout", type=float, default=60.0, help="seconds allowed for one driver provider call")
+    parser.add_argument("--driver-timeout", type=float, default=None, help="seconds per driver call (default: 60 OpenAI, 300 Codex)")
     parser.add_argument(
         "--driver-max-tokens",
         type=int,

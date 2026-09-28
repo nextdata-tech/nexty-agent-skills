@@ -644,7 +644,7 @@ def test_driver_flags_default_to_a_scripted_operator() -> None:
     # flow against a current model was a guaranteed 400 on every authorable
     # turn -- which degrades to a silent fallback, not an error.
     assert args.driver_temperature == 1.0
-    assert args.driver_timeout == 60.0
+    assert args.driver_timeout is None  # backend-specific default chosen during configuration
     assert args.driver_max_tokens == 400
 
 
@@ -708,6 +708,64 @@ def test_driver_configuration_pins_the_model_temperature_and_prompt_hash(
     # The pins and the surface must agree by construction, not by convention.
     assert operator.model_id == driver_pins.driver_model_id
     assert float(driver_pins.driver_sampling_params["temperature"]) == operator.temperature
+
+
+def test_codex_driver_configuration_needs_no_api_key_and_has_distinct_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dp_scenarios.operator.openai_driver import driver_prompt_hash
+    from dp_scenarios.runner.environment import PinnedVersions
+
+    module = _load_runner_module()
+    constructed: list[dict[str, object]] = []
+
+    class FakeCodexProvider:
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs)
+
+        def __call__(self, view: object) -> str:
+            return "Understood, please continue."
+
+    monkeypatch.setattr(module, "CodexDriverProvider", FakeCodexProvider)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    args = _driver_args(module, ["--driver-backend", "codex", "--driver-model", "gpt-6-sol", "--driver-effort", "high"])
+    original = PinnedVersions("s", "v", "w", "mock-1", "c")
+
+    pins, factory = module.driver_configuration(args, original)
+
+    assert constructed == [{"model": "gpt-6-sol", "effort": "high", "timeout_seconds": 300.0}]
+    assert dict(pins.driver_sampling_params) == {
+        "backend": "codex",
+        "effort": "high",
+        "temperature": 1.0,
+        "temperature_applicability": "not-applicable",
+        "max_tokens": "not-applicable",
+        "prompt_hash": driver_prompt_hash(),
+    }
+    assert factory is not None
+    operator = factory(object(), object(), 1)
+    assert operator.provider_timeout_seconds == 300.0
+    assert operator.temperature == 1.0
+    openai_args = _driver_args(module, ["--driver-model", "gpt-6-sol"])
+    openai_pins, _ = module.driver_configuration(openai_args, original, openai_api_key="sk-test")
+    assert openai_pins.driver_model_id == pins.driver_model_id
+    assert openai_pins.driver_sampling_params != pins.driver_sampling_params
+
+
+@pytest.mark.parametrize("extra", [
+    ["--driver-temperature", "0.5"],
+    ["--driver-max-tokens", "500"],
+])
+def test_codex_driver_rejects_openai_sampling_flags(
+    monkeypatch: pytest.MonkeyPatch, extra: list[str]
+) -> None:
+    from dp_scenarios.runner.environment import PinnedVersions
+
+    module = _load_runner_module()
+    monkeypatch.setattr(module, "CodexDriverProvider", lambda **kwargs: object())
+    args = _driver_args(module, ["--driver-backend", "codex", "--driver-model", "gpt-6-sol", *extra])
+    with pytest.raises(module.TierError, match="do not apply to codex"):
+        module.driver_configuration(args, PinnedVersions("s", "v", "w", "mock-1", "c"))
 
 
 def test_driver_configuration_never_lets_the_key_reach_the_pins_or_the_operator(
