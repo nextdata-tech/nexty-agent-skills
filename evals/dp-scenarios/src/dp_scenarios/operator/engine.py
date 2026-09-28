@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -1349,23 +1350,14 @@ class OperatorEngine:
         prior_base_texts: list[str] = []
         prior_operator_messages: list[str] = []
         pending_review_context = ""
+        # A declared fixed beat displaced by an answerable decision stays in
+        # script order. Later fixed beats join the queue; a substitutable slot
+        # absorbs the delay. The declared turn budget never grows to drain it.
+        owed_fixed_beats: deque[tuple[ScriptTurn, tuple[EventInjection, ...]]] = deque()
 
-        for index, scripted_turn in enumerate(self.script.turns, start=1):
+        for index, scheduled_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
             injections = self.script.events.fire(index)
-            # A card's sentinel arms the trip scan only once the card is
-            # actually transmitted; an intention to fire cannot plant anything
-            # the agent could leak, and scanning for it can only manufacture a
-            # false trip. Redaction stays keyed to intention (below), because
-            # it is unconditional: nothing planted may reach a provider.
-            pending_sentinels = tuple(
-                injection.sentinel_bytes
-                for injection in injections
-                if injection.sentinel_bytes is not None
-            )
-            if any(injection.fresh_session for injection in injections):
-                self.transport.start_fresh_session()
-                served_reply_keys.clear()
             # The ``spec_approved`` row's ``artifact_ref`` is minted from what
             # the operator actually sent, so an approval turn transmits its
             # declared line: substituting a matcher reply there would record
@@ -1378,14 +1370,75 @@ class OperatorEngine:
                 agent_message=previous_agent_message,
             )
             # A matched decision is substantive and must reach the agent even
-            # when this fixed slot was authored as a room/approval turn. Its
-            # explicit decision answer takes priority; any due event is then
-            # appended by _message_for so neither message is lost.
+            # when this fixed slot was authored as a room/approval turn.
             decision_answer_pending = bool(
                 next_reply is not None
                 and next_match is not None
                 and next_match.decision_id is not None
             )
+            scheduled_fixed = not scheduled_turn.substitute_reply or scheduled_turn.approval
+            defer_fixed = bool(
+                index > 1
+                and scheduled_fixed
+                and (owed_fixed_beats or (decision_answer_pending and not scheduled_turn.approval))
+            )
+            if defer_fixed:
+                # Events with their own material still fire at the declared
+                # turn, including credential-like plants. A contentless card
+                # rides on this beat's text and must travel with that beat.
+                bound = tuple(
+                    injection for injection in injections
+                    if not injection.messages and not injection.attachments
+                )
+                owed_fixed_beats.append((scheduled_turn, bound))
+                injections = tuple(injection for injection in injections if injection not in bound)
+                scripted_turn = ScriptTurn(scheduled_turn.text)
+            else:
+                scripted_turn = scheduled_turn
+            queued_turn = owed_fixed_beats[0][0] if owed_fixed_beats else None
+            genuine_approval_ask = bool(
+                next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            reapproval = self.script.answer_sheet.reapproval
+            dynamic_approval_due = bool(
+                queued_turn is not None
+                and not queued_turn.approval
+                and reapproval is not None
+                and reapproval_uses < reapproval.max_uses
+                and review_fix_authorized
+                and genuine_approval_ask
+                and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
+            )
+            owed_approval_due = bool(
+                queued_turn is not None
+                and not queued_turn.approval
+                and owed_approval_text is not None
+                and not decision_answer_pending
+                and not dynamic_approval_due
+                and (genuine_approval_ask or owed_approval_wait >= 3)
+            )
+            # An already-owed approval or declared reapproval keeps its own
+            # turn. The queued fixed beat remains at the front for a later
+            # slot instead of being popped and silently replaced by approval.
+            if owed_fixed_beats and not (
+                decision_answer_pending or dynamic_approval_due or owed_approval_due
+            ):
+                scripted_turn, bound = owed_fixed_beats.popleft()
+                injections = (*injections, *bound)
+            # A card's sentinel arms the trip scan only once its material is
+            # transmitted. Keep queued beat-only cards out of this turn's
+            # redaction view and scan; content-bearing cards remain due now.
+            pending_sentinels = tuple(
+                injection.sentinel_bytes
+                for injection in injections
+                if injection.sentinel_bytes is not None
+            )
+            if any(injection.fresh_session for injection in injections):
+                self.transport.start_fresh_session()
+                served_reply_keys.clear()
             # The agent's last message asked the operator something other than
             # approval (a clarifying question about the rubric, the output
             # shape...). "Approved." answers nothing there, and sent now it
@@ -1997,6 +2050,7 @@ class OperatorEngine:
             )
             next_turn_priority_blocks_acceptance = bool(
                 next_scripted_turn is None
+                or owed_fixed_beats
                 or next_scripted_turn.approval
                 or not next_scripted_turn.substitute_reply
                 or next_turn_has_event
@@ -2299,6 +2353,12 @@ class OperatorEngine:
             ):
                 terminal_state = TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
                 reason = "turn_budget_exhausted_pending_answer"
+            elif owed_fixed_beats:
+                # The budget cannot be extended to flush a displaced beat.
+                # An unanswered final question above keeps its more specific
+                # terminal state; otherwise this is an incomplete script.
+                terminal_state = TerminalState.SCRIPT_EXHAUSTED
+                reason = "script_exhausted"
             else:
                 terminal_state = TerminalState.COMPLETED
                 reason = "completed"
