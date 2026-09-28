@@ -590,6 +590,61 @@ def test_checker_transform_walk_tolerates_expression_bodies(tmp_path: Path) -> N
         checker._non_doc_string_literals(path)
 
 
+def _nex890_checker():
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    return checker
+
+
+def test_hard_coded_endpoint_ast_sees_a_config_dict_bound_to_a_name() -> None:
+    checker = _nex890_checker()
+    config_dict = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"config = {'client': {'base_url': base}, 'resources': [{'name': 'orders',"
+        b" 'endpoint': {'path': '/v1/orders'}}]}\n"
+        b"resources = rest_api_resources(config)\n"
+    )
+    from_profile = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"config = {'resources': [{'endpoint': {'path': secrets['endpoint_orders']}}]}\n"
+        b"resources = rest_api_resources(config)\n"
+    )
+
+    assert checker._nex_hardcoded_endpoint_ast({"transform/main.py": config_dict})
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": from_profile})
+
+
+_TEMPLATE_TRANSFORM = """\
+import os
+from dlt.sources.rest_api import rest_api_resources
+
+
+def _headers_from(secrets):
+    return {k[len("header_"):]: v for k, v in secrets.items() if k.startswith("header_")}
+
+
+def build(secrets, models):
+    token = os.environ[secrets["credential_env"]]
+    for m in models:
+        path = secrets[f"endpoint_{m}"]
+        if path.startswith(("http://", "https://")):
+            raise ValueError("endpoint must be a path")
+    return rest_api_resources({"client": {"headers": _headers_from(secrets), "auth": token}})
+"""
+
+
+def test_transform_contract_accepts_the_skill_template_shape() -> None:
+    checker = _nex890_checker()
+
+    assert checker._nex_transform_contract({"transform/main.py": _TEMPLATE_TRANSFORM.encode()})
+    hard_coded = _TEMPLATE_TRANSFORM.replace(
+        'secrets[f"endpoint_{m}"]', '"http://127.0.0.1:8000/v1/orders"'
+    )
+    assert not checker._nex_transform_contract({"transform/main.py": hard_coded.encode()})
+
+
 def test_checker_requires_the_review_requirement_id() -> None:
     spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
     assert spec is not None and spec.loader is not None

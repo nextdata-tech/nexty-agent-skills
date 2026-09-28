@@ -14,7 +14,7 @@
     {"id": "runner-bridge-review-proof", "check": "The runner-owned authenticated MCP bridge trace is paired in order with Claude stream-json tool_use, tool_result, and exactly one successful foreground child review for each workflow."},
     {"id": "dlt-profile-architecture", "check": "The landed closure uses the DLT REST connector and the public endpoint_orders, header_user_agent, auth_type, and credential_env profile fields, with no hand-written HTTP loop or hard-coded endpoint."},
     {"id": "positive-pagination-and-query", "check": "Separate unfiltered observations prove 10/10/3 and 23 rows, while a governed paid filter has its own bounded observations and response."},
-    {"id": "negative-matrix", "check": "401, 403, and 404 each have a trace-linked structured validation failure and exactly one matching stub response in that validation interval; malformed/omitted endpoint profiles fail the static contract and a hard-coded endpoint is rejected by runner AST inspection."},
+    {"id": "negative-matrix", "check": "401, 403, and 404 each have a trace-linked structured validation failure and exactly one matching stub response in that validation interval; malformed/omitted endpoint profiles fail the runner's static profile contract and a hard-coded endpoint is rejected by runner AST inspection."},
     {"id": "materialization-publication-redaction", "check": "Definition digest, published row_count=23, inspect/list/resume/describe/query/export evidence are present and no credential value appears in runner evidence or exported artifacts."}
   ]
 }

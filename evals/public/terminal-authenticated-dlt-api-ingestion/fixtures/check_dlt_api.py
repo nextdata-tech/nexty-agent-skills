@@ -1201,6 +1201,60 @@ def _nex_python_files(files: Mapping[str, tuple[bytes, int | None]], prefix: str
     }
 
 
+def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
+    """Whether a DLT REST call is fed a literal endpoint, directly or via a name.
+
+    A name counts when any string literal nested in its assigned value matches,
+    so the skill's ``config = {...}; rest_api_resources(config)`` shape is seen.
+    """
+    pattern = r"(?:https?://|127\.0\.0\.1|/v1/orders)"
+    assigned: set[str] = set()
+    trees: list[ast.AST] = []
+    for path, payload in transform_files.items():
+        if not path.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(payload.decode("utf-8", errors="replace"))
+        except (SyntaxError, ValueError):
+            continue
+        trees.append(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(
+                    isinstance(child, ast.Constant) and isinstance(child.value, str)
+                    and re.search(pattern, child.value)
+                    for child in ast.walk(node.value)
+                ):
+                    assigned.update(target.id for target in targets if isinstance(target, ast.Name))
+    for tree in trees:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            if name not in {"rest_api_resources", "rest_api_source"}:
+                continue
+            if any(
+                isinstance(child, ast.Constant) and isinstance(child.value, str)
+                and re.search(pattern, child.value)
+                or isinstance(child, ast.Name) and child.id in assigned
+                for child in ast.walk(node)
+            ):
+                return True
+    return False
+
+
+def _nex_fstring_prefix(node: ast.AST, prefix: str) -> bool:
+    """Whether ``node`` is an f-string whose literal head starts with ``prefix``."""
+    return (
+        isinstance(node, ast.JoinedStr) and bool(node.values)
+        and isinstance(node.values[0], ast.Constant)
+        and isinstance(node.values[0].value, str)
+        and node.values[0].value.startswith(prefix)
+    )
+
+
 def _nex_transform_contract(files: Mapping[str, bytes]) -> bool:
     if not files or not any(path.endswith(".py") for path in files):
         return False
@@ -1261,11 +1315,24 @@ def _nex_transform_contract(files: Mapping[str, bytes]) -> bool:
                     found_profile_header = True
                 if (
                     isinstance(outer, ast.Name) and outer.id == "secrets"
-                    and isinstance(sl, ast.Constant) and sl.value == "endpoint_orders"
+                    and (
+                        isinstance(sl, ast.Constant) and sl.value == "endpoint_orders"
+                        or _nex_fstring_prefix(sl, "endpoint_")
+                    )
                 ):
                     found_endpoint_attribute = True
+            # The skill's template builds headers by looping over every
+            # ``header_*`` profile attribute instead of naming each one.
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == "startswith"
+                and any(isinstance(arg, ast.Constant) and arg.value == "header_" for arg in node.args)
+            ):
+                found_profile_header = True
+            # Topology means a concrete host or the fixture path; a bare scheme
+            # prefix in a "must be a path" guard is not an endpoint.
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
-                if re.search(r"(?:https?://|127\.0\.0\.1|/v1/orders)", node.value):
+                if re.search(r"(?:https?://[A-Za-z0-9\[]|127\.0\.0\.1|localhost|/v1/orders)", node.value):
                     hardcoded_topology = True
     return (
         found_rest_connector and found_env_reference and found_profile_header
@@ -1968,7 +2035,6 @@ def check_nex890(
                 if first_capture_request and preflight["request_ns"] >= first_capture_request:
                     failures.append(f"static/{case_name}/preflight-outside-static-window")
                 preflight_result = _nex_structured_content(preflight["response_message"])
-                direct_failure = _nex_selfcheck_failed(preflight_result)
                 generation = preflight_result.get("generation")
                 if generation is None:
                     generation = preflight.get("arguments", {}).get("generation")
@@ -1977,8 +2043,9 @@ def check_nex890(
                     generation is None and snapshot_generation is None
                     or generation == snapshot_generation
                 )
-                if case_name != "hard-coded-endpoint" and not direct_failure:
-                    failures.append(f"static/{case_name}/structured-preflight-failure-missing")
+                # NXD's self-check has no endpoint-profile rule, so a malformed
+                # or omitted endpoint profile need not fail preflight; the
+                # runner's static profile contract below is the authority.
                 if not generation_binding_ok:
                     failures.append(f"static/{case_name}/generation-binding-invalid")
             if case_name == "hard-coded-endpoint" and any(
@@ -2058,39 +2125,8 @@ def check_nex890(
         }
         if any(path == "failure.json" or path.endswith("/failure.json") for path in files):
             hardcoded_failure_record = True
-        assigned: set[str] = set()
-        trees: list[ast.AST] = []
-        literals_found = False
-        for path, payload in transform_files.items():
-            if not path.endswith(".py"):
-                continue
-            try:
-                tree = ast.parse(payload.decode("utf-8", errors="replace"))
-            except SyntaxError:
-                continue
-            trees.append(tree)
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                    value = node.value
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    if isinstance(value, ast.Constant) and isinstance(value.value, str) and re.search(r"(?:https?://|127\.0\.0\.1|/v1/orders)", value.value):
-                        literals_found = True
-                        assigned.update(target.id for target in targets if isinstance(target, ast.Name))
-        for tree in trees:
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                fn = node.func
-                name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
-                if name not in {"rest_api_resources", "rest_api_source"}:
-                    continue
-                if any(
-                    isinstance(child, ast.Constant) and isinstance(child.value, str)
-                    and re.search(r"(?:https?://|127\.0\.0\.1|/v1/orders)", child.value)
-                    or isinstance(child, ast.Name) and child.id in assigned
-                    for child in ast.walk(node)
-                ):
-                    hardcoded_ast = True
+        if _nex_hardcoded_endpoint_ast(transform_files):
+            hardcoded_ast = True
     mark("static/hard-coded-endpoint-runner-ast-rejection", hardcoded_ast and not hardcoded_failure_record)
 
     # Structured diagnostics are accepted only from direct diagnostic objects
