@@ -54,6 +54,32 @@ def test_a_genuine_negative_stock_policy_question_keeps_its_decision() -> None:
     assert match.reply == SHEET.decision_answers["negative_stock"].answer
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Do you authorize adding the two missing summaries to the output?",
+        "May I add the missing negative-stock field to the final report?",
+        "Do you authorize adding those two counts and recapturing for review?",
+    ],
+)
+def test_adding_review_identified_outputs_uses_review_authorization(question: str) -> None:
+    match = MatcherBank(PERSONA, SHEET).reply_for(
+        question,
+        context="The reviewer found a missing negative-stock summary and an omitted orphan count.",
+    )
+
+    assert match.rule_id == "decision.answer.review_fix_authorization"
+    assert match.reply == REVIEW_ANSWER
+
+
+def test_adding_a_field_without_a_review_finding_keeps_its_specific_decision() -> None:
+    match = MatcherBank(PERSONA, SHEET).reply_for(
+        "Should we add a negative stock field to the output?"
+    )
+
+    assert match.rule_id == "decision.answer.negative_stock"
+
+
 def test_a_decision_term_inside_a_review_finding_is_still_a_fix_request() -> None:
     match = MatcherBank(PERSONA, SHEET).reply_for(
         "The review found a missing negative stock verifier. "

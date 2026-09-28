@@ -260,6 +260,9 @@ class AnswerSheet:
 
         ``excluded`` skips decisions the caller has already answered, so the
         next declared decision (if any) can match the same text.
+        A simple plural term also matches its singular whole word: a declared
+        "conversions" decision remains answerable when the agent asks about
+        a "conversion" record. Multiword terms keep their literal contract.
         """
 
         lowered = question.casefold()
@@ -267,7 +270,17 @@ class AnswerSheet:
             if decision_id in excluded:
                 continue
             decision = self.decision_answers[decision_id]
-            if all(term.casefold() in lowered for term in decision.terms):
+            if all(
+                term.casefold() in lowered
+                or (
+                    len(term) > 3
+                    and term.isalpha()
+                    and term.casefold().endswith("s")
+                    and not term.casefold().endswith(("ss", "us", "is"))
+                    and term_present(term[:-1], lowered)
+                )
+                for term in decision.terms
+            ):
                 return decision
         return None
 
