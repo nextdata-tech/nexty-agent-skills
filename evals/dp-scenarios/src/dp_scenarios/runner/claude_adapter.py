@@ -253,8 +253,10 @@ next_actions toward validation and admission. A finding or reviewer claim is
 not permission to auto-fix: never turn claims into permission or suppress the
 findings. Preserve the exact schema, binding, and credential rules above.
 
-If you perform an optional agent-side self-check and adversarial review, write only their short
-outcomes to agent-attestations.json at your workspace root -- the same file
+For every dispatched adversarial review, write its indexed adversarial_review
+entry to agent-attestations.json even when the review is unresolved or needs_user.
+An agent-side self_check entry is optional. Write only their short outcomes to
+agent-attestations.json at your workspace root -- the same file
 NXD_EVAL_ATTESTATIONS_PATH names, given here by name because a run without Bash
 has no way to expand that variable. This is a non-authoritative attestation
 channel, not a ledger and not proof by itself. Its canonical form

@@ -299,7 +299,13 @@ severity and do not forward reviewer-only fields such as `claim`, `evidence`,
 or `why_it_matters`. Use `rejection_code: null` for a clear or findings
 report; use the documented rejection code only for a rejected or indeterminate
 report. Before the first report, finish any required review-record update for
-the current captured inputs. If the supervisor rejects a report for malformed
+the current captured inputs. For every dispatched adversarial review, write an
+indexed adversarial_review entry in the root agent-attestations.json JSON array,
+even when the review is unresolved or needs_user. Use only action_kind, outcome,
+evidence_ref (review-record.json#review_rounds/<index>), and review_round_index.
+Prefix the reference with nxd-jobs/<workflow>/ for a later workflow id.
+This attests the review; it cannot replace the child or supervisor report.
+If the supervisor rejects a report for malformed
 parameters or deserialization, retry with the exact same current binding
 fields and captured revision; change only the in-memory report projection.
 Do not edit the closure, blueprint, or review record, and do not make another

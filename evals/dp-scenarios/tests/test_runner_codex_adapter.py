@@ -1184,6 +1184,8 @@ def test_codex_adapter_result_identifies_its_backend(capsys: pytest.CaptureFixtu
     assert "the per-capture limit resets" in CODEX_SYSTEM_PROMPT
     assert "do not call prepare_workflow, get_workflow_capabilities, or" in CODEX_SYSTEM_PROMPT
     assert "Dispatch exactly one provider-native" in CODEX_SYSTEM_PROMPT
+    assert "For every dispatched adversarial review" in CODEX_SYSTEM_PROMPT
+    assert "even when the review is unresolved or needs_user" in CODEX_SYSTEM_PROMPT
     assert "built-in Codex collaboration child via spawnAgent" in CODEX_SYSTEM_PROMPT
     assert "exact review_input" in CODEX_SYSTEM_PROMPT
     assert "never fabricate the review outcome yourself" in CODEX_SYSTEM_PROMPT

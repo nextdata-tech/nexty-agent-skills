@@ -423,7 +423,7 @@ def test_terminal_state_failure_modes_and_ungraded_criteria_are_separate() -> No
 
 
 def test_engine_completes_only_when_every_scripted_turn_has_one_clean_terminal_result() -> None:
-    script = make_script(turns=("Improve weekly visibility.", "Please continue."))
+    script = make_script(turns=("Improve weekly visibility.", "Please continue."), turn_budget=2)
 
     def completed(message: str) -> TurnResult:
         return TurnResult(
@@ -448,10 +448,32 @@ def test_engine_completes_only_when_every_scripted_turn_has_one_clean_terminal_r
         script,
         InMemoryTransport([completed("Which source is authoritative?"), completed("")]),
     ).run()
+    pending_answer = OperatorEngine(
+        script,
+        InMemoryTransport([completed("Which source is authoritative?"), completed("Which choice should we use?")]),
+    ).run()
+    pending_approval = OperatorEngine(
+        script,
+        InMemoryTransport([completed("Which source is authoritative?"), completed("Please approve this plan.")]),
+    ).run()
+    answered_repeat = OperatorEngine(
+        script,
+        InMemoryTransport([completed("What is the source?"), completed("What is the source?")]),
+    ).run()
 
     assert clean.terminal_state is TerminalState.COMPLETED
     assert ambiguous.terminal_state is TerminalState.SCRIPT_EXHAUSTED
     assert empty_final.terminal_state is TerminalState.SCRIPT_EXHAUSTED
+    assert pending_answer.terminal_state is TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
+    assert pending_answer.stop_reason == "turn_budget_exhausted_pending_answer"
+    assert pending_approval.terminal_state is TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
+    assert answered_repeat.turns[-1].operator_repeat_suppressed
+    assert answered_repeat.terminal_state is TerminalState.COMPLETED
+    under_budget = OperatorEngine(
+        replace(script, turn_budget=3),
+        InMemoryTransport([completed("Which source is authoritative?"), completed("Which choice should we use?")]),
+    ).run()
+    assert under_budget.terminal_state is TerminalState.COMPLETED
 
 
 def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() -> None:

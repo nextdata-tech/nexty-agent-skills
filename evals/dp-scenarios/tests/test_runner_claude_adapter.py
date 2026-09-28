@@ -301,6 +301,8 @@ def test_default_prompt_describes_channels_and_review_dispatch_mechanics_not_sce
     )
 
     assert "agent-attestations.json at your workspace root" in collapsed
+    assert "For every dispatched adversarial review" in prompt
+    assert "even when the review is unresolved or needs_user" in prompt
     # A follow-up that starts another workflow id needs its own job directory;
     # the flat root layout led a live agent to invent ledger keys.
     assert "author it under nxd-jobs/<workflow>/" in collapsed

@@ -156,6 +156,23 @@ def test_b3_review_repairs_are_authorized_before_fuzzy_bait_and_reapproval() -> 
 
 
 @pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
+def test_unique_truncation_choice_has_a_declared_operator_answer() -> None:
+    scenario = _scenario()
+    decision = scenario.answer_sheet.decision_answers["unique_truncation"]
+    assert decision.terms == ("truncation", "50-character")
+    matcher = MatcherBank(scenario.persona, scenario.answer_sheet)
+
+    reply = matcher.reply_for(
+        "Do you approve the unique 50-character truncation for a conversion label?"
+    )
+
+    assert reply.rule_id == "decision.answer.unique_truncation"
+    assert "one remaining long spend campaign" in reply.reply
+    assert "one remaining conversion campaign" in reply.reply
+    assert "ambiguous or unmatched" in reply.reply
+
+
+@pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
 def test_safe_matches_unmatched_identities_policy_and_decision_pass() -> None:
     result = _scenario().follow_up_check(_good_target())
 

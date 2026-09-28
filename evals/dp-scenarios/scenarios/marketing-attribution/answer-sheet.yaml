@@ -40,6 +40,9 @@ decision_answers:
   fuzzy_matching:
     terms: [fuzzy, summer]
     answer: Do not use fuzzy matching. The near spelling remains unmatched because it is not a case, whitespace, or unique 50-character truncation variant.
+  unique_truncation:
+    terms: [truncation, 50-character]
+    answer: "Approve a 50-character conversion prefix only when it uniquely identifies one remaining long spend campaign and one remaining conversion campaign after case and whitespace normalization. Leave ambiguous or unmatched names unmatched; do not use fuzzy matching."
   physical_redaction:
     terms: [newsletter, contacts]
     answer: "The newsletter contacts export is personal subscriber data with no role in campaign attribution. Keep it out of every landed table, file, database, query result, report, and published output, including internal or raw surfaces."
