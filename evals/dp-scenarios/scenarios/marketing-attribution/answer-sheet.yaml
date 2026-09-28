@@ -33,6 +33,8 @@ source_answers:
 decision_answers:
   unmatched_cpa:
     terms: [cpa, unmatched, conversions]
+    synonyms:
+      conversions: [denominator]
     answer: Use conversions from safely matched campaign pairs as the CPA denominator. Do not allocate unmatched conversions to a campaign; keep them visible as diagnostics.
   review_fix_authorization:
     terms: [review, finding]

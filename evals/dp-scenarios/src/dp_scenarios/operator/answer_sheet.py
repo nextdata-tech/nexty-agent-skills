@@ -153,6 +153,19 @@ def _one_sentence(value: str) -> bool:
     return sum(character in ".!?" for character in value) == 1
 
 
+def _decision_term_present(term: str, lowered: str) -> bool:
+    """Match a declared term, including the existing simple plural form."""
+
+    candidate = term.casefold()
+    return candidate in lowered or (
+        len(term) > 3
+        and term.isalpha()
+        and candidate.endswith("s")
+        and not candidate.endswith(("ss", "us", "is"))
+        and term_present(term[:-1], lowered)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionAnswer:
     """One fixed answer keyed by a declared business decision id."""
@@ -160,11 +173,15 @@ class DecisionAnswer:
     decision_id: str
     terms: tuple[str, ...]
     answer: str
+    synonyms: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
     def to_mapping(self) -> dict[str, object]:
         """Return the canonical answer entry."""
 
-        return {"terms": list(self.terms), "answer": self.answer}
+        entry: dict[str, object] = {"terms": list(self.terms), "answer": self.answer}
+        if self.synonyms:
+            entry["synonyms"] = {term: list(values) for term, values in self.synonyms.items()}
+        return entry
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +279,9 @@ class AnswerSheet:
         next declared decision (if any) can match the same text.
         A simple plural term also matches its singular whole word: a declared
         "conversions" decision remains answerable when the agent asks about
-        a "conversion" record. Multiword terms keep their literal contract.
+        a "conversion" record. Each required term can also declare synonyms;
+        one of those alternatives satisfies that term without changing the
+        other required terms. Multiword terms keep their literal contract.
         """
 
         lowered = question.casefold()
@@ -271,13 +290,9 @@ class AnswerSheet:
                 continue
             decision = self.decision_answers[decision_id]
             if all(
-                term.casefold() in lowered
-                or (
-                    len(term) > 3
-                    and term.isalpha()
-                    and term.casefold().endswith("s")
-                    and not term.casefold().endswith(("ss", "us", "is"))
-                    and term_present(term[:-1], lowered)
+                any(
+                    _decision_term_present(candidate, lowered)
+                    for candidate in (term, *decision.synonyms.get(term, ()))
                 )
                 for term in decision.terms
             ):
@@ -366,16 +381,35 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
         if isinstance(entry, str):
             terms = (identifier.replace("_", " "),)
             answer = entry
+            synonyms: dict[str, tuple[str, ...]] = {}
         else:
             data = _mapping(entry, f"answer_sheet.decision_answers.{identifier}")
-            _unknown(data, {"terms", "answer"}, f"answer_sheet.decision_answers.{identifier}")
-            if set(data) != {"terms", "answer"}:
+            _unknown(data, {"terms", "answer", "synonyms"}, f"answer_sheet.decision_answers.{identifier}")
+            if not {"terms", "answer"}.issubset(data):
                 raise AnswerSheetError(
                     f"answer_sheet.decision_answers.{identifier} requires terms and answer"
                 )
             terms = _strings(data["terms"], f"answer_sheet.decision_answers.{identifier}.terms")
             answer = _string(data["answer"], f"answer_sheet.decision_answers.{identifier}.answer")
-        result[identifier] = DecisionAnswer(identifier, terms, _string(answer, f"decision {identifier}.answer"))
+            synonyms = {}
+            if "synonyms" in data:
+                raw_synonyms = _mapping(
+                    data["synonyms"], f"answer_sheet.decision_answers.{identifier}.synonyms"
+                )
+                for term, values in raw_synonyms.items():
+                    if term not in terms:
+                        raise AnswerSheetError(
+                            f"answer_sheet.decision_answers.{identifier}.synonyms must name a declared term"
+                        )
+                    synonyms[term] = _strings(
+                        values, f"answer_sheet.decision_answers.{identifier}.synonyms.{term}"
+                    )
+        result[identifier] = DecisionAnswer(
+            identifier,
+            terms,
+            _string(answer, f"decision {identifier}.answer"),
+            MappingProxyType(synonyms),
+        )
     return result
 
 

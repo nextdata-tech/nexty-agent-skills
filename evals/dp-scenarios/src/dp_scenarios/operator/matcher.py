@@ -219,17 +219,20 @@ SOLICITATION_PATTERN = re.compile(
     # The live turn-14 imperative: "Tell me a name, role, team, or channel."
     # No question mark and no interrogative opener, so without this a direct
     # instruction to the operator was silently dropped as a yield.
-    r"|tell\s+me\s+(?:which|what|whether|if|a|an|the|who|where)|point\s+me)\b",
+    r"|tell\s+me\s+(?:which|what|whether|if|a|an|the|who|where)|point\s+me)\b"
+    # "Reply with ..." is an addressed instruction to the operator. Unlike
+    # a bare "choose" or "confirm" in a task list, it does not narrate a
+    # build step; a live review choice used it without a question mark.
+    r"|(?:^|[.!?]\s)\s*(?:please\s+)?reply\b",
     re.IGNORECASE,
 )
 
-# There is deliberately no bare line-head imperative here. "Next steps:\n-
-# Confirm the metric definition" and "I will:\n- Confirm the row counts
-# myself" are the same shape, and `choose`, `pick` and `decide` heading a
-# bulleted line are how a build agent narrates its *own* plan -- "choose the
-# closest matching field" is field-mapper vocabulary. Matching them made the
-# operator hand back a decision on a turn that requested none, which is the
-# regression this whole module is being changed to remove.
+# There is deliberately no generic bare line-head imperative here. "Reply"
+# addresses the operator, while "Next steps:\n- Confirm the metric definition"
+# and "I will:\n- Confirm the row counts myself" can both narrate agent work.
+# `choose`, `pick` and `decide` heading a bulleted line are also common
+# field-mapper plan vocabulary. Matching them made the operator hand back a
+# decision on a turn that requested none.
 #
 # The signal is not in the text, so it is not inferred: an ask has to name its
 # addressee ("please confirm", "can you confirm"). A bulleted imperative is
@@ -324,6 +327,8 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
             return candidate
         if _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None:
             return candidate
+        if _REVIEW_APPLY_OR_DECLINE_PATTERN.search(candidate) is not None:
+            return candidate
     # Some agents request authorization with an imperative such as
     # "type Approved to authorize applying fix A" rather than a question.
     for candidate in _REQUEST_CLAUSE_SPLIT.split(prose):
@@ -341,6 +346,8 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
                     continue
             return candidate
         if _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None:
+            return candidate
+        if _REVIEW_APPLY_OR_DECLINE_PATTERN.search(candidate) is not None:
             return candidate
     return None
 
@@ -442,6 +449,21 @@ _REVIEW_FIX_CHOICE_PATTERN = re.compile(
     r"[^?]{0,160}\b(?:apply|applies|applying|applied|leave|left|keep|skip|defer|proceed)\b"
     r"|\b(?:apply|applies|applying|applied|leave|left|keep|skip|defer|proceed)\b[^?]{0,160}\b"
     r"(?:fix|correction|change)\b",
+    re.IGNORECASE,
+)
+_REVIEW_APPLY_ACTION = r"(?:add(?:ing)?|appl(?:y|ies|ying|ied)|fix(?:es|ing)?|repair(?:s|ing)?|correct(?:s|ing)?)"
+_REVIEW_DECLINE_ACTION = r"(?:skip(?:s|ping|ped)?|declin(?:e|es|ed|ing)|leav(?:e|ing)|left|omit(?:s|ting|ted)?|defer(?:s|ring|red)?)"
+_REVIEW_APPLY_OR_DECLINE_PATTERN = re.compile(
+    # A reported finding can be put as an action choice without the noun
+    # "fix": "add the missing view or skip it?" and "apply it or decline".
+    # The review-finding context and actual-ask gates in _review_fix_request
+    # keep ordinary output and source-policy choices on their own routes.
+    rf"\b{_REVIEW_APPLY_ACTION}\b[^?\n]{{0,160}}"
+    r"\b(?:or|versus|vs\.?)\b[^?\n]{0,160}"
+    rf"\b{_REVIEW_DECLINE_ACTION}\b"
+    rf"|\b{_REVIEW_DECLINE_ACTION}\b[^?\n]{{0,160}}"
+    r"\b(?:or|versus|vs\.?)\b[^?\n]{0,160}"
+    rf"\b{_REVIEW_APPLY_ACTION}\b",
     re.IGNORECASE,
 )
 _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN = re.compile(
