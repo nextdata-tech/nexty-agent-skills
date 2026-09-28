@@ -215,7 +215,10 @@ runs:
           exit 1
         fi
         artifact=''
-        while IFS= read -r run_id; do
+        # Log every run the lookup considers and why it was passed over, so a
+        # miss (nightly canary run 36297360210) can be diagnosed from the log.
+        echo "NXD workflow runs query returned $(jq '.workflow_runs | length' <<< "$workflow_runs") runs ($runs_query)"
+        while IFS=$'\t' read -r run_id run_sha run_created; do
           if [ -n "$EXPECT_SOURCE_SHA" ]; then
             # The artifact-bundle job is the publication gate for this
             # consumer. GitHub exposes its display name here, which includes
@@ -237,6 +240,7 @@ runs:
                 exit 1
               fi
               if [ "$publication_jobs" -eq 0 ]; then
+                echo "Skipping NXD run $run_id ($run_sha, $run_created): no successful artifact-bundle job"
                 continue
               fi
           fi
@@ -255,12 +259,15 @@ runs:
           if [ -n "$artifact" ]; then
             break
           fi
+          echo "Skipping NXD run $run_id ($run_sha, $run_created): $(jq --arg artifact_prefix "$artifact_prefix" -r '
+            "\(.artifacts | length) artifacts, \([.artifacts[] | select(.name | startswith($artifact_prefix))] | length) matching prefix, \([.artifacts[] | select(.name | startswith($artifact_prefix)) | select(.expired == false)] | length) unexpired"
+          ' <<< "$run_artifacts")"
         done < <(jq -r '.workflow_runs[]
           | select(.head_branch == "main")
           | select((env.EXPECT_SOURCE_SHA == "") or .head_sha == env.EXPECT_SOURCE_SHA)
           | select((env.EXPECT_SOURCE_SHA != "") or
               (.status == "completed" and .conclusion == "success"))
-          | .id' <<< "$workflow_runs")
+          | [.id, .head_sha, .created_at] | @tsv' <<< "$workflow_runs")
         if [ -z "$artifact" ]; then
           echo "No unexpired main-branch NXD artifact found for $SELECTOR_LABEL" >&2
           exit 1

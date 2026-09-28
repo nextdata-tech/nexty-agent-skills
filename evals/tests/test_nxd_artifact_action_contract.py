@@ -71,7 +71,13 @@ elif [[ "$endpoint" == *"actions/runs/123" ]]; then
 elif [[ "$endpoint" == *"actions/workflows/42" ]]; then
   printf '%s\\n' "$FAKE_WORKFLOW_PATH"
 elif [[ "$endpoint" == *"actions/workflows/nxd.ci.yml/runs?"* ]]; then
-  printf '{"workflow_runs":[]}\\n'
+  if [ -n "${FAKE_RUNS_FILE:-}" ]; then
+    cat "$FAKE_RUNS_FILE"
+  else
+    printf '{"workflow_runs":[]}\\n'
+  fi
+elif [[ "$endpoint" =~ actions/runs/([0-9]+)/artifacts\? ]]; then
+  cat "$FAKE_ARTIFACTS_DIR/${BASH_REMATCH[1]}.json"
 else
   printf 'unexpected fake gh endpoint: %s\\n' "$endpoint" >&2
   exit 97
@@ -405,3 +411,78 @@ def test_release_verification_gates_on_publication_job_not_whole_run(
         ],
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the action")
+def test_unpinned_miss_logs_every_checked_run(tmp_path: Path) -> None:
+    """A newest-main miss must say which runs were checked and why each lost.
+
+    Nightly canary run 36297360210 reported only "No unexpired main-branch NXD
+    artifact found", which left the miss undiagnosable.
+    """
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 501,
+                "head_branch": "main",
+                "head_sha": "a" * 40,
+                "created_at": "2026-09-27T05:00:00Z",
+                "status": "completed",
+                "conclusion": "success",
+            },
+            {
+                "id": 502,
+                "head_branch": "main",
+                "head_sha": "b" * 40,
+                "created_at": "2026-09-26T08:36:00Z",
+                "status": "completed",
+                "conclusion": "success",
+            },
+        ]
+    }
+    runs_file = tmp_path / "runs.json"
+    runs_file.write_text(json.dumps(runs), encoding="utf-8")
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "501.json").write_text(
+        json.dumps({"artifacts": [{"name": "docker-image", "expired": False}]}),
+        encoding="utf-8",
+    )
+    (artifacts_dir / "502.json").write_text(
+        json.dumps(
+            {"artifacts": [{"name": "nxd-py-linux-x86_64-x-y-z-502", "expired": True}]}
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.pop("GH_TOKEN", None)
+    env.update(
+        {
+            "PATH": f"{_fake_gh(tmp_path).parent}:{env['PATH']}",
+            "FAKE_GH_LOG": str(tmp_path / "gh.log"),
+            "FAKE_RUNS_FILE": str(runs_file),
+            "FAKE_ARTIFACTS_DIR": str(artifacts_dir),
+            "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+            "ARTIFACT_PREFIX": "nxd-py-linux-x86_64-",
+            "EXPECT_SOURCE_SHA": "",
+            "SELECTOR_LABEL": "the newest NXD main build",
+        }
+    )
+    result = subprocess.run(
+        ["bash", "-c", _action_runs()["Resolve NXD Python artifact"]],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "No unexpired main-branch NXD artifact found" in result.stderr
+    assert "query returned 2 runs" in result.stdout
+    assert (
+        f"Skipping NXD run 501 ({'a' * 40}, 2026-09-27T05:00:00Z): "
+        "1 artifacts, 0 matching prefix, 0 unexpired"
+    ) in result.stdout
+    assert (
+        f"Skipping NXD run 502 ({'b' * 40}, 2026-09-26T08:36:00Z): "
+        "1 artifacts, 1 matching prefix, 0 unexpired"
+    ) in result.stdout
