@@ -1256,8 +1256,13 @@ def _nex_fstring_prefix(node: ast.AST, prefix: str) -> bool:
 
 
 def _nex_transform_contract(files: Mapping[str, bytes]) -> bool:
+    return not _nex_transform_contract_gaps(files)
+
+
+def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
+    """Name each unmet transform-contract condition (fixed labels, no content)."""
     if not files or not any(path.endswith(".py") for path in files):
-        return False
+        return ["no-python-transform"]
     found_rest_connector = False
     found_env_reference = False
     found_profile_header = False
@@ -1273,7 +1278,7 @@ def _nex_transform_contract(files: Mapping[str, bytes]) -> bool:
         try:
             tree = ast.parse(source)
         except (SyntaxError, ValueError):
-            return False
+            return ["unparseable"]
         docstrings: set[int] = set()
         for parent in ast.walk(tree):
             body = getattr(parent, "body", None)
@@ -1334,11 +1339,19 @@ def _nex_transform_contract(files: Mapping[str, bytes]) -> bool:
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 if re.search(r"(?:https?://[A-Za-z0-9\[]|127\.0\.0\.1|localhost|/v1/orders)", node.value):
                     hardcoded_topology = True
-    return (
-        found_rest_connector and found_env_reference and found_profile_header
-        and found_endpoint_attribute and not mentions_old_companion
-        and not forbidden_http_import and not hardcoded_topology
-    )
+    gaps = [
+        label for label, missing in (
+            ("rest-connector-missing", not found_rest_connector),
+            ("credential-env-reference-missing", not found_env_reference),
+            ("profile-header-missing", not found_profile_header),
+            ("endpoint-attribute-missing", not found_endpoint_attribute),
+            ("old-companion-reference", mentions_old_companion),
+            ("direct-http-client", forbidden_http_import),
+            ("hard-coded-topology", hardcoded_topology),
+        )
+        if missing
+    ]
+    return gaps
 
 
 def _nex_direct_diagnostics(message: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -1599,6 +1612,7 @@ def check_nex890(
                     failures.append("trace/extra-workflow-operation")
         elif operation in workflow_operations and operation != "get_workflow_capabilities":
             failures.append("trace/workflow-missing")
+            failures.append(f"trace/workflow-missing/{operation}")
     # Evidence comes only from each workflow's current generation: a successful
     # reset_workflow discards what came before it. Trace hygiene above still
     # covers every call.
@@ -1705,6 +1719,7 @@ def check_nex890(
             call_root = call.get("root")
             if isinstance(call_root, str) and os.path.normpath(call_root) != authoring_root_norm:
                 failures.append(f"trace/{workflow}/root-mismatch")
+                failures.append(f"trace/{workflow}/root-mismatch/{call.get('operation')}")
         response_record = capture["response_record"]
         if not isinstance(response_record.get("root"), str) or os.path.normpath(response_record["root"]) != authoring_root_norm:
             failures.append(f"capture/{workflow}/response-root-mismatch")
@@ -1941,7 +1956,9 @@ def check_nex890(
         if transform_maps.get(workflow) != positive_transform:
             transform_identity = False
     mark("transform/byte-identical-across-workflows", transform_identity)
-    mark("transform/dlt-profile-credential-contract", _nex_transform_contract(positive_transform))
+    transform_gaps = _nex_transform_contract_gaps(positive_transform)
+    mark("transform/dlt-profile-credential-contract", not transform_gaps)
+    failures.extend(f"transform/dlt-profile-credential-contract/{gap}" for gap in transform_gaps)
 
     # Static profile variants and the static AST-rejection case are bound to
     # their exact runner-frozen preflight request and root. The root's basename
@@ -2128,6 +2145,12 @@ def check_nex890(
         if _nex_hardcoded_endpoint_ast(transform_files):
             hardcoded_ast = True
     mark("static/hard-coded-endpoint-runner-ast-rejection", hardcoded_ast and not hardcoded_failure_record)
+    if not hardcoded_cases:
+        failures.append("static/hard-coded-endpoint/case-snapshot-missing")
+    elif not hardcoded_ast:
+        failures.append("static/hard-coded-endpoint/literal-endpoint-not-found")
+    if hardcoded_failure_record:
+        failures.append("static/hard-coded-endpoint/failure-record-present")
 
     # Structured diagnostics are accepted only from direct diagnostic objects
     # on a JSON-RPC-matched response. Free prose and nested arbitrary values
