@@ -228,7 +228,7 @@ def test_runner_cli_mirrors_the_driver_flags_and_defaults_to_scripted() -> None:
 
     assert args.driver_model is None
     assert args.driver_temperature == 1.0
-    assert args.driver_timeout == 60.0
+    assert args.driver_timeout is None  # backend-specific default chosen during configuration
     assert args.driver_max_tokens == 400
     assert args.jobs == 1
 
@@ -279,6 +279,68 @@ def test_runner_cli_driver_requires_the_key_and_pins_the_prompt_hash(
     assert operator.temperature == 0.3
     assert operator.provider.max_tokens == 900
     assert "sk-test" not in repr(operator)
+
+
+def test_runner_cli_codex_driver_pins_backend_and_effort_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dp_scenarios.operator.openai_driver import driver_prompt_hash
+
+    constructed: list[dict[str, object]] = []
+
+    class FakeCodexProvider:
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs)
+
+        def __call__(self, view: object) -> str:
+            return "Please continue."
+
+    monkeypatch.setattr(cli, "CodexDriverProvider", FakeCodexProvider)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    args = cli.build_parser().parse_args([
+        "--scenario-root", "x", "--tier", "smoke", "--canary-dir", "c",
+        "--skills-root", "s", "--skill-pack-version", "1", "--supervisor-version", "2",
+        "--runtime-wheel-version", "3", "--mock-api-version", "4", "--canary-claims-hash", "5",
+        "--report-json", "r.json", "--mode", "live", "--driver-backend", "codex",
+        "--driver-model", "gpt-6-sol", "--driver-effort", "xhigh",
+    ])
+
+    pins, factory = cli._driver_configuration(args, _cli_pins())
+
+    assert constructed == [{"model": "gpt-6-sol", "effort": "xhigh", "timeout_seconds": 300.0}]
+    assert dict(pins.driver_sampling_params) == {
+        "backend": "codex", "effort": "xhigh", "temperature": 1.0,
+        "temperature_applicability": "not-applicable", "max_tokens": "not-applicable",
+        "prompt_hash": driver_prompt_hash(),
+    }
+    assert factory is not None
+    assert factory(object(), object(), 1).provider_timeout_seconds == 300.0
+
+
+def test_runner_cli_refuses_missing_codex_before_canary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dp_scenarios.operator.openai_driver import DriverConfigError
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("dp_scenarios.operator.codex_driver.shutil.which", lambda name: None)
+    args = SimpleNamespace(
+        mode="live", driver_backend="codex", driver_model="gpt-6-sol",
+        driver_effort="medium", driver_temperature=1.0, driver_timeout=None,
+        driver_max_tokens=400,
+    )
+    with pytest.raises(DriverConfigError, match="Codex CLI executable was not found"):
+        cli._driver_configuration(args, _cli_pins())
+
+
+def test_runner_cli_rejects_codex_effort_for_openai() -> None:
+    args = SimpleNamespace(
+        mode="live", driver_backend="openai", driver_model="gpt-x",
+        driver_effort="high", driver_temperature=1.0, driver_timeout=None,
+        driver_max_tokens=400,
+    )
+    with pytest.raises(cli.TierError, match="applies only"):
+        cli._driver_configuration(args, _cli_pins())
 
 
 def test_runner_cli_refuses_a_driver_in_replay_mode(monkeypatch: pytest.MonkeyPatch) -> None:

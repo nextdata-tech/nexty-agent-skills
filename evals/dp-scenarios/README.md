@@ -455,10 +455,25 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 
 | flag | default | meaning |
 |---|---|---|
-| `--driver-model` | none | OpenAI model id; omitting it keeps the scripted operator |
-| `--driver-temperature` | `1.0` | sampling temperature, pinned into the manifest |
-| `--driver-max-tokens` | `400` | completion cap per call, including reasoning tokens |
-| `--driver-timeout` | `60` | seconds allowed for one provider call before the turn falls back |
+| `--driver-model` | none | model id; omitting it keeps the scripted operator |
+| `--driver-backend` | `openai` | `openai` API or locally logged-in `codex` CLI |
+| `--driver-effort` | `medium` | Codex reasoning effort |
+| `--driver-temperature` | `1.0` | OpenAI sampling temperature, pinned into the manifest |
+| `--driver-max-tokens` | `400` | OpenAI completion cap per call, including reasoning tokens |
+| `--driver-timeout` | `60` OpenAI, `300` Codex | seconds allowed for one provider call before the turn falls back |
+
+To use ChatGPT login through the local Codex CLI, use
+`--driver-backend codex --driver-model gpt-6-sol` (optionally
+`--driver-effort medium`). This path does not need `OPENAI_API_KEY`. It sends
+the same system prompt, persona, and view as the OpenAI driver, rendered into
+one stdin prompt for `codex exec` in an empty temporary directory. The child
+gets only `HOME`, `PATH`, optional `CODEX_HOME`, and locale variables. The CLI's
+`--ignore-user-config` and `--ignore-rules` flags avoid user config, MCP server
+and hook configuration, and exec policy rules; the child also uses an ephemeral
+session and a read-only sandbox. The CLI has no supported flag to disable all
+built-in agent tools, and host login files remain available to the Codex
+process for authentication. Use the default temperature and token cap with this
+backend; Codex does not apply them and non-default values are rejected.
 
 The same flags exist on `dp_scenarios.runner.cli`, where they require
 `--mode live` — replaying a recording re-authors nothing.
@@ -475,9 +490,12 @@ declare the vocabulary the agent is being graded on discovering for itself; the
 engine refuses to construct a driver without it.
 
 **What is recorded.** The manifest pins `driver_model_id` and
-`driver_sampling_params` — `temperature`, `max_tokens`, and `prompt_hash`, the
-sha256 of the system prompt, so a silent prompt edit cannot be paired against an
-older run. Per turn, `operator-observations.json` carries `operator_mode`,
+`driver_sampling_params`. OpenAI keeps its historical `temperature`,
+`max_tokens`, and `prompt_hash` fields. Codex adds `backend: codex` and `effort`
+alongside the same prompt hash; its temperature and token cap are marked not
+applicable (the numeric `temperature: 1.0` remains for the manifest schema).
+These fields prevent pairing different operator backends or prompts. Per turn,
+`operator-observations.json` carries `operator_mode`,
 `operator_beat_id` and the driver flags; the run level carries four counters:
 
 | counter | what it means |
@@ -511,7 +529,8 @@ Confirm the ignore works before pasting a real key:
 `git check-ignore -v evals/dp-scenarios/.env` must print a matching rule.
 
 The runner reads only `OPENAI_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from the
-file. `--driver-model` uses the OpenAI key in the harness; the Claude OAuth
+file. `--driver-backend openai --driver-model` uses the OpenAI key in the harness;
+the Codex driver uses local Codex CLI login. The Claude OAuth
 token is passed only across the trusted adapter-to-Claude boundary. It is not
 added to the agent session allowlist, the Desktop supervisor environment, the
 manifest, or retained artifacts. OAuth-token runs also deny Bash so the agent
