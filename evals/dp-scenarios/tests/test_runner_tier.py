@@ -48,7 +48,7 @@ from dp_scenarios.runner import (
 from dp_scenarios.operator.engine import TerminalState as EngineTerminalState
 from dp_scenarios.runner.qualification import QualificationDisposition, qualify_run
 from dp_scenarios.runner.session import LiveSession, SessionError
-from dp_scenarios.runner.report import machine_report
+from dp_scenarios.runner.report import human_summary, machine_report
 from dp_scenarios.runner.tier import run_drift_canary
 from dp_scenarios.scenario import FixtureSpec, GateSpec, load_scenario
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
@@ -2215,7 +2215,17 @@ def test_turns_from_session_replay_unwraps_a_well_formed_entry() -> None:
 @pytest.mark.parametrize(
     ("name", "response", "expected_state", "expected_stop"),
     [
-        ("exhausted", TurnResult(agent_message="What is the source?"), ScoreTerminalState.UNGRADED, "script_exhausted"),
+        (
+            "pending_answer",
+            TurnResult(
+                agent_message="Which choice should we use?",
+                terminal_result_count=1,
+                terminal_result_subtype="success",
+                terminal_result_is_error=False,
+            ),
+            ScoreTerminalState.UNGRADED,
+            "turn_budget_exhausted_pending_answer",
+        ),
         ("timeout", TurnResult(turn_timed_out=True), ScoreTerminalState.UNGRADED, "turn_timeout"),
         ("invalid", TurnResult(environment_wedged=True), ScoreTerminalState.INVALID, "environment_wedge"),
         ("sentinel", TurnResult(agent_message="SECRET"), ScoreTerminalState.AUTOMATIC_ZERO, "sentinel_trip"),
@@ -2236,10 +2246,14 @@ def test_distinct_stop_conditions_remain_distinct(
     run = result.scenario_runs[0]
     assert run.stop_condition == expected_stop
     assert run.score.state is expected_state
-    if name == "exhausted":
-        assert run.qualification.reasons[0] == "script_exhausted"
+    if name == "pending_answer":
+        assert run.qualification.reasons[0] == "turn_budget_exhausted_pending_answer"
+        assert run.qualification.disposition is QualificationDisposition.OBSERVED
+        assert result.verdict == "ungraded"
+        assert "stop=turn_budget_exhausted_pending_answer" in human_summary(result)
     reported = machine_report(result)["scenarios"][0]["runs"][0]
     assert reported["terminal_state"] == expected_stop
+    assert reported["stop_condition"] == expected_stop
     assert reported["score"]["state"] == expected_state.value
 
 

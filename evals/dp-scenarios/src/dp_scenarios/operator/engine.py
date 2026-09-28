@@ -162,6 +162,7 @@ class TerminalState(str, Enum):
     """The engine's terminal observation, before a separate grading pass."""
 
     COMPLETED = "completed"
+    TURN_BUDGET_EXHAUSTED_PENDING_ANSWER = "turn_budget_exhausted_pending_answer"
     SCRIPT_EXHAUSTED = "script_exhausted"
     SENTINEL_TRIP = "sentinel_trip"
     ENVIRONMENT_WEDGE = "environment_wedge"
@@ -2284,8 +2285,23 @@ class OperatorEngine:
                 else str(records[-1].agent_message).strip()
             )
         ):
-            terminal_state = TerminalState.COMPLETED
-            reason = "completed"
+            # The final clean provider result can still leave an agent request
+            # queued for the next operator turn. The script has no turn left
+            # to deliver that answer, so this is a distinct incomplete stop
+            # rather than a proved completion. A suppressed repeat has no
+            # queued answer and therefore does not hold the run open.
+            if (
+                len(records) >= self.script.turn_budget
+                and next_match is not None
+                and next_match.solicits_operator
+                and next_match.category in {Category.DECISION_REQUEST, Category.APPROVAL_REQUEST}
+                and next_reply is not None
+            ):
+                terminal_state = TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
+                reason = "turn_budget_exhausted_pending_answer"
+            else:
+                terminal_state = TerminalState.COMPLETED
+                reason = "completed"
         else:
             terminal_state = TerminalState.SCRIPT_EXHAUSTED
             reason = "script_exhausted"
