@@ -7,13 +7,13 @@ import pytest
 
 from dp_scenarios.ledger import LedgerStore, Manifest, SupervisorFacts, lint, read_ledger
 from dp_scenarios.failure_reasons import REVIEWER_DEADLINE_EXCEEDED
-from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
+from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping, load_answer_sheet
 from dp_scenarios.operator.appender import AppenderError, StaticSupervisorRecordReader, append_supervisor_facts
 from dp_scenarios.operator.engine import FAILURE_MODES, OperatorEngine, OperatorScript, TerminalState, operator_script_hash
 from dp_scenarios.operator.engine import _operator_context
 from dp_scenarios.operator.events import EventSchedule, event_from_mapping
 from dp_scenarios.operator.generated import GeneratedOperator
-from dp_scenarios.operator.matcher import MatcherError
+from dp_scenarios.operator.matcher import Category, MatchResult, MatcherError
 from dp_scenarios.operator.persona import load_persona, persona_from_mapping
 from dp_scenarios.operator.transport import TouchedFile, ToolCall, TurnResult, InMemoryTransport
 
@@ -474,6 +474,86 @@ def test_engine_completes_only_when_every_scripted_turn_has_one_clean_terminal_r
         InMemoryTransport([completed("Which source is authoritative?"), completed("Which choice should we use?")]),
     ).run()
     assert under_budget.terminal_state is TerminalState.COMPLETED
+
+
+@pytest.mark.parametrize(
+    ("category", "rule_id"),
+    [
+        (Category.SOURCE_QUESTION, "source.answer.source"),
+        (Category.OTHER, "fallback.no-leading"),
+    ],
+)
+def test_final_review_disposition_ask_is_pending_despite_matcher_category(
+    monkeypatch: pytest.MonkeyPatch, category: Category, rule_id: str
+) -> None:
+    script = make_script(
+        turns=("Improve weekly visibility.",),
+        turn_budget=1,
+    )
+    engine = OperatorEngine(
+        script,
+        InMemoryTransport([
+            TurnResult(
+                agent_message=(
+                    "A review found a missing disclosure. The source table is unchanged. "
+                    "Do you accept the finding as-is or apply the correction?"
+                ),
+                terminal_result_count=1,
+                terminal_result_subtype="success",
+                terminal_result_is_error=False,
+            )
+        ]),
+    )
+    # Exercise the terminal classifier independently of matcher priority:
+    # broad source or fallback labels must not erase an explicit final choice.
+    monkeypatch.setattr(
+        engine.matcher,
+        "reply_for",
+        lambda *_args, **_kwargs: MatchResult(category, rule_id, "Unrelated reply."),
+    )
+    result = engine.run()
+
+    assert result.turns[-1].match.category is category
+    assert result.terminal_state is TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
+    assert result.stop_reason == "turn_budget_exhausted_pending_answer"
+
+
+@pytest.mark.parametrize(
+    ("final_id", "expected_state"),
+    [
+        ("finding-alpha", TerminalState.COMPLETED),
+        ("finding-beta", TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER),
+    ],
+)
+def test_budget_end_counts_a_new_review_finding_id_as_a_new_question(
+    final_id: str, expected_state: TerminalState
+) -> None:
+    sheet = load_answer_sheet(ROOT / "scenarios/inventory-position/answer-sheet.yaml")
+    persona = load_persona(ROOT / "scenarios/_personas/confidently-wrong.yaml")
+    script = OperatorScript.from_components(
+        persona,
+        sheet,
+        turns=(sheet.opening_message, "Please continue."),
+        turn_budget=2,
+        phase_by_turn={1: 1, 2: 7},
+    )
+
+    def review_ask(finding_id: str) -> TurnResult:
+        return TurnResult(
+            agent_message=(
+                f"Review found issue `{finding_id}` in the closure. "
+                "Do you accept this finding as-is or apply the correction?"
+            ),
+            terminal_result_count=1,
+            terminal_result_subtype="success",
+            terminal_result_is_error=False,
+        )
+
+    transport = InMemoryTransport([review_ask("finding-alpha"), review_ask(final_id)])
+    result = OperatorEngine(script, transport).run()
+
+    assert transport.message_texts[1] == sheet.decision_answers["review_fix_authorization"].answer
+    assert result.terminal_state is expected_state
 
 
 def test_turn_timeout_is_a_distinct_terminal_state_and_marks_unreached_rows() -> None:

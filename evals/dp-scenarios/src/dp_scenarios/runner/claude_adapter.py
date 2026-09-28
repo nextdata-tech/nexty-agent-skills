@@ -186,6 +186,9 @@ v3:decisions[as_of_instant_for_current].text to
 v3:decisions[as-of-instant-for-current].text, and apply the same rule to every
 other populated .text path; never slugify, snake-case, or patch only the path
 named by the error.
+If a proposal rebuilt from a fresh inspect_prepare_recovery map is rejected,
+stop prepare_workflow retries, report the exact rejection codes and the
+blueprint section they identify, and ask the operator how to proceed.
 
 After the review child returns claims, keep the rich review ledger in the
 job-level review-record.json. Relay only the bounded report in

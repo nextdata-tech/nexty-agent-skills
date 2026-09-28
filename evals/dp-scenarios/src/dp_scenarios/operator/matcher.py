@@ -246,7 +246,7 @@ _NON_PROSE = re.compile(
     # split them. Inline spans are single-line on purpose -- ``[^`\n]`` -- so a
     # lone stray backtick cannot swallow the rest of the message, and with it a
     # real question mark.
-    r"```.*?```|`[^`\n]*`|https?://\S+|/\S*\?\S*",
+    r"```.*?```|`[^`\n]*`|https?://\S+|(?<![\w])/\S*\?\S*",
     re.DOTALL,
 )
 
@@ -293,6 +293,23 @@ def _operator_request_text(message: str) -> str:
     return " ".join(_operator_request_clauses(message))
 
 
+def _current_request_clauses(message: str) -> list[str]:
+    """Split a request clause at a semicolon before a separately addressed ask."""
+
+    clauses: list[str] = []
+    for clause in _operator_request_clauses(message):
+        clauses.extend(
+            part.strip()
+            for part in re.split(
+                r";(?=\s*(?:please\s+)?(?:can|could|would|do|does|should|may|how|what|which|reply)\b)",
+                clause,
+                flags=re.IGNORECASE,
+            )
+            if part.strip()
+        )
+    return clauses
+
+
 def _review_fix_request(message: str, context: str = "") -> str | None:
     """Find a review-fix choice in an actual ask clause and its finding context.
 
@@ -303,9 +320,13 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
 
     prose = _NON_PROSE.sub(" ", message)
     review_context = "\n".join((prose, _NON_PROSE.sub(" ", context)))
-    if _REVIEW_FINDING_CONTEXT_PATTERN.search(review_context) is None:
+    if (
+        _REVIEW_FINDING_CONTEXT_PATTERN.search(review_context) is None
+        and _REVIEW_FINDING_ID_PATTERN.search(message) is None
+        and _REVIEW_FINDING_ID_PATTERN.search(context) is None
+    ):
         return None
-    request_clauses = _operator_request_clauses(message)
+    request_clauses = _current_request_clauses(message)
     for candidate in request_clauses:
         if not candidate:
             continue
@@ -314,6 +335,7 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         has_review_fix_action = bool(
             _REVIEW_FIX_ACTION_PATTERN.search(candidate)
             or _REVIEW_OUTPUT_ADDITION_PATTERN.search(candidate)
+            or _REVIEW_FIX_ANAPHORIC_ACTION_PATTERN.search(candidate)
         )
         if has_review_fix_action:
             # "Proceed with all three, some subset, or none?" has no repair
@@ -331,13 +353,13 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
             return candidate
     # Some agents request authorization with an imperative such as
     # "type Approved to authorize applying fix A" rather than a question.
-    for candidate in _REQUEST_CLAUSE_SPLIT.split(prose):
-        candidate = candidate.strip()
-        if not candidate or SOLICITATION_PATTERN.search(candidate) is None:
+    for candidate in _current_request_clauses(message):
+        if SOLICITATION_PATTERN.search(candidate) is None:
             continue
         has_review_fix_action = bool(
             _REVIEW_FIX_ACTION_PATTERN.search(candidate)
             or _REVIEW_OUTPUT_ADDITION_PATTERN.search(candidate)
+            or _REVIEW_FIX_ANAPHORIC_ACTION_PATTERN.search(candidate)
         )
         if has_review_fix_action:
             if _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN.search(candidate) is not None:
@@ -434,6 +456,13 @@ _REVIEW_OUTPUT_ADDITION_PATTERN = re.compile(
     r"[^?\n]{0,140}\b(?:summar(?:y|ies)|counts?|columns?|metrics?)\b",
     re.IGNORECASE,
 )
+_REVIEW_FIX_ANAPHORIC_ACTION_PATTERN = re.compile(
+    r"\b(?:authorize|approve|may\s+i|can\s+i|should\s+i)\b[^?\n]{0,80}"
+    r"\b(?:add(?:ing)?|includ(?:e|ing)|appl(?:y|ying)|fix(?:ing)?|"
+    r"repair(?:ing)?|correct(?:ing)?)\s+(?:it|this|that|them|these|those)"
+    r"\b(?=\s*(?:[?.!,;:]|$))",
+    re.IGNORECASE,
+)
 _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN = re.compile(
     # A per-finding "Fix X?" / "Add Y check?" asks for permission to edit the
     # reviewed implementation. Anchoring at the start avoids capturing "I
@@ -473,13 +502,105 @@ _PROPOSED_FIX_LIST_PATTERN = re.compile(r"\bfix(?:es)?\b", re.IGNORECASE)
 _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
     r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:found|finding|findings|issue|issues|"
     r"correction|corrections|flagged|reported|surfaced|identified|raised)\b"
-    r"|\b(?:finding|findings|issue|issues)\b.{0,140}\breview(?:er)?\b",
+    r"|\b(?:finding|findings|issue|issues)\b.{0,140}\breview(?:er)?\b"
+    r"|\b(?:finding|findings|issue|issues)\b.{0,160}\b(?:surfaced|reported|identified|raised)\b",
     re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_FINDING_ID_PATTERN = re.compile(
+    r"\b(?:finding|issue)\b[^`\n]{0,140}?`([a-z0-9][a-z0-9_-]{4,})`"
+    r"|\b(?:finding|issue)[ _-]?id\s*[:=]\s*[`\"']?([a-z0-9][a-z0-9_-]*)"
+    r"|\b(?:finding|issue)\s*#([a-z0-9][a-z0-9_-]*)",
+    re.IGNORECASE,
+)
+_REVIEW_DISPOSITION_ACTION_PATTERN = re.compile(
+    r"\b(?:accept(?:ed|ing|ance)?|approv(?:e|es|ed|ing|al)|reject(?:ed|ing)?|"
+    r"declin(?:e|ed|ing)|defer(?:red|ring)?|apply|applied|applying|"
+    r"fix(?:es|ed|ing)?|repair(?:s|ed|ing)?|restructur(?:e|ed|ing)|"
+    r"chang(?:e|ed|ing)|skip(?:s|ped|ping)|omit(?:s|ted|ting)|"
+    r"leave|leaving|keep|keeping)\b",
+    re.IGNORECASE,
+)
+_REVIEW_DISPOSITION_TARGET_PATTERN = re.compile(
+    r"\b(?:finding|findings|issue|issues|blocker|blockers|"
+    r"correction|corrections|fix|fixes|as\s+is|as-is|current\s+behavior|"
+    r"current\s+behaviour|restructure)\b",
+    re.IGNORECASE,
 )
 _CORRECTION_INVITATION_PATTERN = re.compile(
     r"\bopen\s+to\s+your\s+correction\b",
     re.IGNORECASE,
 )
+
+
+def _review_disposition_request(message: str, context: str = "") -> str | None:
+    """Find a current question that asks how to dispose of a review finding.
+
+    Finding language in a recap is only context. The disposition verbs and
+    target must occur in a clause that actually asks the operator, so a source
+    or plan-approval question later in the same message cannot inherit a
+    disposition from the recap.
+    """
+
+    prose = _NON_PROSE.sub(" ", message)
+    review_context = "\n".join((prose, _NON_PROSE.sub(" ", context)))
+    if (
+        _REVIEW_FINDING_CONTEXT_PATTERN.search(review_context) is None
+        and _REVIEW_FINDING_ID_PATTERN.search(message) is None
+        and _REVIEW_FINDING_ID_PATTERN.search(context) is None
+    ):
+        return None
+    for current_ask in _current_request_clauses(message):
+        if not solicits_operator(current_ask):
+            continue
+        actions = _REVIEW_DISPOSITION_ACTION_PATTERN.findall(current_ask)
+        if not actions:
+            continue
+        has_alternative = bool(
+            re.search(
+                r"\b(?:or|versus|vs\.?|either|one\s+of)\b",
+                current_ask,
+                re.IGNORECASE,
+            )
+        )
+        has_review_target = bool(_REVIEW_DISPOSITION_TARGET_PATTERN.search(current_ask))
+        if has_alternative and len(actions) >= 2 and has_review_target:
+            return current_ask
+        if has_review_target and re.search(
+            r"\b(?:what|how|whether|should|would|could|can|do|does|may|shall)\b",
+            current_ask,
+            re.IGNORECASE,
+        ):
+            return current_ask
+    return None
+
+
+def is_review_disposition_ask(message: str, context: str = "") -> bool:
+    """Whether the current message explicitly asks how to handle a review finding.
+
+    ``context`` may carry a finding reported on an earlier turn. This is a
+    detector only; it does not choose or reveal a disposition answer.
+    """
+
+    if not isinstance(message, str):
+        raise TypeError("agent message must be a string")
+    if not isinstance(context, str):
+        raise TypeError("matcher context must be a string")
+    return _review_disposition_request(message, context) is not None
+
+
+def review_finding_ids(message: str) -> tuple[str, ...]:
+    """Return explicitly labeled finding identifiers from a review message."""
+
+    if not isinstance(message, str):
+        raise TypeError("agent message must be a string")
+    return tuple(
+        dict.fromkeys(
+            value.casefold()
+            for match in _REVIEW_FINDING_ID_PATTERN.finditer(message)
+            for value in match.groups()
+            if value
+        )
+    )
 
 def asks_for_a_choice(message: str) -> bool:
     """Whether the agent is putting a decision to the operator."""
@@ -629,7 +750,10 @@ class MatcherBank:
 
         if not isinstance(message, str):
             raise TypeError("agent message must be a string")
-        return _REVIEW_FINDING_CONTEXT_PATTERN.search(_NON_PROSE.sub(" ", message)) is not None
+        return (
+            _REVIEW_FINDING_CONTEXT_PATTERN.search(_NON_PROSE.sub(" ", message)) is not None
+            or _REVIEW_FINDING_ID_PATTERN.search(message) is not None
+        )
 
     def validate_outgoing_message(self, message: str) -> None:
         """Validate composed text immediately before transport sends it.
@@ -770,6 +894,31 @@ class MatcherBank:
                 decision_id="review_fix_authorization",
                 matched=True,
                 matched_request_clause=review_fix_request,
+            )
+
+        # A review can ask for a disposition that is not authorization to
+        # apply corrections (for example, accept an existing behavior or
+        # restructure it). Keep that explicit choice out of the source and
+        # plan-approval routes. If no declared decision covers it, the
+        # operator returns its ordinary unknown-decision response rather than
+        # silently selecting an answer from recap vocabulary.
+        review_disposition_request = _review_disposition_request(message, context)
+        if review_disposition_request is not None and review_fix_request is None:
+            if review_fix is not None:
+                return MatchResult(
+                    Category.DECISION_REQUEST,
+                    "decision.answer.review_fix_authorization",
+                    review_fix.answer,
+                    decision_id="review_fix_authorization",
+                    matched=True,
+                    matched_request_clause=review_disposition_request,
+                )
+            return MatchResult(
+                Category.DECISION_REQUEST,
+                "decision.request",
+                "",
+                matched=True,
+                matched_request_clause=review_disposition_request,
             )
 
         # A declared decision is more specific than the generic approval
@@ -1068,5 +1217,7 @@ __all__ = [
     "MatcherError",
     "asks_for_a_choice",
     "classify_and_reply",
+    "is_review_disposition_ask",
+    "review_finding_ids",
     "solicits_operator",
 ]

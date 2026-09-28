@@ -1176,6 +1176,15 @@ def test_codex_system_prompt_preserves_workflow_v2_action_discipline() -> None:
     assert "Do not use `spawnAgent` for closure authoring" in CODEX_SYSTEM_PROMPT
 
 
+def test_codex_prompt_bounds_prepare_retries_after_fresh_recovery() -> None:
+    prompt = " ".join(CODEX_SYSTEM_PROMPT.split())
+    assert (
+        "If a proposal rebuilt from a fresh inspect_prepare_recovery map is rejected, "
+        "stop prepare_workflow retries, report the exact rejection codes and the blueprint section they identify, "
+        "and ask the operator how to proceed."
+    ) in prompt
+
+
 def test_codex_adapter_result_identifies_its_backend(capsys: pytest.CaptureFixture[str]) -> None:
     _write_result(TurnResult(agent_message="ready"), backend="codex")
     payload = json.loads(capsys.readouterr().out)

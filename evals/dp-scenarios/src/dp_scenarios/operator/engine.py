@@ -51,7 +51,15 @@ from .driver import (
     repeat_violation,
 )
 from .generated import GeneratedOperator, OperatorView
-from .matcher import Category, MatchResult, MatcherBank, MatcherError, asks_for_a_choice
+from .matcher import (
+    Category,
+    MatchResult,
+    MatcherBank,
+    MatcherError,
+    asks_for_a_choice,
+    is_review_disposition_ask,
+    review_finding_ids,
+)
 from .text_match import term_present
 from .persona import PersonaCard
 from .transport import Attachment, OperatorMessage, Transport, TurnResult, TouchedFile, ToolCall
@@ -134,6 +142,17 @@ def _normalize_request_clause(clause: str) -> str:
         else:
             normalized.append(character)
     return " ".join("".join(normalized).split())
+
+
+def _review_finding_keys(message: str) -> frozenset[str]:
+    """Return keys for explicitly named pending review finding(s).
+
+    An omitted ID cannot safely be used to carry an authorization forward, so
+    ID-less findings remain outside the answered-once set.
+    """
+
+    identifiers = review_finding_ids(message)
+    return frozenset(f"id:{identifier}" for identifier in identifiers)
 
 
 def _is_ask_back_acceptance_request(match: MatchResult, message: str) -> bool:
@@ -1350,6 +1369,8 @@ class OperatorEngine:
         prior_base_texts: list[str] = []
         prior_operator_messages: list[str] = []
         pending_review_context = ""
+        pending_review_finding_keys: frozenset[str] = frozenset()
+        answered_review_finding_keys: set[str] = set()
         # A declared fixed beat displaced by an answerable decision stays in
         # script order. Later fixed beats join the queue; a substitutable slot
         # absorbs the delay. The declared turn budget never grows to drain it.
@@ -1357,14 +1378,24 @@ class OperatorEngine:
         driver_flexible_slot_seen = False
         review_repair = self.script.answer_sheet.decision_answers.get("review_fix_authorization")
 
-        def fixed_beat_ready(turn: ScriptTurn) -> bool:
-            # The declared review-repair answer grants authority over actual
-            # findings. A fixed copy of that answer cannot precede a finding.
-            return not (
+        def fixed_beat_ready(
+            turn: ScriptTurn, current_match: MatchResult | None
+        ) -> bool:
+            # A fixed review-repair authorization must never be released just
+            # because a finding was mentioned earlier in the conversation.
+            # Other fixed beats keep the existing queue behavior; the
+            # unresolved-disposition guard below prevents them from answering
+            # a pending review choice.
+            if (
                 review_repair is not None
                 and turn.text == review_repair.answer
-                and not pending_review_context
-            )
+                and (
+                    current_match is None
+                    or current_match.decision_id != "review_fix_authorization"
+                )
+            ):
+                return False
+            return True
 
         for index, scheduled_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
@@ -1387,14 +1418,23 @@ class OperatorEngine:
                 and next_match is not None
                 and next_match.decision_id is not None
             )
+            unanswered_review_disposition = bool(
+                is_review_disposition_ask(previous_agent_message, pending_review_context)
+                and (
+                    next_reply is None
+                    or next_match is None
+                    or next_match.decision_id is None
+                )
+            )
             scheduled_fixed = not scheduled_turn.substitute_reply or scheduled_turn.approval
             defer_fixed = bool(
                 index > 1
                 and scheduled_fixed
                 and (
                     owed_fixed_beats
-                    or not fixed_beat_ready(scheduled_turn)
+                    or not fixed_beat_ready(scheduled_turn, next_match)
                     or (decision_answer_pending and not scheduled_turn.approval)
+                    or (unanswered_review_disposition and not scheduled_turn.approval)
                 )
             )
             if defer_fixed:
@@ -1460,8 +1500,9 @@ class OperatorEngine:
             ):
                 _, bound = owed_fixed_beats.popleft()
                 injections = (*injections, *bound)
-            elif owed_fixed_beats and fixed_beat_ready(owed_fixed_beats[0][0]) and not (
+            elif owed_fixed_beats and fixed_beat_ready(owed_fixed_beats[0][0], next_match) and not (
                 decision_answer_pending
+                or unanswered_review_disposition
                 or dynamic_approval_due
                 or owed_approval_due
                 or reserve_driver_slot
@@ -1534,6 +1575,7 @@ class OperatorEngine:
                 and not decision_answer_pending
                 and not dynamic_reapproval
                 and owed_approval_wait >= 3
+                and not unanswered_review_disposition
             )
             owed_approval_turn = owed_approval_genuine_ask or owed_approval_bound_forced
             # Distinct from ``approval_turn``: this is true only when the
@@ -1941,6 +1983,7 @@ class OperatorEngine:
                     # The generic review authorization marks the boundary
                     # between review generations for this bounded memory.
                     delivered_decision_clauses.clear()
+                    answered_review_finding_keys.update(pending_review_finding_keys)
                 elif next_match.matched_request_clause is not None:
                     normalized_clause = _normalize_request_clause(
                         next_match.matched_request_clause
@@ -2002,6 +2045,7 @@ class OperatorEngine:
             )
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
+                pending_review_finding_keys = _review_finding_keys(agent_message)
             match = self.matcher.reply_for(agent_message, context=pending_review_context)
             if (
                 match.decision_id is not None
@@ -2029,7 +2073,14 @@ class OperatorEngine:
                     )
 
             sheet_key = _served_reply_key(match.rule_id)
-            repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
+            repeated_review_authorization = bool(
+                match.decision_id == "review_fix_authorization"
+                and pending_review_finding_keys
+                and pending_review_finding_keys.issubset(answered_review_finding_keys)
+            )
+            repeat_suppressed = repeated_review_authorization or (
+                sheet_key is not None and sheet_key in served_reply_keys
+            )
 
             next_scripted_turn = (
                 self.script.turns[index]
@@ -2385,13 +2436,31 @@ class OperatorEngine:
             # queued for the next operator turn. The script has no turn left
             # to deliver that answer, so this is a distinct incomplete stop
             # rather than a proved completion. A suppressed repeat has no
-            # queued answer and therefore does not hold the run open.
+            # queued answer and therefore does not hold the run open, unless
+            # the final turn asks for a review disposition: that choice remains
+            # unanswered even when a broad matcher selected or suppressed an
+            # unrelated source reply.
+            final_agent_message = records[-1].agent_message
+            if isinstance(final_agent_message, bytes):
+                final_agent_message = final_agent_message.decode("utf-8", errors="replace")
+            pending_review_disposition = (
+                is_review_disposition_ask(final_agent_message, pending_review_context)
+                and (
+                    not pending_review_finding_keys
+                    or not pending_review_finding_keys.issubset(answered_review_finding_keys)
+                )
+            )
             if (
                 len(records) >= self.script.turn_budget
-                and next_match is not None
-                and next_match.solicits_operator
-                and next_match.category in {Category.DECISION_REQUEST, Category.APPROVAL_REQUEST}
-                and next_reply is not None
+                and (
+                    pending_review_disposition
+                    or (
+                        next_match is not None
+                        and next_match.solicits_operator
+                        and next_match.category in {Category.DECISION_REQUEST, Category.APPROVAL_REQUEST}
+                        and next_reply is not None
+                    )
+                )
             ):
                 terminal_state = TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
                 reason = "turn_budget_exhausted_pending_answer"
