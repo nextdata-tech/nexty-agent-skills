@@ -24,7 +24,7 @@
     },
     {
       "id": "derived-model-exists",
-      "check": "DERIVED_MODELS is non-empty and PHYSICAL_MODELS == BASE_MODELS + DERIVED_MODELS. The three questions are not answerable from the raw rows: at minimum a month column, a signed spend measure, and a category column must be materialized."
+      "check": "DERIVED_MODELS is non-empty and PHYSICAL_MODELS == BASE_MODELS + DERIVED_MODELS. The three questions are not answerable from the raw rows: at minimum a signed spend measure and a category column must be materialized."
     },
     {
       "id": "refunds-netted",
@@ -36,7 +36,7 @@
     },
     {
       "id": "monthly-grain",
-      "check": "A month column is materialized from txn_date. The semantic layer cannot express DATE_TRUNC at query time, so daily dates cannot answer a monthly question without a derived column."
+      "check": "The monthly questions are answerable by the query, not by hand. txn_date lands typed as a date (date() in models.py) with a dimension role, so a query groups it with {\"dimension\": \"txn_date\", \"grain\": \"month\"}. A derived month column is not required and should not be added only for reporting. Fails when txn_date lands as a string or with no dimension role and no other month dimension exists, because then neither the query nor the data can produce monthly totals."
     },
     {
       "id": "fx-handling-disclosed",
