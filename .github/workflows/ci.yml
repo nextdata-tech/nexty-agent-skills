@@ -165,9 +165,9 @@ jobs:
           echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
       # Resolve / download / verify / install now live in a shared composite
       # action so the semantic-contract job and the nightly canary consume NXD
-      # artifacts through exactly the same code. The resolver deliberately
-      # considers only completed successful main runs; that makes the lookup
-      # deterministic and excludes artifacts from failed or in-progress runs.
+      # artifacts through exactly the same code. For this pinned lookup the
+      # publication gate is the NXD run's successful artifact-bundle job, not
+      # the whole run: the pin PR opens while later NXD jobs are still running.
       # The token check that used to be the trailing step is the action's first
       # step, so an absent secret still fails the job with the same sentence
       # instead of skipping.

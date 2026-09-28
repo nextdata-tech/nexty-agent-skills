@@ -369,14 +369,19 @@ runs:
             echo "The NXD release manifest references an unreadable workflow run" >&2
             exit 1
           fi
+          # Deliberately no run status/conclusion check. As in the resolve
+          # step, the artifact-bundle job verified below is the publication
+          # gate: the release and the pin PR appear while the rest of the NXD
+          # run is still going, so requiring a completed run failed every pin
+          # PR's first CI run. A run that later completes unsuccessfully is
+          # accepted too: that failure comes from jobs after publication, and
+          # rejecting it would make the verdict depend on when this check ran.
           if ! jq -e --arg expected_source_sha "$EXPECT_SOURCE_SHA" \
-            '(.status == "completed")
-             and (.conclusion == "success")
-             and (.head_branch == "main")
+            '(.head_branch == "main")
              and (.head_sha == $expected_source_sha)
              and (.workflow_id != null)' \
             <<< "$workflow_run" >/dev/null; then
-            echo "The NXD release manifest references a workflow run that is not a successful main run for the pinned source" >&2
+            echo "The NXD release manifest references a workflow run that is not a main run for the pinned source" >&2
             exit 1
           fi
           workflow_id="$(jq -r '.workflow_id // empty' <<< "$workflow_run")"

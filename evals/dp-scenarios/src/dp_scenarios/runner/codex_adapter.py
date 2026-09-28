@@ -54,6 +54,13 @@ from dp_scenarios.runner.claude_adapter import (
 )
 from dp_scenarios.runner.review_guard import (
     REVIEW_DEADLINE_MS,
+    _capture_requirement,
+    _marker as _review_marker,
+    _review_input_availability_error,
+    _review_prompt_has_required_input,
+    _review_prompt_validation_message,
+    review_budget_line,
+    review_inspection_cutoff_line,
     validate_review_timeout_seconds,
 )
 
@@ -285,12 +292,14 @@ Do not call `sendInput`, `resumeAgent`, or `closeAgent` for this one-shot
 reviewer: its spawn prompt is final, and `wait` is the only follow-up
 operation (in v2, `wait_agent` is the only follow-up operation). After the
 wait returns terminal claims, pass the child's returned
-claims and the exact review_input fields to
-report_requirement. Copy every field from the current review_input as a
-sibling of `report` in the action parameters: `requirement_id`, `generation`,
-`subject_sha256`, `dependency_evidence_sha256`, `session_ref`, and
-`message_ref` (use the exact current value, including `null`; never omit
-`session_ref`). The `parameters.report` value must be the JSON object
+claims and the current supervisor binding to
+report_requirement. Copy `requirement_id`, `generation`, `subject_sha256`, and
+`dependency_evidence_sha256` from the current `report_requirement` action as
+siblings of `report`. Supply the non-empty current owning-session reference
+from the run-local handoff as `session_ref`, just as for `session_decision`;
+`review_input` has no `session_ref`. Set `message_ref` to the current message reference when
+available, otherwise `null`. Never send `session_ref: null`. The
+`parameters.report` value must be the JSON object
 `{"schema":"nxd-conversation-review-v1","verdict":"clear","findings":[],"rejection_code":null}`
 or the corresponding exact findings/rejection object, never a JSON-encoded
 string or Markdown. Its `findings` entries have exactly the keys `id`,
@@ -471,18 +480,100 @@ def _review_pending_after_observations(
 
     pending = previous
     for observation in observations:
-        if observation.get("tool") != "mcp__nxd-desktop__advance_workflow":
+        if observation.get("tool") not in {
+            "advance_workflow",
+            "mcp__nxd-desktop__advance_workflow",
+        }:
             continue
         arguments = observation.get("arguments")
         action = _advance_action_type(arguments)
         if observation.get("is_error") is True:
             continue
         result = observation.get("result")
-        if action == "capture" and _response_requires_review(result):
-            pending = True
-        elif action == "report_requirement" and _advance_requirement_id(arguments) == "review":
+        if action == "capture":
+            pending = _response_requires_review(result)
+        elif action == "report_requirement" and _codex_review_requirement_id(arguments) == "review":
             pending = False
     return pending
+
+
+def _codex_review_requirement_id(arguments: object) -> str | None:
+    """Read the review id from current parameter bindings or older fixtures."""
+
+    direct = _advance_requirement_id(arguments)
+    if direct is not None:
+        return direct
+    if not isinstance(arguments, Mapping):
+        return None
+    action = arguments.get("action")
+    parameters = action.get("parameters") if isinstance(action, Mapping) else None
+    requirement_id = parameters.get("requirement_id") if isinstance(parameters, Mapping) else None
+    return requirement_id if isinstance(requirement_id, str) else None
+
+
+def _codex_review_capture(
+    events: Sequence[Mapping[str, object]],
+    previous: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Keep the latest supervisor review binding across Codex turns."""
+
+    capture = previous
+    for event in events:
+        normalized = _normalise_app_server_event(event)
+        if normalized.get("type") != "item.completed":
+            continue
+        item = normalized.get("item")
+        if not isinstance(item, Mapping) or _codex_mcp_name(item) != "mcp__nxd-desktop__advance_workflow":
+            continue
+        arguments = _item_arguments(item)
+        action = _advance_action_type(arguments)
+        raw_result = _item_result(item)
+        if _codex_mcp_is_error(item, raw_result):
+            continue
+        if action == "capture":
+            capture = _capture_requirement(
+                {
+                    "tool_input": arguments,
+                    "tool_response": {
+                        "is_error": False,
+                        "content": _decode_mcp_value(raw_result),
+                    },
+                }
+            )
+        elif action == "report_requirement" and _codex_review_requirement_id(arguments) == "review":
+            capture = None
+    return capture
+
+
+def _codex_review_dispatch_error(
+    item: Mapping[str, object],
+    capture: dict[str, object] | None,
+    *,
+    review_timeout_seconds: float,
+    review_roots: Sequence[Path] | None,
+) -> str | None:
+    """Apply the Claude guard's canonical prompt and binding checks to a spawn."""
+
+    if capture is None:
+        return "Reviewer dispatch rejected: no current supervisor review binding."
+    state = dict(capture)
+    if review_roots is not None:
+        state["review_roots"] = [str(root.resolve()) for root in review_roots]
+    if state.get("review_input_error"):
+        return "Reviewer dispatch rejected: supervisor review_input is missing or malformed."
+    availability_error = _review_input_availability_error(state, state)
+    if availability_error is not None:
+        return f"Reviewer dispatch rejected: retained review input is unavailable ({availability_error})."
+    prompt = item.get("prompt")
+    if _review_marker(prompt) is None:
+        return "Reviewer dispatch rejected: the canonical NXD_REVIEW_DISPATCH marker is missing or malformed."
+    if not _review_prompt_has_required_input(
+        prompt, state, review_timeout_seconds=review_timeout_seconds
+    ):
+        return _review_prompt_validation_message(
+            prompt, state, review_timeout_seconds=review_timeout_seconds
+        )
+    return None
 
 
 def _turn_sandbox_policy(
@@ -722,6 +813,17 @@ def _item_result(item: Mapping[str, object]) -> object:
     if "output" in item:
         return item.get("output")
     return item.get("content")
+
+
+def _codex_mcp_is_error(item: Mapping[str, object], result: object) -> bool:
+    """Read both the app-server call status and the MCP response error flag."""
+
+    return bool(
+        item.get("is_error")
+        or item.get("error")
+        or item.get("status") == "failed"
+        or (isinstance(result, Mapping) and result.get("isError") is True)
+    )
 
 
 def _provider_usage(value: object) -> tuple[int | None, int | None]:
@@ -1885,7 +1987,7 @@ def parse_codex_events(
             continue
         pending.pop(key, None)
         raw_result = _item_result(item)
-        is_error = bool(item.get("is_error", False) or item.get("error") or item.get("status") == "failed")
+        is_error = _codex_mcp_is_error(item, raw_result)
         if raw_result is None and is_error:
             # A completed MCP error is still an answered call.  Leaving it as
             # ``None`` makes the shared checkpoint transport classify the call
@@ -1899,9 +2001,9 @@ def parse_codex_events(
             raw_result = {}
         result = _decode_mcp_value(raw_result)
         safe_arguments = redact_json_rpc(arguments)
-        safe_result = redact_json_rpc(result)
+        safe_result = redact_json_rpc({"is_error": is_error, "content": result})
         calls.append(ToolCall(name, safe_arguments, safe_result))
-        flat_results.append(safe_result)
+        flat_results.append(redact_json_rpc(result))
         transcript.append("[tool_use:" + name + "] " + redact_text(json.dumps(safe_arguments, default=str)[:600]))
         transcript.append("[tool_result] " + redact_text(json.dumps(safe_result, default=str)[:1500]))
         mcp_tool = _mcp_name(name)
@@ -2115,6 +2217,7 @@ class CodexAdapter:
         self._query_history: list[dict[str, object]] = []
         self._last_mcp_call: str | None = None
         self._review_pending = False
+        self._review_capture: dict[str, object] | None = None
         self._redact_json_rpc, self._redact_text = self._load_redactors()
         self._process: subprocess.Popen[bytes] | None = None
         self._rpc_id = 0
@@ -2651,6 +2754,38 @@ class CodexAdapter:
         last_event_at = turn_started_at
         last_event_label = "turn/start"
 
+        def validate_reviewer_spawn(
+            event: Mapping[str, object], observed: Sequence[Mapping[str, object]]
+        ) -> None:
+            normalized = _normalise_app_server_event(event)
+            item = normalized.get("item")
+            if (
+                normalized.get("type") != "item.started"
+                or not isinstance(item, Mapping)
+                or item.get("type") != "collab_agent_tool_call"
+                or item.get("tool") != "spawnAgent"
+            ):
+                return
+            capture = _codex_review_capture(
+                observed, getattr(self, "_review_capture", None)
+            )
+            if capture is None and not getattr(self, "_review_pending", False):
+                return
+            data_dir = getattr(self, "supervisor_data_dir", None)
+            roots = (
+                [data_dir / "captures", data_dir / "blueprints"]
+                if isinstance(data_dir, Path)
+                else []
+            )
+            error = _codex_review_dispatch_error(
+                item,
+                capture,
+                review_timeout_seconds=review_timeout_seconds,
+                review_roots=roots,
+            )
+            if error is not None:
+                raise CodexAdapterError(error, safe_diagnostic=True)
+
         def record_reviewer_lifecycle(
             event: Mapping[str, object], event_at: float
         ) -> None:
@@ -2841,6 +2976,7 @@ class CodexAdapter:
             for buffered_event in before_turn:
                 if not is_root_event(buffered_event):
                     continue
+                validate_reviewer_spawn(buffered_event, events)
                 normalized_buffered = _normalise_app_server_event(buffered_event)
                 record_provider_error(buffered_event, turn_started_at)
                 last_event_label = _event_debug_tail([buffered_event], limit=1) or "buffered_event"
@@ -2972,6 +3108,7 @@ class CodexAdapter:
                 continue
             if not is_root_event(event):
                 continue
+            validate_reviewer_spawn(event, events)
             normalized = _normalise_app_server_event(event)
             event_received_at = time.monotonic()
             record_provider_error(event, event_received_at)
@@ -3224,14 +3361,27 @@ class CodexAdapter:
         return results
 
     def _prompt(self, text: str, attachment_paths: Sequence[str]) -> str:
+        session_ref = getattr(self, "_thread_id", None)
+        session_line = (
+            f"- Current owning-session reference for workflow actions: {session_ref}\n"
+            if isinstance(session_ref, str) and session_ref
+            else ""
+        )
         text += (
             "\n\nRun-local source handoff:\n"
             f"- NXD_EVAL_FIXTURE_DIR={self.fixture_dir}\n"
+            f"{session_line}"
             "- For a file-backed source, read only the supplied input files under "
             "that directory and wire them into the closure; do not use oracle or "
             "gold files as source data.\n"
             "- For an API-backed source, use the workspace infra-profile.yaml and "
             "the generated connector runtime.\n"
+            "- For a review child, include exactly one line each for the supervisor's "
+            "retained_capture_root and retained_blueprint_path, one nonempty "
+            "'Sanitized original request:' line, 'Load and follow nxd-review-closure.', "
+            "the canonical NXD_REVIEW_DISPATCH marker, and these exact budget lines:\n"
+            f"{review_budget_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
+            f"{review_inspection_cutoff_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
         )
         if attachment_paths:
             text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
@@ -3279,6 +3429,9 @@ class CodexAdapter:
             self._thread_id = parsed.session_id
         if parsed.last_mcp_call:
             self._last_mcp_call = parsed.last_mcp_call
+        self._review_capture = _codex_review_capture(
+            events, getattr(self, "_review_capture", None)
+        )
         self._review_pending = _review_pending_after_observations(
             observations, self._review_pending
         )

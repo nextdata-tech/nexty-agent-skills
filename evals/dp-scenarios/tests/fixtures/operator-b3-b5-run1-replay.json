@@ -1,0 +1,6 @@
+{
+  "b3_turn_1": "Before I prepare the plan, how should any combined CPA handle unmatched records: matched pairs only, all conversion records in the denominator, or no combined CPA?",
+  "b3_turn_2": "The plan uses safe campaign matches, separate coverage rates, and unmatched diagnostics. Do you approve this plan as written?",
+  "b5_turn_7": "The read-only review found that the close assessment lacks the approved negative_quantity_count and orphan_warehouse_count summaries. No governed query ran. Do you authorize adding the two missing summaries and recapturing the closure for a fresh review?",
+  "b5_turn_8": "Confirmed. The negative quantities remain visible; I will wait for the accepted review before changing the closure."
+}

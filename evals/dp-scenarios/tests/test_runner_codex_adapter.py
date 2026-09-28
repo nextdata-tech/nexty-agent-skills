@@ -1191,7 +1191,8 @@ def test_codex_adapter_result_identifies_its_backend(capsys: pytest.CaptureFixtu
     assert "never fabricate the review outcome yourself" in CODEX_SYSTEM_PROMPT
     assert "CODEX_REVIEW_CHILD" in CODEX_SYSTEM_PROMPT
     assert "never a JSON-encoded" in CODEX_SYSTEM_PROMPT
-    assert "never omit" in CODEX_SYSTEM_PROMPT and "`session_ref`" in CODEX_SYSTEM_PROMPT
+    assert "Never send `session_ref: null`" in CODEX_SYSTEM_PROMPT
+    assert "`review_input` has" in CODEX_SYSTEM_PROMPT
     assert "findings" in CODEX_SYSTEM_PROMPT and "entries have exactly the keys" in CODEX_SYSTEM_PROMPT
     assert "`id`," in CODEX_SYSTEM_PROMPT and "`severity`," in CODEX_SYSTEM_PROMPT
     assert "do not forward reviewer-only fields" in CODEX_SYSTEM_PROMPT
@@ -3048,7 +3049,10 @@ def test_parse_codex_events_keeps_completed_mcp_error_answered() -> None:
     )
 
     assert result.environment_wedged is False
-    assert result.tool_calls[0].result == {"error": "approval denied"}
+    assert result.tool_calls[0].result == {
+        "is_error": True,
+        "content": {"error": "approval denied"},
+    }
     assert observations[0]["answered"] is True
 
 

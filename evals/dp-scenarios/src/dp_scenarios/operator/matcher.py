@@ -308,7 +308,10 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
             continue
         if _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(candidate):
             return candidate
-        has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
+        has_review_fix_action = bool(
+            _REVIEW_FIX_ACTION_PATTERN.search(candidate)
+            or _REVIEW_OUTPUT_ADDITION_PATTERN.search(candidate)
+        )
         if has_review_fix_action:
             # "Proceed with all three, some subset, or none?" has no repair
             # noun in the request clause. Accept that one enumerated choice
@@ -327,7 +330,10 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         candidate = candidate.strip()
         if not candidate or SOLICITATION_PATTERN.search(candidate) is None:
             continue
-        has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
+        has_review_fix_action = bool(
+            _REVIEW_FIX_ACTION_PATTERN.search(candidate)
+            or _REVIEW_OUTPUT_ADDITION_PATTERN.search(candidate)
+        )
         if has_review_fix_action:
             if _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN.search(candidate) is not None:
                 preceding_prose = prose[: prose.find(candidate)]
@@ -408,6 +414,18 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     # here and is not read as a fix-authorization ask.
     r"|\bhow\s+(?:would\s+you\s+like\s+me|should\s+i)\s+to\s+(?:proceed|handle)\b",
     re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_OUTPUT_ADDITION_PATTERN = re.compile(
+    # Review findings often ask for a missing result to be added rather than
+    # calling the edit a "fix". The finding-context gate in
+    # _review_fix_request and these output nouns keep ordinary policy choices
+    # (for example, whether to preserve negative stock) on their own routes.
+    r"\b(?:add(?:ing)?|includ(?:e|ing)|restor(?:e|ing)|suppl(?:y|ying))\b"
+    r"[^?\n]{0,140}\b(?:missing|omitted|absent)\b[^?\n]{0,140}"
+    r"\b(?:outputs?|fields?|summar(?:y|ies)|counts?|columns?|metrics?|results?|reports?)\b"
+    r"|\b(?:add(?:ing)?|includ(?:e|ing)|restor(?:e|ing)|suppl(?:y|ying))\b"
+    r"[^?\n]{0,140}\b(?:summar(?:y|ies)|counts?|columns?|metrics?)\b",
+    re.IGNORECASE,
 )
 _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN = re.compile(
     # A per-finding "Fix X?" / "Add Y check?" asks for permission to edit the
@@ -698,6 +716,7 @@ class MatcherBank:
             repair_text = review_fix_request.casefold()
             direct_finding_question = bool(
                 _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(review_fix_request)
+                or _REVIEW_OUTPUT_ADDITION_PATTERN.search(review_fix_request)
             )
             specific = self.answer_sheet.answer_for_decision(
                 repair_text, excluded=excluded_decision_ids

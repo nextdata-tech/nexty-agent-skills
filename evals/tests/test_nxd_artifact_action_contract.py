@@ -232,6 +232,9 @@ def _run_release_verifier(
     tmp_path: Path,
     *,
     head_sha: str = SOURCE_SHA,
+    head_branch: str = "main",
+    run_status: str = "completed",
+    run_conclusion: str | None = "success",
     workflow_path: str = ".github/workflows/nxd.python-artifact-refresh.yml",
     publication_jobs: list[dict[str, str]] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -260,9 +263,9 @@ def _run_release_verifier(
     run_file.write_text(
         json.dumps(
             {
-                "status": "completed",
-                "conclusion": "success",
-                "head_branch": "main",
+                "status": run_status,
+                "conclusion": run_conclusion,
+                "head_branch": head_branch,
                 "head_sha": head_sha,
                 "workflow_id": 42,
             }
@@ -337,7 +340,21 @@ def test_release_manifest_verification_binds_source_workflow_and_publication_job
         ],
     )
     assert wrong_source.returncode != 0
-    assert "not a successful main run for the pinned source" in wrong_source.stderr
+    assert "not a main run for the pinned source" in wrong_source.stderr
+
+    wrong_branch = _run_release_verifier(
+        tmp_path / "wrong-branch",
+        head_branch="feature",
+        publication_jobs=[
+            {
+                "name": "Build and publish exact Python artifact / artifact-bundle",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ],
+    )
+    assert wrong_branch.returncode != 0
+    assert "not a main run for the pinned source" in wrong_branch.stderr
 
     wrong_workflow = _run_release_verifier(
         tmp_path / "wrong-workflow",
@@ -356,3 +373,35 @@ def test_release_manifest_verification_binds_source_workflow_and_publication_job
     missing_job = _run_release_verifier(tmp_path / "missing-job")
     assert missing_job.returncode != 0
     assert "successful artifact-bundle jobs; expected exactly one" in missing_job.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the action")
+@pytest.mark.parametrize(
+    ("run_status", "run_conclusion"),
+    [
+        # The pin PR opens as soon as the release is published, while the rest
+        # of the NXD run (45-80 minutes) is still going (nexty PR #340; NXD
+        # runs 36215708383 and 36230304537).
+        ("in_progress", None),
+        # A later, unrelated job in the same run failed or was cancelled after
+        # the artifact-bundle job had already published.
+        ("completed", "failure"),
+        ("completed", "cancelled"),
+    ],
+)
+def test_release_verification_gates_on_publication_job_not_whole_run(
+    tmp_path: Path, run_status: str, run_conclusion: str | None
+) -> None:
+    result = _run_release_verifier(
+        tmp_path,
+        run_status=run_status,
+        run_conclusion=run_conclusion,
+        publication_jobs=[
+            {
+                "name": "Build and publish exact Python artifact / artifact-bundle",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ],
+    )
+    assert result.returncode == 0, result.stderr
