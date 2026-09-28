@@ -240,8 +240,14 @@ explicit `--desktop-python` is supplied. The supervisor's directory must also ho
 `nxd-desktop-kernel-host`: the supervisor spawns that sibling only when
 validation starts, so the runner checks for it before any agent turn rather
 than letting a partial build (such as a `target/ci` holding only the
-supervisor) surface mid-run as `workflow/execution_unavailable`. It does not use the platform CLI or a
-Kubernetes cluster.
+supervisor) surface mid-run as `workflow/execution_unavailable`. The supervisor
+also embeds the skill pack's `src/nxd-run-job-loop/scripts/self_check.py` at
+build time (from its `external/nexty-agent-skills` submodule) and retains that
+copy in every capture, so the runner refuses a supervisor whose binary does not
+contain the staged checker's exact bytes. Without that preflight the run spends
+its agent turns and is then invalidated as `checker_skew_mismatch` by the
+post-capture comparison, which remains the authoritative check. It does not use
+the platform CLI or a Kubernetes cluster.
 
 Before each disposable MCP server starts, the runner activates the bundled
 workflow-v2 contract in that trial's supervisor data directory. Activation is
@@ -449,10 +455,25 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
 
 | flag | default | meaning |
 |---|---|---|
-| `--driver-model` | none | OpenAI model id; omitting it keeps the scripted operator |
-| `--driver-temperature` | `1.0` | sampling temperature, pinned into the manifest |
-| `--driver-max-tokens` | `400` | completion cap per call, including reasoning tokens |
-| `--driver-timeout` | `60` | seconds allowed for one provider call before the turn falls back |
+| `--driver-model` | none | model id; omitting it keeps the scripted operator |
+| `--driver-backend` | `openai` | `openai` API or locally logged-in `codex` CLI |
+| `--driver-effort` | `medium` | Codex reasoning effort |
+| `--driver-temperature` | `1.0` | OpenAI sampling temperature, pinned into the manifest |
+| `--driver-max-tokens` | `400` | OpenAI completion cap per call, including reasoning tokens |
+| `--driver-timeout` | `60` OpenAI, `300` Codex | seconds allowed for one provider call before the turn falls back |
+
+To use ChatGPT login through the local Codex CLI, use
+`--driver-backend codex --driver-model gpt-6-sol` (optionally
+`--driver-effort medium`). This path does not need `OPENAI_API_KEY`. It sends
+the same system prompt, persona, and view as the OpenAI driver, rendered into
+one stdin prompt for `codex exec` in an empty temporary directory. The child
+gets only `HOME`, `PATH`, optional `CODEX_HOME`, and locale variables. The CLI's
+`--ignore-user-config` and `--ignore-rules` flags avoid user config, MCP server
+and hook configuration, and exec policy rules; the child also uses an ephemeral
+session and a read-only sandbox. The CLI has no supported flag to disable all
+built-in agent tools, and host login files remain available to the Codex
+process for authentication. Use the default temperature and token cap with this
+backend; Codex does not apply them and non-default values are rejected.
 
 The same flags exist on `dp_scenarios.runner.cli`, where they require
 `--mode live` — replaying a recording re-authors nothing.
@@ -469,9 +490,12 @@ declare the vocabulary the agent is being graded on discovering for itself; the
 engine refuses to construct a driver without it.
 
 **What is recorded.** The manifest pins `driver_model_id` and
-`driver_sampling_params` — `temperature`, `max_tokens`, and `prompt_hash`, the
-sha256 of the system prompt, so a silent prompt edit cannot be paired against an
-older run. Per turn, `operator-observations.json` carries `operator_mode`,
+`driver_sampling_params`. OpenAI keeps its historical `temperature`,
+`max_tokens`, and `prompt_hash` fields. Codex adds `backend: codex` and `effort`
+alongside the same prompt hash; its temperature and token cap are marked not
+applicable (the numeric `temperature: 1.0` remains for the manifest schema).
+These fields prevent pairing different operator backends or prompts. Per turn,
+`operator-observations.json` carries `operator_mode`,
 `operator_beat_id` and the driver flags; the run level carries four counters:
 
 | counter | what it means |
@@ -505,7 +529,8 @@ Confirm the ignore works before pasting a real key:
 `git check-ignore -v evals/dp-scenarios/.env` must print a matching rule.
 
 The runner reads only `OPENAI_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from the
-file. `--driver-model` uses the OpenAI key in the harness; the Claude OAuth
+file. `--driver-backend openai --driver-model` uses the OpenAI key in the harness;
+the Codex driver uses local Codex CLI login. The Claude OAuth
 token is passed only across the trusted adapter-to-Claude boundary. It is not
 added to the agent session allowlist, the Desktop supervisor environment, the
 manifest, or retained artifacts. OAuth-token runs also deny Bash so the agent
@@ -537,6 +562,22 @@ uv run --project evals/dp-scenarios python evals/dp-scenarios/scripts/run_local_
   --codex-home "$HOME/.codex" \
   --output-dir /tmp/dp-scenarios-codex-b1
 ```
+
+The adversarial reviewer runs as a Codex collaboration child, and Codex picks
+the collaboration runtime from the model catalog's `multi_agent_version`.
+Under v1 (`gpt-5.6-luna`), `spawnAgent` exposes the dispatch prompt and `wait`
+takes `{"targets":[id]}`. Under v2 (`gpt-6-luna` and the other gpt-6 models),
+the tools are `spawn_agent` and `wait_agent`. `wait_agent` takes only
+`timeout_ms`, and the child's lifecycle arrives as `subAgentActivity` items.
+The runner reads the child's final answer from the child thread
+(`thread/turns/list`) and records it with the child's thread id. v2 delivers
+the spawn message to the child only as provider-encrypted content, so the
+dispatch prompt cannot be observed. The canonical reviewer-dispatch gate
+therefore cannot credit a v2 reviewer, and
+`construction_adversarial_review_not_observed` remains. The optional
+`--codex-force-multi-agent-v1` flag stages a copy of the host's cached model
+catalog (`$CODEX_HOME/models_cache.json`) with only the selected model switched
+to v1, and records that choice in the run's sampling parameters.
 
 Codex sessions use one long-lived `codex app-server --stdio` child per live
 run. This keeps the runner-owned MCP connection and opaque provider thread

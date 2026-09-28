@@ -1,0 +1,154 @@
+{
+  "source": "Recorded from the dp-b1-luna-xhigh-run1 and dp-b5-luna-xhigh-run1 live runs (codex-cli 0.156.1, gpt-6-luna, catalog multi_agent_version v2, 2026-09-27). Ids, statuses and argument shapes are verbatim from the parent and child rollouts; the encrypted spawn message is elided and the child's claims are shortened. The app-server notifications are the rollout's event_msg items in the camelCase ThreadItem shape that `codex app-server generate-json-schema` documents for 0.156.1.",
+  "parent_thread_id": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+  "turn_id": "01a0e113-55c5-7172-b617-9c827c1b6aae",
+  "child_thread_id": "01a0e124-d4e5-72e2-b70e-64c8e4b47d3c",
+  "child_agent_path": "/root/crm_pipeline_review_r2",
+  "model_function_calls": {
+    "spawn_agent": {
+      "namespace": "collaboration",
+      "arguments": {"task_name": "crm_pipeline_review_r2", "message": "gAAAAA<provider-encrypted spawn message elided>"},
+      "output": {"task_name": "/root/crm_pipeline_review_r2"}
+    },
+    "wait_agent": {
+      "namespace": "collaboration",
+      "arguments": {"timeout_ms": 600000},
+      "output": {"message": "Wait completed.", "timed_out": false}
+    },
+    "rejected_wait_agent": {
+      "namespace": "collaboration",
+      "arguments": {"targets": ["/root/retained_capture_review"], "timeout_ms": 3600000},
+      "output": "failed to parse function arguments: unknown field `targets`, expected `timeout_ms` at line 1 column 10"
+    },
+    "parent_final_answer_message": {
+      "type": "agent_message",
+      "author": "/root/crm_pipeline_review_r2",
+      "recipient": "/root",
+      "text_prefix": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/crm_pipeline_review_r2\nPayload:\n"
+    }
+  },
+  "rollout_subagent_item": {
+    "type": "SubAgentActivity",
+    "id": "call_cdAqjQo4fPsJSEnAtVqKaU8y",
+    "kind": "started",
+    "agent_thread_id": "01a0e124-d4e5-72e2-b70e-64c8e4b47d3c",
+    "agent_path": "/root/crm_pipeline_review_r2"
+  },
+  "notifications": [
+    {
+      "method": "item/started",
+      "params": {
+        "threadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+        "turnId": "01a0e113-55c5-7172-b617-9c827c1b6aae",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "call_cdAqjQo4fPsJSEnAtVqKaU8y",
+          "kind": "started",
+          "agentThreadId": "01a0e124-d4e5-72e2-b70e-64c8e4b47d3c",
+          "agentPath": "/root/crm_pipeline_review_r2"
+        }
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+        "turnId": "01a0e113-55c5-7172-b617-9c827c1b6aae",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "call_cdAqjQo4fPsJSEnAtVqKaU8y",
+          "kind": "started",
+          "agentThreadId": "01a0e124-d4e5-72e2-b70e-64c8e4b47d3c",
+          "agentPath": "/root/crm_pipeline_review_r2"
+        }
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "threadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+        "turnId": "01a0e113-55c5-7172-b617-9c827c1b6aae",
+        "item": {
+          "type": "collabAgentToolCall",
+          "id": "call_rcXTVHOd3SYuXoCsvqx8OOsQ",
+          "tool": "wait",
+          "status": "inProgress",
+          "senderThreadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "prompt": null,
+          "model": null,
+          "reasoningEffort": null
+        }
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+        "turnId": "01a0e113-55c5-7172-b617-9c827c1b6aae",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "subagent-completed-01a0e124-d559-7293-9585-7a87245e83df",
+          "kind": "completed",
+          "agentThreadId": "01a0e124-d4e5-72e2-b70e-64c8e4b47d3c",
+          "agentPath": "/root/crm_pipeline_review_r2"
+        }
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+        "turnId": "01a0e113-55c5-7172-b617-9c827c1b6aae",
+        "item": {
+          "type": "collabAgentToolCall",
+          "id": "call_rcXTVHOd3SYuXoCsvqx8OOsQ",
+          "tool": "wait",
+          "status": "completed",
+          "senderThreadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "prompt": null,
+          "model": null,
+          "reasoningEffort": null
+        }
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+        "turn": {"id": "01a0e113-55c5-7172-b617-9c827c1b6aae", "status": "completed"}
+      }
+    }
+  ],
+  "child_thread_read": {
+    "thread": {
+      "id": "01a0e124-d4e5-72e2-b70e-64c8e4b47d3c",
+      "parentThreadId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+      "forkedFromId": "01a0e105-41c7-71c1-bc70-a3a8bdf0935c",
+      "agentNickname": "Singer",
+      "threadSource": "subagent",
+      "historyMode": "paginated",
+      "status": {"type": "notLoaded"}
+    }
+  },
+  "child_turns_list": {
+    "data": [
+      {
+        "id": "01a0e124-d559-7293-9585-7a87245e83df",
+        "status": "completed",
+        "items": [
+          {"type": "reasoning", "id": "rs-1", "summary": [], "content": []},
+          {
+            "type": "agentMessage",
+            "id": "msg_040c5df29d6a3be4016ab89dcb915487d2bb1afd0d6a26a114",
+            "phase": "final_answer",
+            "text": "Clear.\n\n**Claims**\n- The captured closure configures cursor pagination and projects only the four governed fields.\n\n**Findings:** None."
+          }
+        ]
+      }
+    ]
+  }
+}

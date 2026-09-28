@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -25,6 +26,7 @@ from dp_scenarios.failure_reasons import (
     INTERRUPTED_UNCLASSIFIED,
     REVIEWER_DEADLINE_EXCEEDED,
 )
+from dp_scenarios.grading.gates import _authored_closure
 
 from .answer_sheet import AnswerSheet
 from .appender import (
@@ -60,12 +62,107 @@ _REVISED_PLAN_PATTERN = re.compile(
     r"|\bgeneration\s+\d+\b",
     re.IGNORECASE | re.DOTALL,
 )
+# A revised plan that the agent actually re-bound with the supervisor after
+# the operator's approval went out. Only a successful ``prepare_workflow`` or
+# ``reset_workflow`` counts: either one invalidates the approval the agent was
+# holding (the workflow returns to ``workflow/consent_pending``), so a fresh
+# "please approve this revised plan" after it is a genuine new ask, not a
+# re-ask of something already granted. Bounded per run so an agent that keeps
+# re-preparing can never turn the operator into an approval loop.
+_REVISION_REAPPROVAL_LIMIT = 2
+_WORKFLOW_REBIND_TOOL_PATTERN = re.compile(
+    r"(?:^|__)(?:prepare|reset)_workflow$", re.IGNORECASE
+)
+
+
+def _rebinds_workflow(call: ToolCall) -> bool:
+    """Whether ``call`` is a successful ``prepare_workflow``/``reset_workflow``.
+
+    Backends record results in two shapes: the Claude adapter keeps the
+    ``tool_result`` envelope (``{"is_error": ..., "content": ...}``); the Codex
+    adapter decodes the content and records a failure as ``{"error": ...}``.
+    An unanswered call (``result is None``), an error in either shape, or an
+    empty payload is not a re-bound plan.
+    """
+
+    if not isinstance(call.name, str) or _WORKFLOW_REBIND_TOOL_PATTERN.search(call.name) is None:
+        return False
+    payload = call.result
+    if isinstance(payload, Mapping) and "is_error" in payload:
+        if payload.get("is_error") is not False:
+            return False
+        payload = payload.get("content")
+    return isinstance(payload, Mapping) and bool(payload) and "error" not in payload
+
+
+_ASK_BACK_ACCEPTANCE_RULE_ID = "stance.ask_back.accept_recommendation"
+_ASK_BACK_ACCEPTANCE_REPLY = "Yes, go with your recommendation."
+_ASK_BACK_HAND_BACK_PATTERN = re.compile(
+    r"\b(?:you\s+tell\s+me|what\s+(?:do|would|should)\s+you\s+recommend|"
+    r"what\s+is\s+your\s+recommendation|what\s+would\s+you\s+do|"
+    r"your\s+(?:call|decision|judg(?:e)?ment)|you\s+(?:choose|decide|pick)|"
+    r"up\s+to\s+you|tell\s+me\s+what\s+you(?:'d|\s+would)\s+do)\b",
+    re.IGNORECASE,
+)
+_AGENT_OWN_PROPOSAL_PATTERN = re.compile(
+    # Present tense only: "Earlier I recommended X" recaps a stale proposal
+    # and must not let the acceptance answer a different, current question.
+    r"\b(?:i\s+(?:propose|recommend|suggest)|"
+    r"my\s+(?:proposed|proposal|recommendation|suggestion)|"
+    r"proposed\s+(?:decision|rule|policy|approach|default|treatment))\b",
+    re.IGNORECASE,
+)
+_PROPOSAL_CONFIRMATION_PATTERN = re.compile(
+    r"\b(?:approv(?:e|es|ed|al|ing)?|confirm(?:s|ed|ation)?|"
+    r"accept(?:s|ed|ance)?|endorse(?:s|d|ment)?|sign\s*off|okay|ok|"
+    r"would\s+that\s+work|does\s+that\s+work|is\s+that\s+acceptable|"
+    r"are\s+you\s+(?:okay|ok|comfortable)\s+with)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_request_clause(clause: str) -> str:
+    """Strip formatting and punctuation without fuzzy-matching wording."""
+
+    normalized: list[str] = []
+    for character in clause.casefold():
+        if character.isspace():
+            normalized.append(" ")
+        elif character == "_" or unicodedata.category(character).startswith("P"):
+            continue
+        else:
+            normalized.append(character)
+    return " ".join("".join(normalized).split())
+
+
+def _is_ask_back_acceptance_request(match: MatchResult, message: str) -> bool:
+    """Whether this current message asks to accept the agent's own proposal."""
+
+    clause = match.matched_request_clause
+    if clause is None or not match.solicits_operator:
+        return False
+    # The proposal is usually laid out in its own paragraph(s) above the ask
+    # ("here's my proposed rule ... **Proposed decision:** ... Do you approve
+    # this specific rule?"), so the whole reply is searched; the pending
+    # hand-back already scopes this to the answer to that one question.
+    if _AGENT_OWN_PROPOSAL_PATTERN.search(message) is None:
+        return False
+    if not _PROPOSAL_CONFIRMATION_PATTERN.search(clause):
+        return False
+    if match.category is Category.APPROVAL_REQUEST:
+        return match.decision_id is None and match.approval_requested
+    return bool(
+        match.category is Category.DECISION_REQUEST
+        and match.decision_id is None
+        and not match.matched
+    )
 
 
 class TerminalState(str, Enum):
     """The engine's terminal observation, before a separate grading pass."""
 
     COMPLETED = "completed"
+    TURN_BUDGET_EXHAUSTED_PENDING_ANSWER = "turn_budget_exhausted_pending_answer"
     SCRIPT_EXHAUSTED = "script_exhausted"
     SENTINEL_TRIP = "sentinel_trip"
     ENVIRONMENT_WEDGE = "environment_wedge"
@@ -918,6 +1015,8 @@ class OperatorEngine:
 
         if match is None:
             return "answer"
+        if match.rule_id == _ASK_BACK_ACCEPTANCE_RULE_ID:
+            return "answer"
         # ``answer_available`` is false when the reply was repeat-suppressed:
         # the fact is declared but has already been given, so this turn has
         # nothing to convey. Reading ``substantive_answer`` alone handed the
@@ -1053,6 +1152,7 @@ class OperatorEngine:
         phase_status_reason: str | None = None,
         operator_approval: bool = False,
         operator_approval_text: str | None = None,
+        suppress_inferred_approval: bool = False,
         operator_mode: str = "scripted",
         operator_directive: str = "answer",
         operator_beat_id: str | None = None,
@@ -1060,9 +1160,26 @@ class OperatorEngine:
         driver_obstacle_rejected: bool = False,
         driver_repeat_rejected: bool = False,
         driver_beat_substituted: bool = False,
+        files_touched: Sequence[TouchedFile] = (),
     ) -> None:
         detail = "operator response selected" if match is not None else (phase_status_reason or "phase not reached")
         action_kind = self._DEFAULT_ACTION_KIND_BY_PHASE[phase]
+        if action_kind == "codegen" and not _authored_closure(
+            [{"path": touched.path} for touched in files_touched]
+        ):
+            # The phase-4 default is "codegen", but a phase default is a label
+            # of convenience, not an observation. When this turn's own
+            # files_touched show no write into the authored closure --
+            # ``_authored_closure`` is gate_intake's own predicate, reused
+            # here so the two can never drift -- nothing was actually
+            # generated. The turn's real content at that point in the
+            # protocol is presenting (or re-presenting) the plan for
+            # approval, which is what "spec_presented" means and which
+            # PHASE_ACTION_KINDS[4] already allows. This does not touch the
+            # operator-approval branches below: an approval turn still
+            # promotes straight to "spec_approved" regardless of this
+            # fallback.
+            action_kind = "spec_presented"
         artifact_ref: str | None = None
         if operator_approval:
             # The operator approved. The evidence is what the operator
@@ -1085,7 +1202,12 @@ class OperatorEngine:
             # indistinguishable from one that presented a spec.
             if not _artifact_text(approval_artifact):
                 claim["approval_without_artifact"] = True
-        elif match is not None and match.approval_requested and not self._script_declares_approval:
+        elif (
+            match is not None
+            and match.approval_requested
+            and not self._script_declares_approval
+            and not suppress_inferred_approval
+        ):
             # Legacy path: the script never declares who approves, so the only
             # available signal is the agent soliciting approval. A script that
             # declares its own approval turn owns approval outright and this
@@ -1191,8 +1313,37 @@ class OperatorEngine:
         next_match: MatchResult | None = None
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
+        delivered_decision_clauses: dict[str, set[str]] = {}
+        pending_ask_back_decision = False
         review_fix_authorized = False
         reapproval_uses = 0
+        # A scripted approval transmitted while nothing was actually being
+        # asked for yet (turn 1 clarifying question, an intake question, a
+        # narration turn) is still on record: the operator already granted it,
+        # so the first time the agent genuinely asks for approval afterward,
+        # the operator reconfirms verbatim rather than routing to a stock
+        # persona line or a stale decision term. This never mints a second
+        # ``spec_approved`` row -- it rides the ordinary substitutable-turn
+        # path -- and it fires at most once per run.
+        early_approval_text: str | None = None
+        reconfirm_available = False
+        # A scripted approval that ``defer_scheduled_approval`` swallows
+        # because a decision answer was pending that turn is not lost: its
+        # text is held here as owed until it is actually transmitted (see
+        # ``owed_approval_turn`` above). ``owed_approval_wait`` counts turns
+        # it has stayed owed, undelivered, since the deferral.
+        owed_approval_text: str | None = None
+        owed_approval_wait = 0
+        # Re-approval of a revised plan. ``revision_approval_text`` is the
+        # declared approval line last actually transmitted (scripted, owed or
+        # reconfirmed); ``plan_rebound_since_approval`` records that the agent
+        # successfully ran ``prepare_workflow``/``reset_workflow`` on or after
+        # the turn that approval (or a later re-approval) went out. Both must
+        # hold, together with a genuine approval ask, for the operator to
+        # approve the revision -- at most ``_REVISION_REAPPROVAL_LIMIT`` times.
+        revision_approval_text: str | None = None
+        plan_rebound_since_approval = False
+        revision_reapproval_uses = 0
         previous_agent_message = ""
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
@@ -1235,9 +1386,24 @@ class OperatorEngine:
                 and next_match is not None
                 and next_match.decision_id is not None
             )
+            # The agent's last message asked the operator something other than
+            # approval (a clarifying question about the rubric, the output
+            # shape...). "Approved." answers nothing there, and sent now it
+            # lands before any plan exists, so the grader rightly finds no
+            # prepare_workflow before it. Owe it to the next genuine ask
+            # instead, exactly as a pending decision answer does.
+            open_question_pending = bool(
+                next_match is not None
+                and next_match.solicits_operator
+                and next_match.category is not Category.APPROVAL_REQUEST
+            )
+            ask_back_acceptance_turn = bool(
+                next_match is not None
+                and next_match.rule_id == _ASK_BACK_ACCEPTANCE_RULE_ID
+            )
             defer_scheduled_approval = bool(
                 scripted_turn.approval
-                and decision_answer_pending
+                and (decision_answer_pending or open_question_pending)
             )
             declared_reapproval = self.script.answer_sheet.reapproval
             dynamic_reapproval = bool(
@@ -1251,7 +1417,39 @@ class OperatorEngine:
                 and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
                 and not scripted_turn.approval
             )
-            approval_turn = (scripted_turn.approval and not defer_scheduled_approval) or dynamic_reapproval
+            # A scripted approval that was deferred by ``defer_scheduled_approval``
+            # on an earlier turn is owed until it is actually transmitted. It
+            # is delivered the first time the agent genuinely asks for
+            # approval afterward (mirroring the reconfirmation mechanism's own
+            # "genuine ask" test below), or -- so a run can never simply lose
+            # its declared approval -- once it has stayed owed for three
+            # further turns, at the next turn that is not itself carrying a
+            # pending decision answer. A pending decision and a firing
+            # ``dynamic_reapproval`` both keep priority: either already has
+            # more specific declared text for this exact moment.
+            owed_approval_genuine_ask = bool(
+                owed_approval_text is not None
+                and not decision_answer_pending
+                and not dynamic_reapproval
+                and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            owed_approval_bound_forced = bool(
+                owed_approval_text is not None
+                and not decision_answer_pending
+                and not dynamic_reapproval
+                and owed_approval_wait >= 3
+            )
+            owed_approval_turn = owed_approval_genuine_ask or owed_approval_bound_forced
+            # Distinct from ``approval_turn``: this is true only when the
+            # scripted slot itself is what transmits (never for a dynamic
+            # reapproval), which is the one case the reconfirmation mechanism
+            # tracks -- a dynamic reapproval already carries its own declared
+            # text for "asked again", so it needs no reconfirmation of its own.
+            scripted_approval_fired = scripted_turn.approval and not defer_scheduled_approval
+            approval_turn = scripted_approval_fired or dynamic_reapproval or owed_approval_turn
             # Turn one, a non-substitutable turn and an approval turn all
             # transmit their declared line whatever the directive says, so
             # recording one there would put a value in the ledger that governed
@@ -1266,6 +1464,51 @@ class OperatorEngine:
             # whole reason to record the field is that reading these lines is
             # what finds defects here.
             yielding = directive == "yield"
+            # A previously-owed approval is reconfirmed the first time the
+            # agent genuinely asks for approval afterward. Decisions and a
+            # firing ``dynamic_reapproval`` keep priority -- both already
+            # carry their own, more specific, declared text for this exact
+            # moment -- and this must never compete with them or with the
+            # scripted approval slot itself.
+            reconfirm_this_turn = bool(
+                reconfirm_available
+                and early_approval_text is not None
+                and not decision_answer_pending
+                and not dynamic_reapproval
+                and not owed_approval_turn
+                and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            # The agent re-bound a revised plan after the operator's approval
+            # and is genuinely asking for approval of that revision. Every
+            # more specific mechanism keeps precedence: a scripted approval
+            # slot, an owed approval, a reconfirmation, a declared dynamic
+            # reapproval, a pending decision answer and the ask-back
+            # acceptance. Turn one, a ``substitute_reply: false`` line and a
+            # yield also keep their declared text; the trigger stays armed for
+            # a later turn. Due events are appended by ``_message_for`` as on
+            # any other turn.
+            revision_reapproval_turn = bool(
+                revision_approval_text is not None
+                and plan_rebound_since_approval
+                and revision_reapproval_uses < _REVISION_REAPPROVAL_LIMIT
+                and index > 1
+                and scripted_turn.substitute_reply
+                and not yielding
+                and not scripted_turn.approval
+                and not decision_answer_pending
+                and not dynamic_reapproval
+                and not owed_approval_turn
+                and not reconfirm_this_turn
+                and not ask_back_acceptance_turn
+                and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            approval_turn = approval_turn or revision_reapproval_turn
             directive_governs = (
                 index > 1
                 and scripted_turn.substitute_reply
@@ -1284,16 +1527,39 @@ class OperatorEngine:
             base = (
                 declared_reapproval.answer
                 if dynamic_reapproval and declared_reapproval is not None
+                else owed_approval_text
+                if owed_approval_turn and owed_approval_text is not None
                 else next_reply
                 if decision_answer_pending and next_reply is not None
                 else next_reply
                 if defer_scheduled_approval and next_reply is not None
+                else revision_approval_text
+                if revision_reapproval_turn and revision_approval_text is not None
                 else scripted_turn.text
                 if index == 1
                 or not scripted_turn.substitute_reply
                 or approval_turn
                 or yielding
+                else early_approval_text
+                if reconfirm_this_turn and early_approval_text is not None
+                else _ASK_BACK_ACCEPTANCE_REPLY
+                if ask_back_acceptance_turn
                 else (next_reply or scripted_turn.text)
+            )
+            # Whether the reconfirmation actually reached this turn's base, as
+            # opposed to ``reconfirm_this_turn`` being true on a turn the
+            # ternary above routed elsewhere first (turn one, a
+            # non-substitutable line, an approval turn, or a yield) -- those
+            # keep priority and the reconfirmation stays owed for a later turn.
+            reconfirm_applied = bool(
+                reconfirm_this_turn
+                and early_approval_text is not None
+                and not (
+                    index == 1
+                    or not scripted_turn.substitute_reply
+                    or approval_turn
+                    or yielding
+                )
             )
             selected_base = base
             operator_mode = "scripted"
@@ -1317,6 +1583,8 @@ class OperatorEngine:
                 and scripted_turn.substitute_reply
                 and not approval_turn
                 and not decision_answer_pending
+                and not reconfirm_this_turn
+                and not ask_back_acceptance_turn
             )
             if self.driver is not None and not authorable:
                 driver_skip_reason = (
@@ -1326,6 +1594,8 @@ class OperatorEngine:
                     if approval_turn
                     else "decision_answer"
                     if decision_answer_pending
+                    else "reconfirmation"
+                    if reconfirm_this_turn
                     else "non_substitutable"
                 )
             if authorable:
@@ -1431,6 +1701,9 @@ class OperatorEngine:
                 # approval, and that text becomes the ``spec_approved``
                 # ledger row's ``artifact_ref``.
                 and not approval_turn
+                and not reconfirm_this_turn
+                and not ask_back_acceptance_turn
+                and not decision_answer_pending
                 and next_reply
                 # The yield rule is path-independent: a rendered persona line
                 # is still a refusal nobody asked for.
@@ -1557,6 +1830,47 @@ class OperatorEngine:
             self.matcher.validate_outgoing_message(message.text)
             prior_operator_messages.append(message.text)
             result = self.transport.send_message(message)
+            ask_back_acceptance_transmitted = bool(
+                ask_back_acceptance_turn
+                and selected_base is next_reply
+                and _ASK_BACK_ACCEPTANCE_REPLY in message.text
+            )
+            decision_answer_delivered = bool(
+                decision_answer_pending
+                and next_match is not None
+                and next_match.decision_id is not None
+                and selected_base is next_reply
+            )
+            if decision_answer_delivered and next_match is not None:
+                if next_match.decision_id == "review_fix_authorization":
+                    # The generic review authorization marks the boundary
+                    # between review generations for this bounded memory.
+                    delivered_decision_clauses.clear()
+                elif next_match.matched_request_clause is not None:
+                    normalized_clause = _normalize_request_clause(
+                        next_match.matched_request_clause
+                    )
+                    if normalized_clause:
+                        delivered_decision_clauses.setdefault(
+                            next_match.decision_id or "", set()
+                        ).add(normalized_clause)
+            if (
+                ask_back_acceptance_transmitted
+            ):
+                pending_ask_back_decision = False
+            elif (
+                self.script.persona.stance_when_unknown == "ask_back"
+                and next_match is not None
+                and next_match.category is Category.DECISION_REQUEST
+                and next_match.decision_id is None
+                and not next_match.matched
+                and _ASK_BACK_HAND_BACK_PATTERN.search(message.text) is not None
+                and not approval_turn
+                and not ask_back_acceptance_turn
+            ):
+                # A match alone is not a hand-back: arm only after the
+                # outgoing message actually carries the ask-back treatment.
+                pending_ask_back_decision = True
             if (
                 decision_answer_pending
                 and next_match is not None
@@ -1594,6 +1908,119 @@ class OperatorEngine:
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
             match = self.matcher.reply_for(agent_message, context=pending_review_context)
+            if (
+                match.decision_id is not None
+                and match.decision_id != "review_fix_authorization"
+                and match.matched_request_clause is not None
+            ):
+                prior_clauses = delivered_decision_clauses.get(match.decision_id, set())
+                normalized_clause = _normalize_request_clause(match.matched_request_clause)
+                # A re-ask repeats the earlier question, possibly with more
+                # words around it ("Which option should I pick, and do you
+                # approve?"), so containment either way counts as the same
+                # question; only a clause that shares none of it is new.
+                re_asked = any(
+                    prior in normalized_clause or normalized_clause in prior
+                    for prior in prior_clauses
+                )
+                if prior_clauses and not re_asked:
+                    # Re-run the ordered matcher with only this decision
+                    # removed. A different rule can then answer the actual
+                    # clause instead of losing the turn to an empty reply.
+                    match = self.matcher.reply_for(
+                        agent_message,
+                        context=pending_review_context,
+                        excluded_decision_ids=frozenset({match.decision_id}),
+                    )
+
+            sheet_key = _served_reply_key(match.rule_id)
+            repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
+
+            next_scripted_turn = (
+                self.script.turns[index]
+                if index < len(self.script.turns)
+                else None
+            )
+            next_turn_number = index + 1
+            next_turn_has_event = any(
+                card.trigger_turn == next_turn_number
+                for card in self.script.events.cards
+            )
+            genuine_prior_request = bool(
+                next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            next_reconfirm_available = reconfirm_available
+            if reconfirm_applied:
+                next_reconfirm_available = False
+            elif scripted_approval_fired or owed_approval_turn:
+                if not genuine_prior_request:
+                    next_reconfirm_available = True
+            next_owed_approval = owed_approval_text is not None
+            if defer_scheduled_approval:
+                next_owed_approval = True
+            elif owed_approval_turn or dynamic_reapproval:
+                next_owed_approval = False
+            declared_reapproval = self.script.answer_sheet.reapproval
+            next_dynamic_reapproval = bool(
+                declared_reapproval is not None
+                and reapproval_uses + int(dynamic_reapproval) < declared_reapproval.max_uses
+                and (
+                    review_fix_authorized
+                    or (
+                        decision_answer_delivered
+                        and next_match is not None
+                        and next_match.decision_id == "review_fix_authorization"
+                    )
+                )
+                and match.category is Category.APPROVAL_REQUEST
+                and match.approval_requested
+                and match.solicits_operator
+                and _REVISED_PLAN_PATTERN.search(agent_message) is not None
+                and next_scripted_turn is not None
+                and not next_scripted_turn.approval
+            )
+            next_reconfirmation = bool(
+                next_reconfirm_available
+                and match.category is Category.APPROVAL_REQUEST
+                and match.approval_requested
+                and match.solicits_operator
+            )
+            next_owed_approval_turn = bool(
+                next_owed_approval
+                and not next_dynamic_reapproval
+                and match.category is Category.APPROVAL_REQUEST
+                and match.approval_requested
+                and match.solicits_operator
+            )
+            next_turn_priority_blocks_acceptance = bool(
+                next_scripted_turn is None
+                or next_scripted_turn.approval
+                or not next_scripted_turn.substitute_reply
+                or next_turn_has_event
+                or next_reconfirmation
+                or next_dynamic_reapproval
+                or next_owed_approval_turn
+            )
+            if (
+                pending_ask_back_decision
+                and self.script.persona.stance_when_unknown == "ask_back"
+                and _is_ask_back_acceptance_request(match, agent_message)
+                and not next_turn_priority_blocks_acceptance
+            ):
+                # This is a behavioral response, not plan approval evidence:
+                # keep it outside both the approval category and its flag.
+                match = MatchResult(
+                    Category.DECISION_REQUEST,
+                    _ASK_BACK_ACCEPTANCE_RULE_ID,
+                    _ASK_BACK_ACCEPTANCE_REPLY,
+                    matched=True,
+                    matched_request_clause=match.matched_request_clause,
+                )
+                sheet_key = None
+                repeat_suppressed = False
             failure_count = max(result.build_failure_count, 1 if result.build_failed else 0)
             if failure_count > 1 or (pending_failure and failure_count > 0):
                 if "one_obstacle_per_turn" not in self.failure_modes:
@@ -1653,12 +2080,16 @@ class OperatorEngine:
             # recorded, because nothing from the brief went out this turn (see
             # qualification._ungraded_reasons for the precedent: a claim the
             # code never checked must not stand).
-            sheet_key = _served_reply_key(match.rule_id)
-            repeat_suppressed = sheet_key is not None and sheet_key in served_reply_keys
             if repeat_suppressed:
                 claim["operator_repeat_suppressed"] = True
             if match.ground_truth and not repeat_suppressed:
                 claim["operator_answered_from_ground_truth"] = True
+            if reconfirm_applied:
+                claim["approval_reconfirmed"] = True
+            if owed_approval_turn:
+                claim["approval_deferred_for_decision"] = True
+            if revision_reapproval_turn:
+                claim["approval_reapproved_revision"] = True
             turn_record = TurnRecord(
                 turn=index,
                 phase=phase,
@@ -1707,6 +2138,7 @@ class OperatorEngine:
                 claim=claim or None,
                 operator_approval=approval_turn,
                 operator_approval_text=message.text if approval_turn else None,
+                suppress_inferred_approval=ask_back_acceptance_transmitted,
                 operator_mode=operator_mode,
                 operator_directive=recorded_directive,
                 operator_beat_id=operator_beat_id,
@@ -1714,11 +2146,96 @@ class OperatorEngine:
                 driver_obstacle_rejected=driver_obstacle_rejected,
                 driver_repeat_rejected=driver_repeat_rejected,
                 driver_beat_substituted=driver_beat_substituted,
+                files_touched=result.files_touched,
             )
             if match.decision_id == "review_fix_authorization" and not repeat_suppressed:
                 review_fix_authorized = True
             if dynamic_reapproval:
                 reapproval_uses += 1
+            if revision_reapproval_turn:
+                revision_reapproval_uses += 1
+            # Any approval that actually went out this turn answers whatever
+            # plan was current; only a re-bind the agent performs from here on
+            # (this turn's own tool calls included -- they follow the
+            # operator's message) can make a later ask a new revision.
+            if approval_turn or reconfirm_applied:
+                plan_rebound_since_approval = False
+                if scripted_approval_fired or owed_approval_turn or reconfirm_applied:
+                    # The declared approval line this turn carried, before any
+                    # due event was appended; a revision re-approval resends
+                    # exactly that line. A declared dynamic ``reapproval``
+                    # answer is scenario-specific text for its own moment and
+                    # is never recycled here.
+                    revision_approval_text = selected_base
+            if revision_approval_text is not None and any(
+                _rebinds_workflow(call) for call in result.tool_calls
+            ):
+                plan_rebound_since_approval = True
+            if defer_scheduled_approval:
+                # The scripted approval for this turn was swallowed by a
+                # pending decision answer; keep its text owed rather than
+                # letting it vanish.
+                owed_approval_text = scripted_turn.text
+                owed_approval_wait = 0
+            elif owed_approval_turn:
+                # Delivered this turn (as ``base`` above); nothing left owed.
+                owed_approval_text = None
+                owed_approval_wait = 0
+            elif dynamic_reapproval:
+                # The declared reapproval mechanism already answered this
+                # exact "asked again" moment with its own, more specific
+                # text -- the same event an owed approval would have been
+                # delivered for. Nothing stays owed behind it: a bound built
+                # to survive silence must not resurrect stale text after the
+                # scenario's own reapproval mechanism has already taken over.
+                owed_approval_text = None
+                owed_approval_wait = 0
+            elif owed_approval_text is not None:
+                owed_approval_wait += 1
+            if reconfirm_applied:
+                # Consumed: at most once per run.
+                reconfirm_available = False
+                early_approval_text = None
+            elif scripted_approval_fired or owed_approval_turn:
+                # ``next_match`` here is still the request that preceded this
+                # turn (updated below), so this is exactly the check the
+                # reconfirmation mechanism exists for: was the scripted line
+                # (or the just-delivered owed approval) actually answering a
+                # genuine ask, or did it transmit into a clarifying question,
+                # an intake turn, or plain narration (or, for the owed case,
+                # get forced out by the three-turn bound)? Only the latter
+                # leaves something owed for reconfirmation.
+                #
+                # ``approval_requested`` alone is not that test: it is
+                # deliberately set whenever the bare vocabulary
+                # ("approve[sd]?", "approval", "sign off") appears anywhere in
+                # the message (see ``MatchResult.approval_requested``), not
+                # only when the message actually solicits approval. A source
+                # answer that merely echoes the scenario's own domain phrase
+                # -- "the approved currency reference" -- trips it too, which
+                # is exactly what B2 run11's turn 2 did: a plain source
+                # clarifying question, classified ``source.answer.source``,
+                # was read as a "genuine prior request" purely because it
+                # repeated that phrase, so the arming below never ran and the
+                # turn-3 scripted approval's text was lost for the rest of the
+                # run instead of staying available to reconfirm. Requiring the
+                # match's own category to be ``APPROVAL_REQUEST`` is the same
+                # guard ``reconfirm_this_turn`` and ``owed_approval_genuine_ask``
+                # already apply below; this is the one place that had fallen
+                # out of step with them.
+                genuine_prior_request = bool(
+                    next_match is not None
+                    and next_match.category is Category.APPROVAL_REQUEST
+                    and next_match.approval_requested
+                    and next_match.solicits_operator
+                )
+                if not genuine_prior_request:
+                    early_approval_text = message.text
+                    reconfirm_available = True
+                # A genuinely-requested approval sets nothing: it already
+                # answered the ask it was for, and any earlier owed
+                # reconfirmation (rare -- two scripted approvals in a row)
+                # is left exactly as it was.
             # The match is kept even when suppressed; only the *reply* is
             # withdrawn. The directive is resolved from the match, and
             # discarding it here made a suppressed turn indistinguishable from
@@ -1768,8 +2285,23 @@ class OperatorEngine:
                 else str(records[-1].agent_message).strip()
             )
         ):
-            terminal_state = TerminalState.COMPLETED
-            reason = "completed"
+            # The final clean provider result can still leave an agent request
+            # queued for the next operator turn. The script has no turn left
+            # to deliver that answer, so this is a distinct incomplete stop
+            # rather than a proved completion. A suppressed repeat has no
+            # queued answer and therefore does not hold the run open.
+            if (
+                len(records) >= self.script.turn_budget
+                and next_match is not None
+                and next_match.solicits_operator
+                and next_match.category in {Category.DECISION_REQUEST, Category.APPROVAL_REQUEST}
+                and next_reply is not None
+            ):
+                terminal_state = TerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER
+                reason = "turn_budget_exhausted_pending_answer"
+            else:
+                terminal_state = TerminalState.COMPLETED
+                reason = "completed"
         else:
             terminal_state = TerminalState.SCRIPT_EXHAUSTED
             reason = "script_exhausted"

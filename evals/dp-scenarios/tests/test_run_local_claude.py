@@ -282,6 +282,9 @@ def test_skill_pack_root_splits_skill_identity_from_harness_and_scenarios(
     monkeypatch.setattr(module, "load_scenarios", fake_load_scenarios)
     monkeypatch.setattr(module, "run_drift_canary", fake_canary)
     monkeypatch.setattr(module, "require_kernel_host_sibling", lambda supervisor: supervisor)
+    monkeypatch.setattr(
+        module, "require_supervisor_embeds_checker", lambda supervisor, root: "digest"
+    )
     monkeypatch.setattr(module, "TierRunner", fake_tier_runner)
     monkeypatch.setattr(module, "write_report", lambda *args, **kwargs: (None, None, ()))
 
@@ -641,7 +644,7 @@ def test_driver_flags_default_to_a_scripted_operator() -> None:
     # flow against a current model was a guaranteed 400 on every authorable
     # turn -- which degrades to a silent fallback, not an error.
     assert args.driver_temperature == 1.0
-    assert args.driver_timeout == 60.0
+    assert args.driver_timeout is None  # backend-specific default chosen during configuration
     assert args.driver_max_tokens == 400
 
 
@@ -705,6 +708,64 @@ def test_driver_configuration_pins_the_model_temperature_and_prompt_hash(
     # The pins and the surface must agree by construction, not by convention.
     assert operator.model_id == driver_pins.driver_model_id
     assert float(driver_pins.driver_sampling_params["temperature"]) == operator.temperature
+
+
+def test_codex_driver_configuration_needs_no_api_key_and_has_distinct_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dp_scenarios.operator.openai_driver import driver_prompt_hash
+    from dp_scenarios.runner.environment import PinnedVersions
+
+    module = _load_runner_module()
+    constructed: list[dict[str, object]] = []
+
+    class FakeCodexProvider:
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs)
+
+        def __call__(self, view: object) -> str:
+            return "Understood, please continue."
+
+    monkeypatch.setattr(module, "CodexDriverProvider", FakeCodexProvider)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    args = _driver_args(module, ["--driver-backend", "codex", "--driver-model", "gpt-6-sol", "--driver-effort", "high"])
+    original = PinnedVersions("s", "v", "w", "mock-1", "c")
+
+    pins, factory = module.driver_configuration(args, original)
+
+    assert constructed == [{"model": "gpt-6-sol", "effort": "high", "timeout_seconds": 300.0}]
+    assert dict(pins.driver_sampling_params) == {
+        "backend": "codex",
+        "effort": "high",
+        "temperature": 1.0,
+        "temperature_applicability": "not-applicable",
+        "max_tokens": "not-applicable",
+        "prompt_hash": driver_prompt_hash(),
+    }
+    assert factory is not None
+    operator = factory(object(), object(), 1)
+    assert operator.provider_timeout_seconds == 300.0
+    assert operator.temperature == 1.0
+    openai_args = _driver_args(module, ["--driver-model", "gpt-6-sol"])
+    openai_pins, _ = module.driver_configuration(openai_args, original, openai_api_key="sk-test")
+    assert openai_pins.driver_model_id == pins.driver_model_id
+    assert openai_pins.driver_sampling_params != pins.driver_sampling_params
+
+
+@pytest.mark.parametrize("extra", [
+    ["--driver-temperature", "0.5"],
+    ["--driver-max-tokens", "500"],
+])
+def test_codex_driver_rejects_openai_sampling_flags(
+    monkeypatch: pytest.MonkeyPatch, extra: list[str]
+) -> None:
+    from dp_scenarios.runner.environment import PinnedVersions
+
+    module = _load_runner_module()
+    monkeypatch.setattr(module, "CodexDriverProvider", lambda **kwargs: object())
+    args = _driver_args(module, ["--driver-backend", "codex", "--driver-model", "gpt-6-sol", *extra])
+    with pytest.raises(module.TierError, match="do not apply to codex"):
+        module.driver_configuration(args, PinnedVersions("s", "v", "w", "mock-1", "c"))
 
 
 def test_driver_configuration_never_lets_the_key_reach_the_pins_or_the_operator(
@@ -1063,3 +1124,108 @@ def test_live_runner_requires_the_kernel_host_next_to_the_supervisor(tmp_path: P
 
     kernel_host.chmod(0o755)
     assert module.require_kernel_host_sibling(supervisor) == kernel_host
+
+
+def _checker_pack(root: Path, content: bytes) -> Path:
+    checker = root.joinpath("src", "nxd-run-job-loop", "scripts", "self_check.py")
+    checker.parent.mkdir(parents=True)
+    checker.write_bytes(content)
+    return root
+
+
+def test_supervisor_checker_preflight_accepts_the_embedded_staged_checker(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    module = _load_runner_module()
+    checker = b"#!/usr/bin/env python3\nprint('current checker')\n"
+    pack = _checker_pack(tmp_path / "pack", checker)
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    # include_bytes! places the file verbatim inside the binary's data.
+    supervisor.write_bytes(b"\x7fELF-prefix" + checker + b"-suffix\x00")
+
+    assert module.require_supervisor_embeds_checker(supervisor, pack) == (
+        hashlib.sha256(checker).hexdigest()
+    )
+
+
+def test_supervisor_checker_preflight_refuses_a_supervisor_built_from_another_checker(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    module = _load_runner_module()
+    current = b"#!/usr/bin/env python3\nprint('current checker')\n"
+    retained = b"#!/usr/bin/env python3\nprint('older checker')\n"
+    pack = _checker_pack(tmp_path / "pack", current)
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_bytes(b"\x7fELF-prefix" + retained + b"-suffix\x00")
+
+    with pytest.raises(TierError, match="checker skew") as raised:
+        module.require_supervisor_embeds_checker(supervisor, pack)
+    assert hashlib.sha256(current).hexdigest() in str(raised.value)
+    assert "checker_skew_mismatch" in str(raised.value)
+
+
+def test_supervisor_checker_preflight_fails_closed_on_unreadable_inputs(
+    tmp_path: Path,
+) -> None:
+    module = _load_runner_module()
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_bytes(b"binary")
+
+    with pytest.raises(TierError, match="skill-pack checker is unreadable"):
+        module.require_supervisor_embeds_checker(supervisor, tmp_path / "missing-pack")
+
+    pack = _checker_pack(tmp_path / "pack", b"print('checker')\n")
+    empty = tmp_path / "empty-supervisor"
+    empty.write_bytes(b"")
+    with pytest.raises(TierError, match="could not read the supervisor binary"):
+        module.require_supervisor_embeds_checker(empty, pack)
+
+
+def test_live_runner_refuses_checker_skew_before_any_agent_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_runner_module()
+    pack = tmp_path / "pack"
+    shutil.copytree(module.REPO_ROOT / "src", pack / "src")
+    (pack / ".claude-plugin").mkdir()
+    shutil.copy2(
+        module.REPO_ROOT / ".claude-plugin" / "plugin.json",
+        pack / ".claude-plugin" / "plugin.json",
+    )
+    supervisor = tmp_path / "nxd-desktop-supervisor"
+    supervisor.write_bytes(b"a supervisor built from another skills commit")
+    supervisor.chmod(0o755)
+
+    def no_agent_spend(*_args, **_kwargs):
+        raise AssertionError("the tier runner must not start after a checker skew")
+
+    monkeypatch.setattr(module, "require_kernel_host_sibling", lambda value: value)
+    monkeypatch.setattr(module, "TierRunner", no_agent_spend)
+    monkeypatch.setattr(module, "run_drift_canary", no_agent_spend)
+
+    with pytest.raises(TierError, match="checker skew"):
+        module.main([
+            "--skill-pack-root", str(pack),
+            "--claude", "/usr/bin/true",
+            "--supervisor", str(supervisor),
+            "--desktop-python", "/usr/bin/true",
+            "--output-dir", str(tmp_path / "output"),
+        ])
+    assert not (tmp_path / "output").exists()
+
+
+def test_forced_codex_multi_agent_v1_requires_codex_and_excludes_v2() -> None:
+    module = _load_runner_module()
+
+    with pytest.raises(TierError, match="requires --agent-backend codex"):
+        module.main(["--codex-force-multi-agent-v1"])
+    with pytest.raises(TierError, match="cannot be combined"):
+        module.main([
+            "--agent-backend", "codex",
+            "--codex-force-multi-agent-v1",
+            "--codex-multi-agent-v2",
+        ])

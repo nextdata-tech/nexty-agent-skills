@@ -6,9 +6,11 @@ scenario's planted judgement cannot be shadowed by incidental infrastructure
 vocabulary. The exemption is per question: an obstacle term is exempt only
 when that same message matches every term of a declared decision; declaring a
 compound decision does not globally remove its words from unrelated questions.
-The same declared decision answer is intentionally selected again when a
-later review turn asks for that authorization again; repeat suppression is an
-engine delivery policy for source, ground-truth, and status answers only.
+The matcher identifies a declared decision from one request clause and
+returns that clause with the answer. The engine uses delivered clauses to
+repeat an answer for the same question while letting a different question
+fall through to the next rule; review-fix authorization starts a new review
+generation.
 """
 
 from __future__ import annotations
@@ -75,6 +77,9 @@ class MatchResult:
     how a live run spent eight of its fifteen turns refusing.
     """
 
+    matched_request_clause: str | None = None
+    """Exact request clause selecting the answer, when a clause applies."""
+
     @property
     def matched_rule_id(self) -> str:
         """Return the stable rule identifier used by evidence rows."""
@@ -126,14 +131,41 @@ DEFAULT_OBSTACLE_TERMS = (
 # outranks the factual lookups. "looks good" is deliberately absent: it is
 # ordinary conversational filler ("the data looks good so far") and reading it
 # as a request for sign-off is a false positive far more often than not.
-APPROVAL_REQUEST_PATTERN = re.compile(r"\b(approve[sd]?|approval|sign\s*off)\b", re.IGNORECASE)
+#
+# "sign off" is excluded when it immediately follows "to": an infinitive
+# ("safe to sign off", "ready to sign off") describes a business eligibility
+# state, not an address to the operator, and B2's own domain vocabulary
+# ("Which close figures are safe to sign off?") is exactly that shape. A
+# solicited sign-off is phrased differently -- "sign off on the spec",
+# "please sign off", "your sign-off" -- none of which this lookbehind
+# excludes.
+# "approved" after "as"/"is"/"are"/"was"/"were" describes the state of data
+# ("should a populated fx_rate count as approved?", "the rate is approved"),
+# and "approval" followed by is/was/indicator/field/... names a source
+# attribute ("unless approval is established elsewhere", "no approval
+# indicator"). Neither asks the operator to approve anything; live B2 (Luna
+# run 1) got the scripted "Approved." in answer to exactly that question,
+# before any plan existed.
+APPROVAL_REQUEST_PATTERN = re.compile(
+    r"\bapproves?\b"
+    r"|(?<!\bas\s)(?<!\bis\s)(?<!\bare\s)(?<!\bwas\s)(?<!\bwere\s)\bapproved\b"
+    r"|\bapproval\b(?!\s+(?:is|was|indicator|field|flag|status|column|marker)\b)"
+    r"|(?<!\bto\s)\bsign\s*off\b",
+    re.IGNORECASE,
+)
 _APPROVAL_CONTEXT_PATTERN = re.compile(
     r"\b(?:need|require|requires|cannot|can\s+not|can't|unable\s+to\s+proceed|"
     r"waiting\s+for|awaiting|without)\b.{0,140}\bapproval\b",
     re.IGNORECASE | re.DOTALL,
 )
 _OTHER_ASK_TOPIC_PATTERN = re.compile(
-    r"\b(source|data|field|column|endpoint|resource|record|row|input|table|where\s+did|"
+    # "data" excludes "data product": the platform's own generic deliverable
+    # name ("generate and build the data product") names nothing substantive
+    # of its own, and treating it as a separate ask suppressed a bare
+    # "Do you approve this plan ... build the data product?" from ever
+    # resolving as approval -- the request clause was disqualified for
+    # mentioning the very artifact the approval authorizes building.
+    r"\b(source|data(?!\s+product\b)|field|column|endpoint|resource|record|row|input|table|where\s+did|"
     r"choose|which|should\s+we|prefer|option|decision|decide|yes\s*/\s*no|"
     r"status|done|finished|finish|complete|where\s+are\s+we|what(?:'s|\s+is)\s+next)\b",
     re.IGNORECASE,
@@ -163,7 +195,9 @@ SOLICITING_OPENER_PATTERN = re.compile(r"\s*which\b", re.IGNORECASE)
 # only to decide whether a stock reply should be handed to a driver as its
 # mandate for the turn.
 SOLICITATION_PATTERN = re.compile(
-    r"\b(please\s+(approve|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
+    # "Please explicitly authorize repairs for X" (live B2, Luna) is as much an
+    # ask as "please approve"; the adverb and "authorize" were both missing.
+    r"\b(please\s+(?:explicitly\s+)?(approve|authori[sz]e|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
     r"|please\s+adjudicate"
     r"|can\s+you|could\s+you|would\s+you|do\s+you\s+want|what\s+would\s+you\s+like"
     r"|let\s+me\s+know|up\s+to\s+you|sign\s*off\s+on|go-?ahead"
@@ -213,8 +247,20 @@ _NON_PROSE = re.compile(
     re.DOTALL,
 )
 
-_REQUEST_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n\s*\n+")
-_QUESTION_CLAUSE_END = re.compile(r"\?\s*[\"')\]]*$")
+# A sentence can end inside markdown emphasis ("**Approve these fixes?** A
+# yes/no is all I need."), so the split also fires after one or two emphasis
+# closers; otherwise the bold question and its trailer fuse into one clause
+# that ends in neither "?" nor an ask.
+_REQUEST_CLAUSE_SPLIT = re.compile(
+    r"(?<=[.!?])\s+|(?<=[.!?][*_])\s+|(?<=[.!?][*_]{2})\s+|\n\s*\n+"
+)
+# A trailing ``**`` or ``*`` closes markdown emphasis wrapped around the
+# question itself ("**Do you authorize that fix?**"), not a quote, paren, or
+# bracket. Without it here, a bold-wrapped question is invisible to every
+# downstream ask-clause check -- neither a question nor (unless it happens to
+# also match ``SOLICITATION_PATTERN``) an explicit ask -- which dropped live
+# review-fix authorization asks entirely.
+_QUESTION_CLAUSE_END = re.compile(r"\?\s*[\"')\]*_]*$")
 
 
 def _operator_request_clauses(message: str) -> list[str]:
@@ -258,23 +304,37 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         return None
     request_clauses = _operator_request_clauses(message)
     for candidate in request_clauses:
-        if candidate and (
-            _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
-            or _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None
-        ):
+        if not candidate:
+            continue
+        if _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(candidate):
+            return candidate
+        has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
+        if has_review_fix_action:
+            # "Proceed with all three, some subset, or none?" has no repair
+            # noun in the request clause. Accept that one enumerated choice
+            # only when the preceding prose explicitly labels the list as
+            # proposed fixes; otherwise it could authorize unrelated work.
+            if _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN.search(candidate) is not None:
+                preceding_prose = prose[: prose.find(candidate)]
+                if _PROPOSED_FIX_LIST_PATTERN.search(preceding_prose) is None:
+                    continue
+            return candidate
+        if _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None:
             return candidate
     # Some agents request authorization with an imperative such as
     # "type Approved to authorize applying fix A" rather than a question.
     for candidate in _REQUEST_CLAUSE_SPLIT.split(prose):
         candidate = candidate.strip()
-        if (
-            candidate
-            and SOLICITATION_PATTERN.search(candidate)
-            and (
-                _REVIEW_FIX_ACTION_PATTERN.search(candidate)
-                or _REVIEW_FIX_CHOICE_PATTERN.search(candidate)
-            )
-        ):
+        if not candidate or SOLICITATION_PATTERN.search(candidate) is None:
+            continue
+        has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
+        if has_review_fix_action:
+            if _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN.search(candidate) is not None:
+                preceding_prose = prose[: prose.find(candidate)]
+                if _PROPOSED_FIX_LIST_PATTERN.search(preceding_prose) is None:
+                    continue
+            return candidate
+        if _REVIEW_FIX_CHOICE_PATTERN.search(candidate) is not None:
             return candidate
     return None
 
@@ -301,23 +361,75 @@ CHOICE_PATTERN = re.compile(
 # A review's implementation findings can recap an earlier decision while the
 # direct question asks the operator to authorize a separate repair. The helper
 # above scopes these action/choice patterns to actual ask clauses.
+#
+# ``fix(?:es|ing)?`` (not just ``fix(?:es)?``) so "authorize fixing #1" is
+# recognized -- a bare ``\bfix\b`` boundary does not match the gerund "fixing".
+# Apply is listed with its inflections because ``\bapply\b`` misses the live
+# "applying" asks. Repair-verb-only alternatives also cover "authorize
+# catching the parse error ...?" and "fix it -- yes or no?" asks.
 _REVIEW_FIX_ACTION_PATTERN = re.compile(
-    r"\b(?:apply|proceed\s+with|make|go\s+ahead\s+with|add|authorize)\b"
-    r"[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|comments?)\b"
+    r"\b(?:apply|applies|applying|applied|proceed\s+with|"
+    r"make|go\s+ahead\s+with|add|authorize)\b"
+    r"[^?\n]{0,140}\b(?:fix(?:es|ing)?|correction(?:s)?|change(?:s)?|comments?)\b"
+    # Live follow-ups refer to fixes already enumerated immediately above:
+    # "Approve applying these two as well?" and "apply both/neither". The
+    # finding-context gate in _review_fix_request keeps these from becoming
+    # generic spec/intake approval patterns.
+    r"|\bappl(?:y|ies|ying)\s+(?:these|those|them|both|all|neither)\b"
+    # A choice over the enumerated items ("proceed with all three, some
+    # subset, or none?") names no repair noun; _review_fix_request accepts it
+    # only when the preceding prose presents the list as fixes.
+    r"|\bproceed\s+with\s+(?:all|both|some|none|either|any)\b"
     r"|\bfix\b[^?\n]{0,140}\b(?:fix(?:es)?|correction(?:s)?|change(?:s)?|"
     r"wording|description|field)\b"
+    # "Do you want me to fix the two blocking findings ...?" names the review
+    # findings themselves as the thing to fix, and "which finding IDs to
+    # apply?" picks among them; both stay behind the finding-context gate.
+    r"|\bfix(?:es|ing)?\b[^?\n]{0,140}\bfindings?\b"
+    r"|\bfindings?\b[^?\n]{0,60}\bto\s+appl(?:y|ies|ying)\b"
+    # "Repair" is the same ask as "fix": "Please explicitly authorize these
+    # review findings for repair", "approve repairs to status-confirmation",
+    # "May I repair the cents and diagnostic-count issues?" (live B2, Luna).
+    r"|\b(?:authorize|approve)\b[^?\n]{0,160}\b(?:findings?|repairs?)\b"
+    r"|\brepair(?:s|ing)?\b[^?\n]{0,140}\b(?:findings?|issues?|blockers?)\b"
+    r"|\bmay\s+i\s+repair\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
-    r"(?:applied|apply|leave|left|keep|skip|defer)\b",
+    r"(?:applied|apply|applies|applying|leave|left|keep|skip|defer)\b"
+    r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
+    r"exclud(?:e|ing)|flag(?:ging)?|treat(?:ing)?|handl(?:e|ing))\b"
+    r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b"
+    r"|\bapprove\b[^?\n]{0,80}\bfixing\b"
+    # A live turn asked "How would you like me to proceed on the two blocking
+    # items?" with no "fix" vocabulary at all -- the repair itself was named
+    # only in the finding recap, not in this clause. This alternative is
+    # reached only through ``_review_fix_request``, which already requires
+    # ``_REVIEW_FINDING_CONTEXT_PATTERN`` to match first, so a bare "how would
+    # you like me to proceed" with no review finding in play never reaches
+    # here and is not read as a fix-authorization ask.
+    r"|\bhow\s+(?:would\s+you\s+like\s+me|should\s+i)\s+to\s+(?:proceed|handle)\b",
     re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN = re.compile(
+    # A per-finding "Fix X?" / "Add Y check?" asks for permission to edit the
+    # reviewed implementation. Anchoring at the start avoids capturing "I
+    # will fix X; do you approve the blueprint?" as a review-fix request.
+    r"^\s*(?:\d+[.)]\s*)?(?:\*\*|__)?(?:fix|repair|correct)\b[^?\n]{1,140}\?"
+    r"|^\s*(?:\d+[.)]\s*)?(?:\*\*|__)?add\b[^?\n]{1,140}"
+    r"\b(?:check|assertion|verifier|verification)\b[^?\n]{0,140}\?",
+    re.IGNORECASE,
 )
 _REVIEW_FIX_CHOICE_PATTERN = re.compile(
     r"\b(?:which\s+(?:(?:would|do)\s+you\s+like|option\s+do\s+you\s+want)|pick\s+one)\b"
     r"|\b(?:fix|correction|change)\b[^?]{0,160}\b(?:or|versus|vs\.?)\b"
-    r"[^?]{0,160}\b(?:apply|leave|left|keep|skip|defer|proceed)\b"
-    r"|\b(?:apply|leave|left|keep|skip|defer|proceed)\b[^?]{0,160}\b"
+    r"[^?]{0,160}\b(?:apply|applies|applying|applied|leave|left|keep|skip|defer|proceed)\b"
+    r"|\b(?:apply|applies|applying|applied|leave|left|keep|skip|defer|proceed)\b[^?]{0,160}\b"
     r"(?:fix|correction|change)\b",
     re.IGNORECASE,
 )
+_REVIEW_FIX_ENUMERATED_CHOICE_PATTERN = re.compile(
+    r"\bproceed\s+with\s+(?:all|both|some|none|either|any)\b", re.IGNORECASE
+)
+_PROPOSED_FIX_LIST_PATTERN = re.compile(r"\bfix(?:es)?\b", re.IGNORECASE)
 _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
     r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:found|finding|findings|issue|issues|"
     r"correction|corrections|flagged|reported|surfaced|identified|raised)\b"
@@ -517,16 +629,35 @@ class MatcherBank:
             return result
         return replace(result, approval_requested=approval, solicits_operator=asked)
 
-    def classify(self, message: str, *, context: str = "") -> MatchResult:
+    def classify(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 
         if not isinstance(message, str):
             raise TypeError("agent message must be a string")
         if not isinstance(context, str):
             raise TypeError("matcher context must be a string")
-        return self._with_approval_flag(self._classify(message, context=context), message)
+        return self._with_approval_flag(
+            self._classify(
+                message,
+                context=context,
+                excluded_decision_ids=excluded_decision_ids,
+            ),
+            message,
+        )
 
-    def _classify(self, message: str, *, context: str = "") -> MatchResult:
+    def _classify(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         prose = _NON_PROSE.sub(" ", message)
         request_clauses = _operator_request_clauses(message)
@@ -565,18 +696,31 @@ class MatcherBank:
             # choice, retain scenario-specific decisions described in the
             # finding; an explicit fix action still wins over recap terms.
             repair_text = review_fix_request.casefold()
-            specific = self.answer_sheet.answer_for_decision(repair_text)
+            direct_finding_question = bool(
+                _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(review_fix_request)
+            )
+            specific = self.answer_sheet.answer_for_decision(
+                repair_text, excluded=excluded_decision_ids
+            )
             if (
                 specific is None
                 and _REVIEW_FIX_ACTION_PATTERN.search(repair_text) is None
+                and not direct_finding_question
             ):
-                specific = self.answer_sheet.answer_for_decision(message)
-            if specific is not None and specific.decision_id != "review_fix_authorization":
+                specific = self.answer_sheet.answer_for_decision(
+                    message, excluded=excluded_decision_ids
+                )
+            if (
+                specific is not None
+                and specific.decision_id != "review_fix_authorization"
+                and not direct_finding_question
+            ):
                 return MatchResult(
                     Category.DECISION_REQUEST,
                     f"decision.answer.{specific.decision_id}",
                     specific.answer,
                     decision_id=specific.decision_id,
+                    matched_request_clause=review_fix_request,
                 )
             return MatchResult(
                 Category.DECISION_REQUEST,
@@ -584,6 +728,7 @@ class MatcherBank:
                 review_fix.answer,
                 decision_id="review_fix_authorization",
                 matched=True,
+                matched_request_clause=review_fix_request,
             )
 
         # A declared decision is more specific than the generic approval
@@ -592,9 +737,13 @@ class MatcherBank:
         # match from unrelated questions (for example, "approve PyYAML?" and
         # "approve the install?").
         request_decision = None
+        request_decision_clause = None
         for clause in request_clauses:
-            request_decision = self.answer_sheet.answer_for_decision(clause)
+            request_decision = self.answer_sheet.answer_for_decision(
+                clause, excluded=excluded_decision_ids
+            )
             if request_decision is not None:
+                request_decision_clause = clause
                 break
         if (
             request_decision is not None
@@ -606,6 +755,7 @@ class MatcherBank:
                 f"decision.answer.{request_decision.decision_id}",
                 request_decision.answer,
                 decision_id=request_decision.decision_id,
+                matched_request_clause=request_decision_clause,
             )
 
         # An explicit approval question is decided by its ask clause. A
@@ -613,19 +763,47 @@ class MatcherBank:
         # an unrelated factual answer (especially one already repeat-suppressed).
         if approval_rule is not None:
             if _CORRECTION_INVITATION_PATTERN.search(prose) is not None:
-                correction_decision = self.answer_sheet.answer_for_decision(prose)
+                correction_decision = self.answer_sheet.answer_for_decision(
+                    prose, excluded=excluded_decision_ids
+                )
                 if correction_decision is not None:
                     return MatchResult(
                         Category.DECISION_REQUEST,
                         f"decision.answer.{correction_decision.decision_id}",
                         correction_decision.answer,
                         decision_id=correction_decision.decision_id,
+                        matched_request_clause=next(
+                            (
+                                clause
+                                for clause in request_clauses
+                                if _CORRECTION_INVITATION_PATTERN.search(clause)
+                            ),
+                            None,
+                        ),
                     )
-            return MatchResult(Category.APPROVAL_REQUEST, approval_rule, "")
+            return MatchResult(
+                Category.APPROVAL_REQUEST,
+                approval_rule,
+                "",
+                matched_request_clause=(
+                    approval_clauses[0]
+                    if approval_clauses
+                    else next(
+                        (
+                            clause
+                            for clause in request_clauses
+                            if _APPROVAL_CONTEXT_PATTERN.search(clause)
+                        ),
+                        None,
+                    )
+                ),
+            )
 
         decision = request_decision
         if decision is None:
-            decision = self.answer_sheet.answer_for_decision(message)
+            decision = self.answer_sheet.answer_for_decision(
+                message, excluded=excluded_decision_ids
+            )
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
         # "no review finding was reported" cannot consume a later decision.
@@ -639,6 +817,13 @@ class MatcherBank:
                 f"decision.answer.{decision.decision_id}",
                 decision.answer,
                 decision_id=decision.decision_id,
+                matched_request_clause=(
+                    request_decision_clause
+                    or next(
+                        (clause for clause in request_clauses if solicits_operator(clause)),
+                        None,
+                    )
+                ),
             )
         if is_question and _contains_term(message, self.question_obstacle_terms):
             return MatchResult(
@@ -657,18 +842,51 @@ class MatcherBank:
             # fact the operator had previously been expected to provide.
             routing_text = message if rule.rule_id == "source.question" else request_text or message
             if rule.pattern.search(routing_text):
-                return MatchResult(rule.category, rule.rule_id, "", matched=True)
+                matched_clause = next(
+                    (clause for clause in request_clauses if rule.pattern.search(clause)),
+                    None,
+                )
+                return MatchResult(
+                    rule.category,
+                    rule.rule_id,
+                    "",
+                    matched=True,
+                    matched_request_clause=matched_clause,
+                )
         return MatchResult(Category.OTHER, "fallback.no-leading", self.persona.no_leading_fallback, matched=False)
 
-    def reply_for(self, message: str, *, context: str = "") -> MatchResult:
+    def reply_for(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
         """Classify one message and choose its fixed reply."""
 
         if not isinstance(context, str):
             raise TypeError("matcher context must be a string")
-        return self._with_approval_flag(self._reply_for(message, context=context), message)
+        return self._with_approval_flag(
+            self._reply_for(
+                message,
+                context=context,
+                excluded_decision_ids=excluded_decision_ids,
+            ),
+            message,
+        )
 
-    def _reply_for(self, message: str, *, context: str = "") -> MatchResult:
-        classified = self.classify(message, context=context)
+    def _reply_for(
+        self,
+        message: str,
+        *,
+        context: str = "",
+        excluded_decision_ids: frozenset[str] = frozenset(),
+    ) -> MatchResult:
+        classified = self.classify(
+            message,
+            context=context,
+            excluded_decision_ids=excluded_decision_ids,
+        )
         if classified.category is Category.OTHER:
             return classified
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
@@ -695,6 +913,7 @@ class MatcherBank:
                     fact,
                     answer_key=key,
                     ground_truth=True,
+                    matched_request_clause=classified.matched_request_clause,
                 )
             source = self.answer_sheet.answer_for_source(lookup_text)
             if source is None and lookup_text != message:
@@ -706,6 +925,7 @@ class MatcherBank:
                     f"source.answer.{key}",
                     answer,
                     answer_key=key,
+                    matched_request_clause=classified.matched_request_clause,
                 )
             return self._unmatched(classified, message)
         if classified.category is Category.STATUS_QUERY:
@@ -714,14 +934,25 @@ class MatcherBank:
                 status = self.answer_sheet.answer_for_status(message)
             if status is not None:
                 key, answer = status
-                return MatchResult(Category.STATUS_QUERY, f"status.answer.{key}", answer, answer_key=key)
+                return MatchResult(
+                    Category.STATUS_QUERY,
+                    f"status.answer.{key}",
+                    answer,
+                    answer_key=key,
+                    matched_request_clause=classified.matched_request_clause,
+                )
             return self._unmatched(classified, message, lookup_text=lookup_text)
         if classified.category is Category.DECISION_REQUEST:
             return self._unmatched(classified, message)
         # APPROVAL_REQUEST has no declared-fact lookup: whether to approve is
         # a persona behavioral choice, not a fact a ground-truth brief holds.
         bank = self.persona.replies_for(classified.category.value)
-        return MatchResult(classified.category, f"persona.{classified.category.value}", bank[0])
+        return MatchResult(
+            classified.category,
+            f"persona.{classified.category.value}",
+            bank[0],
+            matched_request_clause=classified.matched_request_clause,
+        )
 
     def _unmatched(
         self, classified: MatchResult, message: str, *, lookup_text: str | None = None
@@ -746,6 +977,7 @@ class MatcherBank:
                 f"persona.{classified.category.value}",
                 bank[0],
                 matched=False,
+                matched_request_clause=classified.matched_request_clause,
             )
         candidate = lookup_text or message
         found = self.answer_sheet.answer_for_ground_truth(candidate)
@@ -759,12 +991,14 @@ class MatcherBank:
                 fact,
                 answer_key=key,
                 ground_truth=True,
+                matched_request_clause=classified.matched_request_clause,
             )
         return MatchResult(
             classified.category,
             f"unmatched.{classified.category.value}",
             self.persona.no_leading_fallback,
             matched=False,
+            matched_request_clause=classified.matched_request_clause,
         )
 
 

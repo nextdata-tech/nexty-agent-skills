@@ -1,0 +1,369 @@
+{
+  "id": "2026-09-26-b2-finance-close-first-live-sonnet-pass",
+  "date": "2026-09-26",
+  "label": "B2 finance-close first live Sonnet pass",
+  "notes": "Two live Claude Sonnet runs of B2 finance-close on identical code (the #344 branch c37dd3b4, squash-merged to main as c275ec96) with the same pinned supervisor and session config. The before/after tags only satisfy the pairing rule: no code changed between the arms, so this measures run-to-run variance, not a change. Run 14 passed clean: 55, with intake, construction, build and follow-up passing, replay verified, QUALIFIED; it is B2's first live pass. Run 15 passed intake but never published a build (construction_published_build_missing): the agent kept opening further robustness review rounds, and the scripted operator stopped authorising them once review-fix approval asks were classified as generic approval requests and one was captured by the weekend-FX decision answer. That operator routing gap is being fixed separately. One pass in two same-code epochs demonstrates a pass once and gives no repeatability rate.",
+  "plugin_version": "0.53.1",
+  "report_tags": {
+    "before-run14": "before-run14",
+    "after-run15": "after-run15"
+  },
+  "reports": {
+    "before-run14": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "finance-close",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "finance-close",
+              "result": "PASS",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "points": 10,
+                    "codes": [],
+                    "examined": true,
+                    "required": true,
+                    "passed": true,
+                    "ungraded": false
+                  },
+                  "capability": {
+                    "points": 0,
+                    "codes": [
+                      "capability_shortfall_not_staged"
+                    ],
+                    "examined": false,
+                    "required": false,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "narrowing": {
+                    "points": 0,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "examined": false,
+                    "required": false,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "construction": {
+                    "points": 10,
+                    "codes": [],
+                    "examined": true,
+                    "required": true,
+                    "passed": true,
+                    "ungraded": false
+                  },
+                  "build": {
+                    "points": 20,
+                    "codes": [],
+                    "examined": true,
+                    "required": true,
+                    "passed": true,
+                    "ungraded": false
+                  },
+                  "query": {
+                    "points": 0,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "examined": false,
+                    "required": false,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "follow-up": {
+                    "points": 15,
+                    "codes": [],
+                    "examined": true,
+                    "required": true,
+                    "passed": true,
+                    "ungraded": false
+                  }
+                },
+                "total": 55,
+                "scoreable_max": 55,
+                "threshold": 44,
+                "waived_gates": {
+                  "capability": "capability_shortfall_not_staged",
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": true,
+                  "sentinel": false
+                },
+                "state": "passed",
+                "findings": [
+                  "capability_shortfall_not_staged",
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 14,
+                "observed_calls": 190
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.53.1",
+                "supervisor_version": "sha256:e1c5c30459ccdc1c40af4bbb8d16d82c15503160be05e1925a7fedd67719a4b8",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "17137cdcd840c39b8828009ec703377fb452e0183d6cd9e1b736e672cd163954",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "0c43e2d2e8349cbb3a64093e738229d5a91e50dfb73f3d6d1dd6c9e6cf447766",
+                "turn_budget": 14,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "finance-close",
+                "tier": "core",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "finance-close-trial-0",
+                "session_config_sha256": "sha256:e537e9a51e43f3ae9f1114dd63567190a53707d8f4f857ed4b6a10916c253b04",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "QUALIFIED",
+                "operator_mode": "scripted",
+                "reasons": [
+                  "gate_waived:capability",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "verified"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "run_semantic_query"
+              },
+              "route_fidelity": {
+                "status": "examined"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "after-run15": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "finance-close",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "finance-close",
+              "result": "FAIL",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "points": 10,
+                    "codes": [],
+                    "examined": true,
+                    "required": true,
+                    "passed": true,
+                    "ungraded": false
+                  },
+                  "capability": {
+                    "points": 0,
+                    "codes": [
+                      "capability_shortfall_not_staged"
+                    ],
+                    "examined": false,
+                    "required": false,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "narrowing": {
+                    "points": 0,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "examined": false,
+                    "required": false,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "construction": {
+                    "points": 0,
+                    "codes": [
+                      "construction_published_build_missing"
+                    ],
+                    "examined": true,
+                    "required": true,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "build": {
+                    "points": 0,
+                    "codes": [
+                      "build_supervisor_identifier_missing",
+                      "build_supervisor_identifier_missing",
+                      "build_supervisor_identifier_missing"
+                    ],
+                    "examined": false,
+                    "required": true,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "query": {
+                    "points": 0,
+                    "codes": [
+                      "query_actual_not_examined"
+                    ],
+                    "examined": false,
+                    "required": false,
+                    "passed": false,
+                    "ungraded": false
+                  },
+                  "follow-up": {
+                    "points": 0,
+                    "codes": [
+                      "finance_close_not_examined"
+                    ],
+                    "examined": false,
+                    "required": true,
+                    "passed": false,
+                    "ungraded": false
+                  }
+                },
+                "total": 10,
+                "scoreable_max": 55,
+                "threshold": 44,
+                "waived_gates": {
+                  "capability": "capability_shortfall_not_staged",
+                  "narrowing": "narrowing_change_not_staged"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": false,
+                  "route_fidelity": true,
+                  "sentinel": false
+                },
+                "state": "failed",
+                "findings": [
+                  "capability_shortfall_not_staged",
+                  "narrowing_change_not_staged",
+                  "construction_published_build_missing",
+                  "build_supervisor_identifier_missing",
+                  "build_supervisor_identifier_missing",
+                  "build_supervisor_identifier_missing",
+                  "query_actual_not_examined",
+                  "finance_close_not_examined"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 14,
+                "observed_calls": 259
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.53.1",
+                "supervisor_version": "sha256:e1c5c30459ccdc1c40af4bbb8d16d82c15503160be05e1925a7fedd67719a4b8",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "17137cdcd840c39b8828009ec703377fb452e0183d6cd9e1b736e672cd163954",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "0c43e2d2e8349cbb3a64093e738229d5a91e50dfb73f3d6d1dd6c9e6cf447766",
+                "turn_budget": 14,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "finance-close",
+                "tier": "core",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "finance-close-trial-0",
+                "session_config_sha256": "sha256:e537e9a51e43f3ae9f1114dd63567190a53707d8f4f857ed4b6a10916c253b04",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "REJECTED",
+                "operator_mode": "scripted",
+                "reasons": [
+                  "score_state:failed",
+                  "gate_waived:capability",
+                  "gate_waived:narrowing"
+                ],
+                "replay_status": "verified"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "advance_workflow"
+              },
+              "route_fidelity": {
+                "status": "examined"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
