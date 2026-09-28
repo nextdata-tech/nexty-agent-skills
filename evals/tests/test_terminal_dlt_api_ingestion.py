@@ -617,6 +617,17 @@ def test_hard_coded_endpoint_ast_sees_a_config_dict_bound_to_a_name() -> None:
     )
 
     assert checker._nex_hardcoded_endpoint_ast({"transform/main.py": config_dict})
+    dict_slot = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"def make():\n"
+        b"    config = {'resources': [{'endpoint': {}}]}\n"
+        b"    config['resources'][0]['endpoint']['path'] = '/v1/orders'\n"
+        b"    return config\n"
+        b"resources = rest_api_resources(make())\n"
+    )
+    assert checker._nex_hardcoded_endpoint_ast({"transform/main.py": dict_slot})
+    message_only = from_profile + b"assert True, 'expected a path like /v1/orders'\n"
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": message_only})
     assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": from_profile})
 
 

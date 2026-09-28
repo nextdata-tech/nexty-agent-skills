@@ -1201,15 +1201,34 @@ def _nex_python_files(files: Mapping[str, tuple[bytes, int | None]], prefix: str
     }
 
 
-def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
-    """Whether a DLT REST call is fed a literal endpoint, directly or via a name.
+def _nex_non_message_constants(tree: ast.AST) -> list[str]:
+    """String constants that are neither docstrings nor raise/assert messages."""
+    excluded: set[int] = set()
+    for parent in ast.walk(tree):
+        body = getattr(parent, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr):
+            value = body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                excluded.add(id(value))
+        message = parent.exc if isinstance(parent, ast.Raise) else parent.msg if isinstance(parent, ast.Assert) else None
+        if message is not None:
+            excluded.update(id(child) for child in ast.walk(message))
+    return [
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in excluded
+    ]
 
-    A name counts when any string literal nested in its assigned value matches,
-    so the skill's ``config = {...}; rest_api_resources(config)`` shape is seen.
+
+def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
+    """Whether a DLT REST transform carries a literal endpoint in its code.
+
+    The case exists only to plant that literal, so any non-message string
+    matching the fixture topology counts, however it reaches the connector
+    (a name, a dict slot, a helper's return value).
     """
     pattern = r"(?:https?://|127\.0\.0\.1|/v1/orders)"
-    assigned: set[str] = set()
-    trees: list[ast.AST] = []
+    rest_call = False
+    literal = False
     for path, payload in transform_files.items():
         if not path.endswith(".py"):
             continue
@@ -1217,32 +1236,13 @@ def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
             tree = ast.parse(payload.decode("utf-8", errors="replace"))
         except (SyntaxError, ValueError):
             continue
-        trees.append(tree)
         for node in ast.walk(tree):
-            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                if any(
-                    isinstance(child, ast.Constant) and isinstance(child.value, str)
-                    and re.search(pattern, child.value)
-                    for child in ast.walk(node.value)
-                ):
-                    assigned.update(target.id for target in targets if isinstance(target, ast.Name))
-    for tree in trees:
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            fn = node.func
-            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
-            if name not in {"rest_api_resources", "rest_api_source"}:
-                continue
-            if any(
-                isinstance(child, ast.Constant) and isinstance(child.value, str)
-                and re.search(pattern, child.value)
-                or isinstance(child, ast.Name) and child.id in assigned
-                for child in ast.walk(node)
-            ):
-                return True
-    return False
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+                rest_call = rest_call or name in {"rest_api_resources", "rest_api_source"}
+        literal = literal or any(re.search(pattern, value) for value in _nex_non_message_constants(tree))
+    return rest_call and literal
 
 
 def _nex_fstring_prefix(node: ast.AST, prefix: str) -> bool:
