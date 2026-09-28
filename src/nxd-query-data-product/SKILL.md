@@ -281,7 +281,8 @@ first three as a discover→select→run protocol, not free-form SQL:
    the caller sees what was read. The response contains:
    - **metrics** (each with its `compatible_dimensions` list — the dimensions
      that share the model's grain),
-   - **dimensions** (with PII classifications),
+   - **dimensions** (with PII classifications, and for a date or timestamp
+     dimension a `grains` list of the periods it can be grouped by),
    - **joins** (with a `reaches_dimensions` list — dimensions reachable through
      the join without grain-hopping).
    Call `describe_model` once per model; do not batch models into a single call.
@@ -290,6 +291,21 @@ first three as a discover→select→run protocol, not free-form SQL:
    `{"measures": ["total_revenue"], "dimensions": ["country"]}`). Do NOT pass a
    `sql` key or a raw SQL string — the DP compiles the selection itself and
    returns the `compiled_sql` (aggregated, read-only, row-capped) plus rows.
+   **Group by a time period in the same query.** For "per month", "by
+   quarter" or "weekly", pass the date dimension as an object instead of a
+   name: `{"measures": ["enrollment_count"], "dimensions": [{"dimension":
+   "enrollment_date", "grain": "month"}]}`.
+   - Send the object only for a dimension whose `describe_model` entry lists
+     `grains`, and only a grain from that list.
+   - Weeks are ISO weeks starting Monday. Timezone-aware timestamps are grouped
+     in UTC.
+   - Filters apply to the raw date, not the period. For "March 2025", filter
+     `>= "2025-03-01"` and `< "2025-04-01"`.
+   - The output column keeps the dimension's name, so `order_by` uses the plain
+     name.
+   - The response's `time_grains` confirms what was applied.
+   - Never fetch day-level rows and add them up yourself: that is wrong for
+     distinct counts and averages. Never run one query per period either.
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly
    one grain, grain boundaries are visible before you query. Combining measures
    from **join-reachable** models in ONE `run_semantic_query` call is safe — the
