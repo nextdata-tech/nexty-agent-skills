@@ -40,7 +40,7 @@ from dp_scenarios.failure_reasons import (
     classify_failure_reason,
     first_reason,
 )
-from dp_scenarios.operator.transport import ToolCall, TouchedFile, TurnResult
+from dp_scenarios.operator.transport import ToolCall, TurnResult
 from dp_scenarios.runner.claude_adapter import (
     _advance_action_type,
     _advance_requirement_id,
@@ -3435,28 +3435,34 @@ class CodexAdapter:
         self._review_pending = _review_pending_after_observations(
             observations, self._review_pending
         )
-        changed: tuple[TouchedFile, ...] = ()
-        if not lightweight:
-            after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
-            changed = _changed_files(self._before, after)
-            self._before = after
-            _update_machine_artifacts(
-                observations,
-                artifact_dir=self.artifact_dir,
-                facts=self._facts,
-                build_context=self._build_context,
-                lifecycles=self._lifecycles,
-                built_runs=self._built_runs,
-                query_history=self._query_history,
-            )
-            workflow = self._build_context.get("workflow")
-            _update_from_state_dir(
-                self.supervisor_data_dir,
-                facts=self._facts,
-                built_runs=self._built_runs,
-                workflow=workflow if isinstance(workflow, str) and workflow else None,
-            )
-            _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
+        after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
+        changed = _changed_files(self._before, after)
+        self._before = after
+        # A timeout still has answered MCP calls and files written before the
+        # deadline. Keep their machine evidence, as the Claude adapter does,
+        # without treating an in-flight call as a successful observation.
+        evidence_observations = (
+            [observation for observation in observations if observation.get("answered") is True]
+            if lightweight
+            else observations
+        )
+        _update_machine_artifacts(
+            evidence_observations,
+            artifact_dir=self.artifact_dir,
+            facts=self._facts,
+            build_context=self._build_context,
+            lifecycles=self._lifecycles,
+            built_runs=self._built_runs,
+            query_history=self._query_history,
+        )
+        workflow = self._build_context.get("workflow")
+        _update_from_state_dir(
+            self.supervisor_data_dir,
+            facts=self._facts,
+            built_runs=self._built_runs,
+            workflow=workflow if isinstance(workflow, str) and workflow else None,
+        )
+        _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
         details = [value for value in (parsed.environment_detail, environment_detail) if value]
         safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
         tool_calls = _attach_checker_skew_markers(
