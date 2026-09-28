@@ -306,6 +306,8 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
     for candidate in request_clauses:
         if not candidate:
             continue
+        if _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(candidate):
+            return candidate
         has_review_fix_action = _REVIEW_FIX_ACTION_PATTERN.search(candidate) is not None
         if has_review_fix_action:
             # "Proceed with all three, some subset, or none?" has no repair
@@ -396,6 +398,7 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
     r"exclud(?:e|ing)|flag(?:ging)?|treat(?:ing)?|handl(?:e|ing))\b"
     r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b"
+    r"|\bapprove\b[^?\n]{0,80}\bfixing\b"
     # A live turn asked "How would you like me to proceed on the two blocking
     # items?" with no "fix" vocabulary at all -- the repair itself was named
     # only in the finding recap, not in this clause. This alternative is
@@ -405,6 +408,15 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     # here and is not read as a fix-authorization ask.
     r"|\bhow\s+(?:would\s+you\s+like\s+me|should\s+i)\s+to\s+(?:proceed|handle)\b",
     re.IGNORECASE | re.DOTALL,
+)
+_REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN = re.compile(
+    # A per-finding "Fix X?" / "Add Y check?" asks for permission to edit the
+    # reviewed implementation. Anchoring at the start avoids capturing "I
+    # will fix X; do you approve the blueprint?" as a review-fix request.
+    r"^\s*(?:\d+[.)]\s*)?(?:\*\*|__)?(?:fix|repair|correct)\b[^?\n]{1,140}\?"
+    r"|^\s*(?:\d+[.)]\s*)?(?:\*\*|__)?add\b[^?\n]{1,140}"
+    r"\b(?:check|assertion|verifier|verification)\b[^?\n]{0,140}\?",
+    re.IGNORECASE,
 )
 _REVIEW_FIX_CHOICE_PATTERN = re.compile(
     r"\b(?:which\s+(?:(?:would|do)\s+you\s+like|option\s+do\s+you\s+want)|pick\s+one)\b"
@@ -684,17 +696,25 @@ class MatcherBank:
             # choice, retain scenario-specific decisions described in the
             # finding; an explicit fix action still wins over recap terms.
             repair_text = review_fix_request.casefold()
+            direct_finding_question = bool(
+                _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(review_fix_request)
+            )
             specific = self.answer_sheet.answer_for_decision(
                 repair_text, excluded=excluded_decision_ids
             )
             if (
                 specific is None
                 and _REVIEW_FIX_ACTION_PATTERN.search(repair_text) is None
+                and not direct_finding_question
             ):
                 specific = self.answer_sheet.answer_for_decision(
                     message, excluded=excluded_decision_ids
                 )
-            if specific is not None and specific.decision_id != "review_fix_authorization":
+            if (
+                specific is not None
+                and specific.decision_id != "review_fix_authorization"
+                and not direct_finding_question
+            ):
                 return MatchResult(
                     Category.DECISION_REQUEST,
                     f"decision.answer.{specific.decision_id}",
