@@ -574,6 +574,10 @@ def test_checker_counts_only_accepted_actions_after_the_last_reset() -> None:
     assert checker._nex_case_action_calls(
         [consent(refused), retried], "nex890-positive", "consent"
     ) == [retried]
+    tool_error = {"jsonrpc": "2.0", "id": 1, "result": {"isError": True, "content": []}}
+    assert checker._nex_case_action_calls(
+        [consent(tool_error), retried], "nex890-positive", "consent"
+    ) == [retried]
 
 
 def test_checker_transform_walk_tolerates_expression_bodies(tmp_path: Path) -> None:

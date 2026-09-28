@@ -33,7 +33,10 @@ For each resource, use a DLT response action to retain only each response's
 response unchanged. After the DLT run, fail closed unless pages `1..pages`
 were each observed exactly once, `pages` and `total` agree across responses,
 the observed row counts sum to the envelope `total`, and the landed row count
-for that resource equals the same total. Never hard-code a total or include
+for that resource equals the same total. Once both resources reconcile, also
+fail closed unless the landed `orders` rows whose `status` is `paid` equal the
+landed paid-resource row count; this is the closure's own check that the
+governed paid answer matches the paid resource. Never hard-code a total or include
 row values or credentials in diagnostics. The landed table must contain order
 rows only; reject any landed `page`, `per_page`, `total`, or `pages` columns.
 

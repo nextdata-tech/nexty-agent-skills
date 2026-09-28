@@ -1373,6 +1373,12 @@ def _nex_direct_diagnostics(message: Mapping[str, Any]) -> list[Mapping[str, Any
     return []
 
 
+def _nex_accepted(call: Mapping[str, Any]) -> bool:
+    """Whether the supervisor accepted a call; unrecorded responses count."""
+    response = call.get("response_message")
+    return not isinstance(response, Mapping) or _nex_response_ok(response)
+
+
 def _nex_current_generation_calls(calls: list[dict[str, Any]], workflow: str) -> list[dict[str, Any]]:
     """Calls after the workflow's last successful ``reset_workflow``.
 
@@ -1411,15 +1417,16 @@ def _nex_case_action_calls(calls: list[dict[str, Any]], workflow: str, action_ty
             and call.get("operation") == "advance_workflow"
             and _nex_action(call)[0] == "report_requirement"
             and _nex_action_requirement_id(call) == "review"
+            and _nex_accepted(call)
         ]
-    # A consent or capture the supervisor refused at the protocol level (stale
-    # revision, invalid request) changed nothing; only the accepted one counts.
+    # A consent or capture the supervisor rejected (a JSON-RPC refusal or a
+    # tool-level error) changed nothing; only the accepted one counts.
     return [
         call for call in calls
         if call.get("workflow") == workflow
         and call.get("operation") == "advance_workflow"
         and _nex_action(call)[0] == action_type
-        and "error" not in (call.get("response_message") or {})
+        and _nex_accepted(call)
     ]
 
 
@@ -1610,7 +1617,9 @@ def check_nex890(
                 workflow_calls[workflow].append(call)
                 if operation not in workflow_operations:
                     failures.append("trace/extra-workflow-operation")
-        elif operation in workflow_operations and operation != "get_workflow_capabilities":
+        elif operation in workflow_operations and operation not in {
+            "get_workflow_capabilities", "list_data_products",
+        }:
             failures.append("trace/workflow-missing")
             failures.append(f"trace/workflow-missing/{operation}")
     # Evidence comes only from each workflow's current generation: a successful
@@ -1717,7 +1726,12 @@ def check_nex890(
             ):
                 failures.append(f"trace/{workflow}/workflow-binding-invalid")
             call_root = call.get("root")
-            if isinstance(call_root, str) and os.path.normpath(call_root) != authoring_root_norm:
+            # A rejected call changed nothing, so only accepted calls bind a root.
+            if (
+                _nex_accepted(call)
+                and isinstance(call_root, str)
+                and os.path.normpath(call_root) != authoring_root_norm
+            ):
                 failures.append(f"trace/{workflow}/root-mismatch")
                 failures.append(f"trace/{workflow}/root-mismatch/{call.get('operation')}")
         response_record = capture["response_record"]
