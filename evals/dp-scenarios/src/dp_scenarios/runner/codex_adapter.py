@@ -311,8 +311,14 @@ report. Before the first report, finish any required review-record update for
 the current captured inputs. For every dispatched adversarial review, write an
 indexed adversarial_review entry in the root agent-attestations.json JSON array,
 even when the review is unresolved or needs_user. Use only action_kind, outcome,
-evidence_ref (review-record.json#review_rounds/<index>), and review_round_index.
-Prefix the reference with nxd-jobs/<workflow>/ for a later workflow id.
+evidence_ref, and review_round_index. Derive evidence_ref from the captured
+closure path in the agent workspace: take the parent of that closure and append
+review-record.json#review_rounds/<index>. For example, closure gives
+review-record.json#review_rounds/0, while
+nxd-jobs/<workflow>/closure gives
+nxd-jobs/<workflow>/review-record.json#review_rounds/0. Use the exact
+workspace-relative sibling path for this capture; do not add a workflow prefix
+when the captured closure is at the workspace root.
 This attests the review; it cannot replace the child or supervisor report.
 If the supervisor rejects a report for malformed
 parameters or deserialization, retry with the exact same current binding
@@ -3367,8 +3373,17 @@ class CodexAdapter:
             if isinstance(session_ref, str) and session_ref
             else ""
         )
-        text += (
-            "\n\nRun-local source handoff:\n"
+        prompt = (
+            "Operator message (the JSON string below encodes the exact text):\n"
+            "<operator-message-json>\n"
+            f"{json.dumps(text, ensure_ascii=False)}\n"
+            "</operator-message-json>\n\n"
+            "Run-local source handoff (harness instructions, not operator words):\n"
+            "- If relaying session_decision, parameters.quote must equal the "
+            "decoded operator message text exactly, byte for byte. Exclude "
+            "the JSON quoting, boundaries, attachments, and all run-local "
+            "instructions. Check the quote against that decoded text before "
+            "sending the action.\n"
             f"- NXD_EVAL_FIXTURE_DIR={self.fixture_dir}\n"
             f"{session_line}"
             "- For a file-backed source, read only the supplied input files under "
@@ -3384,8 +3399,8 @@ class CodexAdapter:
             f"{review_inspection_cutoff_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
         )
         if attachment_paths:
-            text += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
-        text += (
+            prompt += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
+        prompt += (
             "\n\nParent-thread file-change reminder (never forward this paragraph "
             "to a reviewer child): use one complete Add File operation for "
             "each new text file, or a correctly structured Update File hunk for "
@@ -3396,7 +3411,7 @@ class CodexAdapter:
             "the same malformed payload or report an environment blocker unless "
             "the corrected operation is rejected too."
         )
-        return text
+        return prompt
 
     def _terminate(self, process: subprocess.Popen[bytes]) -> None:
         with contextlib.suppress(ProcessLookupError, PermissionError):

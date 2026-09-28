@@ -1301,8 +1301,13 @@ def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> N
     adapter = object.__new__(CodexAdapter)
     adapter.fixture_dir = tmp_path / "fixture"
 
-    prompt = adapter._prompt("Inspect the supplied source.", ())
+    approval = "Approved. Use only the prepared source.\n"
+    prompt = adapter._prompt(approval, ())
 
+    assert f"<operator-message-json>\n{json.dumps(approval)}\n</operator-message-json>" in prompt
+    assert "Run-local source handoff (harness instructions, not operator words):" in prompt
+    assert "parameters.quote must equal the decoded operator message text exactly" in prompt
+    assert "the JSON quoting, boundaries, attachments, and all run-local" in prompt
     assert f"NXD_EVAL_FIXTURE_DIR={adapter.fixture_dir}" in prompt
     assert "read only the supplied input files" in prompt
     assert "do not use oracle or gold files" in prompt
@@ -1313,6 +1318,13 @@ def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> N
     assert "correct the patch envelope" in prompt
     assert "corrected operation is rejected too" in prompt
     assert "report the blocker rather than retrying malformed patch syntax" not in prompt
+
+
+def test_codex_review_attestation_reference_is_derived_from_captured_closure() -> None:
+    assert "take the parent of that closure and append" in CODEX_SYSTEM_PROMPT
+    assert "review-record.json#review_rounds/0" in CODEX_SYSTEM_PROMPT
+    assert "nxd-jobs/<workflow>/review-record.json#review_rounds/0" in CODEX_SYSTEM_PROMPT
+    assert "do not add a workflow prefix" in CODEX_SYSTEM_PROMPT
 
 
 def test_codex_reviewer_terminal_statuses_include_timeout_and_cancellation() -> None:
@@ -3222,7 +3234,11 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
     assert thread_params["runtimeWorkspaceRoots"] == [str(tmp_path), str(REPO_ROOT)]
     turn_params = requests[5]["params"]
     assert turn_params["input"][0]["type"] == "text"
-    assert turn_params["input"][0]["text"].startswith("hello\n\nRun-local source handoff:")
+    assert turn_params["input"][0]["text"].startswith(
+        "Operator message (the JSON string below encodes the exact text):\n"
+        '<operator-message-json>\n"hello"\n</operator-message-json>\n\n'
+        "Run-local source handoff"
+    )
     assert turn_params["sandboxPolicy"] == {
         "type": "workspaceWrite",
         "writableRoots": [str(tmp_path), str(REPO_ROOT)],

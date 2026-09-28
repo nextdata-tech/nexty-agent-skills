@@ -1354,6 +1354,17 @@ class OperatorEngine:
         # script order. Later fixed beats join the queue; a substitutable slot
         # absorbs the delay. The declared turn budget never grows to drain it.
         owed_fixed_beats: deque[tuple[ScriptTurn, tuple[EventInjection, ...]]] = deque()
+        driver_flexible_slot_seen = False
+        review_repair = self.script.answer_sheet.decision_answers.get("review_fix_authorization")
+
+        def fixed_beat_ready(turn: ScriptTurn) -> bool:
+            # The declared review-repair answer grants authority over actual
+            # findings. A fixed copy of that answer cannot precede a finding.
+            return not (
+                review_repair is not None
+                and turn.text == review_repair.answer
+                and not pending_review_context
+            )
 
         for index, scheduled_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
@@ -1380,7 +1391,11 @@ class OperatorEngine:
             defer_fixed = bool(
                 index > 1
                 and scheduled_fixed
-                and (owed_fixed_beats or (decision_answer_pending and not scheduled_turn.approval))
+                and (
+                    owed_fixed_beats
+                    or not fixed_beat_ready(scheduled_turn)
+                    or (decision_answer_pending and not scheduled_turn.approval)
+                )
             )
             if defer_fixed:
                 # Events with their own material still fire at the declared
@@ -1392,7 +1407,9 @@ class OperatorEngine:
                 )
                 owed_fixed_beats.append((scheduled_turn, bound))
                 injections = tuple(injection for injection in injections if injection not in bound)
-                scripted_turn = ScriptTurn(scheduled_turn.text)
+                # A deferred authorization must not leak through the driver
+                # fallback or a scripted substitute on this same turn.
+                scripted_turn = ScriptTurn("Please continue.")
             else:
                 scripted_turn = scheduled_turn
             queued_turn = owed_fixed_beats[0][0] if owed_fixed_beats else None
@@ -1423,8 +1440,31 @@ class OperatorEngine:
             # An already-owed approval or declared reapproval keeps its own
             # turn. The queued fixed beat remains at the front for a later
             # slot instead of being popped and silently replaced by approval.
-            if owed_fixed_beats and not (
-                decision_answer_pending or dynamic_approval_due or owed_approval_due
+            reserve_driver_slot = bool(
+                self.driver is not None
+                and not driver_flexible_slot_seen
+                and scheduled_turn.substitute_reply
+                and not scheduled_turn.approval
+                and not decision_answer_pending
+            )
+            # A direct answer to the review-repair request also transmits the
+            # declared fixed authorization. Retire that queued copy now, with
+            # any beat-bound event, so it cannot be repeated on a later turn.
+            if (
+                owed_fixed_beats
+                and review_repair is not None
+                and decision_answer_pending
+                and next_match is not None
+                and next_match.decision_id == "review_fix_authorization"
+                and owed_fixed_beats[0][0].text == next_reply
+            ):
+                _, bound = owed_fixed_beats.popleft()
+                injections = (*injections, *bound)
+            elif owed_fixed_beats and fixed_beat_ready(owed_fixed_beats[0][0]) and not (
+                decision_answer_pending
+                or dynamic_approval_due
+                or owed_approval_due
+                or reserve_driver_slot
             ):
                 scripted_turn, bound = owed_fixed_beats.popleft()
                 injections = (*injections, *bound)
@@ -1639,6 +1679,8 @@ class OperatorEngine:
                 and not reconfirm_this_turn
                 and not ask_back_acceptance_turn
             )
+            if authorable and scheduled_turn.substitute_reply:
+                driver_flexible_slot_seen = True
             if self.driver is not None and not authorable:
                 driver_skip_reason = (
                     "turn_one"
