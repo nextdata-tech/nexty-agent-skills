@@ -669,6 +669,21 @@ def test_transform_contract_accepts_the_skill_template_shape() -> None:
     )
 
 
+def test_root_binding_accepts_spellings_of_the_same_cycle(tmp_path: Path) -> None:
+    checker = _nex890_checker()
+    workspace = tmp_path / "ws"
+    root = workspace / "nex890-401"
+    (root / "closure").mkdir(parents=True)
+    authoring = str(root)
+
+    assert checker._nex_root_binding_mismatch(authoring, authoring) is None
+    assert checker._nex_root_binding_mismatch("nex890-401", authoring) is None
+    assert checker._nex_root_binding_mismatch(str(root / "closure"), authoring) is None
+    assert checker._nex_root_binding_mismatch(str(workspace / "nex890-403"), authoring) == "sibling"
+    assert checker._nex_root_binding_mismatch(str(workspace), authoring) == "ancestor"
+    assert checker._nex_root_binding_mismatch("/elsewhere", authoring) == "outside"
+
+
 def test_checker_requires_the_review_requirement_id() -> None:
     spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
     assert spec is not None and spec.loader is not None

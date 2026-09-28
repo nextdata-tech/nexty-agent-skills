@@ -1387,6 +1387,27 @@ def _nex_direct_diagnostics(message: Mapping[str, Any]) -> list[Mapping[str, Any
     return []
 
 
+def _nex_root_binding_mismatch(call_root: str, authoring_root: str) -> str | None:
+    """Classify how a call's root escapes its cycle's authoring root, or None.
+
+    Agents spell the same directory several ways: relative to the workspace
+    (the authoring root's parent), through /var -> /private/var aliases, or as
+    a subdirectory such as the closure. All of those stay inside the cycle.
+    """
+    base = os.path.dirname(authoring_root)
+    resolved = os.path.realpath(
+        call_root if os.path.isabs(call_root) else os.path.join(base, call_root)
+    )
+    root = os.path.realpath(authoring_root)
+    if resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep):
+        return None
+    if os.path.dirname(resolved) == os.path.dirname(root):
+        return "sibling"
+    if root.startswith(resolved.rstrip(os.sep) + os.sep):
+        return "ancestor"
+    return "outside"
+
+
 def _nex_accepted(call: Mapping[str, Any]) -> bool:
     """Whether the supervisor accepted a call; unrecorded responses count."""
     response = call.get("response_message")
@@ -1741,13 +1762,12 @@ def check_nex890(
                 failures.append(f"trace/{workflow}/workflow-binding-invalid")
             call_root = call.get("root")
             # A rejected call changed nothing, so only accepted calls bind a root.
-            if (
-                _nex_accepted(call)
-                and isinstance(call_root, str)
-                and os.path.normpath(call_root) != authoring_root_norm
-            ):
-                failures.append(f"trace/{workflow}/root-mismatch")
-                failures.append(f"trace/{workflow}/root-mismatch/{call.get('operation')}")
+            if _nex_accepted(call) and isinstance(call_root, str):
+                kind = _nex_root_binding_mismatch(call_root, authoring_root_norm)
+                if kind is not None:
+                    failures.append(f"trace/{workflow}/root-mismatch")
+                    failures.append(f"trace/{workflow}/root-mismatch/{call.get('operation')}")
+                    failures.append(f"trace/{workflow}/root-mismatch-{kind}")
         response_record = capture["response_record"]
         if not isinstance(response_record.get("root"), str) or os.path.normpath(response_record["root"]) != authoring_root_norm:
             failures.append(f"capture/{workflow}/response-root-mismatch")
