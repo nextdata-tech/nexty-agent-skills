@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
+import ctypes
 import dataclasses
 import datetime as _dt
+import hashlib
 import io
 import json
 import math
@@ -22,14 +25,19 @@ import os
 import re
 import secrets
 import signal
+import shlex
 import socket
+import stat
+import struct
 import subprocess
 import sys
+import sysconfig
+import shutil
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 REDACTED = "<redacted>"
@@ -68,19 +76,424 @@ _SOURCE_SERVICE_NAME = "api-source"
 _SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
 _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
 _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
-# `inspect_workflow` stays available while review is pending: it is a bounded,
-# read-only supervisor inspection. Keep state-changing and unrelated workflow
-# operations blocked until the captured report is relayed.
-_REVIEW_PENDING_BLOCKED_OPERATIONS = frozenset(
-    {
-        "reset_workflow",
-        "list_data_products",
-        "check_data_product",
-        "prepare_workflow",
-        "get_workflow_capabilities",
-    }
-)
 _REVIEW_READER_TOOL = "read_review_input"
+# While review is pending every tool call is held except these: the
+# captured-input reader, and `inspect_workflow`, a bounded read-only supervisor
+# inspection. The review report itself is decided by `_review_guard_decision`.
+_REVIEW_PENDING_ALLOWED_OPERATIONS = frozenset({_REVIEW_READER_TOOL, "inspect_workflow"})
+_NEX_WORKFLOWS = (
+    "nex890-positive", "nex890-401", "nex890-403", "nex890-404",
+)
+# Bridge diagnostics expose forwarded-request methods only through this
+# allowlist; every other method is reported as "other".
+_NEX_DIAG_METHOD_LABELS = frozenset({"initialize", "tools/list", "tools/call"})
+_NEX_MAX_SNAPSHOT_FILES = 256
+_NEX_MAX_SNAPSHOT_FILE_BYTES = 1024 * 1024
+_NEX_STREAM_PAIR_WAIT_S = 3.0
+# Preflight keeps at most this many characters of redacted tool_result text.
+_NEX_PREFLIGHT_RESULT_TEXT_CHARS = 2000
+_NEX_WORKFLOW_OPERATIONS = {
+    "check_data_product", "prepare_workflow", "advance_workflow",
+    "inspect_workflow", "inspect_run", "list_data_products",
+    "resume_data_product", "describe_models", "run_semantic_query",
+    "export_data_product", _REVIEW_READER_TOOL,
+}
+_DARWIN_SOL_LOCAL = 0
+_DARWIN_LOCAL_PEERCRED = 1
+_DARWIN_LOCAL_PEERPID = 2
+_DARWIN_CTL_KERN = 1
+_DARWIN_KERN_ARGMAX = 8
+_DARWIN_KERN_PROCARGS2 = 49
+_DARWIN_PROC_PIDTBSDINFO = 3
+_PROCESS_ARGS_MIN_BYTES = 4096
+_PROCESS_ARGS_MAX_BYTES = 16 * 1024 * 1024
+
+
+class _DarwinProcBsdInfo(ctypes.Structure):
+    """Darwin ``struct proc_bsdinfo`` from sys/proc_info.h."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+@dataclasses.dataclass(frozen=True)
+class _ProxyPeerIdentity:
+    parent_pid: int
+    executable: str
+    argv: tuple[str, ...]
+
+
+def _canonical_process_path(value: str | os.PathLike[str]) -> str:
+    """Canonicalize a process argument across symlinks and /private aliases."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(value))))
+
+
+def _same_executable(left: str, right: str) -> bool:
+    """Compare executable identity by inode, then canonical path as fallback."""
+    try:
+        left_stat = os.stat(left)
+        right_stat = os.stat(right)
+        if (left_stat.st_dev, left_stat.st_ino) == (right_stat.st_dev, right_stat.st_ino):
+            return True
+    except OSError:
+        pass
+    return _canonical_process_path(left) == _canonical_process_path(right)
+
+
+def _proxy_interpreter_paths() -> tuple[str, ...]:
+    """Return only runner-configured Python interpreter paths for the proxy."""
+    configured = [sys.executable]
+    if sys.platform == "darwin":
+        framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
+        install_dir = sysconfig.get_config_var("PYTHONFRAMEWORKINSTALLDIR")
+        version = sysconfig.get_config_var("VERSION")
+        if all(
+            isinstance(value, str) and value
+            for value in (framework, install_dir, version)
+        ):
+            version_root = Path(install_dir) / "Versions" / version
+            configured.extend(
+                (
+                    str(
+                        version_root
+                        / "Resources"
+                        / f"{framework}.app"
+                        / "Contents"
+                        / "MacOS"
+                        / framework
+                    ),
+                    str(version_root / framework),
+                )
+            )
+    paths: list[str] = []
+    for value in configured:
+        absolute = os.path.abspath(value)
+        for candidate in (absolute, os.path.realpath(absolute)):
+            if candidate not in paths:
+                paths.append(candidate)
+    return tuple(paths)
+
+
+def _parse_darwin_procargs2(
+    buffer: bytearray,
+    used_length: int,
+    *,
+    allowed_argv0: Sequence[bytes],
+    expected_argv_tail: Sequence[str],
+) -> tuple[str, ...] | None:
+    """Parse argv only; the KERN_PROCARGS2 environment tail stays opaque."""
+    if (
+        not isinstance(used_length, int)
+        or isinstance(used_length, bool)
+        or used_length < struct.calcsize("=i")
+        or used_length > len(buffer)
+        or len(expected_argv_tail) != 4
+    ):
+        return None
+    argc = struct.unpack_from("=i", buffer, 0)[0]
+    if argc != 5:
+        return None
+    executable_end = buffer.find(b"\0", struct.calcsize("=i"), used_length)
+    if executable_end < 0:
+        return None
+    offset = executable_end + 1
+    while offset < used_length and buffer[offset] == 0:
+        offset += 1
+    if offset >= used_length:
+        return None
+    argv0_end = buffer.find(b"\0", offset, used_length)
+    if argv0_end <= offset:
+        return None
+
+    # Check argv[0] against runner-owned executable paths before copying or
+    # decoding bytes. An empty argv[0] is indistinguishable from padding here;
+    # the next non-empty item must therefore be the configured interpreter.
+    candidate = memoryview(buffer)[offset:argv0_end]
+    if not any(candidate == expected for expected in allowed_argv0):
+        return None
+    offset = argv0_end + 1
+    for expected in expected_argv_tail:
+        end = buffer.find(b"\0", offset, used_length)
+        if end < 0:
+            return None
+        if memoryview(buffer)[offset:end] != os.fsencode(expected):
+            return None
+        offset = end + 1
+    # Only argv[0] is copied after it matches a runner-configured interpreter.
+    # Compare the remaining four arguments in place so a malformed empty argv[0]
+    # can never cause an environment string to be copied into Python memory.
+    return (os.fsdecode(bytes(candidate)), *expected_argv_tail)
+
+
+def _parse_linux_process_stat(pid: int, raw: bytes) -> tuple[int, int] | None:
+    """Parse (parent pid, start ticks), splitting comm at its final right paren."""
+    if not raw or len(raw) > 8192:
+        return None
+    pid_field, separator, remainder = raw.partition(b" (")
+    if not separator:
+        return None
+    try:
+        if int(pid_field) != pid:
+            return None
+    except ValueError:
+        return None
+    # The comm field is parenthesized but may itself contain spaces and right
+    # parentheses. Split at its final close paren, never the first.
+    _comm, close_paren, fields_blob = remainder.rpartition(b")")
+    if not close_paren:
+        return None
+    fields = fields_blob.split()
+    if len(fields) < 20 or len(fields[0]) != 1:
+        return None
+    try:
+        parent_pid = int(fields[1])
+        start_ticks = int(fields[19])
+    except ValueError:
+        return None
+    if parent_pid < 0 or start_ticks <= 0:
+        return None
+    return parent_pid, start_ticks
+
+
+def _linux_process_snapshot(pid: int) -> tuple[int, int] | None:
+    """Return (parent pid, start ticks) from one bounded Linux proc stat read."""
+    try:
+        with (Path("/proc") / str(pid) / "stat").open("rb") as handle:
+            raw = handle.read(8193)
+    except OSError:
+        return None
+    return _parse_linux_process_stat(pid, raw)
+
+
+def _darwin_process_snapshot(pid: int) -> tuple[int, int, int] | None:
+    """Return (parent pid, start seconds, start microseconds) for one PID."""
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidinfo = libproc.proc_pidinfo
+        proc_pidinfo.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+            ctypes.c_void_p, ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        info = _DarwinProcBsdInfo()
+        expected_size = ctypes.sizeof(info)
+        result_size = proc_pidinfo(
+            pid, _DARWIN_PROC_PIDTBSDINFO, 0,
+            ctypes.byref(info), expected_size,
+        )
+        if result_size != expected_size or info.pbi_pid != pid:
+            return None
+        if info.pbi_ppid < 0:
+            return None
+        return info.pbi_ppid, info.pbi_start_tvsec, info.pbi_start_tvusec
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def _process_parent(pid: int) -> int | None:
+    """Read only a process parent PID; ancestor command lines are irrelevant."""
+    if pid <= 1:
+        return None
+    if sys.platform.startswith("linux"):
+        snapshot = _linux_process_snapshot(pid)
+        return snapshot[0] if snapshot is not None else None
+    if sys.platform == "darwin":
+        snapshot = _darwin_process_snapshot(pid)
+        return snapshot[0] if snapshot is not None else None
+    return None
+
+
+def _darwin_process_executable(pid: int) -> str | None:
+    """Read a process executable path using libproc only, without argv fallback."""
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidpath = libproc.proc_pidpath
+        proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        proc_pidpath.restype = ctypes.c_int
+        buffer = ctypes.create_string_buffer(4096)
+        result_size = proc_pidpath(pid, buffer, len(buffer))
+        if result_size <= 0 or result_size >= len(buffer):
+            return None
+        path = os.fsdecode(buffer.value)
+        return path or None
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def _linux_process_executable(pid: int) -> str | None:
+    try:
+        executable = os.readlink(Path("/proc") / str(pid) / "exe")
+        if not executable or executable.endswith(" (deleted)"):
+            return None
+        return executable
+    except OSError:
+        return None
+
+
+def _parse_linux_process_cmdline(raw: bytes) -> tuple[str, ...] | None:
+    if not raw or len(raw) > _PROCESS_ARGS_MAX_BYTES or not raw.endswith(b"\0"):
+        return None
+    return tuple(os.fsdecode(item) for item in raw[:-1].split(b"\0"))
+
+
+def _linux_process_argv(pid: int) -> tuple[str, ...] | None:
+    try:
+        with (Path("/proc") / str(pid) / "cmdline").open("rb") as handle:
+            raw = handle.read(_PROCESS_ARGS_MAX_BYTES + 1)
+    except OSError:
+        return None
+    return _parse_linux_process_cmdline(raw)
+
+
+def _darwin_process_argv(
+    pid: int,
+    *,
+    allowed_argv0: Sequence[bytes],
+    expected_argv_tail: Sequence[str],
+) -> tuple[str, ...] | None:
+    """Read argv with KERN_PROCARGS2; do not copy or expose its envp tail."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        sysctl = libc.sysctl
+        sysctl.argtypes = [
+            ctypes.POINTER(ctypes.c_int), ctypes.c_uint,
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_void_p, ctypes.c_size_t,
+        ]
+        sysctl.restype = ctypes.c_int
+        argmax_mib = (ctypes.c_int * 2)(_DARWIN_CTL_KERN, _DARWIN_KERN_ARGMAX)
+        argmax = ctypes.c_int()
+        argmax_length = ctypes.c_size_t(ctypes.sizeof(argmax))
+        if (
+            sysctl(
+                argmax_mib, 2, ctypes.byref(argmax), ctypes.byref(argmax_length),
+                None, 0,
+            ) != 0
+            or argmax_length.value != ctypes.sizeof(argmax)
+            or not _PROCESS_ARGS_MIN_BYTES <= argmax.value <= _PROCESS_ARGS_MAX_BYTES
+        ):
+            return None
+
+        buffer = bytearray(argmax.value)
+        c_buffer = (ctypes.c_char * len(buffer)).from_buffer(buffer)
+        try:
+            process_mib = (
+                ctypes.c_int * 3
+            )(_DARWIN_CTL_KERN, _DARWIN_KERN_PROCARGS2, pid)
+            used_length = ctypes.c_size_t(len(buffer))
+            if sysctl(
+                process_mib, 3, ctypes.cast(c_buffer, ctypes.c_void_p),
+                ctypes.byref(used_length), None, 0,
+            ) != 0:
+                return None
+            return _parse_darwin_procargs2(
+                buffer,
+                used_length.value,
+                allowed_argv0=allowed_argv0,
+                expected_argv_tail=expected_argv_tail,
+            )
+        finally:
+            ctypes.memset(ctypes.addressof(c_buffer), 0, len(buffer))
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def _proxy_peer_identity(
+    pid: int,
+    *,
+    allowed_argv0: Sequence[bytes],
+    expected_argv_tail: Sequence[str],
+) -> _ProxyPeerIdentity | None:
+    """Read a PID-bracketed proxy identity without parsing ancestor argv."""
+    if pid <= 1:
+        return None
+    if sys.platform.startswith("linux"):
+        before = _linux_process_snapshot(pid)
+        executable = _linux_process_executable(pid)
+        argv = _linux_process_argv(pid)
+        after = _linux_process_snapshot(pid)
+        executable_after = _linux_process_executable(pid)
+        if (
+            before is None or after != before or executable is None
+            or executable_after is None
+            or not _same_executable(executable, executable_after)
+            or argv is None
+        ):
+            return None
+        return _ProxyPeerIdentity(before[0], executable, argv)
+    if sys.platform == "darwin":
+        before = _darwin_process_snapshot(pid)
+        executable = _darwin_process_executable(pid)
+        argv = _darwin_process_argv(
+            pid,
+            allowed_argv0=allowed_argv0,
+            expected_argv_tail=expected_argv_tail,
+        )
+        executable_after = _darwin_process_executable(pid)
+        after = _darwin_process_snapshot(pid)
+        if (
+            before is None or after != before or executable is None
+            or executable_after is None
+            or not _same_executable(executable, executable_after)
+            or argv is None
+        ):
+            return None
+        return _ProxyPeerIdentity(before[0], executable, argv)
+    return None
+
+
+def _unix_peer_credentials(connection: socket.socket) -> tuple[int, int] | None:
+    """Return peer pid/uid from kernel credentials, failing closed elsewhere."""
+    if sys.platform == "darwin":
+        try:
+            # CPython does not expose these Darwin constants consistently.
+            # Values are from the Darwin SOL_LOCAL socket option ABI.
+            peer_pid_option = getattr(socket, "LOCAL_PEERPID", _DARWIN_LOCAL_PEERPID)
+            peer_cred_option = getattr(socket, "LOCAL_PEERCRED", _DARWIN_LOCAL_PEERCRED)
+            level = getattr(socket, "SOL_LOCAL", _DARWIN_SOL_LOCAL)
+            pid_raw = connection.getsockopt(level, peer_pid_option, struct.calcsize("i"))
+            cred_raw = connection.getsockopt(level, peer_cred_option, 80)
+            pid = struct.unpack("i", pid_raw)[0]
+            # xucred begins with version, effective uid, and group count.
+            version = struct.unpack_from("i", cred_raw)[0]
+            if version != 0:
+                return None
+            uid = struct.unpack_from("i", cred_raw, 4)[0]
+            return pid, uid
+        except (AttributeError, OSError, struct.error):
+            return None
+    if sys.platform.startswith("linux") and hasattr(socket, "SO_PEERCRED"):
+        try:
+            raw = connection.getsockopt(
+                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+            )
+            pid, uid, _gid = struct.unpack("3i", raw)
+            return pid, uid
+        except (OSError, struct.error):
+            return None
+    return None
 _REVIEW_READER_MAX_BYTES = 128 * 1024
 _REVIEW_READER_MAX_LINES = 500
 _REVIEW_READER_MAX_SOURCE_BYTES = 1024 * 1024
@@ -380,7 +793,7 @@ def _review_reader_path(
             return None, error
     try:
         resolved = requested.resolve(strict=True)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None, "requested review path is unavailable"
     if any(
         _review_entry_is_sensitive(part)
@@ -800,11 +1213,11 @@ def _augment_tools_list(
     to advertise this synthetic tool until after capture therefore makes it
     invisible to those clients: the allowlist is valid by the time the child
     runs, but the client received the earlier catalog. Advertising the name
-    from startup fixes that discovery path; some app-server versions still do
-    not propagate MCP tools into collaboration children, so the Codex adapter
-    has a strictly read-only fallback for that boundary. The
-    ``_review_reader_result`` still fails closed until the runner publishes the
-    exact current review paths, so catalog visibility does not grant access to
+    from startup fixes that discovery path. If an app-server version does not
+    propagate MCP tools into a reviewer child, the Codex route fails incomplete
+    rather than assuming a child sandbox policy or falling back to shell reads.
+    The ``_review_reader_result`` still fails closed until the runner publishes
+    the current review paths, so catalog visibility does not grant access to
     any path.
     """
 
@@ -872,6 +1285,97 @@ def _rpc_id_key(value: Any) -> str | None:
     return f"{type(value).__name__}:{json.dumps(value, separators=(',', ':'), sort_keys=True)}"
 
 
+def _nex_result_payload(message: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read the native supervisor JSON from exactly one JSON text block.
+
+    The native supervisor serializes typed tool results into a single MCP text
+    block and does not send structuredContent. Enforce that exact shape; never
+    infer fields from prose or ambiguous multi-block content.
+    """
+    result = message.get("result")
+    if not isinstance(result, Mapping):
+        return {}
+    if "structuredContent" in result:
+        return {}
+    content = result.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        return {}
+    block = content[0]
+    if not isinstance(block, Mapping) or block.get("type") != "text":
+        return {}
+    text = block.get("text")
+    if not isinstance(text, str):
+        return {}
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON object key")
+            value[key] = item
+        return value
+
+    try:
+        payload = json.loads(text, object_pairs_hook=unique_object)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _nex_tool_result_text(content: Any) -> str:
+    """Flatten a Claude tool_result body to its text parts only."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, Mapping) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "\n".join(parts)
+
+
+def _nex_snapshot_sha256(envelope: Mapping[str, Any]) -> str:
+    """Bind frozen bytes to their exact RPC, generation, and logical root."""
+    files = envelope.get("files")
+    if not isinstance(files, Mapping):
+        raise ValueError("snapshot files must be a mapping")
+    manifest: list[dict[str, Any]] = []
+    for path, entry in sorted(files.items(), key=lambda item: str(item[0])):
+        if not isinstance(path, str) or not isinstance(entry, Mapping):
+            raise ValueError("snapshot file entry is malformed")
+        content = entry.get("content")
+        mode = entry.get("mode", 0)
+        if not isinstance(content, bytes) or not isinstance(mode, int) or isinstance(mode, bool):
+            raise ValueError("snapshot file bytes or mode are malformed")
+        manifest.append({
+            "path": os.path.normpath(path),
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "mode": mode,
+        })
+    binding = {
+        "jsonrpc_id": json.dumps(
+            [
+                type(envelope.get("jsonrpc_id", envelope.get("capture_jsonrpc_id"))).__name__,
+                envelope.get("jsonrpc_id", envelope.get("capture_jsonrpc_id")),
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "workflow": envelope.get("workflow"),
+        "root": os.path.normpath(str(envelope.get("root", ""))),
+        "generation": envelope.get("generation"),
+        "expected_base_url": envelope.get("expected_base_url"),
+        "files": manifest,
+    }
+    encoded = json.dumps(
+        binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _timeout_faults(raw: Any) -> dict[str, _TimeoutFault]:
     """Validate the opt-in operation -> deadline configuration from server-spec."""
     if raw is None:
@@ -936,6 +1440,26 @@ def _request_workflow(request: Mapping[str, Any]) -> str | None:
     return workflow if isinstance(workflow, str) else None
 
 
+def _request_root(request: Mapping[str, Any]) -> str | None:
+    """Return an explicit authoring root from a direct or typed action field."""
+    params = request.get("params")
+    arguments = params.get("arguments") if isinstance(params, Mapping) else None
+    if not isinstance(arguments, Mapping):
+        return None
+    for key in ("authoring_root", "root", "definition"):
+        value = arguments.get(key)
+        if isinstance(value, str):
+            return value
+    action = arguments.get("action")
+    action_params = action.get("parameters") if isinstance(action, Mapping) else None
+    if isinstance(action_params, Mapping):
+        for key in ("authoring_root", "root", "definition"):
+            value = action_params.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
 def _request_action(request: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """Return an ``advance_workflow`` action from an MCP request."""
 
@@ -947,6 +1471,60 @@ def _request_action(request: Mapping[str, Any]) -> Mapping[str, Any] | None:
         return None
     action = arguments.get("action")
     return action if isinstance(action, Mapping) else None
+
+
+def _action_requirement_id(action: Mapping[str, Any]) -> Any:
+    """Read a tagged action's requirement id, rejecting conflicting aliases."""
+    parameters = action.get("parameters")
+    if isinstance(parameters, Mapping) and "requirement_id" in parameters:
+        nested = parameters.get("requirement_id")
+        if "requirement_id" in action and action.get("requirement_id") != nested:
+            return None
+        return nested
+    return action.get("requirement_id")
+
+
+def _is_review_requirement_report(action: object) -> bool:
+    return bool(
+        isinstance(action, Mapping)
+        and action.get("type") == "report_requirement"
+        and _action_requirement_id(action) == "review"
+    )
+
+
+def _review_guard_decision(
+    action: object, *, nex_mode: bool, review_child_returned: bool
+) -> tuple[bool, bool]:
+    """Return (blocked, invalidate) for a tool call while review is pending."""
+    if _is_review_requirement_report(action):
+        if nex_mode and not review_child_returned:
+            return True, True
+        return False, False
+    return True, False
+
+
+def _is_nex_validation_advance(request: Mapping[str, Any]) -> bool:
+    """Identify canonical workflow-v2 validation starts plus legacy aliases."""
+    if _request_operation(request) != "advance_workflow":
+        return False
+    action = _request_action(request)
+    if not isinstance(action, Mapping):
+        return False
+    action_type = action.get("type")
+    if action_type in {"validate", "validation"}:
+        return True
+    return (
+        action_type == "start_requirement"
+        and _action_requirement_id(action) == "validation"
+    )
+
+
+def _nex_alias_path(value: str | os.PathLike[str]) -> str:
+    """Normalize macOS /private aliases without resolving caller path identity."""
+    normalized = os.path.normpath(os.path.abspath(os.fspath(value)))
+    if normalized.startswith("/private/"):
+        normalized = normalized[len("/private"):]
+    return normalized
 
 
 def _walk_json_values(value: Any) -> list[Any]:
@@ -1024,10 +1602,7 @@ def _response_satisfies_review(response: Mapping[str, Any]) -> bool:
             continue
         if value.get("code") == "workflow/review_findings":
             return True
-        if (
-            value.get("code") == "workflow/requirement_satisfied"
-            and value.get("requirement_id") == "review"
-        ):
+        if value.get("code") == "workflow/review_satisfied":
             return True
         requirements = value.get("requirements")
         if isinstance(requirements, Mapping):
@@ -1099,6 +1674,12 @@ class DesktopStdioSession:
         allowed_tools: Sequence[str] | None = None,
         workflow_action_guard: bool = False,
         request_timeout_faults: Mapping[str, Any] | None = None,
+        nex_mode: bool = False,
+        nex_workspace: Path | None = None,
+        nex_protected_paths: Sequence[Path] = (),
+        nex_expected_base_url: str | None = None,
+        idle_timeout_seconds: float = 180.0,
+        nex_preflight_mode: bool = False,
         startup_timeout_s: float = 15.0,
         shutdown_timeout_s: float = 5.0,
     ) -> None:
@@ -1112,6 +1693,10 @@ class DesktopStdioSession:
             raise ValueError("server_command must not be empty")
         self.server_command = tuple(command)
         self.server_env = _safe_server_environment(server_env or {})
+        self._nex_redaction_values = tuple(
+            value for key, value in self.server_env.items()
+            if nex_mode and key == _SOURCE_CREDENTIAL_ENV and value
+        )
         self.server_name = server_name
         self.allowed_tools = (
             tuple(allowed_tools)
@@ -1119,6 +1704,17 @@ class DesktopStdioSession:
             else (f"mcp__{server_name}__*",)
         )
         self.workflow_action_guard = bool(workflow_action_guard)
+        self.nex_mode = bool(nex_mode)
+        self.nex_workspace = Path(nex_workspace).resolve() if nex_workspace else None
+        self.nex_expected_base_url = nex_expected_base_url
+        self.nex_protected_paths = tuple(
+            Path(path).resolve() for path in nex_protected_paths
+        )
+        self.idle_timeout_seconds = float(idle_timeout_seconds)
+        self.nex_preflight_mode = bool(nex_preflight_mode)
+        self.nex_settings_path: Path | None = None
+        self._nex_policy_hook_path: Path | None = None
+        self._nex_policy_hashes: dict[Path, str] = {}
         self.request_timeout_faults = dict(request_timeout_faults or {})
         self.startup_timeout_s = startup_timeout_s
         self.shutdown_timeout_s = shutdown_timeout_s
@@ -1126,15 +1722,70 @@ class DesktopStdioSession:
         self._temp: tempfile.TemporaryDirectory[str] | None = None
         self._root: Path | None = None
         self._attached: list[subprocess.Popen[Any]] = []
+        self._attached_event = threading.Event()
         self._bridge_listener: socket.socket | None = None
         self._bridge_connection: socket.socket | None = None
         self._bridge_thread: threading.Thread | None = None
         self._bridge_connections: set[socket.socket] = set()
         self._bridge_workers: set[threading.Thread] = set()
         self._bridge_state_lock = threading.Lock()
+        self._nex_stream_condition = threading.Condition(self._bridge_state_lock)
+        self._nex_last_monotonic_ns = 0
+        self._nex_invalid_reason: str | None = None
+        self._nex_connection_claimed = False
+        self._nex_connection_count = 0
+        self._nex_authenticated_peer: dict[str, Any] | None = None
+        self._nex_trace: list[dict[str, Any]] = []
+        self._nex_bridge_secret_leak = False
+        self._nex_stream_uses: list[dict[str, Any]] = []
+        self._nex_stream_results: dict[str, dict[str, Any]] = {}
+        self._nex_preflight_events: list[dict[str, Any]] = []
+        self._nex_pending_requests: dict[str, dict[str, Any]] = {}
+        self._nex_server_request_ids: set[str] = set()
+        self._nex_server_requests: dict[str, Mapping[str, Any]] = {}
+        self._nex_active_workflow: str | None = None
+        self._nex_active_root: str | None = None
+        self._nex_active_child_id: str | None = None
+        self._nex_child_count = 0
+        self._nex_children_by_workflow: dict[str, int] = {}
+        self._nex_child_returned_by_workflow: dict[str, bool] = {}
+        self._nex_review_read_success = False
+        self._nex_review_read_child_id: str | None = None
+        self._nex_review_child_returned = False
+        self._nex_review_snapshot: dict[str, bytes] = {}
+        self._nex_review_directories: set[str] = set()
+        self._nex_review_aliases: dict[str, str] = {}
+        self._nex_case_snapshots: dict[str, dict[str, Any]] = {}
+        self._nex_pending_static_snapshots: list[dict[str, Any]] = []
+        self._nex_static_snapshots_attached = False
+        self._nex_agent_exited = False
+        self._nex_intentional_shutdown = False
+        # Diagnostic-only bridge state, runner memory only. Pending JSON-RPC
+        # id keys never leave this map; result_metrics() exposes counts,
+        # booleans, exit codes, and allowlisted method labels. None of it
+        # feeds _nex_invalid_reason, the trace, or grading.
+        self._nex_forwarded_pending: dict[str, tuple[str, float]] = {}
+        self._nex_bridge_counts = {
+            "forwarded_requests": 0,
+            "matched_responses": 0,
+            "unmatched_responses": 0,
+            "non_json_response_lines": 0,
+        }
+        self._nex_supervisor_stdout_eof = False
+        self._nex_supervisor_shutdown_requested_at_eof: bool | None = None
+        self._nex_supervisor_exit_code: int | None = None
+        self._nex_supervisor_shutdown_requested_at_exit: bool | None = None
+        self._nex_agent_exit_snapshot: dict[str, Any] | None = None
+        # The whole diagnostics payload, published once at the after-drain
+        # boundary as immutable JSON text so no reader or surviving handler
+        # can alter any counter or snapshot after it.
+        self._nex_final_diagnostics: str | None = None
+        self._nex_last_activity = time.monotonic()
         self._review_guard_state: dict[str, Any] | None = None
+        self._review_capture_in_flight = False
         self._bridge_stop = threading.Event()
         self._bridge_path: Path | None = None
+        self._server_spec_path: Path | None = None
         self._server_process: subprocess.Popen[bytes] | None = None
         self._server_processes: set[subprocess.Popen[bytes]] = set()
         self._started = False
@@ -1200,9 +1851,11 @@ class DesktopStdioSession:
                 self._root = Path(self._temp.name)
             else:
                 self._root = self._provided_root
-                self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
             with contextlib.suppress(OSError):
                 self.root.chmod(0o700)
+            if self.nex_mode:
+                self._prepare_nex_security_files()
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             for _attempt in range(8):
                 candidate = Path("/tmp") / (
@@ -1225,13 +1878,16 @@ class DesktopStdioSession:
             spec = {
                 "bridge_path": str(self.bridge_path),
                 "server_process_result_path": str(self.server_process_result_path),
-                "trace_path": str(self.trace_path),
                 "result_path": str(self.server_result_path),
                 "review_allowlist_path": str(self.review_allowlist_path),
                 "shutdown_timeout_s": self.shutdown_timeout_s,
                 "request_timeout_faults": self.request_timeout_faults,
+                "nex_mode": self.nex_mode,
             }
+            if not self.nex_mode:
+                spec["trace_path"] = str(self.trace_path)
             spec_path = self.root / "server-spec.json"
+            self._server_spec_path = spec_path
             _write_private_text(spec_path, json.dumps(spec, sort_keys=True))
             config = {
                 "mcpServers": {
@@ -1250,7 +1906,8 @@ class DesktopStdioSession:
             _write_private_text(
                 self.config_path, json.dumps(config, indent=2, sort_keys=True)
             )
-            _write_private_text(self.trace_path, "")
+            if not self.nex_mode:
+                _write_private_text(self.trace_path, "")
             _write_private_text(self.server_result_path, "{}")
             _write_private_text(self.server_process_result_path, "{}")
             self._write_review_allowlist(None)
@@ -1272,13 +1929,1230 @@ class DesktopStdioSession:
         return self.start()
 
     def attach_process(self, proc: subprocess.Popen[Any]) -> None:
-        """Register the Claude process for process-group cleanup."""
+        """Register the Claude process and release the deferred NEX bridge accept."""
         self._attached.append(proc)
+        self.touch_nex_activity()
+        self._attached_event.set()
+
+    def touch_nex_activity(self) -> None:
+        if not self.nex_mode:
+            return
+        with self._bridge_state_lock:
+            self._nex_last_activity = time.monotonic()
+
+    def last_nex_activity(self) -> float:
+        with self._bridge_state_lock:
+            return self._nex_last_activity
+
+    def invalidate_nex(self, reason: str) -> None:
+        self._nex_invalidate(reason)
+
+    def _prepare_nex_security_files(self) -> None:
+        if self._root is None or self.nex_workspace is None:
+            raise DesktopStdioError("NEX-890 write policy requires a workspace")
+        source_hook = Path(__file__).with_name("nex890_write_policy_hook.py")
+        if not source_hook.is_file():
+            raise DesktopStdioError("NEX-890 write-policy hook source is missing")
+        hook_path = self.root / "nex-write-policy-hook.py"
+        shutil.copyfile(source_hook, hook_path)
+        hook_path.chmod(0o400)
+        self._nex_policy_hook_path = hook_path
+        settings_path = self.root / "claude-settings.json"
+        self.nex_settings_path = settings_path
+        hook_command = shlex.join([
+            shutil.which("python3") or sys.executable,
+            "-I",
+            str(hook_path),
+            "--workspace",
+            str(self.nex_workspace),
+            "--private-root",
+            str(self.root.resolve()),
+            *[item for path in self.nex_protected_paths for item in ("--plugin-root", str(path))],
+        ])
+        settings = {
+            "permissions": {
+                "deny": [
+                    "Bash", "BashOutput", "KillShell", "Monitor", "PowerShell",
+                    "Write(.claude/**)", "Edit(.claude/**)", "MultiEdit(.claude/**)",
+                    "NotebookEdit(.claude/**)", "Write(.mcp.json)", "Edit(.mcp.json)",
+                    "MultiEdit(.mcp.json)", "NotebookEdit(.mcp.json)",
+                ],
+            },
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": ".*",
+                    "hooks": [{"type": "command", "command": hook_command}],
+                }],
+            },
+        }
+        _write_private_text(
+            settings_path,
+            json.dumps(settings, sort_keys=True, separators=(",", ":")),
+        )
+        settings_path.chmod(0o400)
+        self._nex_policy_hashes = {
+            hook_path: hashlib.sha256(hook_path.read_bytes()).hexdigest(),
+            settings_path: hashlib.sha256(settings_path.read_bytes()).hexdigest(),
+        }
+
+    def verify_nex_security_files(self) -> bool:
+        if not self.nex_mode:
+            return True
+        if not self._nex_policy_hashes:
+            self._nex_invalidate("NEX-890 write-policy state was not initialized")
+            return False
+        for path, expected in self._nex_policy_hashes.items():
+            try:
+                if path.is_symlink() or not path.is_file():
+                    raise OSError("policy file is unavailable")
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                self._nex_invalidate("NEX-890 write-policy state was replaced or removed")
+                return False
+            if actual != expected:
+                self._nex_invalidate("NEX-890 write-policy state changed during the cell")
+                return False
+        return True
 
     def record_agent(self, *, status: str, error: str | None = None) -> None:
         self.agent_result = StdioOutcome(
             status, redact_text(error) if error else None
         )
+        if self.nex_mode:
+            with self._bridge_state_lock:
+                self._nex_capture_agent_exit_locked()
+                self._nex_agent_exited = True
+                self._nex_intentional_shutdown = True
+
+    def _nex_pending_snapshot_locked(self) -> dict[str, Any]:
+        """Summarize unanswered forwarded requests without their ids."""
+        methods: dict[str, int] = {}
+        for label, _started in self._nex_forwarded_pending.values():
+            methods[label] = methods.get(label, 0) + 1
+        oldest = min(
+            (started for _label, started in self._nex_forwarded_pending.values()),
+            default=None,
+        )
+        return {
+            "supervisor_stdout_eof": self._nex_supervisor_stdout_eof,
+            "pending_count": len(self._nex_forwarded_pending),
+            "pending_methods": dict(sorted(methods.items())),
+            "oldest_pending_age_s": (
+                None if oldest is None
+                else round(max(0.0, time.monotonic() - oldest), 1)
+            ),
+        }
+
+    def _nex_capture_agent_exit_locked(self) -> None:
+        """Take the agent-exit snapshot once, before intentional shutdown."""
+        if self._nex_agent_exit_snapshot is None:
+            self._nex_agent_exit_snapshot = self._nex_pending_snapshot_locked()
+
+    def _nex_note_forwarded(self, request: Any) -> str | None:
+        """Track one id-bearing request about to be written to the supervisor."""
+        if not isinstance(request, Mapping) or "method" not in request:
+            return None
+        key = _rpc_id_key(request.get("id"))
+        if key is None:
+            return None
+        method = request.get("method")
+        label = (
+            method
+            if isinstance(method, str) and method in _NEX_DIAG_METHOD_LABELS
+            else "other"
+        )
+        with self._bridge_state_lock:
+            self._nex_bridge_counts["forwarded_requests"] += 1
+            self._nex_forwarded_pending[key] = (label, time.monotonic())
+        return key
+
+    def _nex_forget_forwarded(self, key: str | None) -> None:
+        """Undo _nex_note_forwarded when the supervisor write itself failed."""
+        if key is None:
+            return
+        with self._bridge_state_lock:
+            if self._nex_forwarded_pending.pop(key, None) is not None:
+                self._nex_bridge_counts["forwarded_requests"] -= 1
+
+    def _nex_note_supervisor_line(self, response: Any, server_message: bool) -> None:
+        """Count one supervisor stdout line against the forwarded requests."""
+        with self._bridge_state_lock:
+            if not isinstance(response, Mapping):
+                self._nex_bridge_counts["non_json_response_lines"] += 1
+            elif not server_message:
+                key = _rpc_id_key(response.get("id"))
+                if key is not None and self._nex_forwarded_pending.pop(key, None) is not None:
+                    self._nex_bridge_counts["matched_responses"] += 1
+                else:
+                    self._nex_bridge_counts["unmatched_responses"] += 1
+
+    def _nex_bridge_diagnostics_locked(
+        self, after_drain: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return {
+            **self._nex_bridge_counts,
+            "supervisor_stdout_eof": self._nex_supervisor_stdout_eof,
+            "supervisor_shutdown_requested_at_eof": self._nex_supervisor_shutdown_requested_at_eof,
+            "supervisor_exit_code": self._nex_supervisor_exit_code,
+            "supervisor_shutdown_requested_at_exit": self._nex_supervisor_shutdown_requested_at_exit,
+            "agent_exit": copy.deepcopy(self._nex_agent_exit_snapshot),
+            "after_drain": after_drain,
+        }
+
+    def _nex_bridge_diagnostics(self) -> dict[str, Any]:
+        """Return the frozen final payload once published, else live values."""
+        with self._bridge_state_lock:
+            if self._nex_final_diagnostics is not None:
+                return json.loads(self._nex_final_diagnostics)
+            return self._nex_bridge_diagnostics_locked()
+
+    @staticmethod
+    def _nex_tool_name(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        prefix = f"mcp__{DesktopStdioSession.SERVER_NAME}__"
+        return value[len(prefix):] if value.startswith(prefix) else value
+
+    @staticmethod
+    def _nex_json(value: object) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _nex_timestamp_locked(self) -> int:
+        """Allocate one strictly increasing timestamp under the bridge lock."""
+        current = max(time.monotonic_ns(), self._nex_last_monotonic_ns + 1)
+        self._nex_last_monotonic_ns = current
+        return current
+
+    def _nex_invalidate(self, reason: str) -> None:
+        with self._bridge_state_lock:
+            if self._nex_invalid_reason is None:
+                self._nex_invalid_reason = reason
+
+    def _nex_mark_review_child_returned_locked(self, child_id: str) -> None:
+        child = self._nex_stream_results.get(child_id)
+        if not (
+            child is not None
+            and child.get("kind") == "child"
+            and child.get("success") is True
+            and self._nex_review_read_success
+            and self._nex_review_read_child_id == child_id
+        ):
+            return
+        self._nex_review_child_returned = True
+        workflow = child.get("workflow")
+        if isinstance(workflow, str):
+            self._nex_child_returned_by_workflow[workflow] = True
+
+    def observe_claude_stream_event(self, event: Mapping[str, Any]) -> None:
+        """Incrementally register Claude tool uses and child returns in memory."""
+        if not self.nex_mode:
+            return
+        self.touch_nex_activity()
+        kind = event.get("type")
+        message = event.get("message")
+        parent_id = event.get("parent_tool_use_id")
+        if not isinstance(parent_id, str) and isinstance(message, Mapping):
+            parent_id = message.get("parent_tool_use_id")
+        if not isinstance(parent_id, str):
+            parent_id = None
+        if self.nex_preflight_mode and kind == "result":
+            # An absent field is not an empty list: absence only disables the
+            # canary's CLI denial-ID fallback, while a present value is graded.
+            denials_present = "permission_denials" in event
+            with self._nex_stream_condition:
+                self._nex_preflight_events.append({
+                    "kind": "result",
+                    "is_error": event.get("is_error"),
+                    "subtype": event.get("subtype"),
+                    "permission_denials_present": denials_present,
+                    "permission_denials": (
+                        copy.deepcopy(event.get("permission_denials"))
+                        if denials_present else None
+                    ),
+                    "timestamp_monotonic_ns": self._nex_timestamp_locked(),
+                })
+                self._nex_stream_condition.notify_all()
+        if kind == "assistant":
+            blocks = message.get("content", []) if isinstance(message, Mapping) else []
+            if not isinstance(blocks, list):
+                return
+            with self._nex_stream_condition:
+                for block in blocks:
+                    if not isinstance(block, Mapping) or block.get("type") != "tool_use":
+                        continue
+                    name = block.get("name")
+                    identifier = block.get("id")
+                    arguments = block.get("input", {})
+                    if self.nex_preflight_mode:
+                        self._nex_preflight_events.append({
+                            "kind": "tool_use", "id": identifier, "name": name,
+                            "input": copy.deepcopy(arguments),
+                            "parent_tool_use_id": parent_id,
+                            "timestamp_monotonic_ns": self._nex_timestamp_locked(),
+                        })
+                    if not isinstance(name, str) or not isinstance(identifier, str):
+                        self._nex_invalid_reason = self._nex_invalid_reason or "malformed Claude tool_use"
+                        continue
+                    if identifier in self._nex_stream_results or any(
+                        use.get("id") == identifier for use in self._nex_stream_uses
+                    ):
+                        self._nex_invalid_reason = self._nex_invalid_reason or "duplicate Claude tool_use id"
+                        continue
+                    if name.casefold() in {"task", "agent"}:
+                        if (
+                            parent_id is not None
+                            or self._nex_active_child_id is not None
+                            or not isinstance(arguments, Mapping)
+                            or arguments.get("run_in_background") is not False
+                        ):
+                            self._nex_invalid_reason = self._nex_invalid_reason or "nested or background review child"
+                            continue
+                        self._nex_child_count += 1
+                        self._nex_active_child_id = identifier
+                        state = self._review_guard_state or {}
+                        workflow = state.get("workflow")
+                        if isinstance(workflow, str):
+                            self._nex_children_by_workflow[workflow] = (
+                                self._nex_children_by_workflow.get(workflow, 0) + 1
+                            )
+                            if self._nex_children_by_workflow[workflow] > 1:
+                                self._nex_invalid_reason = (
+                                    self._nex_invalid_reason
+                                    or "more than one foreground review child was used for a workflow"
+                                )
+                        self._nex_stream_results[identifier] = {
+                            "kind": "child", "success": False,
+                            "tool_result_seen": False,
+                            "workflow": workflow if isinstance(workflow, str) else None,
+                        }
+                        continue
+                    normalized = self._nex_tool_name(name)
+                    if normalized is not None and name.startswith("mcp__"):
+                        self._nex_stream_uses.append({
+                            "id": identifier,
+                            "name": normalized,
+                            "arguments": arguments,
+                            "parent_tool_use_id": parent_id,
+                            "matched": False,
+                            "response": False,
+                            "tool_result": False,
+                        })
+                self._nex_stream_condition.notify_all()
+        elif kind == "user":
+            blocks = message.get("content", []) if isinstance(message, Mapping) else []
+            if not isinstance(blocks, list):
+                return
+            with self._nex_stream_condition:
+                for block in blocks:
+                    if not isinstance(block, Mapping) or block.get("type") != "tool_result":
+                        continue
+                    identifier = block.get("tool_use_id")
+                    error = block.get("is_error") is True
+                    if self.nex_preflight_mode:
+                        # Record malformed IDs before the skip below so the
+                        # canary fails closed on them. Only redacted text is
+                        # retained; truncation is measured after redaction.
+                        text, _leaked = self.redact_nex_text(
+                            _nex_tool_result_text(block.get("content", ""))
+                        )
+                        self._nex_preflight_events.append({
+                            "kind": "tool_result",
+                            "id": identifier if isinstance(identifier, str) else None,
+                            "malformed_id": not isinstance(identifier, str),
+                            "is_error": error,
+                            "content": text[:_NEX_PREFLIGHT_RESULT_TEXT_CHARS],
+                            "content_truncated": len(text) > _NEX_PREFLIGHT_RESULT_TEXT_CHARS,
+                            "timestamp_monotonic_ns": self._nex_timestamp_locked(),
+                        })
+                    if not isinstance(identifier, str):
+                        continue
+                    child = self._nex_stream_results.get(identifier)
+                    if child is not None and child.get("kind") == "child":
+                        if child.get("tool_result_seen"):
+                            self._nex_invalid_reason = self._nex_invalid_reason or "duplicate review child tool_result"
+                            continue
+                        child["tool_result_seen"] = True
+                        text = json.dumps(block.get("content", ""), ensure_ascii=False).casefold()
+                        success = not error and "async agent launched" not in text
+                        child["success"] = success
+                        if not success:
+                            self._nex_invalid_reason = self._nex_invalid_reason or "review child did not return successfully in foreground"
+                        else:
+                            self._nex_mark_review_child_returned_locked(identifier)
+                        if self._nex_active_child_id == identifier:
+                            self._nex_active_child_id = None
+                        continue
+                    for use in self._nex_stream_uses:
+                        if use.get("id") == identifier:
+                            if use.get("tool_result"):
+                                self._nex_invalid_reason = self._nex_invalid_reason or "duplicate MCP tool_result"
+                                break
+                            use["tool_result"] = True
+                            use["tool_result_success"] = not error
+                            if use.get("name") == _REVIEW_READER_TOOL:
+                                if error or not use.get("response_success"):
+                                    self._nex_invalid_reason = self._nex_invalid_reason or (
+                                        "review reader response or stream tool_result was unsuccessful"
+                                    )
+                                else:
+                                    parent_tool_use_id = use.get("parent_tool_use_id")
+                                    if isinstance(parent_tool_use_id, str):
+                                        self._nex_review_read_success = True
+                                        self._nex_review_read_child_id = parent_tool_use_id
+                                        self._nex_mark_review_child_returned_locked(parent_tool_use_id)
+                            # A valid MCP tool result may report an expected
+                            # profile/validation failure. The deterministic
+                            # checker grades that response; transport pairing
+                            # remains complete and is not invalidated here.
+                            break
+                self._nex_stream_condition.notify_all()
+
+    def nex_preflight_events(self) -> list[dict[str, Any]]:
+        with self._bridge_state_lock:
+            return copy.deepcopy(self._nex_preflight_events)
+
+    def _nex_match_tool_call(
+        self, request: Mapping[str, Any]
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        params = request.get("params")
+        if not isinstance(params, Mapping):
+            return None, "MCP tools/call has malformed params"
+        name = self._nex_tool_name(params.get("name"))
+        arguments = params.get("arguments", {})
+        deadline = time.monotonic() + _NEX_STREAM_PAIR_WAIT_S
+
+        def argument_fingerprint(value: object) -> str:
+            payload = self._nex_json(value).encode("utf-8")
+            return hashlib.sha256(payload).hexdigest()[:12]
+
+        with self._nex_stream_condition:
+            if self._nex_invalid_reason is not None:
+                return None, self._nex_invalid_reason
+            candidates = [use for use in self._nex_stream_uses if not use.get("matched")]
+
+            def matching_uses() -> list[dict[str, Any]]:
+                return [
+                    use for use in candidates
+                    if name == use.get("name")
+                    and self._nex_json(arguments) == self._nex_json(use.get("arguments", {}))
+                    and (
+                        (
+                            self._nex_active_child_id is not None
+                            and name == _REVIEW_READER_TOOL
+                            and use.get("parent_tool_use_id") == self._nex_active_child_id
+                        )
+                        or (
+                            self._nex_active_child_id is None
+                            and name != _REVIEW_READER_TOOL
+                            and use.get("parent_tool_use_id") is None
+                        )
+                    )
+                ]
+
+            exact_matches = matching_uses()
+            while not exact_matches and self._nex_invalid_reason is None:
+                if (
+                    self._nex_active_child_id is not None
+                    and name != _REVIEW_READER_TOOL
+                ):
+                    self._nex_invalid_reason = "parent MCP call arrived while review child is active"
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    request_hash = argument_fingerprint(arguments)
+                    candidate_summary = ",".join(
+                        f"{use.get('name')}:{argument_fingerprint(use.get('arguments', {}))}"
+                        for use in candidates
+                    )
+                    reader_candidates = [
+                        use for use in candidates
+                        if use.get("name") == _REVIEW_READER_TOOL
+                    ]
+                    relationship_summary = (
+                        f"active_child={bool(self._nex_active_child_id)},"
+                        "reader_parent_present="
+                        f"{any(bool(use.get('parent_tool_use_id')) for use in reader_candidates)},"
+                        "reader_parent_matches_active="
+                        f"{self._nex_active_child_id is not None and any(use.get('parent_tool_use_id') == self._nex_active_child_id for use in reader_candidates)}"
+                    )
+                    self._nex_invalid_reason = (
+                        "MCP tools/call has no preceding matching Claude stream tool_use"
+                        f" (tool={name!r}, arguments_sha256={request_hash},"
+                        f" {relationship_summary}, candidates=[{candidate_summary}])"
+                    )
+                    break
+                self._nex_stream_condition.wait(timeout=remaining)
+                candidates = [use for use in self._nex_stream_uses if not use.get("matched")]
+                exact_matches = matching_uses()
+            if self._nex_invalid_reason is not None:
+                return None, self._nex_invalid_reason
+            child_id = self._nex_active_child_id
+            if child_id is not None and name != _REVIEW_READER_TOOL:
+                self._nex_invalid_reason = "parent MCP call arrived while review child is active"
+                return None, self._nex_invalid_reason
+            if len(exact_matches) != 1:
+                self._nex_invalid_reason = "MCP tools/call ambiguously matches Claude stream tool_use events"
+                return None, self._nex_invalid_reason
+            use = exact_matches[0]
+            expected_parent = use.get("parent_tool_use_id")
+            if name == _REVIEW_READER_TOOL:
+                if child_id is None or expected_parent != child_id:
+                    self._nex_invalid_reason = "review reader call lacks the pinned foreground child linkage"
+                    return None, self._nex_invalid_reason
+                state = self._review_guard_state or {}
+                review_input = state.get("review_input")
+                if not isinstance(review_input, Mapping):
+                    self._nex_invalid_reason = "review reader call has no current capture root"
+                    return None, self._nex_invalid_reason
+                arguments_map = arguments if isinstance(arguments, Mapping) else {}
+                requested_path = arguments_map.get("path")
+                if requested_path not in {
+                    review_input.get("retained_capture_root"),
+                    review_input.get("retained_blueprint_path"),
+                } and self._nex_path_key(requested_path) not in self._nex_review_aliases:
+                    self._nex_invalid_reason = "review reader path does not match the current captured review input"
+                    return None, self._nex_invalid_reason
+            elif expected_parent is not None or child_id is not None:
+                self._nex_invalid_reason = "parent MCP call carries an unexpected child identity"
+                return None, self._nex_invalid_reason
+            use["matched"] = True
+            request_key = _rpc_id_key(request.get("id"))
+            if request_key is None:
+                self._nex_invalid_reason = "MCP tools/call has invalid JSON-RPC id"
+                return None, self._nex_invalid_reason
+            self._nex_pending_requests[request_key] = use
+            return use, None
+
+    @staticmethod
+    def _nex_path_key(value: object) -> str | None:
+        if not isinstance(value, str) or not value or not os.path.isabs(value):
+            return None
+        return os.path.normcase(_nex_alias_path(value)).casefold()
+
+    def _nex_path_is_snapshot_alias(self, value: object) -> bool:
+        key = self._nex_path_key(value)
+        with self._bridge_state_lock:
+            return key in self._nex_review_aliases if key is not None else False
+
+    def _nex_snapshot_review_input(
+        self, request: Mapping[str, Any], response: Mapping[str, Any]
+    ) -> None:
+        """Take a bounded immutable file snapshot immediately after capture."""
+        state = _review_guard_snapshot(response)
+        workflow_value = _request_workflow(request)
+        if workflow_value is not None:
+            state["workflow"] = workflow_value
+        review_input = state.get("review_input")
+        if not isinstance(review_input, Mapping):
+            self._nex_invalidate("capture response did not include the required review_input")
+            return
+        snapshot: dict[str, bytes] = {}
+        modes: dict[str, int] = {}
+        directories: set[str] = set()
+        aliases: dict[str, str] = {}
+
+        def remember_alias(path: Path, canonical: str) -> None:
+            raw = os.path.abspath(os.fspath(path))
+            candidates = {raw, canonical}
+            if raw.startswith("/private/"):
+                candidates.add(raw[len("/private"):])
+            else:
+                candidates.add("/private" + raw)
+            for candidate in candidates:
+                key = self._nex_path_key(candidate)
+                if key is not None:
+                    aliases[key] = canonical
+
+        roots: list[tuple[Path, bool, Path]] = []
+        for key, is_directory in (
+            ("retained_capture_root", True),
+            ("retained_blueprint_path", False),
+        ):
+            raw = review_input.get(key)
+            if not isinstance(raw, str) or not Path(raw).is_absolute():
+                self._nex_invalidate("capture review_input contains an invalid path")
+                return
+            root = Path(raw)
+            try:
+                resolved = root.resolve(strict=True)
+                st = root.lstat()
+            except (OSError, RuntimeError, ValueError):
+                self._nex_invalidate("capture review_input path is unavailable")
+                return
+            if stat.S_ISLNK(st.st_mode) or _nex_alias_path(root) != _nex_alias_path(resolved):
+                self._nex_invalidate("capture review_input path is a symlink")
+                return
+            if is_directory and not resolved.is_dir():
+                self._nex_invalidate("retained capture root is not a directory")
+                return
+            if not is_directory and not resolved.is_file():
+                self._nex_invalidate("retained blueprint path is not a regular file")
+                return
+            logical_root = Path(_nex_alias_path(root))
+            if is_directory:
+                roots.append((resolved, is_directory, logical_root))
+            else:
+                roots.append((resolved, is_directory, logical_root))
+            remember_alias(root, str(logical_root))
+
+        capture_root = next((root for root, is_directory, _logical in roots if is_directory), None)
+        authoring_root = None
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        if isinstance(arguments, Mapping):
+            authoring_root = next(
+                (arguments.get(key) for key in ("authoring_root", "root", "definition")
+                 if isinstance(arguments.get(key), str)),
+                None,
+            )
+        action = _request_action(request)
+        action_params = action.get("parameters") if isinstance(action, Mapping) else None
+        if authoring_root is None and isinstance(action_params, Mapping):
+            authoring_root = next(
+                (action_params.get(key) for key in ("authoring_root", "root", "definition")
+                 if isinstance(action_params.get(key), str)),
+                None,
+            )
+        fallback_root = review_input.get("retained_capture_root")
+        logical_authoring_root = Path(os.path.normpath(os.path.abspath(
+            authoring_root if isinstance(authoring_root, str)
+            else str(fallback_root)
+        )))
+        for root, is_directory, logical_root in roots:
+            if is_directory:
+                directories.add(str(logical_authoring_root))
+                remember_alias(root, str(logical_authoring_root))
+                for current, child_dirs, filenames in os.walk(root, followlinks=False):
+                    child_dirs[:] = [
+                        name for name in child_dirs
+                        if not _review_entry_is_sensitive(name)
+                        and not Path(current, name).is_symlink()
+                    ]
+                    current_path = Path(current)
+                    relative_directory = current_path.relative_to(root)
+                    logical_directory = logical_authoring_root / relative_directory
+                    directories.add(str(logical_directory))
+                    remember_alias(current_path, str(logical_directory))
+                    for filename in sorted(filenames):
+                        if _review_entry_is_sensitive(filename):
+                            continue
+                        path = current_path / filename
+                        try:
+                            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                            try:
+                                info = os.fstat(descriptor)
+                                if not stat.S_ISREG(info.st_mode) or info.st_size > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+                                    continue
+                                data = os.read(descriptor, _NEX_MAX_SNAPSHOT_FILE_BYTES + 1)
+                                if len(data) > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+                                    self._nex_invalidate("capture file exceeded the snapshot byte bound")
+                                    return
+                                mode = stat.S_IMODE(info.st_mode)
+                            finally:
+                                os.close(descriptor)
+                        except OSError:
+                            self._nex_invalidate("capture snapshot encountered an unreadable file")
+                            return
+                        if len(snapshot) >= _NEX_MAX_SNAPSHOT_FILES:
+                            self._nex_invalidate("capture snapshot exceeded its file bound")
+                            return
+                        canonical = str(logical_authoring_root / path.relative_to(root))
+                        snapshot[canonical] = bytes(data)
+                        modes[canonical] = mode
+                        remember_alias(path, canonical)
+            else:
+                try:
+                    descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    try:
+                        info = os.fstat(descriptor)
+                        if not stat.S_ISREG(info.st_mode) or info.st_size > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+                            self._nex_invalidate("retained blueprint exceeds the snapshot bound")
+                            return
+                        data = os.read(descriptor, _NEX_MAX_SNAPSHOT_FILE_BYTES + 1)
+                        if len(data) > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+                            self._nex_invalidate("retained blueprint exceeded the snapshot byte bound")
+                            return
+                        mode = stat.S_IMODE(info.st_mode)
+                    finally:
+                        os.close(descriptor)
+                except OSError:
+                    self._nex_invalidate("retained blueprint could not be snapshotted")
+                    return
+                try:
+                    relative_blueprint = root.relative_to(capture_root) if capture_root is not None else Path(root.name)
+                except ValueError:
+                    relative_blueprint = Path(root.name)
+                canonical = str(logical_authoring_root / relative_blueprint)
+                snapshot[canonical] = bytes(data)
+                modes[canonical] = mode
+                remember_alias(root, canonical)
+        workflow = _request_workflow(request) or ""
+        generation = state.get("generation")
+        envelope = {
+            "jsonrpc_id": request.get("id"),
+            "workflow": workflow,
+            "root": str(logical_authoring_root),
+            "generation": generation,
+            "expected_base_url": self.nex_expected_base_url,
+            "files": {
+                path: {"content": data, "mode": modes.get(path, 0)}
+                for path, data in snapshot.items()
+            },
+        }
+        envelope["snapshot_sha256"] = _nex_snapshot_sha256(envelope)
+        state["authoring_root"] = envelope["root"]
+        with self._bridge_state_lock:
+            self._review_guard_state = state
+            self._nex_review_snapshot = snapshot
+            self._nex_review_directories = directories
+            self._nex_review_aliases = aliases
+            self._nex_review_read_success = False
+            self._nex_review_read_child_id = None
+            self._nex_review_child_returned = False
+            self._nex_active_workflow = workflow
+            self._nex_active_root = str(logical_authoring_root)
+            case = self._nex_case_snapshots.setdefault(workflow, {})
+            if "capture" in case:
+                self._nex_invalid_reason = self._nex_invalid_reason or "workflow has more than one capture snapshot"
+            else:
+                case.update({
+                    "jsonrpc_id": envelope["jsonrpc_id"],
+                    "workflow": workflow,
+                    "root": envelope["root"],
+                    "generation": generation,
+                    "expected_base_url": self.nex_expected_base_url,
+                    "files": envelope["files"],
+                    "snapshot_sha256": envelope["snapshot_sha256"],
+                    "capture": envelope,
+                    "review_root": review_input.get("retained_capture_root"),
+                })
+            if self._nex_pending_static_snapshots and not self._nex_static_snapshots_attached:
+                case.setdefault("static", []).extend(
+                    copy.deepcopy(self._nex_pending_static_snapshots)
+                )
+                self._nex_static_snapshots_attached = True
+
+    def _nex_snapshot_workspace_root(
+        self, request: Mapping[str, Any], root_value: object,
+        *, require_workspace: bool = True,
+    ) -> dict[str, Any] | None:
+        """Snapshot a bounded workspace root without following any symlink."""
+        if not isinstance(root_value, str) or not root_value:
+            return None
+        root = Path(root_value)
+        workspace = self.nex_workspace
+        if workspace is None or not root.is_absolute():
+            self._nex_invalidate("profile snapshot root is not an absolute workspace path")
+            return None
+        try:
+            resolved_workspace = workspace.resolve(strict=True)
+            resolved_root = root.resolve(strict=True)
+            if _nex_alias_path(root) != _nex_alias_path(resolved_root) or (
+                require_workspace and not resolved_root.is_relative_to(resolved_workspace)
+            ):
+                raise OSError("root is a symlink or outside workspace")
+            if not resolved_root.is_dir():
+                raise OSError("root is not a directory")
+        except (OSError, RuntimeError, ValueError):
+            self._nex_invalidate("profile snapshot root failed workspace containment checks")
+            return None
+        logical_root = Path(os.path.normpath(os.path.abspath(root)))
+        files: dict[str, dict[str, Any]] = {}
+        for current, child_dirs, filenames in os.walk(resolved_root, followlinks=False):
+            child_dirs[:] = [name for name in child_dirs if not Path(current, name).is_symlink()]
+            for filename in sorted(filenames):
+                if filename == "failure.json":
+                    continue
+                path = Path(current) / filename
+                try:
+                    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    try:
+                        info = os.fstat(descriptor)
+                        if not stat.S_ISREG(info.st_mode):
+                            continue
+                        if info.st_size > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+                            self._nex_invalidate("profile snapshot file exceeded the byte bound")
+                            return None
+                        data = os.read(descriptor, _NEX_MAX_SNAPSHOT_FILE_BYTES + 1)
+                        if len(data) > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+                            self._nex_invalidate("profile snapshot file exceeded the byte bound")
+                            return None
+                    finally:
+                        os.close(descriptor)
+                except OSError:
+                    self._nex_invalidate("profile snapshot encountered an unreadable file")
+                    return None
+                relative = path.relative_to(resolved_root)
+                files[str(logical_root / relative)] = {
+                    "content": bytes(data), "mode": stat.S_IMODE(info.st_mode)
+                }
+                if len(files) > _NEX_MAX_SNAPSHOT_FILES:
+                    self._nex_invalidate("profile snapshot exceeded its file-count bound")
+                    return None
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        workflow = _request_workflow(request) or ""
+        with self._bridge_state_lock:
+            review_state = dict(self._review_guard_state or {})
+        generation = review_state.get("generation")
+        envelope = {
+            "jsonrpc_id": request.get("id"),
+            "workflow": workflow,
+            "root": str(logical_root),
+            "generation": generation,
+            "expected_base_url": self.nex_expected_base_url,
+            "files": files,
+        }
+        envelope["snapshot_sha256"] = _nex_snapshot_sha256(envelope)
+        return envelope
+
+    def _nex_snapshot_validation(self, request: Mapping[str, Any]) -> None:
+        workflow = _request_workflow(request)
+        if not workflow:
+            self._nex_invalidate("validation request omitted its exact workflow")
+            return
+        with self._bridge_state_lock:
+            case = copy.deepcopy(self._nex_case_snapshots.get(workflow))
+        if not isinstance(case, dict) or "capture" not in case:
+            self._nex_invalidate("validation has no preceding immutable capture snapshot")
+            return
+        root = case.get("review_root")
+        if not isinstance(root, str) or not isinstance(case.get("root"), str):
+            self._nex_invalidate("validation capture roots are unavailable")
+            return
+        envelope = self._nex_snapshot_workspace_root(
+            request, root, require_workspace=False
+        )
+        if envelope is None:
+            return
+        source_root = Path(os.path.normpath(os.path.abspath(str(root))))
+        target_root = Path(str(case.get("root")))
+        rebased_files: dict[str, Any] = {}
+        for path, entry in envelope.get("files", {}).items():
+            try:
+                relative = Path(path).relative_to(source_root)
+            except (TypeError, ValueError):
+                self._nex_invalidate("validation snapshot escaped the retained capture root")
+                return
+            rebased_files[str(target_root / relative)] = entry
+        envelope["files"] = rebased_files
+        envelope["root"] = case.get("root")
+        envelope["generation"] = case.get("generation")
+        envelope["snapshot_sha256"] = _nex_snapshot_sha256(envelope)
+        with self._bridge_state_lock:
+            current = self._nex_case_snapshots.get(workflow)
+            if isinstance(current, dict):
+                current["validation"] = envelope
+
+    def _nex_snapshot_static_request(self, request: Mapping[str, Any]) -> None:
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        if not isinstance(arguments, Mapping):
+            self._nex_invalidate("static profile request omitted its arguments")
+            return
+        root = next(
+            (arguments.get(key) for key in ("authoring_root", "root", "definition")
+             if isinstance(arguments.get(key), str)),
+            None,
+        )
+        envelope = self._nex_snapshot_workspace_root(request, root)
+        if envelope is None:
+            return
+        envelope["workflow"] = "__static__"
+        envelope["snapshot_sha256"] = _nex_snapshot_sha256(envelope)
+        with self._bridge_state_lock:
+            self._nex_pending_static_snapshots.append(envelope)
+            if not self._nex_static_snapshots_attached:
+                first_capture = next(
+                    (case for case in self._nex_case_snapshots.values() if "capture" in case),
+                    None,
+                )
+                if first_capture is not None:
+                    first_capture.setdefault("static", []).extend(
+                        copy.deepcopy(self._nex_pending_static_snapshots)
+                    )
+                    self._nex_static_snapshots_attached = True
+
+    def _nex_bind_static_generation(
+        self, request: Mapping[str, Any], response: Mapping[str, Any]
+    ) -> None:
+        """Bind request-time static bytes when its response supplies a generation."""
+        generation = _nex_result_payload(response).get("generation")
+        if generation is None:
+            params = request.get("params")
+            arguments = params.get("arguments") if isinstance(params, Mapping) else None
+            generation = arguments.get("generation") if isinstance(arguments, Mapping) else None
+        if generation is None:
+            return
+        if not isinstance(generation, (str, int)) or isinstance(generation, bool):
+            self._nex_invalidate("static profile response has an invalid generation")
+            return
+        request_id = _rpc_id_key(request.get("id"))
+        if request_id is None:
+            self._nex_invalidate("static profile response has an invalid JSON-RPC id")
+            return
+        with self._bridge_state_lock:
+            matches = [
+                entry for entry in self._nex_pending_static_snapshots
+                if _rpc_id_key(entry.get("jsonrpc_id")) == request_id
+            ]
+            if len(matches) != 1:
+                self._nex_invalid_reason = self._nex_invalid_reason or (
+                    "static profile response has no unique request-time snapshot"
+                )
+                return
+            matches[0]["generation"] = generation
+            matches[0]["snapshot_sha256"] = _nex_snapshot_sha256(matches[0])
+            for case in self._nex_case_snapshots.values():
+                for entry in case.get("static", []):
+                    if isinstance(entry, dict) and _rpc_id_key(entry.get("jsonrpc_id")) == request_id:
+                        entry["generation"] = generation
+                        entry["snapshot_sha256"] = _nex_snapshot_sha256(entry)
+
+    def nex_file_snapshots(self) -> dict[str, dict[str, Any]]:
+        with self._bridge_state_lock:
+            return copy.deepcopy(self._nex_case_snapshots)
+
+    def _nex_reader_response(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        if not isinstance(arguments, Mapping):
+            return _review_reader_error("arguments must be an object")
+        operation = arguments.get("operation")
+        if operation not in {"read", "list"}:
+            return _review_reader_error("operation must be read or list")
+        max_lines = arguments.get("max_lines", _REVIEW_READER_MAX_LINES)
+        max_bytes = arguments.get("max_bytes", _REVIEW_READER_MAX_BYTES)
+        if (
+            isinstance(max_lines, bool) or not isinstance(max_lines, int)
+            or not 1 <= max_lines <= _REVIEW_READER_MAX_LINES
+            or isinstance(max_bytes, bool) or not isinstance(max_bytes, int)
+            or not 1 <= max_bytes <= _REVIEW_READER_MAX_BYTES
+        ):
+            return _review_reader_error("read bounds are outside the permitted limits")
+        key = self._nex_path_key(arguments.get("path"))
+        if key is None:
+            return _review_reader_error("path must be an absolute captured review path")
+        with self._bridge_state_lock:
+            canonical = self._nex_review_aliases.get(key)
+            snapshot = dict(self._nex_review_snapshot)
+            directories = set(self._nex_review_directories)
+        if canonical is None:
+            return _review_reader_error("requested path is outside the immutable capture snapshot")
+        marker = _REVIEW_READER_TRUNCATION_MARKER
+        marker_bytes = len(marker.encode("utf-8"))
+        try:
+            if operation == "read":
+                data = snapshot.get(canonical)
+                if data is None:
+                    return _review_reader_error("read requires a captured regular file")
+                lines = data.decode("utf-8", errors="replace").splitlines(keepends=True)
+                truncated = len(lines) > max_lines
+                # Redact the whole selection before any byte decision so a
+                # credential straddling the cutoff can never leave a prefix.
+                text, leaked = self.redact_nex_text("".join(lines[:max_lines]))
+                if leaked:
+                    self._nex_bridge_secret_leak = True
+                if truncated or len(text.encode("utf-8")) > max_bytes:
+                    remaining = max_bytes - marker_bytes
+                    if remaining < 0:
+                        return _review_reader_error("max_bytes too small for the truncation marker")
+                    text = _review_utf8_prefix(text, remaining) + marker
+            else:
+                if canonical not in directories:
+                    return _review_reader_error("list requires a captured directory")
+                prefix = canonical.rstrip(os.sep) + os.sep
+                entries: dict[str, str] = {}
+                for path in [*snapshot, *directories]:
+                    if not path.startswith(prefix):
+                        continue
+                    remainder = path[len(prefix):]
+                    if not remainder or os.sep in remainder:
+                        continue
+                    entries[remainder] = "directory" if path in directories else "file"
+                selected = sorted(entries.items())
+                truncated = len(selected) > max_lines
+                # Redact each name, never the serialized blob, so the JSON
+                # stays valid; each piece is one whole serialized entry.
+                pieces: list[str] = []
+                for name, kind in selected[:max_lines]:
+                    safe_name, leaked = self.redact_nex_text(name)
+                    if leaked:
+                        self._nex_bridge_secret_leak = True
+                    pieces.append(json.dumps({"name": safe_name, "kind": kind}, sort_keys=True))
+                text = "[" + ", ".join(pieces) + "]"
+                if truncated or len(text.encode("utf-8")) > max_bytes:
+                    budget = max_bytes - marker_bytes
+                    used = len(b"[]")
+                    if used > budget:
+                        return _review_reader_error("max_bytes too small for the truncation marker")
+                    kept: list[str] = []
+                    for piece in pieces:
+                        cost = len(piece.encode("utf-8")) + (len(b", ") if kept else 0)
+                        if used + cost > budget:
+                            break
+                        kept.append(piece)
+                        used += cost
+                    text = "[" + ", ".join(kept) + "]" + marker
+            return {"isError": False, "content": [{"type": "text", "text": text}]}
+        except (OSError, UnicodeError):
+            return _review_reader_error("immutable review snapshot could not be served")
+
+    def _nex_trace_record(
+        self,
+        direction: str,
+        message: Mapping[str, Any],
+        *,
+        operation: str | None = None,
+        workflow: str | None = None,
+        root: str | None = None,
+        synthetic: bool = False,
+    ) -> None:
+        message_copy = self._redact_nex_payload(
+            message, redact_sensitive_fields=True
+        )
+        with self._bridge_state_lock:
+            record = {
+                "timestamp_monotonic_ns": self._nex_timestamp_locked(),
+                "jsonrpc_id": message.get("id"),
+                "direction": direction,
+                "operation": operation,
+                "workflow": workflow,
+                "root": root,
+                "synthetic": synthetic,
+                "message": message_copy,
+            }
+            self._nex_trace.append(record)
+
+    @classmethod
+    def _replace_nex_secret(cls, value: Any, secret: str) -> Any:
+        if isinstance(value, str):
+            return value.replace(secret, REDACTED)
+        if isinstance(value, Mapping):
+            return {
+                cls._replace_nex_secret(key, secret) if isinstance(key, str) else key:
+                cls._replace_nex_secret(item, secret)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._replace_nex_secret(item, secret) for item in value]
+        return value
+
+    @classmethod
+    def _contains_nex_secret(cls, value: Any, secret: str) -> bool:
+        if isinstance(value, str):
+            return secret in value
+        if isinstance(value, Mapping):
+            return any(
+                cls._contains_nex_secret(key, secret)
+                or cls._contains_nex_secret(item, secret)
+                for key, item in value.items()
+            )
+        if isinstance(value, list):
+            return any(cls._contains_nex_secret(item, secret) for item in value)
+        return False
+
+    def _redact_nex_payload(
+        self, value: Any, *, redact_sensitive_fields: bool = False
+    ) -> Any:
+        """Replace literal source credentials, preserving public profile fields."""
+        if self.nex_mode and any(
+            secret and self._contains_nex_secret(value, secret)
+            for secret in self._nex_redaction_values
+        ):
+            # This can run while the bridge-state lock is held, so only set the
+            # monotonic flag here. nex_evidence() turns it into a locked failure.
+            self._nex_bridge_secret_leak = True
+        redacted = redact_json_rpc(value) if redact_sensitive_fields else value
+        for secret in sorted(self._nex_redaction_values, key=len, reverse=True):
+            redacted = self._replace_nex_secret(redacted, secret)
+        return redacted
+
+    def redact_nex_text(self, value: str) -> tuple[str, bool]:
+        """Redact runtime secrets from raw stream text and report literal hits."""
+        text = redact_text(value)
+        leaked = False
+        for secret in sorted(self._nex_redaction_values, key=len, reverse=True):
+            if secret and secret in value:
+                leaked = True
+                text = text.replace(secret, REDACTED)
+        return text, leaked
+
+    def _nex_record_response(
+        self,
+        request: Mapping[str, Any],
+        response: Mapping[str, Any],
+        *,
+        synthetic: bool = False,
+        workflow_override: str | None = None,
+        root_override: str | None = None,
+    ) -> None:
+        operation = _request_operation(request)
+        workflow = workflow_override or _request_workflow(request)
+        if workflow is None and self.nex_mode and operation in _NEX_WORKFLOW_OPERATIONS:
+            with self._bridge_state_lock:
+                workflow = self._nex_active_workflow
+        params = request.get("params")
+        arguments = params.get("arguments") if isinstance(params, Mapping) else None
+        root = None
+        if isinstance(arguments, Mapping):
+            for key in ("authoring_root", "definition", "root"):
+                value = arguments.get(key)
+                if isinstance(value, str):
+                    root = value
+                    break
+        if root is None:
+            action = _request_action(request)
+            action_params = action.get("parameters") if isinstance(action, Mapping) else None
+            if isinstance(action_params, Mapping):
+                root = next(
+                    (action_params.get(key) for key in ("authoring_root", "definition", "root")
+                     if isinstance(action_params.get(key), str)),
+                    None,
+                )
+        if root is None and self.nex_mode and operation in _NEX_WORKFLOW_OPERATIONS:
+            with self._bridge_state_lock:
+                root = self._nex_active_root
+        if root_override is not None:
+            root = root_override
+        request_key = _rpc_id_key(request.get("id"))
+        if request.get("method") == "tools/call" and request_key is not None:
+            with self._bridge_state_lock:
+                use = self._nex_pending_requests.pop(request_key, None)
+                if use is None:
+                    self._nex_invalid_reason = (
+                        self._nex_invalid_reason or "tools/call response has no matched stream request"
+                    )
+                else:
+                    use["response"] = True
+                    use["response_success"] = not _response_is_error(response)
+                    if operation == _REVIEW_READER_TOOL:
+                        if not use["response_success"]:
+                            self._nex_invalid_reason = self._nex_invalid_reason or (
+                                "review reader MCP response was unsuccessful"
+                            )
+                        elif use.get("tool_result") and use.get("tool_result_success"):
+                            parent_tool_use_id = use.get("parent_tool_use_id")
+                            if isinstance(parent_tool_use_id, str):
+                                self._nex_review_read_success = True
+                                self._nex_review_read_child_id = parent_tool_use_id
+                                self._nex_mark_review_child_returned_locked(parent_tool_use_id)
+        if root is None:
+            with self._bridge_state_lock:
+                state = self._review_guard_state or {}
+            review_input = state.get("review_input")
+            if isinstance(review_input, Mapping):
+                root = state.get("authoring_root") or review_input.get("retained_capture_root")
+        self._nex_trace_record(
+            "response", response, operation=operation, workflow=workflow,
+            root=root if isinstance(root, str) else None, synthetic=synthetic,
+        )
+
+    def finish_nex_cell(self) -> tuple[list[dict[str, Any]], str | None]:
+        """Drain and freeze runner-owned bridge evidence after Claude exits."""
+        if not self.nex_mode:
+            return [], None
+        self.verify_nex_security_files()
+        with self._bridge_state_lock:
+            self._nex_capture_agent_exit_locked()
+            self._nex_agent_exited = True
+            self._nex_intentional_shutdown = True
+
+        # Preserve the process-group IDs even when their leaders have exited.
+        # The private MCP proxy is a Claude descendant and can outlive the CLI.
+        attached = list(self._attached)
+        for proc in attached:
+            if not self._kill_process_group(proc):
+                self._nex_invalidate("Claude process group did not empty during NEX-890 teardown")
+
+        # Closing the listener prevents another connection. The accept thread
+        # is joined first: once it has stopped, only already-registered
+        # handlers can register more, so the handler set can settle. Existing
+        # handlers get a bounded opportunity to drain their final response
+        # before any socket is forcibly closed.
+        self._bridge_stop.set()
+        self._close_socket(self._bridge_listener)
+        if self._bridge_thread is not None:
+            self._bridge_thread.join(timeout=self.shutdown_timeout_s)
+            if self._bridge_thread.is_alive():
+                self._nex_invalidate("NEX-890 bridge accept thread did not stop during teardown")
+        with self._bridge_state_lock:
+            server_processes = set(self._server_processes)
+        if self._join_bridge_handlers(time.monotonic() + self.shutdown_timeout_s):
+            self._nex_invalidate("NEX-890 bridge handler did not drain after Claude exited")
+            with self._bridge_state_lock:
+                connections = list(self._bridge_connections)
+            for connection in connections:
+                self._close_socket(connection)
+        with self._bridge_state_lock:
+            server_processes.update(self._server_processes)
+        for proc in server_processes:
+            if not self._kill_process_group(proc):
+                self._nex_invalidate("NEX-890 supervisor process group did not empty during teardown")
+        # Sockets are closed and supervisors are gone; any handler still alive
+        # could mutate diagnostics after the snapshot, so it fails closed and
+        # the whole diagnostics payload is frozen here rather than read live.
+        live_handlers = self._join_bridge_handlers(time.monotonic() + self.shutdown_timeout_s)
+        accept_stopped = self._bridge_thread is None or not self._bridge_thread.is_alive()
+        if live_handlers or not accept_stopped:
+            self._nex_invalidate("NEX-890 bridge handler survived teardown")
+        with self._bridge_state_lock:
+            if self._nex_final_diagnostics is None:
+                after_drain = self._nex_pending_snapshot_locked()
+                after_drain["accept_thread_stopped"] = accept_stopped
+                after_drain["live_handlers"] = live_handlers
+                after_drain["quiesced"] = accept_stopped and live_handlers == 0
+                self._nex_final_diagnostics = json.dumps(
+                    self._nex_bridge_diagnostics_locked(after_drain), sort_keys=True
+                )
+        self._attached.clear()
+        return self.nex_evidence()
+
+    def _join_bridge_handlers(self, deadline: float) -> int:
+        """Join registered bridge handlers until none are alive or time runs out.
+
+        Handlers register their own forwarding threads, so the set is re-read
+        after every pass. Returns the number still alive at the deadline.
+        """
+        while True:
+            with self._bridge_state_lock:
+                live = [handler for handler in self._bridge_workers if handler.is_alive()]
+            if not live or time.monotonic() >= deadline:
+                return len(live)
+            for handler in live:
+                handler.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    def nex_evidence(self) -> tuple[list[dict[str, Any]], str | None]:
+        """Return a frozen copy of bridge evidence and its fail-closed status."""
+        if not self.nex_mode:
+            return [], None
+        with self._bridge_state_lock:
+            if self._nex_bridge_secret_leak:
+                self._nex_invalid_reason = self._nex_invalid_reason or (
+                    "NEX-890 bridge message contained the trusted source credential"
+                )
+            if self._nex_invalid_reason is None:
+                if self._nex_connection_count != 1:
+                    self._nex_invalid_reason = "NEX-890 did not use exactly one authenticated MCP connection"
+                elif self._nex_active_child_id is not None:
+                    self._nex_invalid_reason = "review child did not return before agent exit"
+                elif self._nex_server_request_ids:
+                    self._nex_invalid_reason = "Claude did not answer a server-initiated JSON-RPC request"
+                elif any(not use.get("matched") or not use.get("response") or not use.get("tool_result") for use in self._nex_stream_uses):
+                    self._nex_invalid_reason = "Claude stream tool_use is not fully paired with bridge request, response, and tool_result"
+                elif (
+                    not self.nex_preflight_mode
+                    and any(use.get("name") == _REVIEW_READER_TOOL for use in self._nex_stream_uses)
+                    and self._nex_child_count != 4
+                ):
+                    self._nex_invalid_reason = "review-child count does not match the four workflow captures"
+                elif not self.nex_preflight_mode and any(
+                    self._nex_children_by_workflow.get(workflow) != 1
+                    or not self._nex_child_returned_by_workflow.get(workflow)
+                    for workflow in _NEX_WORKFLOWS
+                ):
+                    self._nex_invalid_reason = "each workflow must have exactly one successful foreground review child"
+            return json.loads(json.dumps(self._nex_trace)), self._nex_invalid_reason
 
     def _serve_bridge(self) -> None:
         """Accept and serve trusted supervisors for proxy connections.
@@ -1297,6 +3171,8 @@ class DesktopStdioSession:
         if listener is None:
             return
         while not self._bridge_stop.is_set():
+            if self.nex_mode and not self._attached_event.wait(timeout=0.2):
+                continue
             try:
                 connection, _ = listener.accept()
             except socket.timeout:
@@ -1306,6 +3182,31 @@ class DesktopStdioSession:
             if self._bridge_stop.is_set():
                 self._close_socket(connection)
                 return
+            if self.nex_mode:
+                with self._bridge_state_lock:
+                    if self._nex_agent_exited:
+                        self._nex_invalid_reason = (
+                            self._nex_invalid_reason
+                            or "proxy connection arrived after the Claude agent exited"
+                        )
+                        reject = True
+                    elif self._nex_connection_claimed:
+                        self._nex_invalid_reason = (
+                            self._nex_invalid_reason
+                            or "extra or reconnecting NEX-890 proxy connection"
+                        )
+                        reject = True
+                    else:
+                        self._nex_connection_claimed = True
+                        reject = False
+                if reject or not self._authenticate_nex_proxy(connection):
+                    if not reject:
+                        self._nex_invalidate(
+                            "NEX-890 bridge peer failed kernel identity, executable, spec, or ancestry validation"
+                        )
+                    self._close_socket(connection)
+                    continue
+                self.touch_nex_activity()
             worker = threading.Thread(
                 target=self._serve_connection,
                 args=(connection,),
@@ -1316,6 +3217,72 @@ class DesktopStdioSession:
                 self._bridge_connections.add(connection)
                 self._bridge_workers.add(worker)
             worker.start()
+
+    def _authenticate_nex_proxy(self, connection: socket.socket) -> bool:
+        """Authenticate the proxy against kernel peer identity and Claude ancestry."""
+        peer = _unix_peer_credentials(connection)
+        if peer is None:
+            return False
+        peer_pid, peer_uid = peer
+        if peer_uid != os.getuid() or peer_pid <= 0:
+            return False
+        with self._bridge_state_lock:
+            attached = tuple(self._attached)
+        if len(attached) != 1 or self._server_spec_path is None:
+            return False
+        claude_pid = attached[0].pid
+        if peer_pid == claude_pid:
+            return False
+        expected_interpreters = _proxy_interpreter_paths()
+        allowed_argv0 = tuple(os.fsencode(path) for path in expected_interpreters)
+        expected_proxy = str(self.PROXY_MODULE)
+        expected_spec = str(self._server_spec_path)
+        identity = _proxy_peer_identity(
+            peer_pid,
+            allowed_argv0=allowed_argv0,
+            expected_argv_tail=(expected_proxy, "--proxy", "--spec", expected_spec),
+        )
+        if identity is None:
+            return False
+        argv = identity.argv
+        if (
+            len(argv) != 5
+            or not argv[0]
+            or argv[0] not in expected_interpreters
+            or not any(_same_executable(identity.executable, item) for item in expected_interpreters)
+            or argv[1] != expected_proxy
+            or argv[2:4] != ("--proxy", "--spec")
+            or argv[4] != expected_spec
+        ):
+            return False
+
+        current_pid = identity.parent_pid
+        seen = {peer_pid}
+        found_cli = False
+        for _depth in range(64):
+            if current_pid == claude_pid:
+                found_cli = True
+                break
+            if current_pid <= 1 or current_pid in seen:
+                return False
+            seen.add(current_pid)
+            parent_pid = _process_parent(current_pid)
+            if parent_pid is None:
+                return False
+            current_pid = parent_pid
+        if not found_cli:
+            return False
+        with self._bridge_state_lock:
+            self._nex_connection_count += 1
+            self._nex_authenticated_peer = {
+                "pid": peer_pid,
+                "uid": peer_uid,
+                "claude_pid": claude_pid,
+                "proxy_executable_candidates": expected_interpreters,
+                "proxy_module": expected_proxy,
+                "spec_path": expected_spec,
+            }
+        return True
 
     def _serve_connection(self, connection: socket.socket) -> None:
         """Run one supervisor child for one Codex stdio client connection."""
@@ -1336,7 +3303,7 @@ class DesktopStdioSession:
                 "operation": operation,
                 "required_action": {
                     "type": "report_requirement",
-                    "requirement_id": "review",
+                    "parameters": {"requirement_id": "review"},
                 },
                 "message": (
                     "workflow review is pending; dispatch one provider-native "
@@ -1379,38 +3346,85 @@ class DesktopStdioSession:
         def should_block(request: Mapping[str, Any]) -> bool:
             if not self.workflow_action_guard:
                 return False
-            operation = _request_operation(request)
-            if operation not in _REVIEW_PENDING_BLOCKED_OPERATIONS:
+            # Review is a tool-call boundary. Keep protocol methods available
+            # so the reviewer can discover the runner-owned reader, but hold
+            # every tool call once capture starts or review becomes pending.
+            if request.get("method") != "tools/call":
                 return False
             with self._bridge_state_lock:
-                return self._review_guard_state is not None
+                capture_in_flight = self._review_capture_in_flight
+                pending = self._review_guard_state is not None
+                ready = self._nex_review_child_returned
+            if capture_in_flight:
+                return True
+            if not pending:
+                return False
+            operation = _request_operation(request)
+            if operation in _REVIEW_PENDING_ALLOWED_OPERATIONS:
+                return False
+            if operation == "advance_workflow":
+                action = _request_action(request)
+                blocked, invalidate = _review_guard_decision(
+                    action,
+                    nex_mode=self.nex_mode,
+                    review_child_returned=ready,
+                )
+                if invalidate:
+                    self._nex_invalidate("review report arrived before successful child return")
+                return blocked
+            # While pending, only the captured-input reader, workflow
+            # inspection and the review report cross the tool boundary.
+            return True
 
         def update_review_guard(
             request: Mapping[str, Any] | None, response: Mapping[str, Any]
         ) -> None:
             if not self.workflow_action_guard or request is None:
                 return
-            if _response_is_error(response):
-                return
             operation = _request_operation(request)
             action = _request_action(request)
-            if operation == "advance_workflow" and isinstance(action, Mapping):
-                action_type = action.get("type")
-                if action_type == "capture" and _response_requires_review(response):
-                    state = _review_guard_snapshot(response)
-                    workflow = _request_workflow(request)
-                    if workflow is not None:
-                        state["workflow"] = workflow
+            action_type = action.get("type") if isinstance(action, Mapping) else None
+            is_capture = operation == "advance_workflow" and action_type == "capture"
+            if self.nex_mode and _is_nex_validation_advance(request):
+                self.verify_nex_security_files()
+            if _response_is_error(response):
+                if is_capture:
                     with self._bridge_state_lock:
-                        self._review_guard_state = state
-                    self._write_review_allowlist(state)
+                        self._review_capture_in_flight = False
+                return
+            if operation == "advance_workflow" and isinstance(action, Mapping):
+                if action_type == "capture":
+                    if _response_requires_review(response):
+                        state = _review_guard_snapshot(response)
+                        workflow = _request_workflow(request)
+                        if workflow is not None:
+                            state["workflow"] = workflow
+                        if self.nex_mode:
+                            self._nex_snapshot_review_input(request, response)
+                            with self._bridge_state_lock:
+                                self._review_capture_in_flight = False
+                            return
+                        self._write_review_allowlist(state)
+                        with self._bridge_state_lock:
+                            self._review_guard_state = state
+                            self._review_capture_in_flight = False
+                    else:
+                        with self._bridge_state_lock:
+                            self._review_capture_in_flight = False
                 elif (
                     action_type == "report_requirement"
                     and _response_satisfies_review(response)
                 ):
                     with self._bridge_state_lock:
+                        if self.nex_mode and not self._nex_review_child_returned:
+                            self._nex_invalid_reason = (
+                                self._nex_invalid_reason
+                                or "review was reported before the child returned"
+                            )
+                            return
                         self._review_guard_state = None
-                    self._write_review_allowlist(None)
+                    if not self.nex_mode:
+                        self._write_review_allowlist(None)
 
         try:
             self._bridge_connection = connection
@@ -1436,6 +3450,8 @@ class DesktopStdioSession:
                         chunk = connection.recv(65536)
                         if not chunk:
                             break
+                        if self.nex_mode:
+                            self.touch_nex_activity()
                         buffer += chunk
                         while b"\n" in buffer:
                             line, buffer = buffer.split(b"\n", 1)
@@ -1444,18 +3460,158 @@ class DesktopStdioSession:
                             with contextlib.suppress(UnicodeDecodeError, json.JSONDecodeError):
                                 request = json.loads(line.decode("utf-8"))
                             if isinstance(request, Mapping):
+                                if self.nex_mode and "method" not in request:
+                                    # A response to a server-initiated request
+                                    # travels back on this stream. It is not a
+                                    # new client request and has no server reply.
+                                    response_key = _rpc_id_key(request.get("id"))
+                                    server_request: Mapping[str, Any] | None = None
+                                    with self._bridge_state_lock:
+                                        if response_key not in self._nex_server_request_ids:
+                                            self._nex_invalid_reason = (
+                                                self._nex_invalid_reason
+                                                or "Claude emitted an unmatched JSON-RPC response"
+                                            )
+                                        else:
+                                            self._nex_server_request_ids.remove(response_key)
+                                            server_request = self._nex_server_requests.pop(response_key, None)
+                                    if server_request is None:
+                                        self._nex_invalidate("Claude emitted an unmatched JSON-RPC response")
+                                    else:
+                                        self._nex_trace_record(
+                                            "client_response", request,
+                                            operation=_request_operation(server_request),
+                                        )
+                                    child.stdin.write(line)
+                                    child.stdin.flush()
+                                    continue
+                                operation = _request_operation(request)
+                                workflow = _request_workflow(request)
+                                params = request.get("params")
+                                arguments = params.get("arguments") if isinstance(params, Mapping) else None
+                                root = _request_root(request)
+                                matched_use: dict[str, Any] | None = None
+                                trace_workflow = workflow
+                                trace_root = root
+                                if self.nex_mode and request.get("method") == "tools/call":
+                                    matched_use, match_error = self._nex_match_tool_call(request)
+                                    if match_error is not None:
+                                        denied = {
+                                            "jsonrpc": "2.0", "id": request.get("id"),
+                                            "result": {
+                                                "isError": True,
+                                                "structuredContent": {"code": "runner/tool_use_mismatch"},
+                                                "content": [{"type": "text", "text": "runner rejected unmatched MCP request"}],
+                                            },
+                                        }
+                                        self._nex_trace_record(
+                                            "request", request, operation=operation,
+                                            workflow=workflow, root=root,
+                                        )
+                                        self._nex_trace_record(
+                                            "response", denied, operation=operation,
+                                            workflow=workflow, root=root, synthetic=True,
+                                        )
+                                        send_to_proxy(json.dumps(denied, separators=(",", ":")).encode() + b"\n")
+                                        continue
+                                    if trace_workflow is None and operation in _NEX_WORKFLOW_OPERATIONS:
+                                        with self._bridge_state_lock:
+                                            trace_workflow = self._nex_active_workflow
+                                    if trace_root is None and operation in _NEX_WORKFLOW_OPERATIONS:
+                                        with self._bridge_state_lock:
+                                            trace_root = self._nex_active_root
+
+                                if should_block(request) and operation is not None:
+                                    response_line = blocked_review_response(request, operation)
+                                    if self.nex_mode:
+                                        self._nex_trace_record(
+                                            "request", request, operation=operation,
+                                            workflow=trace_workflow, root=trace_root,
+                                        )
+                                        response_message = json.loads(response_line.decode("utf-8"))
+                                        self._nex_record_response(
+                                            request, response_message, synthetic=True,
+                                            workflow_override=trace_workflow,
+                                            root_override=trace_root,
+                                        )
+                                    send_to_proxy(response_line)
+                                    continue
+
+                                if self.nex_mode and operation == "advance_workflow" and workflow is not None:
+                                    with self._bridge_state_lock:
+                                        self._nex_active_workflow = workflow
+                                        if root is not None:
+                                            self._nex_active_root = root
+                                if self.nex_mode:
+                                    if _is_nex_validation_advance(request):
+                                        self._nex_snapshot_validation(request)
+                                    elif operation in {"check_data_product", "prepare_workflow"}:
+                                        candidate_root = _request_root(request)
+                                        static_names = {
+                                            "malformed-endpoint-profile",
+                                            "omitted-endpoint-profile",
+                                            "hard-coded-endpoint",
+                                        }
+                                        if isinstance(candidate_root, str) and Path(candidate_root).name in static_names:
+                                            self._nex_snapshot_static_request(request)
+                                            trace_workflow = "__static__"
+                                            trace_root = candidate_root
                                 request_id = _rpc_id_key(request.get("id"))
                                 if request_id is not None:
-                                    request_context[request_id] = request
-                                operation = _request_operation(request)
-                                if should_block(request) and operation is not None:
-                                    send_to_proxy(blocked_review_response(request, operation))
+                                    if request_id in request_context:
+                                        if self.nex_mode:
+                                            self._nex_invalidate("duplicate in-flight JSON-RPC id")
+                                            continue
+                                    request_context[request_id] = {
+                                        **dict(request),
+                                        "_nex_use": matched_use,
+                                        "_nex_workflow_override": trace_workflow,
+                                        "_nex_root_override": trace_root,
+                                    }
+                                if self.nex_mode:
+                                    self._nex_trace_record(
+                                        "request", request, operation=operation,
+                                        workflow=trace_workflow, root=trace_root,
+                                    )
+                                action = _request_action(request)
+                                if (
+                                    self.workflow_action_guard
+                                    and operation == "advance_workflow"
+                                    and isinstance(action, Mapping)
+                                    and action.get("type") == "capture"
+                                ):
+                                    with self._bridge_state_lock:
+                                        self._review_capture_in_flight = True
+                                if self.nex_mode and operation == _REVIEW_READER_TOOL:
+                                    result = self._nex_reader_response(request)
+                                    response_message = {
+                                        "jsonrpc": "2.0", "id": request.get("id"),
+                                        "result": result,
+                                    }
+                                    self._nex_record_response(
+                                        request, response_message, synthetic=True,
+                                        workflow_override=trace_workflow,
+                                        root_override=trace_root,
+                                    )
+                                    send_to_proxy(
+                                        json.dumps(response_message, separators=(",", ":")).encode() + b"\n"
+                                    )
                                     continue
-                            child.stdin.write(line)
-                            child.stdin.flush()
+                            forwarded_key = (
+                                self._nex_note_forwarded(request) if self.nex_mode else None
+                            )
+                            try:
+                                child.stdin.write(line)
+                                child.stdin.flush()
+                            except OSError:
+                                self._nex_forget_forwarded(forwarded_key)
+                                raise
                     if buffer:
-                        child.stdin.write(buffer)
-                        child.stdin.flush()
+                        if self.nex_mode:
+                            self._nex_invalidate("unterminated bridge request line")
+                        else:
+                            child.stdin.write(buffer)
+                            child.stdin.flush()
                 except (BrokenPipeError, OSError):
                     pass
                 finally:
@@ -1465,17 +3621,95 @@ class DesktopStdioSession:
             def forward_from_server() -> None:
                 try:
                     for line in child.stdout:
+                        if self.nex_mode:
+                            self.touch_nex_activity()
                         response: Any = None
                         with contextlib.suppress(UnicodeDecodeError, json.JSONDecodeError):
                             response = json.loads(line.decode("utf-8"))
                         request = None
-                        if isinstance(response, Mapping) and "id" in response:
+                        server_message = isinstance(response, Mapping) and "method" in response
+                        if self.nex_mode:
+                            self._nex_note_supervisor_line(response, server_message)
+                        if self.nex_mode and isinstance(response, Mapping) and server_message:
+                            server_id = _rpc_id_key(response.get("id"))
+                            if response.get("id") is not None:
+                                with self._bridge_state_lock:
+                                    if server_id in self._nex_server_request_ids:
+                                        self._nex_invalid_reason = (
+                                            self._nex_invalid_reason
+                                            or "duplicate server-initiated JSON-RPC id"
+                                        )
+                                    else:
+                                        self._nex_server_request_ids.add(server_id)
+                                        self._nex_server_requests[server_id] = copy.deepcopy(response)
+                                self._nex_trace_record(
+                                    "server_request", response,
+                                    operation=_request_operation(response),
+                                )
+                            else:
+                                self._nex_trace_record(
+                                    "notification", response,
+                                    operation=_request_operation(response),
+                                )
+                        elif isinstance(response, Mapping) and "id" in response:
                             request_id = _rpc_id_key(response.get("id"))
                             if request_id is not None:
                                 request = request_context.pop(request_id, None)
+                        if self.nex_mode and isinstance(response, Mapping):
+                            if server_message:
+                                # Server notifications and requests are valid
+                                # protocol messages, not unmatched responses.
+                                pass
+                            elif request is None:
+                                self._nex_invalidate("bridge response has no matched request")
+                            else:
+                                original = {key: value for key, value in request.items() if not key.startswith("_")}
+                                workflow_override = request.get("_nex_workflow_override")
+                                root_override = request.get("_nex_root_override")
+                                operation = _request_operation(original)
+                                if original.get("method") == "tools/list":
+                                    augmented = _augment_tools_list(
+                                        response, allowlist_path=self.review_allowlist_path
+                                    )
+                                    if augmented != response:
+                                        response = augmented
+                                        line = json.dumps(
+                                            response, separators=(",", ":")
+                                        ).encode() + b"\n"
+                                update_review_guard(original, response)
+                                if workflow_override == "__static__":
+                                    self._nex_bind_static_generation(original, response)
+                                self._nex_record_response(
+                                    original, response,
+                                    workflow_override=(workflow_override if isinstance(workflow_override, str) else None),
+                                    root_override=(root_override if isinstance(root_override, str) else None),
+                                )
                         if isinstance(response, Mapping):
-                            update_review_guard(request, response)
+                            if not self.nex_mode:
+                                update_review_guard(request, response)
+                        elif self.nex_mode:
+                            self._nex_invalidate("non-JSON response crossed the bridge")
+                        if self.nex_mode:
+                            if isinstance(response, Mapping):
+                                safe_response = self._redact_nex_payload(response)
+                                line = (
+                                    json.dumps(safe_response, separators=(",", ":")).encode()
+                                    + b"\n"
+                                )
+                            else:
+                                safe_text, leaked = self.redact_nex_text(
+                                    line.decode("utf-8", errors="replace")
+                                )
+                                if leaked:
+                                    self._nex_bridge_secret_leak = True
+                                line = safe_text.encode("utf-8")
                         send_to_proxy(line)
+                    if self.nex_mode:
+                        with self._bridge_state_lock:
+                            self._nex_supervisor_stdout_eof = True
+                            self._nex_supervisor_shutdown_requested_at_eof = (
+                                self._nex_intentional_shutdown or self._bridge_stop.is_set()
+                            )
                 except (BrokenPipeError, OSError):
                     pass
 
@@ -1483,15 +3717,42 @@ class DesktopStdioSession:
                 for _line in child.stderr:
                     pass
 
-            to_server = threading.Thread(target=forward_to_server, daemon=True)
-            from_server = threading.Thread(target=forward_from_server, daemon=True)
+            def start_handler(target: Callable[[], None]) -> threading.Thread:
+                # Forwarders mutate evidence and diagnostics, and from_server
+                # can outlive this worker's bounded join. Register them so NEX
+                # teardown joins them before freezing the after-drain snapshot.
+                def run() -> None:
+                    try:
+                        target()
+                    finally:
+                        with self._bridge_state_lock:
+                            self._bridge_workers.discard(threading.current_thread())
+
+                handler = threading.Thread(target=run, daemon=True)
+                with self._bridge_state_lock:
+                    self._bridge_workers.add(handler)
+                handler.start()
+                return handler
+
+            to_server = start_handler(forward_to_server)
+            from_server = start_handler(forward_from_server)
             stderr_reader = threading.Thread(target=drain_stderr, daemon=True)
-            to_server.start()
-            from_server.start()
             stderr_reader.start()
             to_server.join()
             from_server.join(timeout=self.shutdown_timeout_s)
-            if child.poll() is None:
+            if self.nex_mode:
+                with self._bridge_state_lock:
+                    intentional = self._nex_intentional_shutdown or self._bridge_stop.is_set()
+                if intentional:
+                    self._kill_process_group(child)
+                elif child.poll() is None:
+                    try:
+                        child.wait(timeout=self.shutdown_timeout_s)
+                    except subprocess.TimeoutExpired:
+                        self._kill_process_group(child)
+                else:
+                    child.wait()
+            elif child.poll() is None:
                 try:
                     child.wait(timeout=self.shutdown_timeout_s)
                 except subprocess.TimeoutExpired:
@@ -1499,13 +3760,21 @@ class DesktopStdioSession:
             else:
                 child.wait()
             code = child.returncode
+            with self._bridge_state_lock:
+                intentional = self.nex_mode and (
+                    self._nex_intentional_shutdown or self._bridge_stop.is_set()
+                )
+                if self.nex_mode:
+                    self._nex_supervisor_exit_code = code if isinstance(code, int) else None
+                    self._nex_supervisor_shutdown_requested_at_exit = intentional
             _write_private_text(
                 self.server_process_result_path,
                 json.dumps(
                     {
-                        "status": "passed" if code == 0 else "failed",
+                        "status": "passed" if code == 0 or intentional else "failed",
                         "exit_code": code,
                         "pid": child.pid,
+                        "intentional_shutdown": intentional,
                     },
                     sort_keys=True,
                 ),
@@ -1515,9 +3784,17 @@ class DesktopStdioSession:
             with contextlib.suppress(OSError):
                 connection.shutdown(socket.SHUT_WR)
         except (OSError, ValueError) as exc:
+            with self._bridge_state_lock:
+                intentional = self.nex_mode and (
+                    self._nex_intentional_shutdown or self._bridge_stop.is_set()
+                )
             _write_private_text(
                 self.server_process_result_path,
-                json.dumps({"status": "failed", "error": redact_text(str(exc))}, sort_keys=True),
+                json.dumps({
+                    "status": "passed" if intentional else "failed",
+                    "error": None if intentional else redact_text(str(exc)),
+                    "intentional_shutdown": intentional,
+                }, sort_keys=True),
             )
             if child is not None:
                 self._kill_process(child)
@@ -1563,13 +3840,24 @@ class DesktopStdioSession:
 
     def result_metrics(self) -> dict[str, Any]:
         self.server_result = self._read_server_result()
-        return {
+        metrics = {
             "setup_result": self.setup_result.as_dict(),
             "agent_result": self.agent_result.as_dict(),
             "server_result": self.server_result.as_dict(),
+            "nex_bridge_secret_leak": self._nex_bridge_secret_leak,
             "mcp_config": str(self.config_path) if self._started else None,
             "mcp_trace": str(self.trace_path) if self._started else None,
         }
+        if self.nex_mode:
+            metrics["nex_review_children"] = {
+                workflow: {
+                    "count": self._nex_children_by_workflow.get(workflow, 0),
+                    "returned": self._nex_child_returned_by_workflow.get(workflow, False),
+                }
+                for workflow in _NEX_WORKFLOWS
+            }
+            metrics["nex_bridge_diagnostics"] = self._nex_bridge_diagnostics()
+        return metrics
 
     @staticmethod
     def _kill_process(proc: subprocess.Popen[Any]) -> None:
@@ -1589,11 +3877,57 @@ class DesktopStdioSession:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=5)
 
+    @staticmethod
+    def _process_group_alive(pgid: int) -> bool:
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    @classmethod
+    def _kill_process_group(cls, proc: subprocess.Popen[Any]) -> bool:
+        """Signal a run-owned group before reaping its leader, then bound cleanup."""
+        pgid = proc.pid
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            with contextlib.suppress(OSError):
+                proc.terminate()
+        deadline = time.monotonic() + 5.0
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+        while cls._process_group_alive(pgid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if cls._process_group_alive(pgid):
+            with contextlib.suppress(OSError):
+                os.killpg(pgid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=1.0)
+        final_deadline = time.monotonic() + 2.0
+        while cls._process_group_alive(pgid) and time.monotonic() < final_deadline:
+            time.sleep(0.05)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=0.1)
+        return not cls._process_group_alive(pgid)
+
     def cleanup(self) -> None:
         if self._closed:
             return
+        if self.nex_mode:
+            with self._bridge_state_lock:
+                self._nex_intentional_shutdown = True
         for proc in self._attached:
-            self._kill_process(proc)
+            if self.nex_mode:
+                self._kill_process_group(proc)
+            else:
+                self._kill_process(proc)
         self._attached.clear()
         self._bridge_stop.set()
         self._close_socket(self._bridge_listener)
@@ -1609,7 +3943,10 @@ class DesktopStdioSession:
         self._bridge_connection = None
         self._bridge_listener = None
         for proc in processes:
-            self._kill_process(proc)
+            if self.nex_mode:
+                self._kill_process_group(proc)
+            else:
+                self._kill_process(proc)
         for worker in workers:
             worker.join(timeout=5)
         with self._bridge_state_lock:
@@ -1681,8 +4018,10 @@ def _write_proxy_result(path: Path, **payload: Any) -> None:
         _write_private_text(path, json.dumps(redact_json_rpc(payload), sort_keys=True))
 
 
-def _trace_line(path: Path, direction: str, line: bytes, **metadata: Any) -> None:
+def _trace_line(path: Path | None, direction: str, line: bytes, **metadata: Any) -> None:
     """Persist only parsed, recursively-redacted JSON-RPC messages."""
+    if path is None:
+        return
     try:
         value = json.loads(line.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -1709,7 +4048,8 @@ def run_stdio_proxy(spec_path: Path) -> int:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
         bridge_path = Path(spec["bridge_path"])
         server_process_result_path = Path(spec["server_process_result_path"])
-        trace_path = Path(spec["trace_path"])
+        trace_path = Path(spec["trace_path"]) if spec.get("trace_path") else None
+        nex_mode = spec.get("nex_mode") is True
         result_path = Path(spec["result_path"])
         review_allowlist_path = Path(spec["review_allowlist_path"])
         timeout_faults = _timeout_faults(spec.get("request_timeout_faults"))
@@ -1919,18 +4259,21 @@ def run_stdio_proxy(spec_path: Path) -> int:
                             state.timer.cancel()
                             with timers_lock:
                                 active_timers.discard(state.timer)
-                with contextlib.suppress(OSError):
-                    _trace_line(
-                        trace_path,
-                        "response",
-                        line,
-                        forwarded=not (state is not None and state.timed_out),
-                        late=bool(state is not None and state.timed_out),
-                    )
+                if response_operation != _REVIEW_READER_TOOL:
+                    with contextlib.suppress(OSError):
+                        _trace_line(
+                            trace_path,
+                            "response",
+                            line,
+                            forwarded=not (state is not None and state.timed_out),
+                            late=bool(state is not None and state.timed_out),
+                        )
                 if state is not None and state.timed_out:
                     continue
                 output_line = line
                 if (
+                    not nex_mode
+                    and
                     isinstance(message, Mapping)
                     and not (state is not None and state.timed_out)
                     and response_operation == "tools/list"
@@ -1969,10 +4312,11 @@ def run_stdio_proxy(spec_path: Path) -> int:
                 and request["params"].get("name") == _REVIEW_READER_TOOL
             )
             if isinstance(request, Mapping):
-                if is_review_reader_call:
+                if is_review_reader_call and not nex_mode:
                     write_review_reader_response(request)
                     continue
-            _trace_line(trace_path, "request", line)
+            if not is_review_reader_call:
+                _trace_line(trace_path, "request", line)
             if isinstance(request, Mapping):
                 operation = _request_operation(request)
                 request_key = (

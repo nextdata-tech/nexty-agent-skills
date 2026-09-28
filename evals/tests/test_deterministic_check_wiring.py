@@ -132,3 +132,25 @@ def test_scenario_without_the_opt_in_is_untouched(harness, tmp_path, monkeypatch
     assert res.ok is True, res.error
     assert "deterministic_check" not in res.metrics
     assert res.verdict["overall_pass"] is True
+
+
+def test_run_one_preserves_judge_overrides_without_cli_explicit_flags(
+    harness, tmp_path, monkeypatch
+):
+    harness(net_refunds=True)
+    seen = {}
+
+    def capture_judge(*args, **kwargs):
+        seen["model"] = args[5]
+        seen["effort"] = kwargs["effort"]
+        return {"overall_pass": True, "summary": "captured"}
+
+    monkeypatch.setattr(run, "run_judge", capture_judge)
+    res = run.run_one(
+        _skill_set(),
+        SCENARIO,
+        _args(tmp_path, judge_model="caller-model", judge_effort="low"),
+    )
+
+    assert res.ok is True, res.error
+    assert seen == {"model": "caller-model", "effort": "low"}

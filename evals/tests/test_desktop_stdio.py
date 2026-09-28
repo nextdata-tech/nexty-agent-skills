@@ -10,12 +10,16 @@ from __future__ import annotations
 import json
 import os
 import select
+import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,21 +82,28 @@ time.sleep(60)
 """
 
 REVIEW_GUARD_SERVER = r"""
-import json, sys
+import json, sys, time
 
 for raw in sys.stdin:
     request = json.loads(raw)
     operation = request.get("params", {}).get("name", request.get("method"))
     arguments = request.get("params", {}).get("arguments", {})
     action = arguments.get("action", {})
-    if operation == "advance_workflow" and action.get("type") == "capture":
+    if request.get("method") == "tools/list":
+        result = {"tools": [{"name": "advance_workflow", "inputSchema": {}}]}
+    elif operation == "advance_workflow" and action.get("type") == "capture":
+        time.sleep(0.1)
         result = {
             "revision": 4,
             "invalidation_epoch": 0,
             "requirements": {
                 "review": {
                     "status": "pending",
-                    "review_input": {"request_id": "review-1"},
+                    "review_input": {
+                        "request_id": "review-1",
+                        "retained_capture_root": "PLACEHOLDER_CAPTURE",
+                        "retained_blueprint_path": "PLACEHOLDER_BLUEPRINT",
+                    },
                 }
             },
             "next_actions": [
@@ -136,6 +147,380 @@ def _script(path: Path, body: str) -> Path:
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def _procargs2(
+    argv: tuple[str, ...], *, environment_in_used_length: bool = False
+) -> tuple[bytearray, int]:
+    data = bytearray(struct.pack("=i", len(argv)))
+    data.extend(b"/opt/python/bin/Python\0")
+    while len(data) % 8:
+        data.append(0)
+    for argument in argv:
+        data.extend(os.fsencode(argument) + b"\0")
+    if environment_in_used_length:
+        data.extend(b"API_TOKEN=must-not-be-copied\0")
+    used_length = len(data)
+    if not environment_in_used_length:
+        data.extend(b"API_TOKEN=must-not-be-parsed\0\0")
+    return data, used_length
+
+
+def test_darwin_procargs2_parser_reads_five_args_and_ignores_environment():
+    argv = (
+        "/opt/python/bin/Python",
+        "/repo/desktop_stdio.py",
+        "--proxy",
+        "--spec",
+        "/private/tmp/server spec.json",
+    )
+    data, used_length = _procargs2(argv, environment_in_used_length=True)
+    assert b"API_TOKEN=must-not-be-copied" in data[:used_length]
+
+    parsed = ds._parse_darwin_procargs2(
+        data,
+        used_length,
+        allowed_argv0=(b"/opt/python/bin/Python",),
+        expected_argv_tail=argv[1:],
+    )
+
+    assert parsed == argv
+    assert all("API_TOKEN" not in argument for argument in parsed)
+
+
+def test_darwin_procargs2_parser_does_not_copy_shifted_environment(monkeypatch):
+    argv = (
+        "",
+        "/opt/python/bin/Python",
+        str(ds.PROXY_MODULE),
+        "--proxy",
+        "--spec",
+    )
+    data, used_length = _procargs2(argv, environment_in_used_length=True)
+    assert b"API_TOKEN=must-not-be-copied" in data[:used_length]
+    decoded: list[bytes] = []
+    original_fsdecode = os.fsdecode
+
+    def record_decode(value):
+        decoded.append(value)
+        return original_fsdecode(value)
+
+    monkeypatch.setattr(ds.os, "fsdecode", record_decode)
+
+    assert ds._parse_darwin_procargs2(
+        data,
+        used_length,
+        allowed_argv0=(b"/opt/python/bin/Python",),
+        expected_argv_tail=(str(ds.PROXY_MODULE), "--proxy", "--spec", "/private/tmp/spec.json"),
+    ) is None
+    assert decoded == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "allowed_argv0"),
+    [
+        (("/opt/python/bin/Python", "script", "--proxy", "--spec"), (b"/opt/python/bin/Python",)),
+        (("", "script", "--proxy", "--spec", "spec"), (b"/opt/python/bin/Python",)),
+        (("/other/python", "script", "--proxy", "--spec", "spec"), (b"/opt/python/bin/Python",)),
+    ],
+)
+def test_darwin_procargs2_parser_rejects_wrong_argc_or_argv0(argv, allowed_argv0):
+    data, used_length = _procargs2(argv)
+
+    assert ds._parse_darwin_procargs2(
+        data,
+        used_length,
+        allowed_argv0=allowed_argv0,
+        expected_argv_tail=(str(ds.PROXY_MODULE), "--proxy", "--spec", "spec"),
+    ) is None
+
+
+def test_darwin_procargs2_parser_rejects_truncated_arguments():
+    argv = (
+        "/opt/python/bin/Python", "/repo/desktop_stdio.py", "--proxy",
+        "--spec", "server.json",
+    )
+    data, used_length = _procargs2(argv)
+
+    assert ds._parse_darwin_procargs2(
+        data,
+        used_length - 1,
+        allowed_argv0=(argv[0].encode(),),
+        expected_argv_tail=(str(ds.PROXY_MODULE), "--proxy", "--spec", "server.json"),
+    ) is None
+
+
+def test_linux_process_stat_parser_uses_last_comm_parenthesis():
+    pid = 4312
+    fields = [b"S", b"321"] + [b"1"] * 17 + [b"98765"]
+    raw = (
+        f"{pid} (worker) S 1 (hostile comm) with spaces) ".encode()
+        + b" ".join(fields)
+        + b"\n"
+    )
+
+    assert ds._parse_linux_process_stat(pid, raw) == (321, 98765)
+    assert ds._parse_linux_process_stat(pid + 1, raw) is None
+    assert ds._parse_linux_process_stat(pid, b"truncated") is None
+
+
+def test_linux_process_cmdline_preserves_empty_argv0_and_requires_nul():
+    assert ds._parse_linux_process_cmdline(
+        b"\0/repo/desktop_stdio.py\0--proxy\0--spec\0spec.json\0"
+    ) == ("", "/repo/desktop_stdio.py", "--proxy", "--spec", "spec.json")
+    assert ds._parse_linux_process_cmdline(b"python\0script.py") is None
+
+
+def _configure_nex_proxy_auth(monkeypatch, session, *, argv=None, executable=None, parent=None):
+    session._server_spec_path = Path("/private/tmp/server-spec.json")
+    session._attached = [SimpleNamespace(pid=4100)]
+    interpreter = "/opt/python/bin/Python"
+    valid_argv = (
+        interpreter,
+        str(ds.PROXY_MODULE),
+        "--proxy",
+        "--spec",
+        str(session._server_spec_path),
+    )
+    monkeypatch.setattr(ds, "_unix_peer_credentials", lambda _connection: (4200, os.getuid()))
+    monkeypatch.setattr(ds, "_proxy_interpreter_paths", lambda: (interpreter,))
+    monkeypatch.setattr(
+        ds,
+        "_proxy_peer_identity",
+        lambda _pid, *, allowed_argv0, expected_argv_tail: ds._ProxyPeerIdentity(
+            parent_pid=4300 if parent is None else parent,
+            executable=interpreter if executable is None else executable,
+            argv=valid_argv if argv is None else argv,
+        ),
+    )
+    monkeypatch.setattr(ds, "_process_parent", lambda _pid: 4100)
+    return valid_argv
+
+
+def test_nex_proxy_auth_accepts_exact_peer_argv_and_claude_ancestry(tmp_path, monkeypatch):
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"], root=tmp_path / "session"
+    )
+    _configure_nex_proxy_auth(monkeypatch, session)
+
+    assert session._authenticate_nex_proxy(object()) is True
+    assert session._nex_connection_count == 1
+    assert session._nex_authenticated_peer["claude_pid"] == 4100
+
+
+@pytest.mark.parametrize("change", ["module", "switches", "spec", "shape", "executable", "ancestry"])
+def test_nex_proxy_auth_rejects_wrong_peer_identity(tmp_path, monkeypatch, change):
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"], root=tmp_path / "session"
+    )
+    valid_argv = _configure_nex_proxy_auth(monkeypatch, session)
+    if change == "module":
+        values = list(valid_argv)
+        values[1] = "/tmp/other_proxy.py"
+        _configure_nex_proxy_auth(monkeypatch, session, argv=tuple(values))
+    elif change == "switches":
+        values = list(valid_argv)
+        values[2:4] = ("--spec", "--proxy")
+        _configure_nex_proxy_auth(monkeypatch, session, argv=tuple(values))
+    elif change == "spec":
+        values = list(valid_argv)
+        values[4] = "/tmp/other.json"
+        _configure_nex_proxy_auth(monkeypatch, session, argv=tuple(values))
+    elif change == "shape":
+        _configure_nex_proxy_auth(monkeypatch, session, argv=valid_argv[:-1])
+    elif change == "executable":
+        _configure_nex_proxy_auth(monkeypatch, session, executable="/tmp/other-python")
+    else:
+        _configure_nex_proxy_auth(monkeypatch, session, parent=9999)
+        monkeypatch.setattr(ds, "_process_parent", lambda _pid: None)
+
+    assert session._authenticate_nex_proxy(object()) is False
+    assert session._nex_connection_count == 0
+
+
+@pytest.mark.skipif(
+    not (sys.platform.startswith("linux") or sys.platform == "darwin"),
+    reason="live peer identity is implemented only for Linux and macOS",
+)
+def test_nex_proxy_auth_accepts_live_peer_with_quoted_parent_argv(tmp_path):
+    bridge_path = Path("/tmp") / (
+        f"n890-{os.getpid()}-{time.monotonic_ns()}.sock"
+    )
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.settimeout(10)
+
+    result_path = tmp_path / "proxy-result.json"
+    spec_path = tmp_path / "server-spec.json"
+    pid_path = tmp_path / "proxy.pid"
+    wrapper_pid_path = tmp_path / "proxy-parent.pid"
+    proxy_parent_script = (
+        "import os, signal, subprocess, sys, time\n"
+        "proxy = None\n"
+        "def unblock_proxy_sigterm():\n"
+        "    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})\n"
+        "def stop(*_args):\n"
+        "    if proxy is not None:\n"
+        "        try: os.killpg(proxy.pid, signal.SIGTERM)\n"
+        "        except ProcessLookupError: pass\n"
+        "        try: proxy.wait(timeout=5)\n"
+        "        except subprocess.TimeoutExpired:\n"
+        "            os.killpg(proxy.pid, signal.SIGKILL); proxy.wait()\n"
+        "    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, stop)\n"
+        "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+        "proxy = subprocess.Popen([sys.executable, sys.argv[1], '--proxy', '--spec', sys.argv[2]], "
+        "stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, "
+        "start_new_session=True, preexec_fn=unblock_proxy_sigterm)\n"
+        "signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})\n"
+        "temporary = sys.argv[3] + '.tmp'\n"
+        "with open(temporary, 'w') as pid_file: pid_file.write(str(proxy.pid))\n"
+        "os.replace(temporary, sys.argv[3])\n"
+        "time.sleep(60)\n"
+    )
+    parent_script = (
+        "import os, signal, subprocess, sys, time\n"
+        "wrapper = None\n"
+        "def stop(*_args):\n"
+        "    if wrapper is not None:\n"
+        "        try: wrapper.wait(timeout=6)\n"
+        "        except subprocess.TimeoutExpired:\n"
+        "            wrapper.kill(); wrapper.wait()\n"
+        "    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, stop)\n"
+        "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+        "wrapper = subprocess.Popen([sys.executable, '-c', sys.argv[1], *sys.argv[2:]], "
+        "stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n"
+        "signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})\n"
+        "temporary = sys.argv[5] + '.tmp'\n"
+        "with open(temporary, 'w') as pid_file: pid_file.write(str(wrapper.pid))\n"
+        "os.replace(temporary, sys.argv[5])\n"
+        "time.sleep(60)\n"
+    )
+    parent = None
+    connection = None
+    proxy_pid = None
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"], root=tmp_path / "session"
+    )
+    session._server_spec_path = spec_path
+    expected_proxy_interpreters = ds._proxy_interpreter_paths()
+    expected_proxy_argv0 = tuple(
+        os.fsencode(path) for path in expected_proxy_interpreters
+    )
+    expected_proxy_argv_tail = (
+        str(ds.PROXY_MODULE), "--proxy", "--spec", str(spec_path)
+    )
+
+    def live_proxy_identity():
+        if proxy_pid is None:
+            return None
+        identity = ds._proxy_peer_identity(
+            proxy_pid,
+            allowed_argv0=expected_proxy_argv0,
+            expected_argv_tail=expected_proxy_argv_tail,
+        )
+        if (
+            identity is None
+            or len(identity.argv) != 5
+            or identity.argv[0] not in expected_proxy_interpreters
+            or not any(
+                ds._same_executable(identity.executable, path)
+                for path in expected_proxy_interpreters
+            )
+            or identity.argv[1:] != expected_proxy_argv_tail
+        ):
+            return None
+        return identity
+
+    try:
+        listener.bind(str(bridge_path))
+        listener.listen(1)
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "bridge_path": str(bridge_path),
+                    "server_process_result_path": str(tmp_path / "server-process.json"),
+                    "result_path": str(result_path),
+                    "trace_path": str(tmp_path / "trace.jsonl"),
+                    "review_allowlist_path": str(tmp_path / "review-allowlist.json"),
+                    "nex_mode": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        parent = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                parent_script,
+                proxy_parent_script,
+                str(ds.PROXY_MODULE),
+                str(spec_path),
+                str(pid_path),
+                str(wrapper_pid_path),
+                "it's an unmatched ancestor quote",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        session._attached = [parent]
+        deadline = time.monotonic() + 10
+        while (
+            not (pid_path.exists() and wrapper_pid_path.exists())
+            and time.monotonic() < deadline
+        ):
+            if parent.poll() is not None:
+                raise AssertionError("proxy parent exited before starting the child")
+            time.sleep(0.01)
+        assert pid_path.exists() and wrapper_pid_path.exists(), (
+            "proxy process tree did not publish both child PIDs"
+        )
+        proxy_pid = int(pid_path.read_text(encoding="utf-8"))
+        wrapper_pid = int(wrapper_pid_path.read_text(encoding="utf-8"))
+        connection, _address = listener.accept()
+
+        assert ds._process_parent(proxy_pid) == wrapper_pid
+        assert ds._process_parent(wrapper_pid) == parent.pid
+        assert session._authenticate_nex_proxy(connection) is True
+        assert session._nex_authenticated_peer["pid"] == proxy_pid
+        assert session._nex_authenticated_peer["claude_pid"] == parent.pid
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        if parent is not None:
+            try:
+                os.killpg(parent.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                parent.communicate(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(parent.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                parent.communicate(timeout=5)
+        if live_proxy_identity() is not None:
+            try:
+                os.killpg(proxy_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 1
+            while (
+                time.monotonic() < deadline
+                and live_proxy_identity() is not None
+            ):
+                time.sleep(0.02)
+            if live_proxy_identity() is not None:
+                try:
+                    os.killpg(proxy_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        bridge_path.unlink(missing_ok=True)
 
 
 def test_session_writes_private_strict_config_and_mcp_allowlist(tmp_path):
@@ -240,6 +625,16 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
 
 def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
     child = _script(tmp_path / "review-guard-server.py", REVIEW_GUARD_SERVER)
+    capture_dir = tmp_path / "retained-capture"
+    capture_dir.mkdir()
+    (capture_dir / "summary.json").write_text('{"status":"ready"}\n')
+    blueprint = tmp_path / "retained-blueprint.md"
+    blueprint.write_text("# Blueprint\n")
+    server_text = REVIEW_GUARD_SERVER.replace(
+        "PLACEHOLDER_CAPTURE", str(capture_dir)
+    ).replace("PLACEHOLDER_BLUEPRINT", str(blueprint))
+    child.write_text("#!/usr/bin/env python3\n" + server_text, encoding="utf-8")
+    child.chmod(0o755)
     session = ds.DesktopStdioSession(
         [sys.executable, str(child)],
         root=tmp_path / "session",
@@ -262,28 +657,65 @@ def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
         start_new_session=True,
     )
 
-    def call(request):
+    def send(request):
         assert proxy.stdin is not None and proxy.stdout is not None
         proxy.stdin.write(json.dumps(request) + "\n")
         proxy.stdin.flush()
+
+    def receive():
+        assert proxy.stdout is not None
         return json.loads(proxy.stdout.readline())
 
+    def call(request):
+        send(request)
+        return receive()
+
     try:
-        capture = call(
+        send(
             {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "advance_workflow",
-                    "arguments": {
-                        "workflow": "crm-pipeline",
-                        "action": {"type": "capture"},
-                    },
-                },
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "advance_workflow", "arguments": {
+                    "workflow": "crm-pipeline", "action": {"type": "capture"}
+                }},
             }
         )
+        send({
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": {"name": "run_semantic_query", "arguments": {"query": "SELECT 1"}},
+        })
+        initial_responses = {response["id"]: response for response in (receive(), receive())}
+        capture = initial_responses[1]
+        concurrent_block = initial_responses[9]
         assert capture["result"]["next_actions"][0]["code"] == "workflow/review_pending"
+        assert concurrent_block["result"]["isError"] is True
+        assert concurrent_block["result"]["structuredContent"]["code"] == "runner/review_pending"
+
+        initialized = call({
+            "jsonrpc": "2.0", "id": 8, "method": "initialize", "params": {}
+        })
+        assert initialized["result"]["forwarded_operation"] == "initialize"
+
+        # Protocol inventory remains available during review so the proxy can
+        # advertise the runner-owned reader to the reviewer child.
+        listed = call({"jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {}})
+        assert {tool["name"] for tool in listed["result"]["tools"]} >= {
+            "advance_workflow", "read_review_input"
+        }
+
+        reader = call({
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": {"name": "read_review_input", "arguments": {
+                "path": str(capture_dir), "operation": "list"
+            }},
+        })
+        assert reader["result"]["isError"] is False
+
+        blocked_unlisted = call({
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": {"name": "run_semantic_query", "arguments": {"query": "SELECT 1"}},
+        })
+        assert blocked_unlisted["result"]["isError"] is True
+        assert blocked_unlisted["result"]["structuredContent"]["code"] == "runner/review_pending"
 
         blocked = call(
             {
@@ -300,6 +732,16 @@ def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
         assert blocked_result["isError"] is True
         assert blocked_result["structuredContent"]["code"] == "runner/review_pending"
         assert blocked_result["structuredContent"]["required_action"]["type"] == "report_requirement"
+        assert blocked_result["structuredContent"]["required_action"]["parameters"]["requirement_id"] == "review"
+
+        blocked_capture = call({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": "advance_workflow", "arguments": {
+                "workflow": "crm-pipeline",
+                "action": {"type": "capture"}
+            }},
+        })
+        assert blocked_capture["result"]["isError"] is True
 
         report = call(
             {
@@ -312,10 +754,12 @@ def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
                         "workflow": "crm-pipeline",
                         "action": {
                             "type": "report_requirement",
-                            "requirement_id": "review",
-                            "generation": 1,
-                            "subject_sha256": "subject-1",
-                            "dependency_evidence_sha256": "evidence-1",
+                            "parameters": {
+                                "requirement_id": "review",
+                                "generation": 1,
+                                "subject_sha256": "subject-1",
+                                "dependency_evidence_sha256": "evidence-1",
+                            },
                         },
                     },
                 },
@@ -345,15 +789,85 @@ def test_codex_review_guard_returns_mcp_error_and_survives_report(tmp_path):
         session.cleanup()
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "report_requirement", "parameters": {"requirement_id": "review"}},
+        {"type": "report_requirement", "requirement_id": "review"},
+    ],
+)
+def test_review_guard_accepts_canonical_and_legacy_report_envelopes(action):
+    assert ds._is_review_requirement_report(action)
+    assert ds._review_guard_decision(
+        action, nex_mode=True, review_child_returned=True
+    ) == (False, False)
+
+
+def test_review_guard_rejects_conflicting_or_wrong_requirement_ids():
+    conflicting = {
+        "type": "report_requirement",
+        "requirement_id": "review",
+        "parameters": {"requirement_id": "validation"},
+    }
+    wrong = {
+        "type": "report_requirement",
+        "parameters": {"requirement_id": "validation"},
+    }
+    for action in (conflicting, wrong):
+        assert not ds._is_review_requirement_report(action)
+        assert ds._review_guard_decision(
+            action, nex_mode=True, review_child_returned=True
+        ) == (True, False)
+
+
+def test_nex_review_report_before_child_return_blocks_and_invalidates():
+    action = {
+        "type": "report_requirement",
+        "parameters": {"requirement_id": "review"},
+    }
+    assert ds._review_guard_decision(
+        action, nex_mode=True, review_child_returned=False
+    ) == (True, True)
+
+
+def test_nex_validation_guard_recognizes_workflow_v2_requirement():
+    request = {
+        "method": "tools/call",
+        "params": {
+            "name": "advance_workflow",
+            "arguments": {
+                "action": {
+                    "type": "start_requirement",
+                    "parameters": {"requirement_id": "validation"},
+                }
+            },
+        },
+    }
+    assert ds._is_nex_validation_advance(request)
+    request["params"]["arguments"]["action"]["parameters"]["requirement_id"] = "review"
+    assert not ds._is_nex_validation_advance(request)
+    request["params"]["arguments"]["action"]["parameters"]["requirement_id"] = "validation"
+    request["params"]["arguments"]["action"]["requirement_id"] = "other"
+    assert not ds._is_nex_validation_advance(request)
+
+
 def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
     child = _script(tmp_path / "review-reader-server.py", REVIEW_READER_SERVER)
     capture = tmp_path / "capture"
     capture.mkdir()
     (capture / "build-record.json").write_text('{"status":"ok"}\n')
+    transform = capture / "transform"
+    transform.mkdir()
+    source_path = transform / "main.py"
+    source_path.write_text("ENDPOINT = '/v1/orders'\n")
     (capture / ".env").write_text("TOKEN=must-not-be-read\n")
     (capture / ".env.local").write_text("TOKEN=must-not-be-read\n")
     blueprint = tmp_path / "blueprint.md"
     blueprint.write_text("# Approved blueprint\n")
+    outside = tmp_path / "outside-review-secret.txt"
+    outside.write_text("OUTSIDE_REVIEW_SECRET\n")
+    escape_link = capture / "outside-link.txt"
+    escape_link.symlink_to(outside)
     session = ds.DesktopStdioSession(
         [sys.executable, str(child)],
         root=tmp_path / "session",
@@ -426,6 +940,29 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             and record.get("message", {}).get("id") == 2
             for record in trace_records
         )
+        source_read = call({
+            "jsonrpc": "2.0", "id": 2.25, "method": "tools/call",
+            "params": {"name": ds._REVIEW_READER_TOOL, "arguments": {
+                "path": str(source_path), "operation": "read",
+            }},
+        })
+        assert source_read["result"]["isError"] is False
+        assert "ENDPOINT = '/v1/orders'" in source_read["result"]["content"][0]["text"]
+        traversal = call({
+            "jsonrpc": "2.0", "id": 2.3, "method": "tools/call",
+            "params": {"name": ds._REVIEW_READER_TOOL, "arguments": {
+                "path": str(capture / "transform" / ".." / "build-record.json"),
+                "operation": "read",
+            }},
+        })
+        assert traversal["result"]["isError"] is True
+        escaped = call({
+            "jsonrpc": "2.0", "id": 2.4, "method": "tools/call",
+            "params": {"name": ds._REVIEW_READER_TOOL, "arguments": {
+                "path": str(escape_link), "operation": "read",
+            }},
+        })
+        assert escaped["result"]["isError"] is True
         bounded_read = call(
             {
                 "jsonrpc": "2.0",
@@ -454,7 +991,9 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             and record.get("message", {}).get("params", {}).get("name")
             == ds._REVIEW_READER_TOOL
         ]
-        assert len(bounded_summaries) == 2
+        # Every reader attempt is represented by a safe summary, including
+        # rejected traversal and symlink reads; raw arguments stay out of trace.
+        assert len(bounded_summaries) == 5
         assert all(
             record["message"]["params"] == {"name": ds._REVIEW_READER_TOOL}
             for record in bounded_summaries
@@ -521,7 +1060,7 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             for line in trace_text.splitlines()
             if '"review_reader_summary"' in line
         ]
-        assert len(reader_summaries) == 4
+        assert len(reader_summaries) == 7
         assert any(
             summary["operation"] == "read"
             and summary["path_class"] == "blueprint"
@@ -534,6 +1073,7 @@ def test_proxy_exposes_bounded_runner_owned_review_reader(tmp_path):
             and summary["error_code"] == "path_outside_allowlist"
             for summary in reader_summaries
         )
+        assert "OUTSIDE_REVIEW_SECRET" not in trace_text
         if proxy.stdin is not None:
             proxy.stdin.close()
         assert proxy.wait(timeout=10) == 0
@@ -1384,7 +1924,7 @@ def test_review_guard_recognizes_workflow_v2_action_shape():
     }
     report = {
         "result": {
-            "code": "workflow/requirement_satisfied",
+            "code": "workflow/review_satisfied",
             "requirement_id": "review",
             "requirements": [{"id": "review", "status": "complete"}],
         }
@@ -1969,6 +2509,21 @@ def test_session_cleanup_kills_attached_process_group(tmp_path):
     assert child.poll() is not None
 
 
+def test_session_context_always_cleans_up_after_agent_exception(tmp_path, monkeypatch):
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"], root=tmp_path / "session"
+    )
+    session._root = tmp_path / "session"
+    session._root.mkdir()
+    monkeypatch.setattr(session, "start", lambda: session)
+
+    with pytest.raises(RuntimeError, match="incomplete agent"):
+        with session:
+            raise RuntimeError("incomplete agent")
+
+    assert session._closed is True
+
+
 def test_session_cleanup_kills_proxy_server_child(tmp_path):
     child = _script(tmp_path / "holding-server.py", HOLDING_SERVER)
     pid_file = tmp_path / "server.pid"
@@ -2022,6 +2577,529 @@ def test_redaction_is_recursive_and_fail_closed(payload):
     assert all(secret not in value for secret in ("hunter2", "abc", "xyz", "u:p"))
     assert all(secret not in value for secret in ("S3cr3tPw", "AKIAIOSFODNN7EXAMPLE"))
     assert ds.REDACTED in value
+
+
+def test_nex_agent_facing_payload_redacts_source_credential(tmp_path):
+    secret = "synthetic-source-credential-for-redaction"
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"],
+        nex_mode=True,
+        server_env={
+            "NXD_EVAL_SOURCE_TOKEN": secret,
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": "api-source=NXD_EVAL_SOURCE_TOKEN",
+        },
+    )
+    message = {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": {
+            "content": [{"type": "text", "text": f"server reflected {secret}"}],
+            "rows": [{secret: "row value"}],
+            "profile": {
+                "credential_env": "NXD_EVAL_SOURCE_TOKEN",
+                "auth_type": "bearer",
+            },
+        },
+    }
+    safe_message = session._redact_nex_payload(message)
+    redacted = json.dumps(safe_message)
+    assert secret not in redacted
+    assert ds.REDACTED in redacted
+    assert ds.REDACTED in safe_message["result"]["rows"][0]
+    assert safe_message["result"]["profile"] == {
+        "credential_env": "NXD_EVAL_SOURCE_TOKEN",
+        "auth_type": "bearer",
+    }
+
+    redacted_text, leaked = session.redact_nex_text(
+        f"malformed server response: {secret}"
+    )
+    assert leaked is True
+    assert secret not in redacted_text
+    assert session.result_metrics()["nex_bridge_secret_leak"] is True
+    _trace, evidence_error = session.nex_evidence()
+    assert "trusted source credential" in evidence_error
+
+
+_NEX_READER_TOKEN = "synthNEX7q2Zk9pLwV"
+_NEX_READER_ROOT = "/nex-reader-capture/root"
+
+
+def _nex_reader_session(files, directories=()):
+    """Install an immutable review snapshot directly; no socket is started."""
+
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"],
+        nex_mode=True,
+        server_env={
+            "NXD_EVAL_SOURCE_TOKEN": _NEX_READER_TOKEN,
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": "api-source=NXD_EVAL_SOURCE_TOKEN",
+        },
+    )
+    snapshot = {f"{_NEX_READER_ROOT}/{name}": data for name, data in files.items()}
+    dirs = {_NEX_READER_ROOT, *(f"{_NEX_READER_ROOT}/{name}" for name in directories)}
+    session._nex_review_snapshot = snapshot
+    session._nex_review_directories = dirs
+    session._nex_review_aliases = {
+        session._nex_path_key(path): path for path in [*snapshot, *dirs]
+    }
+    return session
+
+
+def _nex_read(session, path, operation="read", **bounds):
+    return session._nex_reader_response({
+        "method": "tools/call",
+        "params": {"arguments": {"path": path, "operation": operation, **bounds}},
+    })
+
+
+def _nex_reader_text(result):
+    assert result["isError"] is False
+    (block,) = result["content"]
+    return block["text"]
+
+
+def test_nex_reader_returns_exactly_max_lines_without_marker():
+    content = "".join(f"line {index}\n" for index in range(500))
+    session = _nex_reader_session({"f.txt": content.encode()})
+
+    text = _nex_reader_text(_nex_read(session, f"{_NEX_READER_ROOT}/f.txt"))
+
+    assert text == content
+    assert ds._REVIEW_READER_TRUNCATION_MARKER not in text
+    assert session._nex_bridge_secret_leak is False
+
+
+def test_nex_reader_marks_line_truncation_within_byte_cap():
+    lines = [f"line {index}\n" for index in range(501)]
+    session = _nex_reader_session({"f.txt": "".join(lines).encode()})
+
+    text = _nex_reader_text(_nex_read(session, f"{_NEX_READER_ROOT}/f.txt"))
+
+    assert text == "".join(lines[:500]) + ds._REVIEW_READER_TRUNCATION_MARKER
+    assert len(text.encode("utf-8")) <= ds._REVIEW_READER_MAX_BYTES
+    assert session._nex_bridge_secret_leak is False
+
+
+def test_nex_reader_redacts_before_utf8_safe_byte_clip_and_flags_leak():
+    # Raw, the byte cutoff would fall inside the token; redacted first, it
+    # falls inside the multibyte character that follows the placeholder.
+    content = "é" * 10 + " " + _NEX_READER_TOKEN + " " + "é" * 30 + "\n"
+    session = _nex_reader_session({"f.txt": content.encode("utf-8")})
+    max_bytes = 60
+
+    text = _nex_reader_text(
+        _nex_read(session, f"{_NEX_READER_ROOT}/f.txt", max_bytes=max_bytes)
+    )
+
+    encoded = text.encode("utf-8")
+    assert len(encoded) <= max_bytes
+    assert encoded.decode("utf-8") == text and "�" not in text
+    assert text.endswith(ds._REVIEW_READER_TRUNCATION_MARKER)
+    assert text == "é" * 10 + " " + ds.REDACTED + " " + ds._REVIEW_READER_TRUNCATION_MARKER
+    assert _NEX_READER_TOKEN not in text
+    assert _NEX_READER_TOKEN[:6] not in text
+    assert session._nex_bridge_secret_leak is True
+
+
+def _nex_list_entries(text, *, truncated):
+    marker = ds._REVIEW_READER_TRUNCATION_MARKER
+    if truncated:
+        assert text.endswith(marker)
+        text = text[: -len(marker)]
+    else:
+        assert marker not in text
+    return json.loads(text)
+
+
+def test_nex_reader_list_truncates_whole_entries_by_lines_and_bytes():
+    files = {name: b"x" for name in ("a.txt", "b.txt", "d.txt", "e.txt")}
+    session = _nex_reader_session(files, directories=("c",))
+    expected = [
+        {"kind": "file", "name": "a.txt"},
+        {"kind": "file", "name": "b.txt"},
+        {"kind": "directory", "name": "c"},
+        {"kind": "file", "name": "d.txt"},
+        {"kind": "file", "name": "e.txt"},
+    ]
+
+    full = _nex_reader_text(_nex_read(session, _NEX_READER_ROOT, "list"))
+    assert _nex_list_entries(full, truncated=False) == expected
+
+    by_lines = _nex_reader_text(_nex_read(session, _NEX_READER_ROOT, "list", max_lines=2))
+    assert _nex_list_entries(by_lines, truncated=True) == expected[:2]
+
+    # One byte short of three entries plus the marker: exactly two survive.
+    three_entries = json.dumps(expected[:3], sort_keys=True)
+    max_bytes = len(three_entries) + len(ds._REVIEW_READER_TRUNCATION_MARKER) - 1
+    by_bytes = _nex_reader_text(
+        _nex_read(session, _NEX_READER_ROOT, "list", max_bytes=max_bytes)
+    )
+    assert len(by_bytes.encode("utf-8")) <= max_bytes
+    assert _nex_list_entries(by_bytes, truncated=True) == expected[:2]
+    assert session._nex_bridge_secret_leak is False
+
+
+def test_nex_reader_list_redacts_names_inside_valid_json():
+    session = _nex_reader_session({
+        "token=abc": b"x",
+        f"token={_NEX_READER_TOKEN}": b"x",
+        "plain.txt": b"x",
+    })
+
+    text = _nex_reader_text(_nex_read(session, _NEX_READER_ROOT, "list"))
+
+    entries = _nex_list_entries(text, truncated=False)
+    assert [entry["name"] for entry in entries] == [
+        "plain.txt", f"token={ds.REDACTED}", f"token={ds.REDACTED}",
+    ]
+    assert {entry["kind"] for entry in entries} == {"file"}
+    assert "abc" not in text and _NEX_READER_TOKEN not in text
+    assert session._nex_bridge_secret_leak is True
+
+
+def test_nex_reader_errors_when_marker_cannot_fit():
+    session = _nex_reader_session({"f.txt": b"x" * 64}, directories=("sub",))
+    too_small = len(ds._REVIEW_READER_TRUNCATION_MARKER) - 1
+
+    read = _nex_read(session, f"{_NEX_READER_ROOT}/f.txt", max_bytes=too_small)
+    listed = _nex_read(session, _NEX_READER_ROOT, "list", max_lines=1, max_bytes=too_small)
+
+    assert read["isError"] is True
+    assert listed["isError"] is True
+
+
+def test_nex_result_metrics_expose_only_per_workflow_review_return_status():
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"],
+        nex_mode=True,
+    )
+    session._nex_children_by_workflow.update({
+        "nex890-positive": 1,
+        "nex890-401": 2,
+    })
+    session._nex_child_returned_by_workflow.update({
+        "nex890-positive": True,
+    })
+
+    assert session.result_metrics()["nex_review_children"] == {
+        "nex890-positive": {"count": 1, "returned": True},
+        "nex890-401": {"count": 2, "returned": False},
+        "nex890-403": {"count": 0, "returned": False},
+        "nex890-404": {"count": 0, "returned": False},
+    }
+
+
+SILENT_SERVER = r"""
+import sys
+for _raw in sys.stdin:
+    pass
+"""
+
+UNMATCHED_SERVER = r"""
+import json, sys
+print(json.dumps({"jsonrpc": "2.0", "id": 9999, "result": {}}), flush=True)
+print("supervisor banner", flush=True)
+for _raw in sys.stdin:
+    pass
+"""
+
+
+def _nex_bridge_harness(tmp_path, server_body):
+    """Serve one NEX bridge connection over a socketpair; proxy auth is skipped."""
+    root = tmp_path / "bridge-root"
+    root.mkdir()
+    server = _script(tmp_path / "server.py", server_body)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(server)], nex_mode=True, shutdown_timeout_s=2.0,
+    )
+    session._root = root  # the bridge publishes its process result here
+    proxy_side, bridge_side = socket.socketpair()
+    proxy_side.settimeout(5.0)
+    worker = threading.Thread(
+        target=session._serve_connection, args=(bridge_side,), daemon=True
+    )
+    with session._bridge_state_lock:
+        session._bridge_connections.add(bridge_side)
+        session._bridge_workers.add(worker)
+    worker.start()
+    return session, proxy_side
+
+
+def _nex_send(proxy_side, message):
+    proxy_side.sendall(json.dumps(message).encode() + b"\n")
+
+
+def _nex_diagnostics(session):
+    return session.result_metrics()["nex_bridge_diagnostics"]
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "bridge diagnostics did not settle"
+        time.sleep(0.02)
+
+
+def _nex_bridge_finish(session, proxy_side):
+    proxy_side.shutdown(socket.SHUT_WR)
+    return session.finish_nex_cell()
+
+
+def test_nex_diagnostics_show_unanswered_initialize_at_exit_and_after_drain(tmp_path):
+    session, proxy_side = _nex_bridge_harness(tmp_path, SILENT_SERVER)
+    try:
+        _nex_send(proxy_side, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        _wait_until(lambda: _nex_diagnostics(session)["forwarded_requests"] == 1)
+        session.record_agent(status="passed")
+        _trace, evidence_error = _nex_bridge_finish(session, proxy_side)
+    finally:
+        proxy_side.close()
+        session.cleanup()
+
+    diagnostics = _nex_diagnostics(session)
+    for snapshot in (diagnostics["agent_exit"], diagnostics["after_drain"]):
+        assert snapshot["pending_count"] == 1
+        assert snapshot["pending_methods"] == {"initialize": 1}
+        assert isinstance(snapshot["oldest_pending_age_s"], float)
+    assert diagnostics["agent_exit"]["supervisor_stdout_eof"] is False
+    assert diagnostics["after_drain"]["supervisor_stdout_eof"] is True
+    assert diagnostics["supervisor_shutdown_requested_at_eof"] is True
+    assert isinstance(diagnostics["supervisor_exit_code"], int)
+    assert diagnostics["matched_responses"] == 0
+    assert evidence_error is not None
+
+
+def test_nex_diagnostics_pair_answered_request_without_changing_evidence(tmp_path):
+    session, proxy_side = _nex_bridge_harness(tmp_path, FAKE_SERVER)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session.nex_workspace = workspace.resolve()
+    session._prepare_nex_security_files()
+    # The harness skips proxy authentication and runs no review children, so
+    # seed the counters a passing cell would have produced. The trace itself is
+    # only what the bridge records.
+    with session._bridge_state_lock:
+        session._nex_connection_count = 1
+        for workflow in ds._NEX_WORKFLOWS:
+            session._nex_children_by_workflow[workflow] = 1
+            session._nex_child_returned_by_workflow[workflow] = True
+    try:
+        _nex_send(proxy_side, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        _wait_until(lambda: _nex_diagnostics(session)["matched_responses"] == 1)
+        reply = json.loads(proxy_side.makefile("rb").readline())
+        session.record_agent(status="passed")
+        trace, evidence_error = _nex_bridge_finish(session, proxy_side)
+    finally:
+        proxy_side.close()
+        session.cleanup()
+
+    assert reply["id"] == 1 and reply["result"]["echo"] == "initialize"
+    assert evidence_error is None
+    diagnostics = _nex_diagnostics(session)
+    assert diagnostics["forwarded_requests"] == 1
+    assert diagnostics["unmatched_responses"] == 0
+    for snapshot in (diagnostics["agent_exit"], diagnostics["after_drain"]):
+        assert snapshot["pending_count"] == 0
+        assert snapshot["pending_methods"] == {}
+        assert snapshot["oldest_pending_age_s"] is None
+    assert diagnostics["after_drain"]["quiesced"] is True
+    # Diagnostics are read-only with respect to the fail-closed verdict and trace.
+    assert session.nex_evidence() == (trace, None)
+    assert {record["direction"] for record in trace} == {"request", "response"}
+    assert "pending" not in json.dumps(trace)
+
+
+def test_nex_diagnostics_freeze_whole_payload_when_handler_survives_teardown(tmp_path):
+    root = tmp_path / "bridge-root"
+    root.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server = _script(tmp_path / "server.py", SILENT_SERVER)
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(server)], nex_mode=True, shutdown_timeout_s=0.2,
+    )
+    session._root = root
+    session.nex_workspace = workspace.resolve()
+    session._prepare_nex_security_files()
+    # Seed a passing cell so the only invalidation is the surviving handler.
+    with session._bridge_state_lock:
+        session._nex_connection_count = 1
+        for workflow in ds._NEX_WORKFLOWS:
+            session._nex_children_by_workflow[workflow] = 1
+            session._nex_child_returned_by_workflow[workflow] = True
+    release = threading.Event()
+
+    def blocked_handler():
+        # Outlives both bounded joins, then records one late supervisor line.
+        release.wait(timeout=5.0)
+        session._nex_note_supervisor_line({"jsonrpc": "2.0", "id": 1, "result": {}}, False)
+
+    handler = threading.Thread(target=blocked_handler, daemon=True)
+    with session._bridge_state_lock:
+        session._bridge_workers.add(handler)
+    handler.start()
+    try:
+        session.record_agent(status="passed")
+        _trace, evidence_error = session.finish_nex_cell()
+        frozen = _nex_diagnostics(session)
+        release.set()
+        handler.join(timeout=5.0)
+        assert not handler.is_alive()
+    finally:
+        release.set()
+        session.cleanup()
+
+    assert evidence_error == "NEX-890 bridge handler did not drain after Claude exited"
+    assert frozen["after_drain"]["live_handlers"] == 1
+    assert frozen["after_drain"]["quiesced"] is False
+    assert frozen["unmatched_responses"] == 0
+    # The late handler did mutate live state, but not the published payload.
+    with session._bridge_state_lock:
+        assert session._nex_bridge_counts["unmatched_responses"] == 1
+    assert _nex_diagnostics(session) == frozen
+    assert session.nex_evidence()[1] == evidence_error
+
+
+def test_nex_diagnostics_count_unmatched_and_non_json_supervisor_lines(tmp_path):
+    session, proxy_side = _nex_bridge_harness(tmp_path, UNMATCHED_SERVER)
+    try:
+        _wait_until(
+            lambda: _nex_diagnostics(session)["unmatched_responses"] == 1
+            and _nex_diagnostics(session)["non_json_response_lines"] == 1
+        )
+        session.record_agent(status="passed")
+        _nex_bridge_finish(session, proxy_side)
+    finally:
+        proxy_side.close()
+        session.cleanup()
+
+    diagnostics = _nex_diagnostics(session)
+    assert diagnostics["forwarded_requests"] == 0
+    assert diagnostics["matched_responses"] == 0
+    assert diagnostics["unmatched_responses"] == 1
+    assert diagnostics["non_json_response_lines"] == 1
+
+
+def test_nex_diagnostics_label_unknown_methods_other_without_payload_details(tmp_path):
+    request_id = "req-diagnostic-id-4242"
+    private_path = str(tmp_path / "private-params-path")
+    session, proxy_side = _nex_bridge_harness(tmp_path, SILENT_SERVER)
+    try:
+        _nex_send(proxy_side, {
+            "jsonrpc": "2.0", "id": request_id, "method": "custom/private-method",
+            "params": {"path": private_path},
+        })
+        _wait_until(lambda: _nex_diagnostics(session)["forwarded_requests"] == 1)
+        supervisor_pid = session._server_process.pid
+        session.record_agent(status="passed")
+        _nex_bridge_finish(session, proxy_side)
+    finally:
+        proxy_side.close()
+        session.cleanup()
+
+    metrics = session.result_metrics()
+    diagnostics = metrics["nex_bridge_diagnostics"]
+    assert diagnostics["agent_exit"]["pending_methods"] == {"other": 1}
+    assert diagnostics["after_drain"]["pending_methods"] == {"other": 1}
+    serialized = json.dumps(diagnostics)
+    for forbidden in (
+        request_id, "custom/private-method", "private-params-path",
+        private_path, str(tmp_path), str(supervisor_pid),
+    ):
+        assert forbidden not in serialized
+
+
+def test_nex_result_payload_decodes_only_one_unambiguous_json_text_block():
+    payload = {"archive_path": "/workspace/exports/product.zip", "generation": 7}
+    message = {
+        "result": {
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+        }
+    }
+    assert ds._nex_result_payload(message) == payload
+    assert ds._nex_result_payload({
+        "result": {"content": [{"type": "text", "text": "not JSON: {}"}]}
+    }) == {}
+    assert ds._nex_result_payload({
+        "result": {"content": [
+            {"type": "text", "text": json.dumps(payload)},
+            {"type": "text", "text": "{}"},
+        ]}
+    }) == {}
+    assert ds._nex_result_payload({
+        "result": {"content": [{"type": "text", "text": '{"generation":1,"generation":2}'}]}
+    }) == {}
+    assert ds._nex_result_payload({
+        "result": {
+            "structuredContent": payload,
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+        }
+    }) == {}
+
+
+def _tool_results(*blocks):
+    return {"type": "user", "message": {"content": list(blocks)}}
+
+
+def test_nex_preflight_records_malformed_result_ids_and_only_redacted_bounded_text():
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"], nex_mode=True, nex_preflight_mode=True
+    )
+    session.observe_claude_stream_event(_tool_results(
+        {"type": "tool_result", "tool_use_id": 7, "is_error": True, "content": "x"},
+        {
+            "type": "tool_result", "tool_use_id": "long", "is_error": True,
+            "content": [{"type": "text", "text": "y" * 2500}],
+        },
+        {
+            "type": "tool_result", "tool_use_id": "redacted",
+            "content": "api_key=" + "s" * 2100,
+        },
+    ))
+
+    malformed, long, redacted = session.nex_preflight_events()
+    assert malformed["id"] is None and malformed["malformed_id"] is True
+    assert long["malformed_id"] is False and long["is_error"] is True
+    assert long["content"] == "y" * 2000 and long["content_truncated"] is True
+    # Truncation is measured after redaction shrinks the secret away.
+    assert redacted["content"] == "api_key=<redacted>"
+    assert redacted["content_truncated"] is False
+    assert all("s" * 50 not in json.dumps(event) for event in session.nex_preflight_events())
+
+
+def test_nex_preflight_distinguishes_absent_empty_and_malformed_permission_denials():
+    session = ds.DesktopStdioSession(
+        [sys.executable, "-c", "pass"], nex_mode=True, nex_preflight_mode=True
+    )
+    for event in (
+        {"type": "result", "is_error": False},
+        {"type": "result", "is_error": False, "permission_denials": []},
+        {"type": "result", "is_error": False, "permission_denials": "bad"},
+    ):
+        session.observe_claude_stream_event(event)
+
+    absent, empty, malformed = session.nex_preflight_events()
+    assert (absent["permission_denials_present"], absent["permission_denials"]) == (False, None)
+    assert (empty["permission_denials_present"], empty["permission_denials"]) == (True, [])
+    assert (malformed["permission_denials_present"], malformed["permission_denials"]) == (True, "bad")
+
+
+def test_regular_nex_stream_handling_is_unchanged_outside_preflight():
+    session = ds.DesktopStdioSession([sys.executable, "-c", "pass"], nex_mode=True)
+    session.observe_claude_stream_event({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "u1", "name": "mcp__nxd-desktop__inspect_run", "input": {}},
+    ]}})
+    session.observe_claude_stream_event(_tool_results(
+        {"type": "tool_result", "tool_use_id": 7, "is_error": True, "content": "x"},
+        {"type": "tool_result", "tool_use_id": "u1", "content": "ok"},
+    ))
+    session.observe_claude_stream_event({"type": "result", "is_error": False})
+
+    assert session.nex_preflight_events() == []
+    assert session._nex_invalid_reason is None
+    assert session._nex_stream_uses[0]["tool_result"] is True
+    assert session._nex_stream_uses[0]["tool_result_success"] is True
 
 
 def test_trace_writes_remain_parseable_under_concurrency(tmp_path):

@@ -23,25 +23,29 @@ from dp_scenarios.runner.codex_adapter import (
     CodexAppServerEOF,
     CodexAdapter,
     CodexAdapterError,
+    TERMINAL_ROUTE_COMPLETION_TOOLS,
+    TERMINAL_ROUTE_REQUIRED_TOOLS,
     _COLLAB_FAILURE_STATUSES,
+    _app_server_environment,
     _attach_checker_skew_markers,
     _checker_skew_marker,
     _codex_timeout_detail,
-    _event_debug_tail,
     _codex_timeout_failure_reason,
     _codex_provider_error,
     _codex_provider_error_reason,
     _codex_root_progress_event,
+    _event_debug_tail,
     _normalise_app_server_event,
     _review_pending_after_observations,
     _reviewer_wait_without_target,
+    _terminal_turn_sandbox_policy,
     _turn_sandbox_policy,
-    _validate_persistent_codex_config,
     _update_reviewer_deadline,
     _update_reviewer_deadline_from_events,
     _load_mcp_server,
-    parse_codex_events,
+    _validate_persistent_codex_config,
     _write_result,
+    parse_codex_events,
 )
 from dp_scenarios.runner import codex_adapter as codex_adapter_module
 from dp_scenarios.failure_reasons import (
@@ -95,6 +99,11 @@ def _stub_turn_collector(
     adapter.review_timeout_seconds = 300.0
     adapter._review_deadline_ms = 300_000.0
     adapter._thread_id = "root-thread"
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter._route_turn_count = 0
+    adapter.idle_timeout_seconds = 180.0
+    adapter.fixture_handoff = False
     def stamp(event):
         if not stamp_root_identity or not isinstance(event, dict):
             return event
@@ -147,7 +156,11 @@ def test_codex_provider_error_events_are_reduced_before_report_parsing() -> None
         codex_error_info={"httpStatusCode": 429}
     )
 
-    assert _normalise_app_server_event(event) == {"type": "provider_error"}
+    assert _normalise_app_server_event(event) == {
+        "type": "provider_error",
+        "thread_id": "root-thread",
+        "turn_id": "root-turn",
+    }
     parsed, _observations = parse_codex_events(
         (event,),
         redact_json_rpc=_identity,
@@ -1294,6 +1307,30 @@ def test_successful_review_report_restores_workspace_write_for_follow_up_turn() 
     }
 
 
+def test_terminal_route_turn_policies_are_workspace_only_and_network_disabled() -> None:
+    assert _terminal_turn_sandbox_policy("execution", "/tmp/ws") == {
+        "type": "workspaceWrite",
+        "writableRoots": ["/tmp/ws"],
+        "networkAccess": False,
+    }
+    assert _terminal_turn_sandbox_policy("repair", "/tmp/ws") == {
+        "type": "workspaceWrite",
+        "writableRoots": ["/tmp/ws"],
+        "networkAccess": False,
+    }
+    assert _terminal_turn_sandbox_policy("review", "/tmp/ws") == {
+        "type": "readOnly",
+        "networkAccess": False,
+    }
+    assert _terminal_turn_sandbox_policy("completion", "/tmp/ws") == {
+        "type": "workspaceWrite",
+        "writableRoots": ["/tmp/ws"],
+        "networkAccess": False,
+    }
+    with pytest.raises(ValueError):
+        _terminal_turn_sandbox_policy("other", "/tmp/ws")
+
+
 def test_non_review_requirement_report_does_not_clear_review_lock() -> None:
     report = {
         "tool": "mcp__nxd-desktop__advance_workflow",
@@ -1309,6 +1346,7 @@ def test_non_review_requirement_report_does_not_clear_review_lock() -> None:
 def test_codex_turn_prompt_names_the_run_local_fixture_root(tmp_path: Path) -> None:
     adapter = object.__new__(CodexAdapter)
     adapter.fixture_dir = tmp_path / "fixture"
+    adapter.fixture_handoff = True
 
     approval = "Approved. Use only the prepared source.\n"
     prompt = adapter._prompt(approval, ())
@@ -1719,6 +1757,9 @@ def test_reviewer_wait_without_target_is_fatal_only_with_explicit_failure() -> N
 
 def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter.idle_timeout_seconds = 180.0
     adapter.timeout_s = 1000.0
     adapter._read_until_response = lambda *_args, **_kwargs: (
         {"result": {"turn": {"id": "root-turn"}}},
@@ -1757,6 +1798,9 @@ def test_codex_reviewer_deadline_wins_when_stream_read_reaches_it(monkeypatch) -
 
 def test_codex_pending_init_snapshot_keeps_the_configured_reviewer_deadline(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter.idle_timeout_seconds = 180.0
     adapter.timeout_s = 1000.0
     spawn_started = {
         "method": "item/started",
@@ -1792,6 +1836,9 @@ def test_codex_pending_init_snapshot_keeps_the_configured_reviewer_deadline(monk
 
 def test_codex_reviewer_timeout_reports_target_match_and_safe_child_state(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter.idle_timeout_seconds = 180.0
     adapter.timeout_s = 1000.0
     adapter._review_deadline_ms = 300_000.0
     adapter.review_timeout_seconds = 300.0
@@ -1850,6 +1897,9 @@ def test_codex_reviewer_timeout_reports_target_match_and_safe_child_state(monkey
 
 def test_codex_turn_deadline_wins_when_nonterminal_events_keep_arriving(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter.idle_timeout_seconds = 180.0
     adapter.timeout_s = 1.0
     adapter._read_until_response = lambda *_args, **_kwargs: (
         {"result": {"turn": {"id": "root-turn"}}},
@@ -1871,6 +1921,9 @@ def test_codex_turn_deadline_wins_when_nonterminal_events_keep_arriving(monkeypa
 
 def test_codex_completed_reviewer_can_continue_past_review_deadline(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter.idle_timeout_seconds = 180.0
     adapter.timeout_s = 1000.0
     adapter._review_deadline_ms = 300_000.0
     adapter.review_timeout_seconds = 300.0
@@ -1923,6 +1976,9 @@ def test_codex_completed_reviewer_can_continue_past_review_deadline(monkeypatch)
 
 def test_codex_root_timeout_reports_timing_and_reviewer_phase(monkeypatch) -> None:
     adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+    adapter._route_deadline = None
+    adapter.idle_timeout_seconds = 180.0
     adapter.timeout_s = 810.0
     adapter._review_deadline_ms = 300_000.0
     adapter.review_timeout_seconds = 300.0
@@ -3405,9 +3461,110 @@ def test_native_codex_config_rejects_unapproved_persisted_settings(tmp_path: Pat
         _validate_persistent_codex_config(config, workspace=workspace)
 
 
+def test_codex_home_uses_default_codex_auth_as_a_symlink(tmp_path: Path, monkeypatch) -> None:
+    default_home = tmp_path / "home"
+    auth_path = default_home / ".codex" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text("opaque test credential", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: default_home))
+    adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = True
+
+    isolated = adapter._isolated_codex_home({})
+    try:
+        auth_link = Path(isolated.name) / "auth.json"
+        assert auth_link.is_symlink()
+        assert auth_link.resolve() == auth_path
+    finally:
+        isolated.cleanup()
+
+
+def test_ordinary_codex_adapter_does_not_add_default_auth_or_terminal_scrubbing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    default_home = tmp_path / "home"
+    auth_path = default_home / ".codex" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text("opaque test credential", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: default_home))
+    adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = False
+
+    isolated = adapter._isolated_codex_home({})
+    try:
+        assert not (Path(isolated.name) / "auth.json").exists()
+    finally:
+        isolated.cleanup()
+
+    source = {
+        "OPENAI_API_KEY": "legacy-secret",
+        "CODEX_API_KEY": "ordinary-codex-secret",
+        "NXD_EVAL_SOURCE_TOKEN": "source-secret",
+        "UNRELATED": "kept",
+    }
+    ordinary = _app_server_environment(source, terminal_route=False)
+    assert "OPENAI_API_KEY" not in ordinary
+    assert "NXD_EVAL_SOURCE_TOKEN" not in ordinary
+    assert ordinary["CODEX_API_KEY"] == "ordinary-codex-secret"
+    assert ordinary["UNRELATED"] == "kept"
+    terminal = _app_server_environment(source, terminal_route=True)
+    assert "CODEX_API_KEY" not in terminal
+
+
 def test_codex_adapter_rejects_non_object_app_server_events() -> None:
     with pytest.raises(CodexAdapterError, match="non-object JSON event"):
         CodexAdapter._decode_app_server_line(b"[]")
+
+
+def test_adapter_sigterm_runs_finally_and_closes_app_server(monkeypatch) -> None:
+    import dp_scenarios.runner.codex_adapter as codex_adapter_module
+
+    closed = []
+    handlers = {}
+
+    class FakeAdapter:
+        terminal_route = False
+        _thread_id = None
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    def register(signum, handler):
+        handlers[signum] = handler
+
+    def input_lines():
+        yield "\n"
+        handlers[codex_adapter_module.signal.SIGTERM](
+            codex_adapter_module.signal.SIGTERM, None
+        )
+
+    args = SimpleNamespace(
+        codex=Path("/bin/true"), model="gpt-6-luna", effort="medium",
+        skill_pack_root=Path("/workspace/.skills"), repo_root=REPO_ROOT,
+        fixture_dir=Path("/empty"), artifact_dir=Path("/artifacts"),
+        desktop_supervisor=Path("/bin/true"), desktop_python=Path(sys.executable),
+        timeout=10, append_system_prompt="test", mcp_config=Path("/mcp.json"),
+        strict_mcp_config=True, allowedTools=None, supervisor_data_dir=Path("/state"),
+        multi_agent_v2=True, force_multi_agent_v1=False, review_timeout=None,
+        native_continuation=False, resume_session_id=None, terminal_route=True,
+        idle_timeout=5,
+        native_state_dir=None,
+        codex_version="codex-cli 0.155.1", no_fixture_handoff=True,
+    )
+    parser = SimpleNamespace(parse_args=lambda _argv=None: args)
+    monkeypatch.setattr(codex_adapter_module, "build_parser", lambda: parser)
+    monkeypatch.setattr(codex_adapter_module, "CodexAdapter", FakeAdapter)
+    monkeypatch.setattr(codex_adapter_module.signal, "signal", register)
+    monkeypatch.setattr(codex_adapter_module.sys, "stdin", input_lines())
+
+    with pytest.raises(SystemExit) as stopped:
+        codex_adapter_module.main()
+
+    assert stopped.value.code == 128 + codex_adapter_module.signal.SIGTERM
+    assert closed == [True]
 
 
 def test_codex_adapter_drains_queued_events_before_checking_deadline() -> None:
@@ -3427,6 +3584,7 @@ def test_main_suppresses_private_startup_exception_text(
     class StartupFailure:
         _thread_id = "root-thread"
         last_mcp_call = None
+        terminal_route = False
 
         def __init__(self, **_kwargs) -> None:
             pass
@@ -3624,6 +3782,627 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
     assert "event_tail=item/started[mcpToolCall]:nxd-desktop/inspect_run=inProgress" in (
         result.environment_detail or ""
     )
+
+
+def _route_audit_adapter() -> CodexAdapter:
+    adapter = object.__new__(CodexAdapter)
+    adapter.terminal_route = True
+    adapter.codex_version = "codex-cli 0.155.1"
+    adapter._thread_id = "root-thread"
+    adapter._active_turn_id = "review-turn"
+    adapter._route_stage = "review"
+    adapter._route_capture_seen = False
+    adapter._route_review_input = {
+        "retained_capture_root": "/review/capture",
+        "retained_blueprint_path": "/review/blueprint.md",
+    }
+    adapter._route_turn_count = 2
+    adapter._route_deadline = None
+    adapter._route_spawned_receivers = set()
+    adapter._route_stage_spawn_count = 0
+    adapter._route_stage_spawn_items = set()
+    adapter._route_report_count = 0
+    adapter._route_review_receiver_ids = set()
+    adapter._route_child_reader_receivers = set()
+    adapter._route_child_success_receivers = set()
+    adapter._route_child_message_receivers = set()
+    adapter._route_child_reader_paths = []
+    adapter._route_child_violations = []
+    adapter._route_unattributed_events = 0
+    adapter._route_audit_events = []
+    adapter._route_active_items = {}
+    adapter._route_pending_child_events = []
+    adapter._route_review_verified = True
+    adapter._route_successful_root_tools = set()
+    adapter._route_completion_tools = set()
+    adapter._route_completion_verified = False
+    adapter._route_input_tokens = 11
+    adapter._route_output_tokens = 17
+    adapter.idle_timeout_seconds = 180.0
+    adapter._last_mcp_call = "advance_workflow:ok"
+    adapter._redact_text = lambda value: value
+    adapter._persist_route_audit = lambda **_kwargs: None
+    return adapter
+
+
+def _audit_item(method: str, thread: str, turn: str, item: dict) -> dict:
+    return {
+        "method": method,
+        "params": {"threadId": thread, "turnId": turn, "item": item},
+    }
+
+
+def test_terminal_route_audit_appends_redacted_events_and_checkpoints_state(
+    tmp_path: Path,
+) -> None:
+    adapter = _route_audit_adapter()
+    adapter.artifact_dir = tmp_path
+    adapter._route_audit_persisted_event_count = 0
+    adapter._redact_json_rpc = lambda value: json.loads(
+        json.dumps(value).replace("synthetic-secret", "<redacted>")
+    )
+    adapter._route_audit_events = [{
+        "event": "item.completed", "detail": "synthetic-secret"
+    }]
+    adapter._persist_route_audit = CodexAdapter._persist_route_audit.__get__(adapter)
+
+    adapter._persist_route_audit()
+    event_path = tmp_path / "codex-app-server-events.jsonl"
+    assert event_path.stat().st_mode & 0o777 == 0o600
+    assert "synthetic-secret" not in event_path.read_text(encoding="utf-8")
+    assert "<redacted>" in event_path.read_text(encoding="utf-8")
+
+    adapter._persist_route_audit(force_snapshot=True)
+    snapshot = json.loads(
+        (tmp_path / "codex-app-server-audit.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["event_count"] == 1
+    assert "events" not in snapshot
+
+
+def test_terminal_route_audit_requires_spawned_child_read_and_root_report(tmp_path: Path) -> None:
+    adapter = _route_audit_adapter()
+    adapter._route_capture_seen = True
+    capture_root = tmp_path / "retained-capture"
+    transform_dir = capture_root / "transform"
+    transform_dir.mkdir(parents=True)
+    source_path = transform_dir / "main.py"
+    source_path.write_text("ENDPOINT = '/v1/orders'\n", encoding="utf-8")
+    blueprint_path = tmp_path / "retained-blueprint.md"
+    blueprint_path.write_text("# Blueprint\n", encoding="utf-8")
+    adapter._route_review_input = {
+        "retained_capture_root": str(capture_root),
+        "retained_blueprint_path": str(blueprint_path),
+    }
+    spawn_started = {
+        "type": "collabAgentToolCall",
+        "id": "spawn-1",
+        "tool": "spawnAgent",
+        "prompt": "CODEX_REVIEW_CHILD: inspect only retained evidence",
+    }
+    spawn_completed = {**spawn_started, "receiverThreadIds": ["child-thread"]}
+    adapter._route_audit_event(_audit_item("item/started", "root-thread", "review-turn", spawn_started))
+    adapter._route_audit_event(_audit_item(
+        "item/completed", "root-thread", "review-turn",
+        {"type": "userMessage", "id": "root-user", "content": []},
+    ))
+    adapter._route_audit_event(_audit_item(
+        "item/completed", "child-thread", "child-turn",
+        {"type": "userMessage", "id": "child-user", "content": []},
+    ))
+    adapter._route_audit_event(_audit_item(
+        "item/completed", "child-thread", "child-turn",
+        {"type": "enteredReviewMode", "id": "review-mode"},
+    ))
+    reader = {
+        "type": "mcpToolCall",
+        "id": "reader-1",
+        "server": "nxd-desktop",
+        "tool": "read_review_input",
+        "arguments": {"path": str(source_path), "operation": "read"},
+        "status": "completed",
+    }
+    adapter._route_audit_event(_audit_item("item/started", "child-thread", "child-turn", reader))
+    adapter._route_audit_event(_audit_item("item/completed", "child-thread", "child-turn", reader))
+    message = {"type": "agentMessage", "id": "message-1", "text": "Review complete"}
+    adapter._route_audit_event(_audit_item("item/completed", "child-thread", "child-turn", message))
+    adapter._route_audit_event({
+        "method": "turn/completed",
+        "params": {"threadId": "child-thread", "turnId": "child-turn",
+                   "turn": {"id": "child-turn", "status": "completed"}},
+    })
+    # Child events may be streamed before the spawn completion publishes its
+    # receiver ID. Buffer only the redacted projection until that ID matches.
+    assert adapter._route_pending_child_events
+    adapter._route_audit_event(_audit_item("item/completed", "root-thread", "review-turn", spawn_completed))
+    report = {
+        "type": "mcpToolCall",
+        "id": "report-1",
+        "server": "nxd-desktop",
+        "tool": "advance_workflow",
+        "arguments": {"action": {"type": "report_requirement", "requirement_id": "review"}},
+    }
+    adapter._route_audit_event(_audit_item("item/started", "root-thread", "review-turn", report))
+    adapter._route_audit_event(_audit_item("item/completed", "root-thread", "review-turn", report))
+    _stage_valid_completion(adapter)
+
+    result = adapter._route_result(
+        [
+            TurnResult(terminal_result_subtype="success", terminal_result_is_error=False,
+                       input_tokens=5, output_tokens=7),
+            TurnResult(agent_message="Root answer", terminal_result_subtype="success",
+                       terminal_result_is_error=False, input_tokens=6, output_tokens=10),
+            TurnResult(terminal_result_subtype="success", terminal_result_is_error=False),
+        ],
+        None,
+    )
+    assert result.environment_wedged is False
+    assert result.agent_message == "Root answer"
+    assert (result.input_tokens, result.output_tokens) == (11, 17)
+    assert result.provider_model_calls == 0
+    assert adapter._route_stage_spawn_count == 1
+    assert adapter._route_child_reader_receivers == {"child-thread"}
+    assert adapter._route_pending_child_events == []
+    assert adapter._route_child_violations == []
+
+
+def test_terminal_route_review_paths_allow_only_capture_descendants(tmp_path: Path) -> None:
+    adapter = _route_audit_adapter()
+    capture_root = tmp_path / "retained-capture"
+    capture_root.mkdir()
+    (capture_root / "main.py").write_text("source", encoding="utf-8")
+    blueprint = tmp_path / "retained-blueprint.md"
+    blueprint.write_text("blueprint", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    (capture_root / "escape.txt").symlink_to(outside)
+    adapter._route_review_input = {
+        "retained_capture_root": str(capture_root),
+        "retained_blueprint_path": str(blueprint),
+    }
+
+    assert adapter._route_review_path_allowed(str(capture_root / "main.py"))
+    assert adapter._route_review_path_allowed(str(blueprint))
+    assert not adapter._route_review_path_allowed(
+        str(capture_root / "nested" / ".." / "main.py")
+    )
+    assert not adapter._route_review_path_allowed(str(capture_root / "escape.txt"))
+    assert not adapter._route_review_path_allowed(str(outside))
+
+
+def test_terminal_route_audit_fails_closed_for_wrong_path_command_and_unattributed_child() -> None:
+    adapter = _route_audit_adapter()
+    adapter._route_review_receiver_ids.add("child-thread")
+    wrong_reader = {
+        "type": "mcpToolCall", "id": "reader-bad", "server": "nxd-desktop",
+        "tool": "read_review_input",
+        "arguments": {"path": "/outside/secret", "operation": "read"},
+    }
+    adapter._route_audit_event(_audit_item("item/started", "child-thread", "child-turn", wrong_reader))
+    command = {"type": "commandExecution", "id": "cmd-1", "command": "cat /review/capture"}
+    adapter._route_audit_event(_audit_item("item/started", "child-thread", "child-turn", command))
+    adapter._route_audit_event(_audit_item("item/completed", "foreign-thread", "foreign-turn", {
+        "type": "agentMessage", "id": "foreign-msg", "text": "not root evidence",
+    }))
+    assert any("not exact/allowed" in value for value in adapter._route_child_violations)
+    assert any("used command execution" in value for value in adapter._route_child_violations)
+    assert adapter._route_unattributed_events == 1
+    result = adapter._route_result(
+        [TurnResult(terminal_result_subtype="success", terminal_result_is_error=False)] * 2,
+        None,
+    )
+    assert result.environment_wedged is True
+
+
+def test_terminal_route_audit_rejects_mcp_error_envelope_for_review_reader(
+    tmp_path: Path,
+) -> None:
+    adapter = _route_audit_adapter()
+    capture_root = tmp_path / "retained-capture"
+    capture_root.mkdir()
+    adapter._route_review_input = {
+        "retained_capture_root": str(capture_root),
+        "retained_blueprint_path": str(tmp_path / "retained-blueprint.md"),
+    }
+    (tmp_path / "retained-blueprint.md").write_text("# Blueprint\n", encoding="utf-8")
+    adapter._route_review_receiver_ids.add("child-thread")
+    reader = {
+        "type": "mcpToolCall",
+        "id": "reader-error",
+        "server": "nxd-desktop",
+        "tool": "read_review_input",
+        "arguments": {"path": str(capture_root), "operation": "list"},
+        "status": "completed",
+        "result": {"isError": True, "structuredContent": {"code": "review_input_error"}},
+    }
+    adapter._route_audit_event(_audit_item("item/started", "child-thread", "child-turn", reader))
+    adapter._route_audit_event(_audit_item("item/completed", "child-thread", "child-turn", reader))
+    assert adapter._route_child_reader_paths == []
+    assert any("reader call failed" in value for value in adapter._route_child_violations)
+
+
+def test_terminal_route_audits_notifications_received_before_turn_start_response() -> None:
+    adapter = _route_audit_adapter()
+    adapter.timeout_s = 10
+    adapter._route_capture_seen = True
+    before_turn_action = {
+        "method": "item/started",
+        "params": {
+            "threadId": "root-thread",
+            "turnId": "review-turn",
+            "item": {
+                "type": "commandExecution",
+                "id": "early-command",
+                "command": "cat /review/capture",
+            },
+        },
+    }
+    adapter._read_until_response = lambda *_args: (
+        {"result": {"turn": {"id": "review-turn"}}},
+        [before_turn_action],
+    )
+    adapter._read_streams = lambda *_args: pytest.fail(
+        "an unaudited pre-response action must not reach the event loop"
+    )
+
+    with pytest.raises(CodexAdapterError, match="action audit failed closed"):
+        adapter._collect_turn(1, "review prompt", [])
+
+    assert any("root executed a command" in value for value in adapter._route_child_violations)
+
+
+def test_terminal_route_passive_items_do_not_require_action_pairing() -> None:
+    adapter = _route_audit_adapter()
+    active: set[str] = set()
+    for item_type in ("userMessage", "enteredReviewMode", "exitedReviewMode"):
+        item_id = item_type
+        adapter._observe_route_event(
+            _audit_item("item/completed", "root-thread", "review-turn", {
+                "type": item_type, "id": item_id,
+            }),
+            active,
+        )
+    assert active == set()
+    assert adapter._route_child_violations == []
+
+
+def test_terminal_route_idle_deadline_suspends_for_active_action_but_keeps_absolute_cap(
+    monkeypatch,
+) -> None:
+    import dp_scenarios.runner.codex_adapter as codex_adapter_module
+
+    now = {"value": 0.0}
+    monkeypatch.setattr(codex_adapter_module.time, "monotonic", lambda: now["value"])
+    adapter = _route_audit_adapter()
+    adapter._route_stage = "execution"
+    adapter.timeout_s = 100.0
+    adapter.idle_timeout_seconds = 5.0
+    action = {
+        "type": "mcpToolCall", "id": "capabilities", "server": "nxd-desktop",
+        "tool": "get_workflow_capabilities", "arguments": {},
+    }
+    started = _audit_item("item/started", "root-thread", "review-turn", action)
+    completed = _audit_item("item/completed", "root-thread", "review-turn", action)
+    adapter._read_until_response = lambda *_args: (
+        {"result": {"turn": {"id": "review-turn"}}}, [started]
+    )
+    deadlines: list[float] = []
+
+    def read_after_action(deadline: float):
+        deadlines.append(deadline)
+        if len(deadlines) == 1:
+            now["value"] = 90.0
+            return completed
+        now["value"] = 95.0
+        raise TimeoutError("idle read expired")
+
+    adapter._read_streams = read_after_action
+    with pytest.raises(TimeoutError, match="idle deadline expired"):
+        adapter._collect_turn(1, "review", [])
+    assert deadlines == [100.0, 95.0]
+
+    now["value"] = 0.0
+    absolute_adapter = _route_audit_adapter()
+    absolute_adapter._route_stage = "execution"
+    absolute_adapter.timeout_s = 100.0
+    absolute_adapter.idle_timeout_seconds = 5.0
+    absolute_adapter._read_until_response = lambda *_args: (
+        {"result": {"turn": {"id": "review-turn"}}}, [started]
+    )
+    absolute_deadlines: list[float] = []
+
+    def reach_absolute_deadline(deadline: float):
+        absolute_deadlines.append(deadline)
+        now["value"] = 101.0
+        raise TimeoutError("absolute turn deadline")
+
+    absolute_adapter._read_streams = reach_absolute_deadline
+    with pytest.raises(TimeoutError, match="absolute turn deadline"):
+        absolute_adapter._collect_turn(1, "review", [])
+    assert absolute_deadlines == [100.0]
+
+
+def test_terminal_route_audits_startup_failure_events_before_turn_events() -> None:
+    adapter = _route_audit_adapter()
+    adapter.timeout_s = 10.0
+    startup_failure = {
+        "method": "mcpServer/startupStatus/updated",
+        "params": {"name": "nxd-desktop", "status": "failed"},
+    }
+    root_completed = {
+        "method": "turn/completed",
+        "params": {
+            "threadId": "root-thread", "turnId": "review-turn",
+            "turn": {"id": "review-turn", "status": "completed"},
+        },
+    }
+    adapter._read_until_response = lambda *_args: (
+        {"result": {"turn": {"id": "review-turn"}}}, []
+    )
+    adapter._read_streams = lambda *_args: root_completed
+    adapter._collect_turn(1, "review", [startup_failure])
+
+    assert adapter._route_unattributed_events == 1
+    assert any(
+        event.get("attribution") == "missing_protocol_identity"
+        for event in adapter._route_audit_events
+    )
+
+
+def test_terminal_route_attributes_turn_completion_by_nested_turn_id() -> None:
+    adapter = _route_audit_adapter()
+    event = {
+        "method": "turn/completed",
+        "params": {
+            "threadId": "root-thread",
+            "turn": {"id": "review-turn", "status": "completed"},
+        },
+    }
+    adapter._route_audit_event(event)
+    assert adapter._route_unattributed_events == 0
+    assert adapter._route_child_violations == []
+
+
+def test_terminal_capture_evidence_must_belong_to_root_turn() -> None:
+    adapter = _route_audit_adapter()
+    adapter._active_turn_id = "execution-turn"
+    child_capture = {
+        "type": "item.completed",
+        "thread_id": "spawned-reviewer",
+        "turn_id": "execution-turn",
+        "item": {
+            "type": "mcp_tool_call", "server": "nxd-desktop",
+            "tool": "advance_workflow",
+            "arguments": {"action": {"type": "capture"}},
+            "result": {"requirement": {"status": "review_pending"}},
+        },
+    }
+    assert not adapter._successful_capture_event(child_capture)
+
+
+def _stage_valid_review(adapter: CodexAdapter) -> None:
+    adapter._route_stage_spawn_count = 1
+    adapter._route_stage_spawn_items = {"spawn-item"}
+    adapter._route_spawned_receivers = {"reviewer-1"}
+    adapter._route_review_receiver_ids = {"reviewer-1"}
+    adapter._route_child_reader_paths = ["/review/capture/transform.py"]
+    adapter._route_child_reader_receivers = {"reviewer-1"}
+    adapter._route_child_success_receivers = {"reviewer-1"}
+    adapter._route_child_message_receivers = {"reviewer-1"}
+    adapter._route_report_count = 1
+
+
+def _stage_valid_completion(adapter: CodexAdapter) -> None:
+    adapter._route_successful_root_tools.update(TERMINAL_ROUTE_REQUIRED_TOOLS)
+    adapter._route_completion_tools.update(TERMINAL_ROUTE_COMPLETION_TOOLS)
+    adapter._route_completion_verified = True
+
+
+def test_terminal_route_send_runs_writable_review_repair_review_cycle(tmp_path: Path) -> None:
+    adapter = _route_audit_adapter()
+    adapter.artifact_dir = tmp_path
+    adapter.timeout_s = 100.0
+    adapter._persist_route_audit = lambda **_kwargs: None
+    reports = iter((
+        {"completed": True, "clear": False, "report": {"finding": "fix import"}},
+        {"completed": True, "clear": True},
+    ))
+    adapter._last_review_report = lambda: next(reports)
+    stages: list[tuple[str, str]] = []
+
+    def fake_send(request, *, stage):
+        adapter._route_turn_count += 1
+        adapter._route_stage = stage
+        text = request["message"]["text"]
+        stages.append((stage, text))
+        if stage in {"execution", "repair"}:
+            adapter._route_capture_seen = True
+            adapter._route_review_input = {
+                "retained_capture_root": "/review/capture",
+                "retained_blueprint_path": "/review/blueprint.md",
+            }
+        elif stage == "review":
+            _stage_valid_review(adapter)
+        else:
+            _stage_valid_completion(adapter)
+        return TurnResult(
+            terminal_result_subtype="success",
+            terminal_result_is_error=False,
+            provider_model_calls=1,
+            input_tokens=2,
+            output_tokens=3,
+        )
+
+    adapter._send_turn = fake_send
+    result = adapter.send({"message": {"text": "Implement", "attachments": []}})
+
+    assert [stage for stage, _text in stages] == [
+        "execution", "review", "repair", "review", "completion"
+    ]
+    assert "RUNNER-AUTHORIZED REPAIR STAGE" in stages[2][1]
+    assert "RUNNER STAGE: read-only retained-capture review" in stages[3][1]
+    assert "RUNNER-AUTHORIZED COMPLETION STAGE" in stages[4][1]
+    assert not result.environment_wedged
+    assert result.terminal_result_subtype == "success"
+    assert result.input_tokens == 10
+    assert result.output_tokens == 15
+    assert adapter._route_completion_verified
+
+
+def test_terminal_route_send_rejects_early_writer_spawn_and_caps_repair_cycles(
+    tmp_path: Path,
+) -> None:
+    adapter = _route_audit_adapter()
+    adapter.artifact_dir = tmp_path
+    adapter.timeout_s = 100.0
+    adapter._persist_route_audit = lambda **_kwargs: None
+    called_stages: list[str] = []
+
+    def early_spawn(request, *, stage):
+        adapter._route_turn_count += 1
+        adapter._route_stage = stage
+        called_stages.append(stage)
+        adapter._route_capture_seen = True
+        adapter._route_review_input = {
+            "retained_capture_root": "/review/capture",
+            "retained_blueprint_path": "/review/blueprint.md",
+        }
+        adapter._route_child_violations.append("writer spawned before review stage")
+        return TurnResult(
+            terminal_result_subtype="success", terminal_result_is_error=False
+        )
+
+    adapter._send_turn = early_spawn
+    early_result = adapter.send({"message": {"text": "Implement", "attachments": []}})
+    assert called_stages == ["execution"]
+    assert early_result.environment_wedged
+
+    capped = _route_audit_adapter()
+    capped.artifact_dir = tmp_path / "capped"
+    capped.timeout_s = 100.0
+    capped._persist_route_audit = lambda **_kwargs: None
+    capped._last_review_report = lambda: {
+        "completed": True, "clear": False, "report": {"finding": "still broken"}
+    }
+    capped_stages: list[str] = []
+
+    def repeated_findings(request, *, stage):
+        capped._route_turn_count += 1
+        capped._route_stage = stage
+        capped_stages.append(stage)
+        if stage in {"execution", "repair"}:
+            capped._route_capture_seen = True
+            capped._route_review_input = {
+                "retained_capture_root": "/review/capture",
+                "retained_blueprint_path": "/review/blueprint.md",
+            }
+        else:
+            _stage_valid_review(capped)
+        return TurnResult(
+            terminal_result_subtype="success", terminal_result_is_error=False
+        )
+
+    capped._send_turn = repeated_findings
+    capped_result = capped.send({"message": {"text": "Implement", "attachments": []}})
+    assert capped_stages == ["execution", "review", "repair", "review", "repair", "review"]
+    assert capped._route_turn_count == 6
+    assert capped_result.environment_wedged
+
+
+def test_terminal_route_does_not_treat_rejected_review_report_as_findings() -> None:
+    adapter = _route_audit_adapter()
+    adapter._last_observations = [{
+        "tool": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {
+            "action": {"type": "report_requirement", "requirement_id": "review"}
+        },
+        "is_error": False,
+        "result": {"code": "workflow/review_report_rejected"},
+    }]
+    assert adapter._last_review_report() is None
+
+
+def test_terminal_route_requires_review_requirement_id_for_clear_report() -> None:
+    adapter = _route_audit_adapter()
+    adapter._last_observations = [{
+        "tool": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {
+            "action": {"type": "report_requirement", "requirement_id": "review"}
+        },
+        "is_error": False,
+        "result": {"code": "workflow/requirement_satisfied", "requirement_id": "admission"},
+    }]
+    assert adapter._last_review_report() is None
+    adapter._last_observations[0]["result"] = {
+        "code": "workflow/requirement_satisfied", "requirement_id": "review"
+    }
+    assert adapter._last_review_report() == {"completed": True, "clear": True}
+
+
+def test_terminal_completion_rejects_reprepare_capture_and_review_report() -> None:
+    adapter = _route_audit_adapter()
+    adapter._route_stage = "completion"
+    adapter._route_review_verified = True
+    calls = (
+        ("prepare_workflow", {}),
+        ("advance_workflow", {"action": {"type": "capture"}}),
+        (
+            "advance_workflow",
+            {"action": {"type": "report_requirement", "requirement_id": "review"}},
+        ),
+    )
+    for index, (tool, arguments) in enumerate(calls, 1):
+        item = {
+            "type": "mcpToolCall",
+            "id": f"completion-{index}",
+            "server": "nxd-desktop",
+            "tool": tool,
+            "arguments": arguments,
+        }
+        adapter._route_audit_event(
+            _audit_item("item/started", "root-thread", "review-turn", item)
+        )
+        adapter._route_audit_event(
+            _audit_item("item/completed", "root-thread", "review-turn", item)
+        )
+    assert any("prepare another workflow" in item for item in adapter._route_child_violations)
+    assert sum("repeated capture or review reporting" in item for item in adapter._route_child_violations) == 2
+
+
+def test_terminal_route_parser_keeps_root_identity_answer_and_mcp_only() -> None:
+    events = [
+        {"method": "thread/started", "params": {"threadId": "child-thread",
+         "thread": {"id": "child-thread"}}},
+        _audit_item("item/completed", "child-thread", "child-turn",
+                    {"type": "agentMessage", "id": "child-message", "text": "CHILD ANSWER"}),
+        _audit_item("item/completed", "child-thread", "child-turn",
+                    {"type": "mcpToolCall", "id": "child-mcp", "server": "nxd-desktop",
+                     "tool": "advance_workflow", "arguments": {"action": {"type": "capture"}},
+                     "result": {"secret": "child-only"}}),
+        {"method": "mcpServer/startupStatus/updated", "params": {
+            "threadId": "child-thread", "turnId": "child-turn", "name": "nxd-desktop",
+            "status": "failed", "error": "child-only error",
+        }},
+        _audit_item("item/completed", "root-thread", "root-turn",
+                    {"type": "agentMessage", "id": "root-message", "text": "ROOT ANSWER"}),
+        {"method": "turn/completed", "params": {"threadId": "root-thread", "turnId": "root-turn",
+         "turn": {"id": "root-turn", "status": "completed",
+                  "usage": {"input_tokens": 3, "output_tokens": 9}}}},
+    ]
+    result, observations = parse_codex_events(
+        events,
+        redact_json_rpc=_identity,
+        redact_text=_identity,
+        session_id="root-thread",
+        root_turn_id="root-turn",
+        strict_attribution=True,
+    )
+    assert result.session_id == "root-thread"
+    assert result.agent_message == "ROOT ANSWER"
+    assert result.environment_wedged is False
+    assert result.terminal_result_subtype == "success"
+    assert (result.input_tokens, result.output_tokens) == (3, 9)
+    assert observations == []
 
 
 def test_codex_timeout_retains_answered_publication_and_codegen(
