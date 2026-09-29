@@ -229,6 +229,34 @@ def test_each_environment_gets_a_fresh_home_and_a_row_zero_manifest(tmp_path: Pa
         assert second.manifest.trial_index == 1
 
 
+def test_mrr_waterfall_uses_generated_csvs_without_starting_a_mock_source(
+    tmp_path: Path,
+) -> None:
+    from dp_scenarios.scenario import load_scenario
+    from dp_scenarios.runner.tier import _snapshot_source_artifacts
+
+    scenario = load_scenario(ROOT / "scenarios/mrr-waterfall")
+    assert scenario.route_table is None
+
+    with RunEnvironment(scenario, pins(), root=tmp_path) as environment:
+        assert environment.mock_source is None
+        assert "NXD_EVAL_SOURCE_URL" not in environment.agent_environment
+        assert "NXD_EVAL_SOURCE_PROFILE" not in environment.agent_environment
+        assert (environment.fixture_dir / "data/subscription_events.csv").is_file()
+        assert (environment.fixture_dir / "data/customer_contacts.csv").is_file()
+        artifact_root = tmp_path / "source-artifacts"
+        artifact_root.mkdir()
+        turn_snapshots: list[dict[str, object]] = []
+        _snapshot_source_artifacts(
+            environment,
+            artifact_root,
+            turn_number=1,
+            turn_snapshots=turn_snapshots,
+        )
+        assert not (artifact_root / "source-turns.json").exists()
+        assert turn_snapshots == []
+
+
 def test_agent_fixture_excludes_gold_and_sensitive_generation_metadata(tmp_path: Path) -> None:
     with RunEnvironment(make_scenario(), pins(), root=tmp_path) as environment:
         agent_manifest = json.loads((environment.fixture_dir / "fixture-manifest.json").read_text(encoding="utf-8"))
@@ -1024,6 +1052,7 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
         "locale-timezone",
         "marketing-attribution",
         "headcount-attrition",
+        "mrr-waterfall",
     }
     for name in with_conduct:
         assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"
@@ -1077,6 +1106,7 @@ def test_evidence_contracts_do_not_predeclare_follow_up_decisions() -> None:
 
     scenarios = load_scenarios(REPO_ROOT / "evals/dp-scenarios/scenarios")
     checked_ids: set[str] = set()
+    mrr_contract_checked = False
     expected_event_turns = {
         "b2-weekend-fx": 4,
         "b2-weekend-fx-reversal": 6,
@@ -1108,6 +1138,33 @@ def test_evidence_contracts_do_not_predeclare_follow_up_decisions() -> None:
             continue
 
         contract_text = json.dumps(contract, sort_keys=True)
+        if scenario.id == "mrr-waterfall":
+            required_fields = contract["required_fields"]
+            assert set(required_fields) == {
+                "publication_ref",
+                "governed_query_refs",
+                "decision_refs",
+            }
+            for hidden in (
+                "B7-same-month",
+                "B7-E8",
+                "same_month_classification",
+                "same_month_classification_revised",
+                "event_deduplication",
+                "Initially show a customer's within-month contraction",
+                "Use each customer's prior-month close",
+                "Use event_id as the key",
+                "gross separate directions",
+                "net out",
+                "52000",
+                "56000",
+                "54000",
+            ):
+                assert hidden not in contract_text, (
+                    f"mrr-waterfall evidence contract disclosed hidden value {hidden!r}"
+                )
+            mrr_contract_checked = True
+
         value_check = decision_values.get(scenario.id)
         if value_check is not None:
             decision_contract_text = json.dumps(
@@ -1161,6 +1218,7 @@ def test_evidence_contracts_do_not_predeclare_follow_up_decisions() -> None:
         "c2-active-count-reconciliation",
         "c6-source-local-day",
     }
+    assert mrr_contract_checked, "mrr-waterfall has no generic follow-up evidence contract"
 
 
 def test_the_default_prompt_does_not_restate_what_the_gates_grade() -> None:
