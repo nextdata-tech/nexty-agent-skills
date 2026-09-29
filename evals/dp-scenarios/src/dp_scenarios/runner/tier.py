@@ -243,6 +243,15 @@ class ScenarioRun:
                 "hard_gate_flags": dict(self.score.hard_gate_flags),
                 "state": self.score.state.value,
                 "findings": [finding.code for finding in self.score.findings],
+                "honesty_findings": [
+                    {
+                        "code": finding.code,
+                        "line": finding.line_number,
+                        "value": finding.value,
+                        "field": finding.field,
+                    }
+                    for finding in self.score.honesty_findings
+                ],
             },
             "route_fidelity": {
                 "status": self.route_fidelity_status,

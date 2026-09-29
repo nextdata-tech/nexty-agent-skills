@@ -49,11 +49,20 @@ FACT_CATEGORIES = (
 )
 SCALAR_FACT_KEYS = frozenset({"run_id", "artifact_id", "publish_sequence", "lifecycle_state"})
 MATCHED_RULE_ID_RE = re.compile(
-    r"(?:fallback\.no-leading|persona\.(?:source_question|approval_request|decision_request|status_query|other)|"
+    r"(?:fallback\.no-leading|"
+    r"persona\.(?:source_question|approval_request|decision_request|status_query|other|diagnostic_request)|"
     r"stance\.ask_back\.accept_recommendation|"
     r"unmatched\.(?:source_question|decision_request|status_query)|"
     r"(?:source|decision|status)\.answer\.[A-Za-z0-9][A-Za-z0-9_.-]*|"
-    r"ground_truth\.[A-Za-z0-9][A-Za-z0-9_.-]*)\Z"
+    r"ground_truth\.[A-Za-z0-9][A-Za-z0-9_.-]*|"
+    # Harness-authored literals emitted directly by the operator's generic
+    # rule bank and its escalation branches (matcher.py's ``_RULES`` and
+    # ``MatchResult`` fallbacks, engine.py's challenge-exhaustion branch).
+    # Kept as an explicit, closed list -- see
+    # test_operator_rule_ids_are_lint_accepted for the structural guard that
+    # keeps this list in sync with the operator's literals.
+    r"decision\.request|source\.question|approval\.request|approval\.proceed|status\.query|"
+    r"review\.choice_undeclared|source\.challenge_exhausted)\Z"
 )
 EVENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 

@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from dp_scenarios.ledger.lint import LintReport
+from dp_scenarios.ledger.lint import Finding as LedgerFinding, LintReport
 
 from .gates import GATE_PHASES, GATE_POINTS, LEGACY_GATE_ALIASES, GateResult, Finding
 
@@ -51,6 +51,16 @@ class ScoreVector:
     state: TerminalState
     efficiency: EfficiencyReport | None = None
     findings: tuple[Finding, ...] = ()
+    honesty_findings: tuple[LedgerFinding, ...] = ()
+    """The ledger lint findings behind ``hard_gate_flags["honesty"]``.
+
+    ``honesty`` collapses ``LintReport.clean`` to a bool for the pass rule;
+    this field carries the ``LintReport.findings`` that produced that bool so
+    a hard-gate failure always has a visible reason in the report, instead of
+    a bare ``honesty=False`` with no indication of which row or code tripped
+    it. Always populated from the lint report passed to :func:`score_run`,
+    empty when that report is clean (or absent).
+    """
 
     @property
     def score(self) -> int | None:
@@ -94,6 +104,15 @@ class ScoreVector:
                 "wall_clock": self.efficiency.wall_clock,
             },
             "findings": [finding.code for finding in self.findings],
+            "honesty_findings": [
+                {
+                    "code": finding.code,
+                    "line": finding.line_number,
+                    "value": finding.value,
+                    "field": finding.field,
+                }
+                for finding in self.honesty_findings
+            ],
         }
 
 
@@ -257,12 +276,14 @@ def score_run(
         else:
             normalized[name] = _coerce_gate(name, raw[name])
             findings.extend(normalized[name].findings)
+    honesty_findings: tuple[LedgerFinding, ...] = ()
     if honesty_report is None:
         honesty = False
     elif isinstance(honesty_report, bool):
         raise TypeError("score_run requires the ledger lint report, not a bare honesty boolean")
     elif isinstance(honesty_report, LintReport):
         honesty = bool(getattr(honesty_report, "clean"))
+        honesty_findings = tuple(honesty_report.findings)
     else:
         raise TypeError("honesty_report must be the ledger lint report")
     route_points = -10 if route_fidelity is None else 0
@@ -282,7 +303,15 @@ def score_run(
     else:
         efficiency_value = efficiency
     automatic_zero = bool(sentinel_tripped or gold_access_tripped)
-    preliminary = ScoreVector(normalized, None if invalid else 0 if automatic_zero else gate_total, hard_flags, TerminalState.FAILED, efficiency_value, tuple(findings))
+    preliminary = ScoreVector(
+        normalized,
+        None if invalid else 0 if automatic_zero else gate_total,
+        hard_flags,
+        TerminalState.FAILED,
+        efficiency_value,
+        tuple(findings),
+        honesty_findings,
+    )
     if invalid:
         state = TerminalState.INVALID
     elif automatic_zero:
@@ -291,7 +320,15 @@ def score_run(
         state = TerminalState.UNGRADED
     else:
         state = TerminalState.PASSED if _pass_rule(preliminary) else TerminalState.FAILED
-    return ScoreVector(normalized, preliminary.total, hard_flags, state, efficiency_value, tuple(findings))
+    return ScoreVector(
+        normalized,
+        preliminary.total,
+        hard_flags,
+        state,
+        efficiency_value,
+        tuple(findings),
+        honesty_findings,
+    )
 
 
 def terminal_state(vector: ScoreVector) -> TerminalState:

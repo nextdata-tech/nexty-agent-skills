@@ -229,6 +229,54 @@ def test_ground_truth_and_unmatched_rule_ids_are_accepted(tmp_path: Path, matche
     assert lint(path, supervisor_facts=FACTS).clean
 
 
+@pytest.mark.parametrize(
+    "matched_rule_id",
+    [
+        "source.challenge_exhausted",
+        "review.choice_undeclared",
+        "persona.diagnostic_request",
+        "decision.request",
+        "source.question",
+        "approval.request",
+        "approval.proceed",
+        "status.query",
+    ],
+)
+def test_harness_authored_rule_ids_lint_clean(tmp_path: Path, matched_rule_id: str) -> None:
+    """Regression for the honesty hard-gate defect on live runs B1/B5.
+
+    Every one of these is a real ``matched_rule_id`` the operator (matcher.py
+    / engine.py) writes to the ledger -- ``source.challenge_exhausted`` from
+    engine.py's challenge-exhaustion escalation (#400), the rest from
+    matcher.py's generic rule bank and its escalation branches. A ledger row
+    carrying any of them must lint clean; before this fix they were rejected
+    as INVALID_MATCHED_RULE_ID even though every scored gate had passed.
+    """
+
+    path = tmp_path / f"harness-rule-{matched_rule_id.replace('.', '-')}.jsonl"
+    rows = complete_rows()
+    rows[0] = make_row(turn=1, matched_rule_id=matched_rule_id)
+    write_ledger(path, rows)
+
+    report = lint(path, supervisor_facts=FACTS)
+    assert report.clean, report.findings
+
+
+def test_free_text_matched_rule_id_still_fails_after_the_harness_literals_were_added(
+    tmp_path: Path,
+) -> None:
+    """The additive whitelist expansion must not have loosened the guard."""
+
+    path = tmp_path / "free-text-rule.jsonl"
+    rows = complete_rows()
+    rows[0] = make_row(turn=1, matched_rule_id="the agent seemed confused")
+    write_ledger(path, rows)
+
+    report = lint(path, supervisor_facts=FACTS)
+
+    assert INVALID_MATCHED_RULE_ID in codes(report)
+
+
 def test_unmatched_rule_id_rejects_an_undeclared_category(tmp_path: Path) -> None:
     path = tmp_path / "invalid-unmatched-category.jsonl"
     rows = complete_rows()
