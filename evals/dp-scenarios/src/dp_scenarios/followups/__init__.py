@@ -22,8 +22,12 @@ import pkgutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..support import _MISSING
+
+if TYPE_CHECKING:
+    from ..runner.evidence_context import SupervisorHistoryView
 
 
 class FollowUpError(Exception):
@@ -38,6 +42,7 @@ class FollowUpContext:
     row_count_oracle: object = _MISSING
     source_evidence: object = _MISSING
     operator_observations: object = _MISSING
+    supervisor_history: SupervisorHistoryView | None = None
 
 
 Handler = Callable[["object", object, Mapping[str, object], FollowUpContext], Mapping[str, object]]

@@ -377,6 +377,20 @@ Each live Claude epoch also writes these deterministic histories under its
 - `supervisor-captures.json` — `dp-scenario-supervisor-captures-v1`: safe snapshot inventory; copied files live under `supervisor-captures/<digest>/`.
 - `definition-export.json` — `dp-scenario-definition-export-v1`: compiled manifest promises and inventory metadata for session runs.
 
+Follow-up graders receive a `SupervisorHistoryView` built from exactly these
+seven JSON files and the already sanitized capture snapshots. It is read-only,
+size-bounded, and joins a release through its run's `definition_id` and
+`capture_sha256`; a missing artifact or inconsistent identity cannot be
+replaced with the newest unrelated record. A compiled promise's
+`source_in_inventory` means only that its path was listed. The separate
+`source_hash_verified` flag is true only when the actual contract source bytes
+and size match the definition inventory. Existing follow-up kinds can ignore
+the new context. A history-dependent handler checks the view's `status` and
+uses `rows("publication-history")` plus `linked_release(release)`; that join
+raises `HistoryEvidenceError` on conflicting identities or copied-file hashes.
+The next scenario package must classify missing or invalid runner history as
+ungraded evidence and an absent agent-produced release as a graded failure.
+
 To run several selected scenario packages at once, repeat `--scenario` and set
 `--jobs`, for example:
 

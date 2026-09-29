@@ -15,6 +15,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 import yaml
 
@@ -46,6 +47,9 @@ from .mockrest.config import load_config as load_route_table
 from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
 from .operator.answer_sheet import AnswerSheet, load_answer_sheet
 from .synthgen import GenerationResult, generate_dataset, get_dataset
+
+if TYPE_CHECKING:
+    from .runner.evidence_context import SupervisorHistoryView
 
 
 class GoldArtifactError(ScenarioError):
@@ -409,6 +413,7 @@ class Scenario:
         row_count_oracle: object = _MISSING,
         source_evidence: object = _MISSING,
         operator_observations: object = _MISSING,
+        supervisor_history: SupervisorHistoryView | None = None,
     ) -> Mapping[str, object]:
         """Run follow-up against a closure, with gold resolved separately.
 
@@ -450,6 +455,7 @@ class Scenario:
             row_count_oracle=row_count_oracle,
             source_evidence=source_evidence,
             operator_observations=operator_observations,
+            supervisor_history=supervisor_history,
         )
         try:
             kind = followups.get(binding.kind)
@@ -503,6 +509,7 @@ class Scenario:
         row_count_oracle: object = _MISSING,
         source_evidence: object = _MISSING,
         operator_observations: object = _MISSING,
+        supervisor_history: SupervisorHistoryView | None = None,
     ) -> GateResult:
         """Adapt the declared follow-up check to the settled follow-up gate type."""
 
@@ -534,6 +541,7 @@ class Scenario:
             row_count_oracle=row_count_oracle,
             source_evidence=source_evidence,
             operator_observations=operator_observations,
+            supervisor_history=supervisor_history,
         )
         base = gate_follow_up(result)
         raw_findings = result.get("findings", ())
@@ -571,6 +579,7 @@ class Scenario:
         row_count_oracle: object = _MISSING,
         source_evidence: object = _MISSING,
         operator_observations: object = _MISSING,
+        supervisor_history: SupervisorHistoryView | None = None,
     ) -> GateResult:
         """Alias for callers that use the gate-oriented spelling."""
 
@@ -582,6 +591,7 @@ class Scenario:
             row_count_oracle=row_count_oracle,
             source_evidence=source_evidence,
             operator_observations=operator_observations,
+            supervisor_history=supervisor_history,
         )
 
     def check_fired_plants(self, run_or_ids: object) -> GateResult:

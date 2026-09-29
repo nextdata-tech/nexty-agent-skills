@@ -67,6 +67,7 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
+from .evidence_context import load_supervisor_history_view
 from .checkpoint import (
     CheckpointIdentity,
     CheckpointState,
@@ -2917,11 +2918,14 @@ class TierRunner:
             follow_up_parameters = inspect.signature(follow_up_method).parameters
         except (TypeError, ValueError):
             follow_up_parameters = {}
+        history_kwargs: dict[str, object] = {}
+        if "supervisor_history" in follow_up_parameters:
+            history_kwargs["supervisor_history"] = load_supervisor_history_view(artifact_root)
         if "fired_plants" in follow_up_parameters:
             fired_plants = observations.get("fired_plant_ids", ())
             if not isinstance(fired_plants, Sequence) or isinstance(fired_plants, (str, bytes)):
                 fired_plants = ()
-            follow_up_kwargs: dict[str, object] = {"fired_plants": fired_plants}
+            follow_up_kwargs: dict[str, object] = {"fired_plants": fired_plants, **history_kwargs}
             if "operator_observations" in follow_up_parameters:
                 follow_up_kwargs["operator_observations"] = observations
             if "row_count_oracle" in follow_up_parameters:
@@ -2935,14 +2939,15 @@ class TierRunner:
                 **follow_up_kwargs,
             )
         elif "query_rows" in follow_up_parameters:
-            follow_up = follow_up_method(follow_up_target, query_rows)
+            follow_up = follow_up_method(follow_up_target, query_rows, **history_kwargs)
         elif "source_evidence" in follow_up_parameters:
             follow_up = follow_up_method(
                 follow_up_target,
                 source_evidence=source_evidence,
+                **history_kwargs,
             )
         else:
-            follow_up = follow_up_method(follow_up_target)
+            follow_up = follow_up_method(follow_up_target, **history_kwargs)
         ungraded = observations.get("ungraded_criteria", ())
         if not isinstance(ungraded, Sequence) or isinstance(ungraded, (str, bytes)):
             ungraded = ()

@@ -786,7 +786,22 @@ def test_tier_grading_uses_a_custom_live_workspace_root(tmp_path: Path, monkeypa
         oracle_dir=oracle_dir,
         desktop_server_name="nxd-desktop",
     )
-    captured: dict[str, Path] = {}
+    captured: dict[str, object] = {}
+
+    def follow_up_with_history(
+        _scenario: FakeScenario,
+        _closure: object,
+        _fixture_dir: object = None,
+        _query_rows: object = None,
+        *,
+        fired_plants: object = None,
+        supervisor_history: object = None,
+    ) -> GateResult:
+        del fired_plants
+        captured["history"] = supervisor_history
+        return GateResult("follow-up", False, 0, examined=False, ungraded=True)
+
+    monkeypatch.setattr(FakeScenario, "follow_up_gate", follow_up_with_history)
 
     monkeypatch.setattr(tier_module, "_fixture_integrity_error", lambda _environment: None)
     monkeypatch.setattr(tier_module, "read_ledger", lambda _path: [])
@@ -840,6 +855,8 @@ def test_tier_grading_uses_a_custom_live_workspace_root(tmp_path: Path, monkeypa
         artifact_root,
     )
 
+    history = captured.pop("history")
+    assert history.status == "missing"
     assert captured == {
         "attestations": custom_workspace,
         "published": custom_workspace,
