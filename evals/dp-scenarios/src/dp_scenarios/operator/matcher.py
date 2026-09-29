@@ -176,7 +176,19 @@ _ADDRESSED_APPROVAL_ASK_PATTERN = re.compile(
     r"|\b(?:need|require|await|waiting\s+for|without|asking\s+for)\b[^.!?\n]{0,110}"
     r"\b(?:your|explicit)\s+approval\b"
     r"|\bi'?d\s+like\s+your\s+(?:approval|sign\s*off)\b"
-    r"|\b(?:let\s+me\s+know|tell\s+me)\b[^.!?\n]{0,100}\bapprove\b",
+    r"|\b(?:let\s+me\s+know|tell\s+me)\b[^.!?\n]{0,100}\bapprove\b"
+    # The literal reply token itself, not the noun "approval". A revision
+    # re-ask commonly tells the operator to send the bare word back --
+    # "Reply with **Approve** as its own message.", "reply **Approve** as
+    # its own message" -- with no "approval"/"approved" anywhere in the
+    # sentence, so the alternatives above (which all require that noun) miss
+    # it entirely. Markdown emphasis around the token is common and optional.
+    r"|\b(?:reply|respond|send|state|give)\b[^.!?\n]{0,40}[*_]{0,2}approve[*_]{0,2}\b"
+    # The same token offered as its own bulleted or table-row option
+    # ("- **Approve** to recapture the closure...", "| **Approve** | ..."),
+    # mirroring how a lettered review choice is recognised behind a bullet
+    # or table marker and optional markdown emphasis.
+    r"|(?:^|\n)\s*[-*|]\s*[*_]{0,2}approve[*_]{0,2}\b",
     re.IGNORECASE,
 )
 _OTHER_ASK_TOPIC_PATTERN = re.compile(
@@ -252,8 +264,31 @@ SOLICITATION_PATTERN = re.compile(
     r"|\breply\s+(?:yes|no)\b"
     # "Reply with ..." is an addressed instruction to the operator. Unlike
     # a bare "choose" or "confirm" in a task list, it does not narrate a
-    # build step; a live review choice used it without a question mark.
-    r"|(?:^|[.!?,;:]\s)\s*(?:please\s+)?reply\b",
+    # build step; a live review choice used it without a question mark. A
+    # markdown subheading ("## What clears the blocker") commonly sits
+    # directly above this line with no sentence-ending punctuation before
+    # it, only a single newline, so the boundary accepts ``\n`` alongside
+    # clause-start and sentence punctuation -- the same boundary the
+    # findings/blockers rule two alternatives up already uses.
+    r"|(?:^|[.!?,;:]\s|\n)\s*(?:please\s+)?reply\b"
+    # The literal reply token offered as its own bulleted or table-row
+    # option ("- **Approve** to recapture the closure...", a markdown table
+    # row). Unlike the bare "choose"/"confirm"/"pick" imperatives this file
+    # deliberately excludes (see below -- those can narrate the agent's own
+    # plan), "approve" listed alone as an option is never the agent's own
+    # step; it is always the literal word being offered back to the
+    # operator as a reply.
+    r"|(?:^|\n)\s*[-*|]\s*[*_]{0,2}approve[*_]{0,2}\b"
+    # "Reply with **Approve**" mid-sentence, inside a numbered step
+    # ("1. **You approve the plan.** Reply with **Approve** as its own
+    # message.") is not preceded by clause-start punctuation or a newline --
+    # the clause splitter still isolates it as its own ask clause (a
+    # sentence boundary inside bold emphasis), but this whole-message
+    # detector is checked independently and would otherwise miss it. Unlike
+    # the bare "reply" alternative above, this one does not need a left
+    # boundary at all: it only fires when "reply" and the literal token
+    # "approve" sit close together, which is specific enough on its own.
+    r"|\breply\b[^.!?\n]{0,40}[*_]{0,2}approve\b",
     re.IGNORECASE,
 )
 
@@ -295,6 +330,17 @@ _REQUEST_CLAUSE_SPLIT = re.compile(
 # review-fix authorization asks entirely.
 _QUESTION_CLAUSE_END = re.compile(r"\?\s*[\"')\]*_]*$")
 
+# A markdown subheading ("## What clears the blocker") sits directly above
+# its own line with no sentence-ending punctuation, only a single newline, so
+# without this it stays glued to the line beneath it as one clause. That is
+# harmless while nothing reads the heading's own words, but a heading can
+# itself contain incidental vocabulary ("blocker", "what", ...) that other
+# clause-scoped checks key on, and gluing it to a genuine ask clause lets
+# that vocabulary leak into an unrelated request. Forcing a paragraph break
+# after every heading line keeps a heading and the text beneath it in
+# separate clauses, the same way a blank line already does.
+_MARKDOWN_HEADING_LINE = re.compile(r"^#{1,6}[ \t]+[^\n]*$", re.MULTILINE)
+
 
 def _operator_request_clauses(message: str) -> list[str]:
     """Return question or explicit-ask clauses from an agent message.
@@ -305,6 +351,7 @@ def _operator_request_clauses(message: str) -> list[str]:
     """
 
     prose = _NON_PROSE.sub(" ", message)
+    prose = _MARKDOWN_HEADING_LINE.sub(lambda m: f"{m.group(0)}\n\n", prose)
     clauses: list[str] = []
     for clause in _REQUEST_CLAUSE_SPLIT.split(prose):
         candidate = clause.strip()
