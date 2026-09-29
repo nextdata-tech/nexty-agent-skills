@@ -3301,3 +3301,63 @@ def test_nex_review_reader_request_does_not_leave_stale_request_context(tmp_path
     assert seen["called"]
     assert second["id"] == 5
     assert "duplicate in-flight" not in (session._nex_invalid_reason or "")
+
+
+def _nex_reader_tool_result(session, use, *, response_success, is_error):
+    use.update({"name": ds._REVIEW_READER_TOOL, "response_success": response_success,
+                "parent_tool_use_id": "child-1"})
+    session._nex_stream_uses.append(use)
+    session.observe_claude_stream_event({
+        "type": "user",
+        "message": {"content": [{
+            "type": "tool_result", "tool_use_id": use["id"],
+            "is_error": is_error, "content": "reader reply",
+        }]},
+    })
+
+
+def test_nex_refused_review_read_does_not_invalidate_the_cell(tmp_path):
+    session, proxy_side = _nex_bridge_harness(tmp_path, SILENT_SERVER)
+    try:
+        _nex_reader_tool_result(session, {"id": "r1"}, response_success=False, is_error=True)
+        assert session._nex_invalid_reason is None
+        assert not session._nex_review_read_success
+    finally:
+        proxy_side.close()
+        session.cleanup()
+
+
+def test_nex_served_review_read_with_failed_stream_result_still_invalidates(tmp_path):
+    session, proxy_side = _nex_bridge_harness(tmp_path, SILENT_SERVER)
+    try:
+        _nex_reader_tool_result(session, {"id": "r2"}, response_success=True, is_error=True)
+        assert session._nex_invalid_reason == (
+            "review reader response or stream tool_result was unsuccessful (siblings=-1)"
+        )
+    finally:
+        proxy_side.close()
+        session.cleanup()
+
+
+def test_nex_rootless_call_binds_to_its_own_workflow_root(tmp_path, monkeypatch):
+    session, proxy_side = _nex_bridge_harness(tmp_path, SILENT_SERVER)
+    roots = {}
+    monkeypatch.setattr(
+        session, "_nex_trace_record",
+        lambda direction, message, **kw: roots.__setitem__(kw.get("workflow"), kw.get("root")),
+    )
+    try:
+        session._nex_workflow_roots["nex890-positive"] = "/ws/positive"
+        session._nex_active_workflow = "nex890-positive"
+        for request_id, workflow in ((1, "nex890-401"), (2, "nex890-positive")):
+            request = {"jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+                       "params": {"name": "prepare_workflow",
+                                  "arguments": {"workflow": workflow}}}
+            session._nex_record_response(
+                request, {"jsonrpc": "2.0", "id": request_id, "result": {"content": []}}
+            )
+    finally:
+        proxy_side.close()
+        session.cleanup()
+    assert roots["nex890-401"] is None
+    assert roots["nex890-positive"] == "/ws/positive"
