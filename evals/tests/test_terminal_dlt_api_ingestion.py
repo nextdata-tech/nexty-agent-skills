@@ -13,6 +13,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIO = ROOT / "evals/public/terminal-authenticated-dlt-api-ingestion"
@@ -69,12 +71,12 @@ def _write_valid_closure(root: Path) -> None:
     (root / "companion-files").write_text("api-source-endpoints\n", encoding="utf-8")
     (root / "api-source-endpoints").write_text("orders=/v1/orders\n", encoding="utf-8")
     cases = {
-        "unauthorized-401": ("auth", "transform_error"),
-        "forbidden-403": ("auth", "transform_error"),
-        "unknown-endpoint-404": ("source", "transform_error"),
-        "malformed-companion": ("closure", "structure/companion_files_invalid"),
+        "unauthorized-401": ("validation", "scratch_transform_failed"),
+        "forbidden-403": ("validation", "scratch_transform_failed"),
+        "unknown-endpoint-404": ("validation", "scratch_transform_failed"),
+        "malformed-companion": ("validation", "scratch_transform_failed"),
         "omitted-companion": ("closure", "structure/companion_files_invalid"),
-        "hard-coded-endpoint": ("closure", "structure/endpoint_not_companion_derived"),
+        "hard-coded-endpoint": ("review", "endpoint_not_companion_derived"),
     }
     for case, (phase, code) in cases.items():
         case_dir = root / ".eval-cases" / case
@@ -87,7 +89,8 @@ def _write_valid_closure(root: Path) -> None:
     hardcoded_transform.mkdir()
     (hardcoded_transform / "main.py").write_text(
         "from dlt.sources.rest_api import rest_api_resources\n"
-        "ENDPOINT = '/v1/orders'\n",
+        "def source():\n"
+        "    return rest_api_resources({'resources': [{'name': 'orders', 'endpoint': {'path': '/v1/orders'}}]})\n",
         encoding="utf-8",
     )
     (root / "exports").mkdir()
@@ -138,23 +141,23 @@ def _trace(tmp_path: Path, *, omit_case: str | None = None) -> Path:
 
     number = 20
     cases = {
-        "unauthorized-401": ("auth", "transform_error"),
-        "forbidden-403": ("auth", "transform_error"),
-        "unknown-endpoint-404": ("source", "transform_error"),
-        "malformed-companion": ("closure", "structure/companion_files_invalid"),
+        "unauthorized-401": ("validation", "scratch_transform_failed"),
+        "forbidden-403": ("validation", "scratch_transform_failed"),
+        "unknown-endpoint-404": ("validation", "scratch_transform_failed"),
+        "malformed-companion": ("validation", "scratch_transform_failed"),
         "omitted-companion": ("closure", "structure/companion_files_invalid"),
-        "hard-coded-endpoint": ("closure", "structure/endpoint_not_companion_derived"),
+        "hard-coded-endpoint": ("review", "endpoint_not_companion_derived"),
     }
     for case, (phase, code) in cases.items():
         if case == omit_case:
             continue
         signature = {
-            "unauthorized-401": "401 unauthorized",
-            "forbidden-403": "403 forbidden",
-            "unknown-endpoint-404": "404 not_found",
-            "malformed-companion": "companion invalid",
+            "unauthorized-401": "scratch_transform_failed",
+            "forbidden-403": "scratch_transform_failed",
+            "unknown-endpoint-404": "scratch_transform_failed",
+            "malformed-companion": "scratch_transform_failed",
             "omitted-companion": "companion missing",
-            "hard-coded-endpoint": "hard-coded endpoint transform",
+            "hard-coded-endpoint": "review endpoint transform hard-coded",
         }[case]
         call(number, "check_data_product", {"definition": f"/workspace/.eval-cases/{case}", "workflow": case}, {"status": "failed", "phase": phase, "code": code, "detail": signature}, error=True)
         number += 1
@@ -200,7 +203,14 @@ def _observations(tmp_path: Path, *, bypass: bool = False) -> Path:
     return path
 
 
-def _run_checker(tmp_path: Path, *, trace: Path | None = None, observations: Path | None = None, root: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run_checker(
+    tmp_path: Path,
+    *,
+    trace: Path | None = None,
+    observations: Path | None = None,
+    root: Path | None = None,
+    terminal_route: bool = True,
+) -> subprocess.CompletedProcess[str]:
     root = root or (tmp_path / "closure")
     if not root.exists():
         root.mkdir()
@@ -209,12 +219,17 @@ def _run_checker(tmp_path: Path, *, trace: Path | None = None, observations: Pat
     observations = observations or _observations(tmp_path)
     marker = tmp_path / "marker.txt"
     marker.write_text(SECRET + "\n", encoding="utf-8")
+    checker_env = {**os.environ, "NXD_STUB_OBSERVATIONS": str(observations)}
+    if terminal_route:
+        checker_env["NXD_EVAL_TERMINAL_WORKFLOW_ROUTE"] = "terminal_workflow_review_v1"
+    else:
+        checker_env.pop("NXD_EVAL_TERMINAL_WORKFLOW_ROUTE", None)
     return subprocess.run(
         [sys.executable, str(CHECKER), "--fixtures", str(SCENARIO / "fixtures"), "--root", str(root), "--trace", str(trace), "--secret-marker-file", str(marker)],
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "NXD_STUB_OBSERVATIONS": str(observations)},
+        env=checker_env,
     )
 
 
@@ -224,7 +239,11 @@ def test_scenario_wires_current_runner_contract() -> None:
     http = json.loads((SCENARIO / "fixtures/http_stub.json").read_text(encoding="utf-8"))
     assert checks["deterministic_check"]["trace_source"] == "runner_mcp"
     assert stdio["profile_builder"] == "prepare_stdio_profile.py"
-    assert http["agent_env"] == {"NXD_EVAL_SOURCE_TOKEN": "VALID_TOKEN"}
+    assert stdio["supported_agent_backends"] == ["claude"]
+    assert stdio["nex_mode"] is True
+    assert "codex_app_server_route" not in stdio
+    assert "agent_env" not in http
+    assert http["trusted_server_env"] == {"NXD_EVAL_SOURCE_TOKEN": "VALID_TOKEN"}
     assert (SCENARIO / "fixtures/prepare_stdio_profile.py").is_file()
 
 
@@ -275,6 +294,485 @@ def test_checker_accepts_complete_contract(tmp_path: Path) -> None:
     assert "ALL CHECKS PASSED" in result.stdout
 
 
+def test_checker_parses_supervisor_text_payload_and_nested_review_requirement() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker_payload", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    payload = {
+        "requirements": [
+            {"id": "consent", "generation": 1, "review_input": None},
+            {
+                "id": "review",
+                "generation": 7,
+                "review_input": {"retained_capture_root": "/state/capture"},
+            },
+        ]
+    }
+    response = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"content": [{"type": "text", "text": json.dumps(payload)}]},
+    }
+
+    parsed = checker._nex_structured_content(response)
+    review = checker._nex_requirement(parsed, "review")
+    assert review["generation"] == 7
+    assert review["review_input"] == {"retained_capture_root": "/state/capture"}
+    assert checker._nex_requirement(parsed, "missing") == {}
+    assert checker._nex_structured_content({
+        "result": {"content": [
+            {"type": "text", "text": json.dumps(payload)},
+            {"type": "text", "text": "{}"},
+        ]}
+    }) == {}
+    assert checker._nex_structured_content({
+        "result": {
+            "structuredContent": payload,
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+        }
+    }) == {}
+
+
+def test_checker_reads_only_known_nested_operation_diagnostic() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker_diagnostics", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    diagnostic = {
+        "phase": "scratch_transform",
+        "code": "validation/scratch_transform_failed",
+        "http_status": 401,
+    }
+    response = {
+        "result": {"content": [{"type": "text", "text": json.dumps({
+            "operation": {"diagnostic": diagnostic},
+            "operations": [{"diagnostic": {"code": "ignored", "phase": "ignored"}}],
+        })}]}
+    }
+    assert checker._nex_direct_diagnostics(response) == [diagnostic]
+    assert checker._nex_direct_diagnostics({
+        "result": {"content": [{"type": "text", "text": "diagnostic code=foo phase=bar"}]}
+    }) == []
+    assert checker._nex_direct_diagnostics({
+        "result": {"content": [{"type": "text", "text": json.dumps({
+            "code": "validation/scratch_transform_failed",
+            "phase": "scratch_transform",
+            "diagnostic": diagnostic,
+        })}]}
+    }) == []
+
+
+def test_checker_maps_workflow_v2_session_decision_to_consent_stage() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    consent = {
+        "workflow": "nex890-positive",
+        "operation": "advance_workflow",
+        "arguments": {
+            "action": {
+                "type": "session_decision",
+                "parameters": {"requirement_id": "consent"},
+            }
+        },
+    }
+
+    assert checker._nex_case_action_calls([consent], "nex890-positive", "consent") == [consent]
+
+
+@pytest.mark.parametrize("flat", [False, True])
+def test_checker_maps_workflow_v2_validation_requirement(flat: bool) -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    action = {"type": "start_requirement"}
+    if flat:
+        action["requirement_id"] = "validation"
+    else:
+        action["parameters"] = {"requirement_id": "validation"}
+    validation = {
+        "workflow": "nex890-positive",
+        "operation": "advance_workflow",
+        "arguments": {"action": action},
+    }
+
+    assert checker._nex_case_action_calls([validation], "nex890-positive", "validate") == [validation]
+
+
+def test_checker_distinguishes_missing_and_duplicate_validation() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+
+    assert checker._nex_validation_cardinality_failure("nex890-positive", []) == (
+        "cycle/nex890-positive/validation-missing"
+    )
+    assert checker._nex_validation_cardinality_failure("nex890-positive", [{}]) is None
+    assert checker._nex_validation_cardinality_failure("nex890-positive", [{}, {}]) == (
+        "cycle/nex890-positive/validation-duplicate"
+    )
+
+
+def test_checker_reports_review_verdict_and_returned_validation_action() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    report_call = {
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "parameters": {
+                    "requirement_id": "review",
+                    "report": {"verdict": "clear", "findings": [], "rejection_code": None},
+                },
+            }
+        }
+    }
+    # The supervisor's WorkflowResponse shape: flat next actions keyed by
+    # "action", serialised as one text block.
+    report_response = {
+        "result": {"content": [{"type": "text", "text": json.dumps({
+            "next_actions": [{
+                "action": "start_requirement",
+                "requirement_id": "validation",
+                "code": "workflow/requirement_pending",
+                "generation": 1,
+            }]
+        })}]}
+    }
+
+    assert checker._nex_report_verdict(report_call) == "clear"
+    finding_call = {
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "parameters": {
+                    "report": {
+                        "verdict": "findings",
+                        "findings": [{
+                            "id": "wrong-endpoint",
+                            "severity": "blocking",
+                            "description": "description must not enter the diagnostic",
+                        }],
+                    }
+                },
+            }
+        }
+    }
+    assert checker._nex_report_finding_labels(finding_call) == [
+        "wrong-endpoint-blocking"
+    ]
+    long_id_call = {
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "parameters": {
+                    "report": {
+                        "verdict": "findings",
+                        "findings": [
+                            {"id": "Not A Slug", "severity": "advisory", "description": "x"},
+                            {"id": "paid_filter_unverified", "severity": "blocking", "description": "x"},
+                        ],
+                    }
+                },
+            }
+        }
+    }
+    assert checker._nex_report_finding_labels(long_id_call) == [
+        "finding-id-unavailable-advisory",
+        "paid-filter-unverified-blocking",
+    ]
+    rejected_call = {
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "parameters": {
+                    "report": {
+                        "verdict": "rejected",
+                        "findings": [],
+                        "rejection_code": "scope_refused",
+                    }
+                },
+            }
+        }
+    }
+    assert checker._nex_report_rejection_code(rejected_call) == "scope_refused"
+    assert checker._nex_validation_action_returned(report_response)
+    assert not checker._nex_validation_action_returned({
+        "result": {"content": [{"type": "text", "text": json.dumps({"next_actions": []})}]}
+    })
+
+
+def test_checker_flags_rpc_errors_only_on_evidence_calls() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    error = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "stale revision"}}
+    ok = {"jsonrpc": "2.0", "id": 1, "result": {"content": []}}
+    validation = {"workflow": "nex890-401", "response_message": error}
+    refused = {"workflow": "nex890-401", "response_message": error}
+    static = {"workflow": "__static__", "response_message": error}
+    validated = {"nex890-401": validation}
+
+    assert checker._nex_evidence_call_rpc_error(validation, validated)
+    assert checker._nex_evidence_call_rpc_error(static, validated)
+    assert not checker._nex_evidence_call_rpc_error(refused, validated)
+    assert not checker._nex_evidence_call_rpc_error(
+        {"workflow": "nex890-401", "response_message": ok}, {"nex890-401": validation}
+    )
+    assert not checker._nex_evidence_call_rpc_error(
+        {"workflow": "__static__", "response_message": ok}, validated
+    )
+
+
+def test_checker_counts_only_accepted_actions_after_the_last_reset() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    ok = {"jsonrpc": "2.0", "id": 1, "result": {"content": []}}
+    refused = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "stale revision"}}
+
+    def consent(response: dict) -> dict:
+        return {
+            "workflow": "nex890-positive",
+            "operation": "advance_workflow",
+            "arguments": {"action": {"type": "session_decision"}},
+            "response_message": response,
+        }
+
+    def reset(response: dict) -> dict:
+        return {
+            "workflow": "nex890-positive",
+            "operation": "reset_workflow",
+            "arguments": {"workflow": "nex890-positive"},
+            "response_message": response,
+        }
+
+    before, after = consent(ok), consent(ok)
+    assert checker._nex_case_action_calls(
+        [before, reset(ok), after], "nex890-positive", "consent"
+    ) == [after]
+    assert checker._nex_case_action_calls(
+        [before, reset(refused), after], "nex890-positive", "consent"
+    ) == [before, after]
+    retried = consent(ok)
+    assert checker._nex_case_action_calls(
+        [consent(refused), retried], "nex890-positive", "consent"
+    ) == [retried]
+    tool_error = {"jsonrpc": "2.0", "id": 1, "result": {"isError": True, "content": []}}
+    assert checker._nex_case_action_calls(
+        [consent(tool_error), retried], "nex890-positive", "consent"
+    ) == [retried]
+
+
+def test_checker_transform_walk_tolerates_expression_bodies(tmp_path: Path) -> None:
+    # A DLT response hook is usually a lambda or uses a conditional
+    # expression; their ``body`` is one node, not a statement list.
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    for source in (b"hook = lambda response: response\n", b"x = 1 if True else 2\n"):
+        assert checker._nex_transform_contract({"transform/main.py": source}) in (True, False)
+        path = tmp_path / "main.py"
+        path.write_bytes(source)
+        checker._non_doc_string_literals(path)
+
+
+def _nex890_checker():
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    return checker
+
+
+def test_hard_coded_endpoint_ast_sees_a_config_dict_bound_to_a_name() -> None:
+    checker = _nex890_checker()
+    config_dict = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"config = {'client': {'base_url': base}, 'resources': [{'name': 'orders',"
+        b" 'endpoint': {'path': '/v1/orders'}}]}\n"
+        b"resources = rest_api_resources(config)\n"
+    )
+    from_profile = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"config = {'resources': [{'endpoint': {'path': secrets['endpoint_orders']}}]}\n"
+        b"resources = rest_api_resources(config)\n"
+    )
+
+    assert checker._nex_hardcoded_endpoint_ast({"transform/main.py": config_dict})
+    dict_slot = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"def make():\n"
+        b"    config = {'resources': [{'endpoint': {}}]}\n"
+        b"    config['resources'][0]['endpoint']['path'] = '/v1/orders'\n"
+        b"    return config\n"
+        b"resources = rest_api_resources(make())\n"
+    )
+    assert checker._nex_hardcoded_endpoint_ast({"transform/main.py": dict_slot})
+    message_only = from_profile + b"assert True, 'expected a path like /v1/orders'\n"
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": message_only})
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": from_profile})
+    # A scheme prefix around a profile-derived host is not a planted endpoint.
+    scheme_prefix = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"def t(secrets):\n"
+        b"    base = f\"https://{secrets['host']}\"\n"
+        b"    return rest_api_resources({'client': {'base_url': base}})\n"
+    )
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": scheme_prefix})
+    assert checker._nex_hardcoded_endpoint_ast({
+        "transform/main.py": scheme_prefix.replace(b"{secrets['host']}", b"127.0.0.1:{port}")
+    })
+    # A literal and connector only under ``if False:`` plant nothing.
+    dead_only = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"if False:\n"
+        b"    rest_api_resources({'resources': [{'endpoint': {'path': '/v1/orders'}}]})\n"
+    )
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": dead_only})
+
+
+_TEMPLATE_TRANSFORM = """\
+import os
+from dlt.sources.rest_api import rest_api_resources
+
+
+def _headers_from(secrets):
+    return {k[len("header_"):]: v for k, v in secrets.items() if k.startswith("header_")}
+
+
+def build(secrets, models):
+    token = os.environ[secrets["credential_env"]]
+    for m in models:
+        path = secrets[f"endpoint_{m}"]
+        if path.startswith(("http://", "https://")):
+            raise ValueError("endpoint must be a path")
+    return rest_api_resources({"client": {"headers": _headers_from(secrets), "auth": token}})
+"""
+
+
+def test_transform_contract_accepts_the_skill_template_shape() -> None:
+    checker = _nex890_checker()
+
+    assert checker._nex_transform_contract({"transform/main.py": _TEMPLATE_TRANSFORM.encode()})
+    hard_coded = _TEMPLATE_TRANSFORM.replace(
+        'secrets[f"endpoint_{m}"]', '"http://127.0.0.1:8000/v1/orders"'
+    )
+    assert not checker._nex_transform_contract({"transform/main.py": hard_coded.encode()})
+    diagnostic = _TEMPLATE_TRANSFORM.replace(
+        'raise ValueError("endpoint must be a path")',
+        'raise ValueError(f"endpoint {path!r} must be a path like /v1/orders, not http://127.0.0.1")',
+    )
+    assert diagnostic != _TEMPLATE_TRANSFORM
+    assert checker._nex_transform_contract({"transform/main.py": diagnostic.encode()})
+    assert "hard-coded-topology-loopback" in checker._nex_transform_contract_gaps(
+        {"transform/main.py": hard_coded.encode()}
+    )
+
+
+def test_root_binding_accepts_spellings_of_the_same_cycle(tmp_path: Path) -> None:
+    checker = _nex890_checker()
+    workspace = tmp_path / "ws"
+    root = workspace / "nex890-401"
+    (root / "closure").mkdir(parents=True)
+    authoring = str(root)
+
+    assert checker._nex_root_binding_mismatch(authoring, authoring) is None
+    assert checker._nex_root_binding_mismatch("nex890-401", authoring) is None
+    assert checker._nex_root_binding_mismatch(str(root / "closure"), authoring) is None
+    assert checker._nex_root_binding_mismatch(str(workspace / "nex890-403"), authoring) == "sibling"
+    assert checker._nex_root_binding_mismatch(str(workspace), authoring) == "ancestor"
+    assert checker._nex_root_binding_mismatch("/elsewhere", authoring) == "outside"
+
+
+def test_checker_requires_the_review_requirement_id() -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    report = {
+        "workflow": "nex890-positive",
+        "operation": "advance_workflow",
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "parameters": {"requirement_id": "review"},
+            }
+        },
+    }
+    wrong_requirement = {
+        **report,
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "parameters": {"requirement_id": "validation"},
+            }
+        },
+    }
+    conflicting_ids = {
+        **report,
+        "arguments": {
+            "action": {
+                "type": "report_requirement",
+                "requirement_id": "review",
+                "parameters": {"requirement_id": "validation"},
+            }
+        },
+    }
+
+    assert checker._nex_case_action_calls([report], "nex890-positive", "report_requirement") == [report]
+    assert checker._nex_case_action_calls([wrong_requirement], "nex890-positive", "report_requirement") == []
+    assert checker._nex_case_action_calls([conflicting_ids], "nex890-positive", "report_requirement") == []
+
+
+def test_non_codex_checker_does_not_use_codex_route_phases(tmp_path: Path) -> None:
+    result = _run_checker(tmp_path, terminal_route=False)
+    assert result.returncode != 0
+    assert "negative/unauthorized-401-missing-structured-code" in result.stdout
+
+
+def test_hard_coded_endpoint_oracle_keeps_legacy_rule_and_tightens_codex_rule(
+    tmp_path: Path, monkeypatch
+) -> None:
+    spec = importlib.util.spec_from_file_location("nex890_checker", CHECKER)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    transform = tmp_path / ".eval-cases/hard-coded-endpoint/transform/main.py"
+    transform.parent.mkdir(parents=True)
+    transform.write_text("ENDPOINT = '/v1/orders'\n", encoding="utf-8")
+
+    monkeypatch.delenv("NXD_EVAL_TERMINAL_WORKFLOW_ROUTE", raising=False)
+    assert checker._hard_coded_case_is_runner_rejected(tmp_path)
+
+    transform.write_text(
+        "from dlt.sources.rest_api import rest_api_resources\n"
+        "ENDPOINT_URL = 'http://127.0.0.1/v1/orders'\n"
+        "source = rest_api_resources({'client': {'base_url': ENDPOINT_URL}})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "NXD_EVAL_TERMINAL_WORKFLOW_ROUTE", "terminal_workflow_review_v1"
+    )
+    assert checker._hard_coded_case_is_runner_rejected(tmp_path)
+
+    transform.write_text(
+        transform.read_text(encoding="utf-8")
+        + "# api-source-endpoints was retained\n",
+        encoding="utf-8",
+    )
+    assert not checker._hard_coded_case_is_runner_rejected(tmp_path)
+
+
 def test_checker_rejects_missing_lifecycle_evidence(tmp_path: Path) -> None:
     trace = _trace(tmp_path)
     records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
@@ -317,3 +815,302 @@ def test_checker_scans_export_entries_for_secret_leaks(tmp_path: Path) -> None:
     result = _run_checker(tmp_path)
     assert result.returncode != 0
     assert "redaction/marker-in-export-entry" in result.stdout
+
+
+def test_transform_contract_rejects_other_hand_written_http_clients() -> None:
+    checker = _nex890_checker()
+    assert checker._nex_transform_contract_gaps({"transform/main.py": _TEMPLATE_TRANSFORM.encode()}) == []
+    # DLT paginator/auth configuration objects stay allowed.
+    configured = (
+        "from dlt.sources.helpers.rest_client.paginators import PageNumberPaginator\n"
+        "from dlt.sources.helpers.rest_client.auth import BearerTokenAuth\n"
+        + _TEMPLATE_TRANSFORM
+    )
+    assert checker._nex_transform_contract_gaps({"transform/main.py": configured.encode()}) == []
+    for addition in (
+        "import urllib3\n",
+        "import http.client\n",
+        "from http import client\n",
+        "from http.client import HTTPSConnection\n",
+        "import aiohttp\n",
+        "import socket\n",
+        "import pycurl\n",
+        "from dlt.sources.helpers import requests\n",
+        "from dlt.sources.helpers import rest_client\n",
+        "from dlt.sources.helpers.rest_client import RESTClient\n",
+        "from dlt.sources.helpers.rest_client.client import RESTClient\n",
+        "import dlt.sources.helpers.rest_client\n",
+        "def pages(client):\n    return client.paginate('/orders')\n",
+        "httpx = __import__('httpx')\n",
+    ):
+        gaps = checker._nex_transform_contract_gaps(
+            {"transform/main.py": (addition + _TEMPLATE_TRANSFORM).encode()}
+        )
+        assert "direct-http-client" in gaps, addition
+
+
+def test_transform_contract_requires_a_live_rest_connector() -> None:
+    checker = _nex890_checker()
+    returned = 'return rest_api_resources({"client": {"headers": _headers_from(secrets), "auth": token}})'
+    assert returned in _TEMPLATE_TRANSFORM
+    for replacement in (
+        # Dead branch.
+        "if False:\n        rest_api_resources({})\n    return []",
+        "if 0:\n        return rest_api_resources({})\n    return []",
+        # Result discarded or bound to a name nobody reads.
+        "rest_api_resources({})\n    return []",
+        "unused = rest_api_resources({})\n    return []",
+    ):
+        source = _TEMPLATE_TRANSFORM.replace(returned, replacement)
+        gaps = checker._nex_transform_contract_gaps({"transform/main.py": source.encode()})
+        assert "rest-connector-missing" in gaps, replacement
+    for replacement in (
+        "resources = rest_api_resources({})\n    return resources",
+        "pipeline.run(rest_api_resources({}))",
+        "yield from rest_api_resources({})",
+        "return [*rest_api_resources({})]",
+    ):
+        source = _TEMPLATE_TRANSFORM.replace(returned, replacement)
+        assert checker._nex_transform_contract_gaps({"transform/main.py": source.encode()}) == [], replacement
+
+
+def test_root_binding_treats_an_unresolvable_path_as_outside() -> None:
+    checker = _nex890_checker()
+    assert checker._nex_root_binding_mismatch("/ws/nex890-401\x00x", "/ws/nex890-401") == "outside"
+    assert checker._nex_root_binding_mismatch("nex890-401", "/ws/nex\x00") == "outside"
+
+
+# --- check_nex890 end to end -------------------------------------------------
+
+_NEX_WS = "/nex890-ws"
+_NEX_BASE_URL = "http://127.0.0.1:18080"
+_NEX_UA = "nexty-dlt-client/1.0"
+
+
+def _nex_profile(**overrides: str | None) -> bytes:
+    fields = {
+        "base_url": _NEX_BASE_URL,
+        "auth_type": "bearer",
+        "header_user_agent": _NEX_UA,
+        "credential_env": "NXD_EVAL_SOURCE_TOKEN",
+        "endpoint_orders": "/v1/orders",
+    }
+    fields.update(overrides)
+    lines = ["services:", "  - name: api-source", "    attributes:"]
+    for key, value in fields.items():
+        if value is not None:
+            lines += [f"      - key: {key}", f"        value: {value}", "        public: true"]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _nex_seal(envelope: dict) -> dict:
+    """Bind an envelope exactly as the runner does (see _nex_snapshot_hash_matches)."""
+    import hashlib
+
+    manifest = [
+        {"path": os.path.normpath(path), "sha256": hashlib.sha256(entry["content"]).hexdigest(), "mode": entry["mode"]}
+        for path, entry in sorted(envelope["files"].items())
+    ]
+    identifier = envelope["jsonrpc_id"]
+    binding = {
+        "jsonrpc_id": json.dumps([type(identifier).__name__, identifier], sort_keys=True, separators=(",", ":")),
+        "workflow": envelope["workflow"],
+        "root": os.path.normpath(envelope["root"]),
+        "generation": envelope.get("generation"),
+        "expected_base_url": envelope.get("expected_base_url"),
+        "files": manifest,
+    }
+    encoded = json.dumps(binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return {**envelope, "snapshot_sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def _nex_files(root: str, files: dict[str, bytes]) -> dict:
+    return {f"{root}/{path}": {"content": data, "mode": 0o644} for path, data in files.items()}
+
+
+def _nex890_evidence(
+    *,
+    verdicts: dict[str, str] | None = None,
+    transforms: dict[str, bytes] | None = None,
+    malformed_endpoint: str = "http://127.0.0.1:18080/v1/orders",
+    export_bytes: bytes | None = None,
+    drop_status: int | None = None,
+) -> tuple[list, list, dict, list]:
+    """A minimal complete NEX-890 evidence set that ``check_nex890`` passes."""
+    verdicts = verdicts or {}
+    transforms = transforms or {}
+    trace: list[dict] = []
+    observations: list[dict] = []
+    clock = iter(range(1_000, 10**9, 100))
+    ids = iter(range(1, 10**6))
+
+    def call(operation: str, workflow: str | None, arguments: dict, payload: dict, *,
+             root: str | None = None, reader: bool = False, during=None) -> dict:
+        number, start = next(ids), next(clock)
+        meta = {"operation": operation, "workflow": workflow}
+        if root is not None:
+            meta["root"] = root
+        request = {"direction": "request", "jsonrpc_id": number, "timestamp_monotonic_ns": start, **meta,
+                   "message": {"jsonrpc": "2.0", "id": number, "method": "tools/call",
+                               "params": {"name": operation, "arguments": arguments}}}
+        if reader:
+            request["synthetic"] = False
+        if during is not None:
+            during(start)
+        response = {"direction": "response", "jsonrpc_id": number, "timestamp_monotonic_ns": next(clock), **meta,
+                    "message": {"jsonrpc": "2.0", "id": number,
+                                "result": {"content": [{"type": "text", "text": json.dumps(payload)}]}}}
+        if reader:
+            response["synthetic"] = True
+        trace.extend([request, response])
+        return {"id": number}
+
+    def pages(start: int) -> None:
+        stamp = iter(range(start + 1, start + 99))
+        for page, rows in ((1, 10), (2, 10), (3, 3)):
+            observations.append({"timestamp_monotonic_ns": next(stamp), "path": "/v1/orders", "status": 200,
+                                 "authorized": True, "user_agent": _NEX_UA, "status_filter": None,
+                                 "page": page, "rows": rows, "total": 23, "pages": 3, "per_page": 10})
+        for page, rows in ((1, 10), (2, 6)):
+            observations.append({"timestamp_monotonic_ns": next(stamp), "path": "/v1/orders?status=paid", "status": 200,
+                                 "authorized": True, "user_agent": _NEX_UA, "status_filter": "paid",
+                                 "page": page, "rows": rows, "total": 16, "pages": 2, "per_page": 10})
+
+    def failing(status: int, path: str, agent: str, authorized: bool):
+        def emit(start: int) -> None:
+            if status != drop_status:
+                observations.append({"timestamp_monotonic_ns": start + 1, "path": path, "status": status,
+                                     "authorized": authorized, "user_agent": agent})
+        return emit
+
+    static = []
+    static_files = {
+        "malformed-endpoint-profile": {"infra-profile.yaml": _nex_profile(endpoint_orders=malformed_endpoint)},
+        "omitted-endpoint-profile": {"infra-profile.yaml": _nex_profile(endpoint_orders=None)},
+        "hard-coded-endpoint": {"transform/main.py": (
+            b"from dlt.sources.rest_api import rest_api_resources\n"
+            b"def source():\n"
+            b"    return rest_api_resources({'resources': [{'endpoint': {'path': '/v1/orders'}}]})\n"
+        )},
+    }
+    for case, files in static_files.items():
+        root = f"{_NEX_WS}/.eval-cases/{case}"
+        number = call("check_data_product", "__static__", {"definition": root}, {"outcome": "pass"})["id"]
+        static.append(_nex_seal({"jsonrpc_id": number, "workflow": "__static__", "root": root,
+                                 "generation": None, "expected_base_url": _NEX_BASE_URL,
+                                 "files": _nex_files(root, files)}))
+
+    profiles = {
+        "nex890-positive": _nex_profile(),
+        "nex890-401": _nex_profile(auth_type=None),
+        "nex890-403": _nex_profile(header_user_agent="wrong-agent/0.1"),
+        "nex890-404": _nex_profile(endpoint_orders="/v1/missing"),
+    }
+    during_validation = {
+        "nex890-positive": pages,
+        "nex890-401": failing(401, "/v1/orders", _NEX_UA, False),
+        "nex890-403": failing(403, "/v1/orders", "wrong-agent/0.1", True),
+        "nex890-404": failing(404, "/v1/missing", _NEX_UA, True),
+    }
+    diagnostic = {"operation": {"diagnostic": {"code": "validation/scratch_transform_failed", "phase": "scratch_transform"}}}
+    export_path = f"{_NEX_WS}/exports/nex890.zip"
+    snapshots: dict = {}
+    for workflow, profile in profiles.items():
+        root = f"{_NEX_WS}/{workflow}"
+
+        def advance(action: dict, payload: dict, during=None) -> dict:
+            return call("advance_workflow", workflow, {"workflow": workflow, "action": action}, payload,
+                        root=root, during=during)
+
+        advance({"type": "session_decision"}, {"next_actions": [{"action": "capture"}]})
+        capture = advance(
+            {"type": "capture", "parameters": {"authoring_root": root}},
+            {"requirements": [{"id": "review", "generation": 1, "review_input": {"retained_capture_root": "/state/r"}}]},
+        )
+        call("read_review_input", workflow, {"path": "/state/r", "operation": "list"}, {"entries": []},
+             root=root, reader=True)
+        advance(
+            {"type": "report_requirement", "parameters": {"requirement_id": "review",
+             "report": {"verdict": verdicts.get(workflow, "clear"), "findings": []}}},
+            {"next_actions": [{"action": "start_requirement", "requirement_id": "validation"}]},
+        )
+        validation = advance(
+            {"type": "start_requirement", "parameters": {"requirement_id": "validation"}},
+            {} if workflow == "nex890-positive" else diagnostic,
+            during=during_validation[workflow],
+        )
+        files = {"infra-profile.yaml": profile,
+                 "transform/main.py": transforms.get(workflow, _TEMPLATE_TRANSFORM.encode())}
+        common = {"workflow": workflow, "root": root, "generation": 1, "expected_base_url": _NEX_BASE_URL,
+                  "files": _nex_files(root, files)}
+        snapshots[workflow] = _nex_seal({**common, "jsonrpc_id": capture["id"]})
+        snapshots[workflow]["validation"] = _nex_seal({**common, "jsonrpc_id": validation["id"]})
+        if workflow == "nex890-positive":
+            advance({"type": "start_run"}, {"status": "published"}, during=pages)
+            call("inspect_run", workflow, {"run_id": "run-1"},
+                 {"run": {"run_id": "run-1", "definition_id": "sha256:" + "a" * 64, "workflow": workflow}})
+            call("resume_data_product", workflow, {"workflow": workflow}, {"semantic_endpoint": "local"})
+            call("run_semantic_query", workflow,
+                 {"measures": ["order_count"], "filters": [{"dimension": "status", "op": "=", "value": "paid"}]},
+                 {"row_count": 1, "rows": [[16]]})
+            call("export_data_product", workflow, {"destination": export_path}, {"archive_path": export_path})
+    snapshots["nex890-positive"]["static"] = static
+    if export_bytes is None:
+        buffer = __import__("io").BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("infra-profile.yaml", "credential_env: NXD_EVAL_SOURCE_TOKEN\n")
+        export_bytes = buffer.getvalue()
+    snapshots["nex890-positive"]["outputs"] = {export_path: {"content": export_bytes}}
+    return trace, observations, snapshots, [SECRET]
+
+
+def test_check_nex890_passes_a_complete_synthetic_run() -> None:
+    checker = _nex890_checker()
+    result = checker.check_nex890(*_nex890_evidence())
+    assert result["failures"] == []
+    assert result["passed"] is True
+    json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ({"drop_status": 401}, "wire/nex890-401/status-interval-bound"),
+        ({"verdicts": {"nex890-positive": "findings"}}, "review/nex890-positive/report-verdict-findings"),
+        ({"transforms": {"nex890-404": _TEMPLATE_TRANSFORM.encode() + b"# drift\n"}},
+         "transform/byte-identical-across-workflows"),
+        ({"transforms": {name: b"import urllib3\n" + _TEMPLATE_TRANSFORM.encode()
+                         for name in ("nex890-positive", "nex890-401", "nex890-403", "nex890-404")}},
+         "transform/dlt-profile-credential-contract/direct-http-client"),
+        ({"malformed_endpoint": "orders"}, "static/malformed-endpoint-profile"),
+        ({"export_bytes": b"PK\x03\x04 truncated"}, "export/frozen-output-redaction"),
+    ],
+)
+def test_check_nex890_fails_closed_on_each_mutation(mutation: dict, expected: str) -> None:
+    checker = _nex890_checker()
+    result = checker.check_nex890(*_nex890_evidence(**mutation))
+    assert result["passed"] is False
+    assert expected in result["failures"], result["failures"]
+
+
+def test_check_nex890_corrupt_deflate_member_is_a_check_failure() -> None:
+    checker = _nex890_checker()
+    buffer = __import__("io").BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("export.json", json.dumps({"rows": list(range(500))}))
+    data = bytearray(buffer.getvalue())
+    header = 30 + len("export.json")
+    data[header:header + 16] = b"\xff" * 16  # corrupt the deflate stream, keep the directory
+    result = checker.check_nex890(*_nex890_evidence(export_bytes=bytes(data)))
+    assert "export/frozen-output-redaction" in result["failures"]
+
+
+def test_check_nex890_nul_in_call_root_is_a_check_failure() -> None:
+    checker = _nex890_checker()
+    trace, observations, snapshots, markers = _nex890_evidence()
+    victim = next(r for r in trace if r.get("operation") == "read_review_input" and r["direction"] == "request")
+    victim["root"] = f"{_NEX_WS}/nex890-401\x00"
+    response = next(r for r in trace if r["direction"] == "response" and r["jsonrpc_id"] == victim["jsonrpc_id"])
+    response["root"] = victim["root"]
+    result = checker.check_nex890(trace, observations, snapshots, markers)
+    assert result["passed"] is False

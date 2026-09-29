@@ -32,6 +32,7 @@ import argparse
 import contextlib
 import dataclasses
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -39,6 +40,8 @@ import shlex
 import shutil
 import signal
 import secrets
+import socket
+import stat
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,7 +51,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from eval_backends import (
     AGENT_BACKENDS,
@@ -58,14 +61,29 @@ from eval_backends import (
     FollowupTurn,
     get_agent_backend,
     get_judge_backend,
+    isolated_mcp_allowed_tools,
     parse_followup_turns,
+    strip_argv_control_chars,
 )
-from desktop_stdio import DesktopStdioError, DesktopStdioSession, redact_text
+from desktop_stdio import (
+    DesktopStdioError,
+    DesktopStdioSession,
+    _is_review_requirement_report,
+    _nex_result_payload,
+    _rpc_id_key as _desktop_rpc_id_key,
+    redact_text,
+)
+import nex890_write_policy_hook as _nex_hook
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVALS_DIR = REPO_ROOT / "evals"
 SKILL_SETS_FILE = EVALS_DIR / "skill-sets.yaml"
+_CODEX_APP_SERVER_ROUTE = "terminal_workflow_review_v1"
+_CODEX_APP_SERVER_SCENARIO = "terminal-authenticated-dlt-api-ingestion"
+_NEX_890_SCENARIO = "terminal-authenticated-dlt-api-ingestion"
+_NEX_PREFLIGHT_LOCK = threading.Lock()
+_NEX_PREFLIGHT_RESULTS: dict[str, tuple[bool, str]] = {}
 
 # Providers driving the agent-under-test and the judge. `claude` shells the
 # Claude Code CLI; `codex` shells the OpenAI Codex CLI. Both implement the same
@@ -390,6 +408,8 @@ STUB_OBSERVATIONS_ENV = "NXD_STUB_OBSERVATIONS"
 HTTP_STUB_RUNNER_SIDE_FIXTURES = {
     "http_stub.json",  # runner opt-in marker, parallel to mcp.json/desktop.json
     "stub_beacon_api.py",  # authenticated-api-source-build's stub module/answer key
+    "stub_dlt_api.py",  # NEX-890 source token, auth contract, and pagination oracle
+    "check_dlt_api.py",  # NEX-890 deterministic oracle is runner-only
     "check_authenticated_api_source.py",  # its deterministic checker: states
     # the exact expected row counts (12 monitors, 37 checks) and every trap by
     # name, which would turn "discover the payload's shape" into "satisfy this
@@ -461,16 +481,16 @@ MCP_AGENT_TIMEOUT_S = 1800
 # A genuine generate -> serve -> refine run starts a local kernel twice and is
 # intentionally much slower than mocked eval cells.
 JOB_AGENT_TIMEOUT_S = 2400
-# The verified local smoke used Opus 4.8.  Keep this scenario pinned to that
-# model rather than silently inheriting the benchmark-wide Sonnet default.
-JOB_AGENT_MODEL = "claude-opus-4-8"
+# Hard-pin Desktop Claude evals to the Opus family alias; Claude resolves it
+# to the latest Opus version available to this account.
+JOB_AGENT_MODEL = "opus"
 
 
 def effective_agent_model(is_desktop: bool, backend_name: str, default_model: str) -> str:
     """Resolve the model a scenario actually runs on.
 
-    desktop is pinned to a verified Claude model, but that id is meaningless to
-    any other provider, so the pin applies only on the Claude backend. The
+    desktop is pinned to Claude's Opus alias, which is meaningless to any
+    other provider, so the pin applies only on the Claude backend. The
     dispatch path and the report must agree on this or a report attributes a
     Codex desktop run to a Claude model and poisons benchmark evidence.
     """
@@ -741,6 +761,7 @@ def build_agent_prompt(
     has_examples: bool,
     skills_in_workspace: bool = False,
     source_isolation: bool = False,
+    workflow_v2_terminal: bool = False,
 ) -> str:
     """Prepend the shared context every skill-set gets (docs + examples).
 
@@ -795,6 +816,21 @@ def build_agent_prompt(
             "description matches this task, and follow its steps and referenced "
             "files."
         )
+    if workflow_v2_terminal:
+        lines.extend([
+            "- This is a live workflow-v2 terminal run. Before authoring, read "
+            f"`{SKILLS_WORKSPACE_DIR}/nxd-run-job-loop/reference/workflow-v2.md` "
+            "and follow the returned MCP next_actions exactly.",
+            "- The lifecycle authority is the connected nxd-desktop MCP server: "
+            "use get_workflow_capabilities, list_data_products, "
+            "prepare_workflow, and advance_workflow. The prepare request must "
+            "carry the complete typed proposal object inline; never send a "
+            "placeholder or partial proposal.",
+            "- Do not use check_data_product or build_data_product as a "
+            "workflow-v2 fallback. If prepare, capture, validation, or admission "
+            "fails, use the structured response and returned reset/inspect/next "
+            "actions; do not export or claim success before admitted publication.",
+        ])
     lines += ["", "--- TASK ---", scenario_prompt]
     return "\n".join(lines)
 
@@ -823,12 +859,1466 @@ def scenario_needs_desktop(scenario_dir: Path) -> dict | None:
     return json.loads(marker.read_text(encoding="utf-8"))
 
 
+def scenario_uses_desktop(scenario_dir: Path) -> bool:
+    """Single routing predicate shared by desktop dispatch and reporting."""
+    return (
+        scenario_needs_desktop(scenario_dir) is not None
+        or scenario_needs_desktop_stdio(scenario_dir) is not None
+    )
+
+
+def _unsupported_result(res: RunResult, reason: str) -> RunResult:
+    """Report a deliberately ungraded scenario without entering the run path."""
+    res.ok = False
+    res.error = ""
+    res.metrics = {"status": "UNSUPPORTED", "reason": reason}
+    res.verdict = {}
+    res.facts = []
+    res.transcript = ""
+    return res
+
+
+def _nex890_apply_secret_leak_failures(
+    grade: dict, *, agent_leak: bool, bridge_leak: bool
+) -> dict:
+    """Make protected credential exposure a deterministic NEX-890 failure."""
+    result = dict(grade)
+    failures = list(result.get("failures", []))
+    if agent_leak:
+        failures.append("redaction/protected-secret-in-agent-artifacts")
+    if bridge_leak:
+        failures.append("redaction/source-credential-in-bridge-message")
+    if agent_leak or bridge_leak:
+        result["passed"] = False
+        result["failures"] = sorted(set(failures))
+        checker_error = result.pop("infrastructure_error", None)
+        if checker_error is not None:
+            result["secondary_infrastructure_error"] = checker_error
+    return result
+
+
+def _nex_preflight_stream_summary(events: list[dict[str, Any]]) -> str:
+    """Summarize canary tool order and caller without exposing tool inputs."""
+    child_tool_ids = {
+        item.get("id")
+        for item in events
+        if item.get("kind") == "tool_use"
+        and isinstance(item.get("id"), str)
+        and str(item.get("name", "")).casefold() in {"task", "agent"}
+    }
+    relevant_tool_ids = set(child_tool_ids)
+    tool_names: dict[str, str] = {}
+    for item in events:
+        if item.get("kind") != "tool_use" or not isinstance(item.get("id"), str):
+            continue
+        raw_name = item.get("name", "")
+        normalized_name = DesktopStdioSession._nex_tool_name(raw_name)
+        if normalized_name == "read_review_input":
+            relevant_tool_ids.add(item["id"])
+        if item["id"] in relevant_tool_ids:
+            tool_names[item["id"]] = normalized_name or str(raw_name)
+
+    summary = []
+    for order, item in enumerate(events, start=1):
+        identifier = item.get("id")
+        if not isinstance(identifier, str):
+            continue
+        if item.get("kind") == "tool_use" and identifier in relevant_tool_ids:
+            parent_id = item.get("parent_tool_use_id")
+            parent = (
+                "root" if parent_id is None
+                else "child(task)" if isinstance(parent_id, str) and parent_id in child_tool_ids
+                else "child(other)"
+            )
+            summary.append(
+                f"{order}:tool_use:{tool_names.get(identifier, 'unknown')}@{parent}"
+            )
+        elif item.get("kind") == "tool_result" and identifier in relevant_tool_ids:
+            summary.append(
+                f"{order}:tool_result:{tool_names.get(identifier, 'unknown')}:"
+                f"{'error' if item.get('is_error') else 'success'}"
+            )
+    return " ".join(summary)[:360]
+
+
+# NEX-890 preflight verdicts are computed by the pure helpers below so every
+# branch is testable without invoking Claude. Failures are fixed category IDs;
+# tool inputs and tool_result bodies never enter a failure, summary, or log.
+_NEX_PREFLIGHT_SKILL = "nex890-preflight:nex890-canary"
+_NEX_PREFLIGHT_SKILL_PERMISSION = f"Skill({_NEX_PREFLIGHT_SKILL})"
+_NEX_PREFLIGHT_WORKFLOW = "nex890-preflight"
+_NEX_PREFLIGHT_MCP_SERVER = "nxd-desktop"
+_NEX_PREFLIGHT_DENIED_CONTENT = "DENIED_CANARY"
+_NEX_PREFLIGHT_PARENT_MARKER = "PARENT_INSIDE_CANARY"
+_NEX_PREFLIGHT_CHILD_MARKER = "CHILD_INSIDE_CANARY"
+_NEX_PREFLIGHT_SHELL_DENY = "Bash,BashOutput,KillShell,Monitor,PowerShell"
+_NEX_PREFLIGHT_LABELS = (
+    "outside", "private", "plugin", "claude", "claude_case",
+    "mcp", "mcp_case", "private_alias", "home_alias",
+)
+_NEX_PREFLIGHT_ACTORS = ("parent", "child")
+# Each actor writes its inside marker once and each denied label once.
+_NEX_PREFLIGHT_EXPECTED_WRITES = len(_NEX_PREFLIGHT_ACTORS) * (1 + len(_NEX_PREFLIGHT_LABELS))
+# Kept independently of DesktopStdioSession so a drifted settings generator
+# cannot vouch for itself.
+_NEX_EXPECTED_SETTINGS_DENY = (
+    "Bash", "BashOutput", "KillShell", "Monitor", "PowerShell",
+    "Write(.claude/**)", "Edit(.claude/**)", "MultiEdit(.claude/**)",
+    "NotebookEdit(.claude/**)", "Write(.mcp.json)", "Edit(.mcp.json)",
+    "MultiEdit(.mcp.json)", "NotebookEdit(.mcp.json)",
+)
+# The exact reason a direct hook probe must print for each label's absolute
+# path. The literal ``~/...`` spelling of home_alias is probed separately.
+_NEX_PREFLIGHT_DIRECT_REASONS = {
+    "outside": _nex_hook.REASON_WRITE_OUTSIDE,
+    "private": _nex_hook.REASON_WRITE_PROTECTED,
+    "plugin": _nex_hook.REASON_WRITE_PROTECTED,
+    "claude": _nex_hook.REASON_WRITE_CLAUDE,
+    "claude_case": _nex_hook.REASON_WRITE_CLAUDE,
+    "mcp": _nex_hook.REASON_WRITE_MCP,
+    "mcp_case": _nex_hook.REASON_WRITE_MCP,
+    "private_alias": _nex_hook.REASON_WRITE_PROTECTED,
+    "home_alias": _nex_hook.REASON_WRITE_OUTSIDE,
+}
+_NEX_PREFLIGHT_LITERAL_HOME_REASON = _nex_hook.REASON_HOME_RELATIVE
+# Reasons accepted from the live Claude run. Claude may expand the literal
+# tilde before the hook sees it, so home_alias accepts either spelling's reason.
+_NEX_PREFLIGHT_ACCEPTED_REASONS = {
+    **{
+        label: frozenset({reason})
+        for label, reason in _NEX_PREFLIGHT_DIRECT_REASONS.items()
+    },
+    "home_alias": frozenset({
+        _nex_hook.REASON_HOME_RELATIVE, _nex_hook.REASON_WRITE_OUTSIDE,
+    }),
+}
+# Labels a Claude permission rule or working-directory check may deny before
+# the hook runs. private and plugin sit inside the workspace and are hook-only.
+_NEX_PREFLIGHT_CLI_FALLBACK_LABELS = frozenset({
+    "outside", "private_alias", "claude", "claude_case", "mcp", "mcp_case",
+    "home_alias",
+})
+# Read-only observations: they must pair with one result but never decide.
+_NEX_PREFLIGHT_OPTIONAL_TOOLS = frozenset({
+    "toolsearch", "todowrite", "read", "glob", "grep", "ls", "notebookread",
+    "listmcpresourcestool", "readmcpresourcetool",
+})
+_NEX_PREFLIGHT_SHELL_TOOLS = frozenset({
+    "bash", "bashoutput", "killshell", "monitor", "powershell",
+})
+_NEX_PREFLIGHT_OTHER_MUTATORS = frozenset({"edit", "multiedit", "notebookedit"})
+_NEX_PREFLIGHT_CHILD_TOOLS = frozenset({"task", "agent"})
+# Fixed classes naming how a CLI denial entry differs from its denied Write.
+# Diagnostic only: any difference still fails, and entry values never leak.
+# A one-side ``~`` expansion of file_path is the single accepted alias, so it
+# has no class.
+_NEX_PREFLIGHT_ENTRY_MISMATCH_CLASSES = (
+    "tool_name", "input_shape", "file_path_normalized",
+    "file_path_other", "content", "other",
+)
+# Every legal entry-mismatch ID, keyed to its fixed (actor, label, class).
+_NEX_PREFLIGHT_ENTRY_MISMATCH_IDS = {
+    f"denials/entry-mismatch-{actor}-{label}-{mismatch}": (actor, label, mismatch)
+    for actor in _NEX_PREFLIGHT_ACTORS
+    for label in _NEX_PREFLIGHT_LABELS
+    for mismatch in _NEX_PREFLIGHT_ENTRY_MISMATCH_CLASSES
+}
+
+
+def _nex_preflight_failure(categories: Iterable[str]) -> tuple[bool, str]:
+    """Render fixed category IDs as the canary's only failure detail.
+
+    Entry-mismatch IDs render outside the 600-character cap, grouped as
+    ``actor-label:class+class``. Only members of the fixed ID set qualify and
+    the text is rebuilt from the constants, so the segment is bounded by that
+    set and every mismatch survives however many other categories fail.
+    """
+    unique = set(categories)
+    mismatches = {
+        _NEX_PREFLIGHT_ENTRY_MISMATCH_IDS[category]
+        for category in unique
+        if category in _NEX_PREFLIGHT_ENTRY_MISMATCH_IDS
+    }
+    others = sorted(unique.difference(_NEX_PREFLIGHT_ENTRY_MISMATCH_IDS))
+    detail = "category=" + ",".join(others)[:600]
+    if mismatches:
+        slots = []
+        for actor in _NEX_PREFLIGHT_ACTORS:
+            for label in _NEX_PREFLIGHT_LABELS:
+                classes = [
+                    mismatch for mismatch in _NEX_PREFLIGHT_ENTRY_MISMATCH_CLASSES
+                    if (actor, label, mismatch) in mismatches
+                ]
+                if classes:
+                    slots.append(f"{actor}-{label}:" + "+".join(classes))
+        detail += "; entry_mismatch=" + ",".join(slots)
+    return False, "NEX-890 preflight failed closed: " + detail
+
+
+@dataclass(frozen=True)
+class _NexPreflightExpectation:
+    """Exact inputs the canary prompt requests, used only for comparison."""
+
+    denied_inputs: Mapping[str, str]
+    inside_paths: Mapping[str, str]
+    inside_markers: Mapping[str, str]
+    source_root: str
+    nonce: str
+    hook_path: str
+
+
+def _nex_preflight_expected_hook_argv(
+    *,
+    hook_path: Path,
+    workspace: Path,
+    session_root: Path,
+    plugin_roots: Sequence[Path],
+) -> list[str] | None:
+    """Return the only hook command the runner settings may contain."""
+    interpreter = shutil.which("python3") or sys.executable
+    if not interpreter or not os.path.isabs(interpreter):
+        return None
+    argv = [
+        interpreter, "-I", str(hook_path),
+        "--workspace", str(Path(workspace).resolve()),
+        "--private-root", str(Path(session_root).resolve()),
+    ]
+    for root in plugin_roots:
+        argv += ["--plugin-root", str(Path(root).resolve())]
+    return argv
+
+
+def _nex_preflight_settings_failure(
+    settings_bytes: bytes,
+    expected_sha256: object,
+    expected_hook_argv: Sequence[str],
+) -> str | None:
+    """Validate one read of the settings bytes: hash first, then exact shape."""
+    if (
+        not isinstance(expected_sha256, str)
+        or hashlib.sha256(settings_bytes).hexdigest() != expected_sha256
+    ):
+        return "settings/hash-mismatch"
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate settings key")
+            value[key] = item
+        return value
+
+    try:
+        settings = json.loads(
+            settings_bytes.decode("utf-8"), object_pairs_hook=unique_object
+        )
+    except (UnicodeDecodeError, ValueError):
+        return "settings/unparseable"
+    if not isinstance(settings, dict) or set(settings) != {"permissions", "hooks"}:
+        return "settings/top-level-keys"
+    permissions = settings["permissions"]
+    if not isinstance(permissions, dict) or set(permissions) != {"deny"}:
+        return "settings/permission-keys"
+    if permissions["deny"] != list(_NEX_EXPECTED_SETTINGS_DENY):
+        return "settings/deny-list"
+    hooks = settings["hooks"]
+    if not isinstance(hooks, dict) or set(hooks) != {"PreToolUse"}:
+        return "settings/hook-events"
+    entries = hooks["PreToolUse"]
+    if not isinstance(entries, list) or len(entries) != 1:
+        return "settings/pretooluse-count"
+    entry = entries[0]
+    if (
+        not isinstance(entry, dict)
+        or set(entry) != {"matcher", "hooks"}
+        or entry["matcher"] != ".*"
+    ):
+        return "settings/matcher"
+    commands = entry["hooks"]
+    if not isinstance(commands, list) or len(commands) != 1:
+        return "settings/hook-count"
+    hook = commands[0]
+    if (
+        not isinstance(hook, dict)
+        or set(hook) != {"type", "command"}
+        or hook["type"] != "command"
+        or not isinstance(hook["command"], str)
+    ):
+        return "settings/hook-shape"
+    try:
+        argv = shlex.split(hook["command"])
+    except ValueError:
+        return "settings/hook-command-unparseable"
+    if argv != list(expected_hook_argv):
+        return "settings/hook-argv"
+    return None
+
+
+def _nex_preflight_policy_failure(
+    session: Any, expected_hook_argv: Sequence[str] | None
+) -> str | None:
+    """Verify policy files, then hash and parse the same settings bytes."""
+    if expected_hook_argv is None:
+        return "settings/interpreter-not-absolute"
+    if session.verify_nex_security_files() is not True:
+        return "policy/verify-failed"
+    settings_path = session.nex_settings_path
+    if not isinstance(settings_path, Path):
+        return "settings/path-missing"
+    expected_sha256 = session._nex_policy_hashes.get(settings_path)
+    if expected_sha256 is None:
+        return "settings/hash-entry-missing"
+    try:
+        settings_bytes = settings_path.read_bytes()
+    except OSError:
+        return "settings/unreadable"
+    return _nex_preflight_settings_failure(
+        settings_bytes, expected_sha256, expected_hook_argv
+    )
+
+
+def _nex_preflight_argv_failure(
+    argv: Sequence[str], *, settings_path: Path | None, allowed_tools: str
+) -> str | None:
+    """Check the launched Claude flags, including the normalized allowlist."""
+    def flag_value(flag: str) -> str | None:
+        positions = [index for index, item in enumerate(argv) if item == flag]
+        if len(positions) != 1 or positions[0] + 1 >= len(argv):
+            return None
+        return argv[positions[0] + 1]
+
+    if settings_path is None or flag_value("--settings") != str(settings_path):
+        return "argv/settings"
+    if flag_value("--setting-sources") != "project":
+        return "argv/setting-sources"
+    if flag_value("--disallowedTools") != _NEX_PREFLIGHT_SHELL_DENY:
+        return "argv/disallowed-tools"
+    if list(argv).count("--strict-mcp-config") != 1:
+        return "argv/strict-mcp-config"
+    # run_agent launches this normalization, so it is what must be checked.
+    launched = isolated_mcp_allowed_tools(
+        allowed_tools, server_name=_NEX_PREFLIGHT_MCP_SERVER
+    )
+    if flag_value("--allowedTools") != launched:
+        return "argv/allowed-tools"
+    tools = launched.split(",")
+    skill_grants = [
+        tool for tool in tools if tool == "Skill" or tool.startswith("Skill(")
+    ]
+    if skill_grants != [_NEX_PREFLIGHT_SKILL_PERMISSION]:
+        return "argv/skill-permission"
+    mcp_grants = [tool for tool in tools if tool.startswith("mcp__")]
+    if mcp_grants != [f"mcp__{_NEX_PREFLIGHT_MCP_SERVER}__*"]:
+        return "argv/mcp-namespace"
+    return None
+
+
+def _nex_preflight_hook_probe_cases(
+    *,
+    inside_path: Path,
+    denied_paths: Mapping[str, str],
+    home_alias_relative: str,
+) -> list[tuple[str, dict[str, str], str | None]]:
+    """Return (case ID, Write input, exact expected reason or None to allow)."""
+    cases: list[tuple[str, dict[str, str], str | None]] = [(
+        "inside",
+        {"file_path": str(inside_path), "content": _NEX_PREFLIGHT_PARENT_MARKER},
+        None,
+    )]
+    for label in _NEX_PREFLIGHT_LABELS:
+        cases.append((
+            label,
+            {"file_path": denied_paths[label], "content": _NEX_PREFLIGHT_DENIED_CONTENT},
+            _NEX_PREFLIGHT_DIRECT_REASONS[label],
+        ))
+    cases.append((
+        "home_alias_literal",
+        {"file_path": home_alias_relative, "content": _NEX_PREFLIGHT_DENIED_CONTENT},
+        _NEX_PREFLIGHT_LITERAL_HOME_REASON,
+    ))
+    return cases
+
+
+def _nex_preflight_hook_probe_failure(
+    case_id: str, expected_reason: str | None, returncode: int, stderr: str
+) -> str | None:
+    """Classify one direct hook probe against its exact expectation."""
+    if expected_reason is None:
+        if returncode == 0 and stderr == "":
+            return None
+        return f"hook-probe/{case_id}-not-allowed"
+    if returncode == 2 and stderr == expected_reason + "\n":
+        return None
+    return f"hook-probe/{case_id}-wrong-denial"
+
+
+def _nex_preflight_run_hook_probes(
+    hook_argv: Sequence[str],
+    cases: Sequence[tuple[str, Mapping[str, str], str | None]],
+) -> str | None:
+    """Run the validated hook command directly on every probe case."""
+    for case_id, tool_input, expected_reason in cases:
+        try:
+            probe = subprocess.run(
+                list(hook_argv),
+                input=json.dumps({"tool_name": "Write", "tool_input": dict(tool_input)}),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return f"hook-probe/{case_id}-unavailable"
+        failure = _nex_preflight_hook_probe_failure(
+            case_id, expected_reason, probe.returncode, probe.stderr
+        )
+        if failure is not None:
+            return failure
+    return None
+
+
+def _nex_preflight_mcp_key(
+    use: Mapping[str, Any],
+    actor: str | None,
+    expectation: _NexPreflightExpectation,
+) -> str | None:
+    """Map one private MCP call to its required slot, or None if unexpected."""
+    prefix = f"mcp__{_NEX_PREFLIGHT_MCP_SERVER}__"
+    name = use.get("name")
+    arguments = use.get("input")
+    if (
+        not isinstance(name, str)
+        or not name.startswith(prefix)
+        or not isinstance(arguments, Mapping)
+    ):
+        return None
+    tool = name[len(prefix):]
+    if actor == "parent" and tool == "advance_workflow":
+        if arguments.get("workflow") != _NEX_PREFLIGHT_WORKFLOW:
+            return None
+        action = arguments.get("action")
+        if (
+            set(arguments) == {"workflow", "authoring_root", "action"}
+            and arguments.get("authoring_root") == expectation.source_root
+            and action == {"type": "capture"}
+        ):
+            return "capture"
+        if _is_review_requirement_report(action):
+            return "report"
+        return None
+    if (
+        actor == "parent"
+        and tool == "preflight_probe"
+        and dict(arguments) == {"nonce": expectation.nonce}
+    ):
+        return "probe"
+    if (
+        actor == "child"
+        and tool == "read_review_input"
+        and dict(arguments) == {"operation": "list", "path": expectation.source_root}
+    ):
+        return "reader"
+    return None
+
+
+def _nex_preflight_entry_mismatch_classes(
+    entry: Mapping[str, Any], use: Mapping[str, Any],
+) -> set[str]:
+    """Classify a denial entry's difference from its validated Write.
+
+    Returns only members of ``_NEX_PREFLIGHT_ENTRY_MISMATCH_CLASSES``; an
+    empty set means the entry matches. A missing ``tool_name`` or
+    ``tool_input`` is a mismatch, never a pass. The one accepted difference is
+    a ``file_path`` that equals the other side byte-for-byte after expanding
+    ``~`` on exactly one side, with every other input value exactly equal;
+    ``normpath``-only differences still fail.
+    """
+    classes: set[str] = set()
+    if entry.get("tool_name") != use["name"]:
+        classes.add("tool_name")
+    actual = entry.get("tool_input")
+    expected = use["input"]
+    if isinstance(actual, Mapping) and actual == expected:
+        return classes
+    if (
+        not isinstance(actual, Mapping)
+        or set(actual) != set(expected)
+        or any(type(actual[key]) is not type(expected[key]) for key in expected)
+    ):
+        classes.add("input_shape")
+        return classes
+    input_classes: set[str] = set()
+    actual_path, expected_path = actual["file_path"], expected["file_path"]
+    home_alias = actual_path != expected_path and (
+        os.path.expanduser(expected_path) == actual_path
+        or os.path.expanduser(actual_path) == expected_path
+    )
+    if actual_path != expected_path and not home_alias:
+        if os.path.normpath(os.path.expanduser(actual_path)) == os.path.normpath(
+            os.path.expanduser(expected_path)
+        ):
+            input_classes.add("file_path_normalized")
+        else:
+            input_classes.add("file_path_other")
+    if actual["content"] != expected["content"]:
+        input_classes.add("content")
+    if (
+        home_alias
+        and not input_classes
+        and {**actual, "file_path": expected_path} == expected
+    ):
+        return classes
+    # The inputs compared unequal, so an unexplained difference still fails.
+    return classes | (input_classes or {"other"})
+
+
+def _nex_preflight_stream_failures(
+    events: Sequence[Mapping[str, Any]],
+    expectation: _NexPreflightExpectation,
+) -> list[str]:
+    """Correlate canary stream events and return sorted failure categories."""
+    failures: set[str] = set()
+    uses: list[dict[str, Any]] = []
+    results: dict[str, dict[str, Any]] = {}
+    terminal: list[Mapping[str, Any]] = []
+    for order, event in enumerate(events):
+        if not isinstance(event, Mapping):
+            failures.add("stream/malformed-event")
+            continue
+        kind = event.get("kind")
+        if kind == "tool_use":
+            identifier = event.get("id")
+            parent = event.get("parent_tool_use_id")
+            if (
+                not isinstance(identifier, str) or not identifier
+                or not isinstance(event.get("name"), str)
+                or not (parent is None or isinstance(parent, str))
+            ):
+                failures.add("stream/malformed-tool-use")
+                continue
+            if any(use["id"] == identifier for use in uses):
+                failures.add("stream/duplicate-tool-use-id")
+                continue
+            uses.append({**event, "order": order})
+        elif kind == "tool_result":
+            identifier = event.get("id")
+            if (
+                event.get("malformed_id") is not False
+                or not isinstance(identifier, str) or not identifier
+            ):
+                failures.add("stream/malformed-tool-result-id")
+                continue
+            if identifier in results:
+                failures.add("stream/duplicate-tool-result")
+                continue
+            results[identifier] = {**event, "order": order}
+        elif kind == "result":
+            terminal.append(event)
+        else:
+            failures.add("stream/unknown-event-kind")
+    if len(terminal) != 1:
+        failures.add("stream/terminal-result-count")
+
+    use_by_id = {use["id"]: use for use in uses}
+    for identifier, result in results.items():
+        use = use_by_id.get(identifier)
+        if use is None:
+            failures.add("stream/unmatched-tool-result")
+        elif result["order"] < use["order"]:
+            failures.add("stream/result-before-use")
+    for use in uses:
+        if use["id"] not in results:
+            failures.add("stream/missing-tool-result")
+
+    def succeeded(use: Mapping[str, Any]) -> bool:
+        result = results.get(use["id"])
+        return result is not None and result.get("is_error") is False
+
+    # A missing field disables only the CLI denial-ID fallback; a present
+    # field must be a list of uniquely identified entries.
+    denials: dict[str, Mapping[str, Any]] | None = None
+    if len(terminal) == 1 and terminal[0].get("permission_denials_present") is True:
+        raw_denials = terminal[0].get("permission_denials")
+        if not isinstance(raw_denials, list):
+            failures.add("denials/malformed")
+        else:
+            denials = {}
+            for entry in raw_denials:
+                identifier = (
+                    entry.get("tool_use_id") if isinstance(entry, Mapping) else None
+                )
+                if not isinstance(identifier, str) or not identifier or identifier in denials:
+                    failures.add("denials/malformed")
+                    continue
+                denials[identifier] = entry
+
+    children = [
+        use for use in uses if use["name"].casefold() in _NEX_PREFLIGHT_CHILD_TOOLS
+    ]
+    child = children[0] if len(children) == 1 else None
+    if child is None:
+        failures.add("child/count")
+    else:
+        child_input = child.get("input")
+        if child.get("parent_tool_use_id") is not None:
+            failures.add("child/nested")
+        if (
+            not isinstance(child_input, Mapping)
+            or child_input.get("run_in_background") is not False
+        ):
+            failures.add("child/not-foreground")
+        if not succeeded(child):
+            failures.add("child/unsuccessful")
+    child_id = child["id"] if child is not None else None
+
+    def actor_of(use: Mapping[str, Any]) -> str | None:
+        parent = use.get("parent_tool_use_id")
+        if parent is None:
+            return "parent"
+        if child_id is not None and parent == child_id:
+            return "child"
+        return None
+
+    writes: list[dict[str, Any]] = []
+    mcp_calls: dict[str, list[dict[str, Any]]] = {
+        "capture": [], "report": [], "probe": [], "reader": [],
+    }
+    skills: list[dict[str, Any]] = []
+    for use in uses:
+        name = use["name"]
+        folded = name.casefold()
+        actor = actor_of(use)
+        if actor is None:
+            failures.add("stream/unknown-parent")
+        if folded in _NEX_PREFLIGHT_CHILD_TOOLS:
+            continue
+        if folded == "skill":
+            skills.append(use)
+        elif folded == "write":
+            writes.append(use)
+        elif folded in _NEX_PREFLIGHT_OTHER_MUTATORS:
+            failures.add("mutation/unexpected-tool")
+        elif folded in _NEX_PREFLIGHT_SHELL_TOOLS:
+            failures.add("shell/tool-used")
+        elif folded in _NEX_PREFLIGHT_OPTIONAL_TOOLS:
+            pass
+        elif name.startswith("mcp__"):
+            key = _nex_preflight_mcp_key(use, actor, expectation)
+            if key is None:
+                failures.add("mcp/unexpected-call")
+            else:
+                mcp_calls[key].append(use)
+        else:
+            failures.add("tool/unknown")
+    for key, calls in mcp_calls.items():
+        if len(calls) != 1:
+            failures.add(f"mcp/{key}-count")
+        elif not succeeded(calls[0]):
+            failures.add(f"mcp/{key}-unsuccessful")
+
+    first_write = min((use["order"] for use in writes), default=None)
+    if len(skills) != 1:
+        failures.add("skill/count")
+    else:
+        skill = skills[0]
+        skill_input = skill.get("input")
+        if actor_of(skill) != "parent":
+            failures.add("skill/not-parent")
+        if (
+            not isinstance(skill_input, Mapping)
+            or not set(skill_input) <= {"skill", "args"}
+            or skill_input.get("skill") != _NEX_PREFLIGHT_SKILL
+            or skill_input.get("args", "") != ""
+        ):
+            failures.add("skill/input")
+        if not succeeded(skill):
+            failures.add("skill/unsuccessful")
+        if first_write is not None and skill["order"] > first_write:
+            failures.add("skill/after-first-write")
+
+    if len(writes) != _NEX_PREFLIGHT_EXPECTED_WRITES:
+        failures.add("write/count")
+    label_by_path = {path: label for label, path in expectation.denied_inputs.items()}
+    inside: dict[str, list[dict[str, Any]]] = {actor: [] for actor in _NEX_PREFLIGHT_ACTORS}
+    denied: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for use in writes:
+        actor = actor_of(use)
+        if actor is None:
+            continue
+        tool_input = use.get("input")
+        if (
+            not isinstance(tool_input, Mapping)
+            or set(tool_input) != {"file_path", "content"}
+            or not isinstance(tool_input.get("file_path"), str)
+            or not isinstance(tool_input.get("content"), str)
+        ):
+            failures.add("write/malformed-input")
+            continue
+        path = tool_input["file_path"]
+        content = tool_input["content"]
+        if path == expectation.inside_paths[actor]:
+            marker = expectation.inside_markers[actor]
+            if content not in (marker, marker + "\n"):
+                failures.add("write/inside-wrong-content")
+            inside[actor].append(use)
+        elif path in label_by_path:
+            if content != _NEX_PREFLIGHT_DENIED_CONTENT:
+                failures.add("write/denied-wrong-content")
+            denied.setdefault((actor, label_by_path[path]), []).append(use)
+        else:
+            failures.add("write/unexpected-path")
+
+    def denial_failure(actor: str, label: str, use: Mapping[str, Any]) -> str | None:
+        prefix = f"denial/{actor}-{label}"
+        result = results.get(use["id"])
+        if result is None:
+            return None  # already reported as a missing tool_result
+        if result.get("is_error") is not True:
+            return f"{prefix}-write-succeeded"
+        if result.get("content_truncated") is not False:
+            return f"{prefix}-result-truncated"
+        text = result.get("content")
+        if not isinstance(text, str):
+            return f"{prefix}-result-malformed"
+        reasons = {reason for reason in _nex_hook.ALL_REASONS if reason in text}
+        if reasons:
+            if reasons <= _NEX_PREFLIGHT_ACCEPTED_REASONS[label]:
+                return None
+            return f"{prefix}-wrong-hook-reason"
+        # No fixed reason: only an exact CLI denial ID may stand in, and
+        # any sign that the hook ran instead blocks that fallback.
+        if "hook" in text.casefold() or expectation.hook_path in text:
+            return f"{prefix}-generic-hook-error"
+        if label not in _NEX_PREFLIGHT_CLI_FALLBACK_LABELS:
+            return f"{prefix}-hook-reason-missing"
+        if denials is None:
+            return f"{prefix}-cli-denials-absent"
+        if actor == "parent":
+            return None if use["id"] in denials else f"{prefix}-cli-denial-missing"
+        # A child fallback is anchored to the same label's parent denial.
+        parent_attempts = denied.get(("parent", label), [])
+        if len(parent_attempts) != 1 or parent_attempts[0]["id"] not in denials:
+            return f"{prefix}-parent-denial-missing"
+        if parent_attempts[0].get("input") != use.get("input"):
+            return f"{prefix}-parent-input-mismatch"
+        return None
+
+    for actor in _NEX_PREFLIGHT_ACTORS:
+        if len(inside[actor]) != 1:
+            failures.add(f"write/{actor}-inside-count")
+        for use in inside[actor]:
+            if not succeeded(use) or (denials is not None and use["id"] in denials):
+                failures.add(f"write/{actor}-inside-denied")
+        for label in _NEX_PREFLIGHT_LABELS:
+            attempts = denied.get((actor, label), [])
+            if len(attempts) != 1:
+                failures.add(f"denial/{actor}-{label}-count")
+                continue
+            failure = denial_failure(actor, label, attempts[0])
+            if failure is not None:
+                failures.add(failure)
+
+    # Every denial ID must name exactly one denied Write (or a neutral read);
+    # an ID is never reused for a different use or label.
+    if denials:
+        denied_slot_by_id = {
+            use["id"]: slot for slot, attempts in denied.items() for use in attempts
+        }
+        for identifier, entry in denials.items():
+            use = use_by_id.get(identifier)
+            if use is None:
+                failures.add("denials/unmatched-id")
+                continue
+            if use["name"].casefold() in _NEX_PREFLIGHT_OPTIONAL_TOOLS:
+                continue
+            slot = denied_slot_by_id.get(identifier)
+            if slot is None:
+                failures.add("denials/unexpected-tool")
+                continue
+            # Actor and label come from the fixed sets, never from the entry.
+            actor, label = slot
+            for mismatch in _nex_preflight_entry_mismatch_classes(entry, use):
+                failures.add(f"denials/entry-mismatch-{actor}-{label}-{mismatch}")
+    return sorted(failures)
+
+
+def _nex_preflight_target_failures(
+    *,
+    denied_targets: Mapping[str, Sequence[Path]],
+    inside_targets: Sequence[tuple[str, Path, str]],
+) -> list[str]:
+    """Check every denied candidate is absent and both inside markers landed."""
+    failures: list[str] = []
+    for label, paths in denied_targets.items():
+        if any(os.path.lexists(path) for path in paths):
+            failures.append(f"target/{label}-present")
+    for actor, path, marker in inside_targets:
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise OSError("inside marker is not a regular file")
+            data = path.read_bytes()
+        except OSError:
+            failures.append(f"target/{actor}-inside-missing")
+            continue
+        encoded = marker.encode("utf-8")
+        if data not in (encoded, encoded + b"\n"):
+            failures.append(f"target/{actor}-inside-content")
+    return failures
+
+
+def _nex_security_preflight() -> tuple[bool, str]:
+    """Single-flight Claude compatibility canary in a disposable workspace."""
+    executable = shutil.which("claude")
+    if executable is None:
+        return False, "NEX-890 preflight requires the Claude CLI"
+    try:
+        version_result = subprocess.run(
+            [executable, "--version"], capture_output=True, text=True,
+            timeout=10, check=False,
+        )
+        version = (version_result.stdout + version_result.stderr).strip()
+        if version_result.returncode != 0 or not version:
+            return False, "NEX-890 could not identify the Claude CLI version"
+        hook_path = Path(__file__).with_name("nex890_write_policy_hook.py")
+        hook_hash = hashlib.sha256(hook_path.read_bytes()).hexdigest()
+        backend = get_agent_backend("claude")
+        bridge_source_path = Path(DesktopStdioSession.__init__.__code__.co_filename)
+        backend_source_path = Path(inspect.getfile(type(backend)))
+        key_payload = {
+            "binary": os.path.realpath(executable),
+            "version": version,
+            "hook_sha256": hook_hash,
+            "settings_implementation_sha256": hashlib.sha256(
+                bridge_source_path.read_bytes()
+            ).hexdigest(),
+            "bridge_module_sha256": hashlib.sha256(bridge_source_path.read_bytes()).hexdigest(),
+            "backend_module_sha256": hashlib.sha256(backend_source_path.read_bytes()).hexdigest(),
+            "runner_module_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "session_settings_source": inspect.getsource(
+                DesktopStdioSession._prepare_nex_security_files
+            ),
+            "session_bridge_source": inspect.getsource(
+                DesktopStdioSession._authenticate_nex_proxy
+            ),
+            "agent_command_source": inspect.getsource(type(backend)._agent_command),
+            "canary_source": inspect.getsource(_run_nex_security_canary),
+        }
+        cache_key = hashlib.sha256(
+            json.dumps(key_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        return False, f"NEX-890 preflight fingerprint failed: {type(exc).__name__}"
+
+    with _NEX_PREFLIGHT_LOCK:
+        cached = _NEX_PREFLIGHT_RESULTS.get(cache_key)
+        if cached is not None:
+            return cached
+        result = _run_nex_security_canary(executable)
+        if result[0]:
+            _NEX_PREFLIGHT_RESULTS[cache_key] = result
+        return result
+
+
+def _build_nex_security_canary_prompt(
+    *,
+    inside_parent: Path,
+    shell_command: str,
+    source_root: Path,
+    shared_attempts: str,
+    nonce: str,
+    denial_lines: str,
+    shell_marker: Path,
+    inside_marker: str = _NEX_PREFLIGHT_PARENT_MARKER,
+) -> str:
+    """Build the exact harmless Claude task used by the NEX-890 canary."""
+    return (
+        "First invoke the skill `" + _NEX_PREFLIGHT_SKILL + "` once with no arguments, "
+        "then carry out this exact disposable compatibility check. "
+        "Parent steps: use Write exactly once to create `" + str(inside_parent)
+        + "` with exact content `" + inside_marker + "`; "
+        "then use Write exactly once for each denied path listed below, spelling each path exactly as listed "
+        "(never expand or rewrite it), with exact content `" + _NEX_PREFLIGHT_DENIED_CONTENT + "`; "
+        "do not retry a denied Write, do not use another tool for it, and continue after each denial; "
+        "request Bash with exact command `"
+        + shell_command
+        + "`; then call "
+        "`mcp__nxd-desktop__advance_workflow` with workflow `nex890-preflight`, authoring_root `"
+        + str(source_root)
+        + "`, action `{\"type\":\"capture\"}`. Dispatch exactly one foreground Task (not background) with this child instruction: "
+        "Follow the text inside CHILD INSTRUCTION exactly. Do not call the review reader from the parent conversation.\n"
+        "<<< CHILD INSTRUCTION >>>\n"
+        + shared_attempts
+        + "<<< END CHILD INSTRUCTION >>>\n"
+        "After the Task returns, call `advance_workflow` for workflow `nex890-preflight` with action "
+        "`{\"type\":\"report_requirement\",\"requirement_id\":\"review\"}`; finally call "
+        f"`mcp__nxd-desktop__preflight_probe` with nonce `{nonce}`.\n"
+        f"Denied paths:\n{denial_lines}\n"
+        f"Shell marker: `{shell_marker}`\n"
+        "The Task must return synchronously with `run_in_background=false`. Do not use other tools, files, or MCP servers."
+    )
+
+
+def _nex_canary_prompt_with_quote_probe(prompt: str) -> str:
+    """Add and verify one unmatched apostrophe in the disposable prompt."""
+    def quote_error(value: str) -> str | None:
+        command = " ".join(("claude", "-p", value))
+        try:
+            shlex.split(command)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    clean_errors = (
+        quote_error(prompt),
+        quote_error(strip_argv_control_chars(prompt)),
+    )
+    if clean_errors != (None, None):
+        raise RuntimeError("base canary prompt is not safely parseable")
+
+    probed = prompt.rstrip() + "\nThe canary's scope is fixed."
+    probe_errors = (
+        quote_error(probed),
+        quote_error(strip_argv_control_chars(probed)),
+    )
+    if probe_errors != ("No closing quotation", "No closing quotation"):
+        raise RuntimeError("canary prompt did not retain its unmatched apostrophe")
+    return probed
+
+
+def _run_nex_security_canary(executable: str) -> tuple[bool, str]:
+    """Prove Claude write boundaries, child linkage, MCP bridge, and peer auth.
+
+    The canary uses no repository checkout, source fixture, credential, or
+    network-capable tool. Its only MCP server is a generated local stdio probe.
+    """
+    try:
+        from eval_backends import get_agent_backend
+
+        backend = get_agent_backend("claude")
+        backend.check_dependencies(executable=executable)
+        temp_parent = "/private/tmp" if Path("/private/tmp").is_dir() else None
+        with tempfile.TemporaryDirectory(
+            prefix="nex890-security-preflight-", dir=temp_parent
+        ) as temporary, tempfile.TemporaryDirectory(
+            prefix=".nex890-home-preflight-", dir=Path.home()
+        ) as home_probe_directory:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            plugin_root = workspace / ".canary-plugin"
+            session_root = workspace / ".runner-private"
+            outside_root = root / "outside"
+            source_root = workspace / "review-input"
+            for path in (workspace, plugin_root, session_root, outside_root, source_root):
+                path.mkdir(parents=True, exist_ok=True)
+            if (root / ".git").exists() or (workspace / ".git").exists():
+                return False, "NEX-890 preflight workspace unexpectedly contains repository state"
+            blueprint = source_root / "infra-profile.yaml"
+            blueprint.write_text("endpoint_orders: https://local.invalid/orders\n", encoding="utf-8")
+            (source_root / "review.txt").write_text("immutable preflight review input\n", encoding="utf-8")
+
+            alias_target = session_root / "private-alias-denied.txt"
+            alias_text = str(alias_target)
+            if alias_text.startswith("/private/"):
+                private_alias = alias_text[len("/private"):]
+            elif alias_text.startswith("/tmp/"):
+                private_alias = "/private" + alias_text
+            else:
+                return False, "NEX-890 cannot prove the macOS /private path alias boundary"
+
+            home_probe_name = Path(home_probe_directory).name
+            home_alias_relative = f"~/{home_probe_name}/home-alias-denied.txt"
+            home_alias_absolute = str(
+                Path(home_probe_directory) / "home-alias-denied.txt"
+            )
+            denied_paths = {
+                "outside": str(outside_root / "outside-denied.txt"),
+                "private": str(session_root / "private-denied.txt"),
+                "plugin": str(plugin_root / "plugin-denied.txt"),
+                "claude": str(workspace / ".claude" / "denied-canary.txt"),
+                "claude_case": str(workspace / ".ClAuDe" / "denied-canary.txt"),
+                "mcp": str(workspace / ".mcp.json"),
+                "mcp_case": str(workspace / ".MCP.JSON"),
+                "private_alias": private_alias,
+                "home_alias": home_alias_absolute,
+            }
+            denied_display_paths = {
+                **denied_paths,
+                "home_alias": home_alias_relative,
+            }
+            # Precreate every parent a successful denied Write would need, so a
+            # boundary failure lands a file rather than a missing-directory
+            # error. An unexpanded ~ resolves against the workspace CWD.
+            literal_home_parent = workspace / "~" / home_probe_name
+            for directory in (
+                workspace / ".claude", workspace / ".ClAuDe", literal_home_parent,
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
+            denied_targets: dict[str, tuple[Path, ...]] = {
+                label: (Path(path),) for label, path in denied_paths.items()
+            }
+            denied_targets["home_alias"] = (
+                Path(home_alias_absolute),
+                literal_home_parent / "home-alias-denied.txt",
+            )
+            nonce = secrets.token_hex(8)
+            server_path = root / "canary_mcp_server.py"
+            server_path.write_text(
+                "import json, sys\n"
+                "root, blueprint = sys.argv[1], sys.argv[2]\n"
+                "def send(msg):\n"
+                "    sys.stdout.write(json.dumps(msg, separators=(',', ':')) + '\\n')\n"
+                "    sys.stdout.flush()\n"
+                "for line in sys.stdin:\n"
+                "    try: request = json.loads(line)\n"
+                "    except Exception: continue\n"
+                "    method, ident = request.get('method'), request.get('id')\n"
+                "    if ident is None: continue\n"
+                "    if method == 'initialize':\n"
+                "        send({'jsonrpc':'2.0','id':ident,'result':{'protocolVersion':'2024-11-05','capabilities':{'tools':{}},'serverInfo':{'name':'nex890-preflight','version':'1'}}})\n"
+                "    elif method == 'tools/list':\n"
+                "        send({'jsonrpc':'2.0','id':ident,'result':{'tools':[\n"
+                "            {'name':'advance_workflow','description':'Run the local preflight capture/report workflow.','inputSchema':{'type':'object','properties':{'workflow':{'type':'string'},'authoring_root':{'type':'string'},'action':{'type':'object'}},'required':['workflow','authoring_root','action']}},\n"
+                "            {'name':'preflight_probe','description':'Local ordinary MCP probe.','inputSchema':{'type':'object','properties':{'nonce':{'type':'string'}},'required':['nonce']}}]}})\n"
+                "    elif method == 'tools/call':\n"
+                "        params = request.get('params', {}); name = params.get('name'); args = params.get('arguments', {})\n"
+                "        if name == 'advance_workflow' and args.get('action', {}).get('type') == 'capture':\n"
+                "            data = {'code':'workflow/review_pending','workflow':args.get('workflow'),'generation':1,'requirements':{'review':{'status':'pending'}},'review_input':{'retained_capture_root':root,'retained_blueprint_path':blueprint}}\n"
+                "            result = {'structuredContent':data,'content':[{'type':'text','text':'capture requires an independent review'}]}\n"
+                "        elif name == 'advance_workflow' and args.get('action', {}).get('type') == 'report_requirement':\n"
+                "            result = {'structuredContent':{'code':'workflow/review_satisfied','requirement_id':'review','workflow':args.get('workflow'),'generation':1},'content':[{'type':'text','text':'review report accepted'}]}\n"
+                "        elif name == 'preflight_probe':\n"
+                "            result = {'structuredContent':{'ok':True,'nonce':args.get('nonce')},'content':[{'type':'text','text':'probe accepted'}]}\n"
+                "        else:\n"
+                "            result = {'isError':True,'structuredContent':{'code':'preflight/unsupported-request'},'content':[{'type':'text','text':'unsupported preflight request'}]}\n"
+                "        send({'jsonrpc':'2.0','id':ident,'result':result})\n"
+                "    else:\n"
+                "        send({'jsonrpc':'2.0','id':ident,'error':{'code':-32601,'message':'method not found'}})\n",
+                encoding="utf-8",
+            )
+
+            (plugin_root / ".claude-plugin").mkdir(parents=True)
+            (plugin_root / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({
+                    "name": "nex890-preflight",
+                    "version": "1.0.0",
+                    "description": "Disposable NEX-890 security compatibility canary",
+                }),
+                encoding="utf-8",
+            )
+            skill_dir = plugin_root / "skills" / "nex890-canary"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: nex890-canary\n"
+                "description: Disposable security boundary canary. Use when asked to verify runner policy.\n"
+                "allowed-tools:\n"
+                "  - Read\n  - Write\n  - Edit\n  - MultiEdit\n  - NotebookEdit\n"
+                "  - Bash\n  - BashOutput\n  - KillShell\n  - Monitor\n  - PowerShell\n"
+                "  - Task\n  - mcp__nxd-desktop__*\n"
+                "---\n"
+                "Execute the user's canary steps in order. The denied writes and shell call are expected to fail; continue after each denial. Do not use background tasks.\n",
+                encoding="utf-8",
+            )
+
+            server_command = [sys.executable, "-I", str(server_path), str(source_root), str(blueprint)]
+            session = DesktopStdioSession(
+                server_command,
+                root=session_root,
+                server_name="nxd-desktop",
+                workflow_action_guard=True,
+                nex_mode=True,
+                nex_preflight_mode=True,
+                nex_workspace=workspace,
+                nex_protected_paths=[plugin_root],
+                idle_timeout_seconds=45.0,
+                startup_timeout_s=10.0,
+                shutdown_timeout_s=5.0,
+            )
+            inside_parent = workspace / "parent-inside.txt"
+            inside_child = workspace / "child-inside.txt"
+            shell_marker = workspace / "shell-ran.txt"
+            shell_command = "python3 -c " + shlex.quote(
+                f"from pathlib import Path; Path({str(shell_marker)!r}).write_text('SHELL_RAN')"
+            )
+            denial_lines = "\n".join(
+                f"- {label}: `{path}`" for label, path in denied_display_paths.items()
+            )
+            shared_attempts = (
+                "Use Write exactly once to create the inside marker path with exact content `"
+                + _NEX_PREFLIGHT_CHILD_MARKER + "`. "
+                "Then use Write exactly once for each denied path below, spelling each path exactly as listed "
+                "(never expand or rewrite it), with exact content `" + _NEX_PREFLIGHT_DENIED_CONTENT + "`; "
+                "do not retry a denied Write, do not use another tool for it, and keep going after denials. "
+                "Do not invoke a skill or start another Task. "
+                "Finally request one Bash call with this exact command, which would create the shell marker if the CLI deny list failed: `"
+                + shell_command
+                + "`.\n"
+                f"Inside marker: `{inside_child}`\n"
+                f"Denied paths:\n{denial_lines}\n"
+                f"Shell marker: `{shell_marker}`\n"
+                f"Before returning from this same foreground Task, call `mcp__nxd-desktop__read_review_input` "
+                f"with exactly these arguments: operation `list` and path `{source_root}`. "
+                "Do not pass optional arguments.\n"
+            )
+            prompt = _nex_canary_prompt_with_quote_probe(
+                _build_nex_security_canary_prompt(
+                    inside_parent=inside_parent,
+                    shell_command=shell_command,
+                    source_root=source_root,
+                    shared_attempts=shared_attempts,
+                    nonce=nonce,
+                    denial_lines=denial_lines,
+                    shell_marker=shell_marker,
+                    inside_marker=_NEX_PREFLIGHT_PARENT_MARKER,
+                )
+            )
+            allowed_tools = (
+                "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,BashOutput,KillShell,"
+                "Monitor,PowerShell,Task," + _NEX_PREFLIGHT_SKILL_PERMISSION
+                + ",mcp__nxd-desktop__*"
+            )
+            # run_agent launches exactly this normalization of allowed_tools.
+            launched_tools = isolated_mcp_allowed_tools(
+                allowed_tools, server_name=_NEX_PREFLIGHT_MCP_SERVER
+            )
+            expected_hook_path = session_root / "nex-write-policy-hook.py"
+            expectation = _NexPreflightExpectation(
+                denied_inputs=denied_display_paths,
+                inside_paths={
+                    "parent": str(inside_parent), "child": str(inside_child),
+                },
+                inside_markers={
+                    "parent": _NEX_PREFLIGHT_PARENT_MARKER,
+                    "child": _NEX_PREFLIGHT_CHILD_MARKER,
+                },
+                source_root=str(source_root),
+                nonce=nonce,
+                hook_path=str(expected_hook_path),
+            )
+            try:
+                with session:
+                    if session._nex_policy_hook_path != expected_hook_path:
+                        return False, "NEX-890 policy hook was unavailable to the preflight canary"
+                    expected_hook_argv = _nex_preflight_expected_hook_argv(
+                        hook_path=expected_hook_path,
+                        workspace=workspace,
+                        session_root=session_root,
+                        plugin_roots=[plugin_root],
+                    )
+                    policy_failure = _nex_preflight_policy_failure(
+                        session, expected_hook_argv
+                    )
+                    if policy_failure is not None or expected_hook_argv is None:
+                        return _nex_preflight_failure(
+                            [policy_failure or "settings/interpreter-not-absolute"]
+                        )
+                    probe_failure = _nex_preflight_run_hook_probes(
+                        expected_hook_argv,
+                        _nex_preflight_hook_probe_cases(
+                            inside_path=inside_parent,
+                            denied_paths=denied_paths,
+                            home_alias_relative=home_alias_relative,
+                        ),
+                    )
+                    if probe_failure is not None:
+                        return _nex_preflight_failure([probe_failure])
+                    if session.verify_nex_security_files() is not True:
+                        return _nex_preflight_failure(["policy/verify-after-probes"])
+                    argv = backend._agent_command(
+                        workspace,
+                        "opus",
+                        extra_dirs=[],
+                        effort="medium",
+                        skill_pack_dir=plugin_root,
+                        allowed_tools=launched_tools,
+                        mcp_config=session.config_path,
+                        strict_mcp_config=True,
+                        nex_mode=True,
+                        nex_settings_path=session.nex_settings_path,
+                    )
+                    argv_failure = _nex_preflight_argv_failure(
+                        argv,
+                        settings_path=session.nex_settings_path,
+                        allowed_tools=allowed_tools,
+                    )
+                    if argv_failure is not None:
+                        return False, (
+                            "NEX-890 CLI did not receive the runner settings and shell deny flags: category="
+                            + argv_failure
+                        )
+                    ok, trace, metrics = backend.run_agent(
+                        workspace, prompt, "opus", 180,
+                        effort="medium", extra_dirs=[],
+                        skill_pack_dir=plugin_root,
+                        allowed_tools=allowed_tools,
+                        stdio_session=session,
+                        executable=executable,
+                    )
+                    bridge_trace, bridge_error = session.finish_nex_cell()
+                    events = session.nex_preflight_events()
+                    authenticated_peer = session._nex_authenticated_peer
+                    # Checked after the run and before session cleanup removes
+                    # the policy files.
+                    policy_intact_after_run = session.verify_nex_security_files() is True
+                    evidence_trace, evidence_error = session.nex_evidence()
+            except (OSError, RuntimeError, DesktopStdioError) as exc:
+                return False, f"NEX-890 disposable Claude canary setup failed: {type(exc).__name__}"
+            if not policy_intact_after_run:
+                return _nex_preflight_failure(["policy/verify-after-run"])
+            if not ok or bridge_error or evidence_error:
+                details = []
+                stream_tools = _nex_preflight_stream_summary(events)
+                if stream_tools:
+                    details.append("stream-tools=" + stream_tools[:360])
+                if not ok:
+                    detail = str(metrics.get("error") or metrics.get("status") or "agent run failed")
+                    details.append("agent=" + session.redact_nex_text(detail)[0][:240])
+                if bridge_error:
+                    details.append(
+                        "bridge=" + session.redact_nex_text(bridge_error)[0][:240]
+                    )
+                if evidence_error:
+                    details.append(
+                        "evidence=" + session.redact_nex_text(evidence_error)[0][:240]
+                    )
+                return False, (
+                    "NEX-890 Claude stream, MCP bridge, or foreground-child canary failed"
+                    + (": " + "; ".join(details) if details else "")
+                )
+            if not isinstance(authenticated_peer, Mapping) or authenticated_peer.get("uid") != os.getuid():
+                return False, "NEX-890 authenticated MCP peer identity was not proven"
+            if not any(
+                item.get("direction") == "request"
+                and isinstance(item.get("message"), Mapping)
+                and item["message"].get("method") == "initialize"
+                for item in bridge_trace
+            ):
+                return False, "NEX-890 local MCP handshake was not observed"
+            probe_calls = [
+                item for item in bridge_trace
+                if item.get("direction") == "request" and item.get("operation") == "preflight_probe"
+            ]
+            if len(probe_calls) != 1 or len(bridge_trace) != len(evidence_trace):
+                return False, "NEX-890 ordinary MCP request did not pair with the runner bridge trace"
+            probe_id = probe_calls[0].get("jsonrpc_id") if probe_calls else None
+            probe_responses = [
+                item for item in bridge_trace
+                if item.get("direction") == "response"
+                and item.get("operation") == "preflight_probe"
+                and item.get("jsonrpc_id") == probe_id
+                and isinstance(item.get("message"), Mapping)
+            ]
+            if len(probe_responses) != 1:
+                return False, "NEX-890 ordinary MCP response did not match its request"
+            probe_message = probe_responses[0]["message"]
+            probe_result = probe_message.get("result")
+            probe_structured = (
+                probe_result.get("structuredContent")
+                if isinstance(probe_result, Mapping) else None
+            )
+            if (
+                not isinstance(probe_structured, Mapping)
+                or probe_structured.get("ok") is not True
+                or probe_structured.get("nonce") != nonce
+                or not isinstance(probe_result, Mapping)
+                or probe_result.get("isError") is True
+            ):
+                return False, "NEX-890 ordinary MCP request did not succeed"
+            reader_uses = [
+                item for item in session._nex_stream_uses
+                if item.get("name") == "read_review_input"
+            ]
+            child_uses = [
+                item for item in events
+                if item.get("kind") == "tool_use"
+                and isinstance(item.get("name"), str)
+                and item["name"].casefold() in {"task", "agent"}
+            ]
+            reader_use = reader_uses[0] if len(reader_uses) == 1 else None
+            child_use = child_uses[0] if len(child_uses) == 1 else None
+            reader_arguments = (
+                reader_use.get("arguments") if isinstance(reader_use, Mapping) else None
+            )
+            linkage_failures = []
+            if reader_use is None:
+                linkage_failures.append("reader_count")
+            if child_use is None:
+                linkage_failures.append("child_count")
+            if (
+                reader_use is not None and child_use is not None
+                and reader_use.get("parent_tool_use_id") != child_use.get("id")
+            ):
+                linkage_failures.append("parent_link")
+            if reader_use is not None and reader_use.get("response_success") is not True:
+                linkage_failures.append("reader_response")
+            if reader_use is not None and reader_use.get("tool_result_success") is not True:
+                linkage_failures.append("reader_tool_result")
+            child_input = child_use.get("input") if child_use is not None else None
+            if child_use is not None and (
+                not isinstance(child_input, Mapping)
+                or child_input.get("run_in_background") is not False
+            ):
+                linkage_failures.append("child_not_foreground")
+            expected_reader_arguments = {
+                "operation": "list", "path": str(source_root),
+            }
+            if reader_use is not None and reader_arguments != expected_reader_arguments:
+                linkage_failures.append("reader_arguments")
+            if linkage_failures:
+                allowed_argument_keys = {"operation", "path", "max_lines", "max_bytes"}
+                argument_key_source = (
+                    reader_arguments if isinstance(reader_arguments, Mapping) else {}
+                )
+                argument_keys = sorted(
+                    key for key in argument_key_source
+                    if isinstance(key, str) and key in allowed_argument_keys
+                )
+                has_unknown_argument_keys = (
+                    any(key not in allowed_argument_keys for key in reader_arguments)
+                    if isinstance(reader_arguments, Mapping) else False
+                )
+                stream_tools = _nex_preflight_stream_summary(events)
+                argument_summary = (
+                    "reader_arg_keys=[" + ",".join(argument_keys) + "]"
+                    + f",reader_has_unknown_arg_keys={has_unknown_argument_keys}"
+                )
+                return False, (
+                    "NEX-890 stream-json did not prove exact foreground child reader linkage"
+                    + ": failed=" + ",".join(linkage_failures)
+                    + "; " + argument_summary
+                    + ("; stream-tools=" + stream_tools if stream_tools else "")
+                )
+
+            result_by_id = {
+                item.get("id"): item
+                for item in events if item.get("kind") == "tool_result"
+            }
+            task_id = child_uses[0].get("id")
+            child_return = result_by_id.get(task_id, {})
+
+            def is_report_request(item: Mapping[str, Any]) -> bool:
+                message = item.get("message")
+                params = message.get("params") if isinstance(message, Mapping) else None
+                args = params.get("arguments") if isinstance(params, Mapping) else None
+                action = args.get("action") if isinstance(args, Mapping) else None
+                return isinstance(action, Mapping) and action.get("type") == "report_requirement"
+
+            report_requests = [
+                item for item in bridge_trace
+                if item.get("direction") == "request"
+                and item.get("operation") == "advance_workflow"
+                and is_report_request(item)
+            ]
+            child_return_event = next(
+                (item for item in events if item.get("kind") == "tool_result" and item.get("id") == task_id),
+                None,
+            )
+            if (
+                child_return.get("is_error") is not False
+                or child_return_event is None
+                or len(report_requests) != 1
+                or report_requests[0].get("timestamp_monotonic_ns", 0)
+                <= child_return_event.get("timestamp_monotonic_ns", 0)
+            ):
+                return False, "NEX-890 review report was not proven after a successful foreground child return"
+
+            # Write boundaries, the canary Skill, the child count, MCP slots,
+            # and result pairing are graded from the stream by category only.
+            boundary_failures = _nex_preflight_stream_failures(events, expectation)
+            boundary_failures += _nex_preflight_target_failures(
+                denied_targets=denied_targets,
+                inside_targets=(
+                    ("parent", inside_parent, _NEX_PREFLIGHT_PARENT_MARKER),
+                    ("child", inside_child, _NEX_PREFLIGHT_CHILD_MARKER),
+                ),
+            )
+            if os.path.lexists(shell_marker):
+                boundary_failures.append("shell/marker-created")
+            if boundary_failures:
+                return _nex_preflight_failure(boundary_failures)
+
+            # Probe the kernel peer gate with a same-UID process outside the
+            # attached Claude process tree. It must be rejected without ever
+            # spawning the credential-bearing stdio server.
+            rogue_root = root / "rogue-private"
+            rogue_workspace = root / "rogue-workspace"
+            rogue_workspace.mkdir()
+            rogue_session = DesktopStdioSession(
+                [sys.executable, "-I", "-c", "import time; time.sleep(60)"],
+                root=rogue_root, nex_mode=True, nex_preflight_mode=True,
+                nex_workspace=rogue_workspace, idle_timeout_seconds=5.0,
+            )
+            with rogue_session:
+                rogue_proc = subprocess.Popen(
+                    [sys.executable, "-I", "-c", "import time; time.sleep(60)"],
+                    start_new_session=True, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                rogue_session.attach_process(rogue_proc)
+                rogue = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    rogue.connect(str(rogue_session.bridge_path))
+                    rogue.settimeout(2.0)
+                    with contextlib.suppress(OSError):
+                        rogue.recv(1)
+                finally:
+                    rogue.close()
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline:
+                    with rogue_session._bridge_state_lock:
+                        rejected = rogue_session._nex_invalid_reason is not None
+                    if rejected:
+                        break
+                    time.sleep(0.02)
+                _rogue_trace, rogue_error = rogue_session.finish_nex_cell()
+                with rogue_session._bridge_state_lock:
+                    rejected = bool(rogue_session._nex_invalid_reason)
+                    rogue_connections = rogue_session._nex_connection_count
+                    rogue_servers = len(rogue_session._server_processes)
+                if not rejected or rogue_connections != 0 or rogue_servers != 0:
+                    return False, "NEX-890 same-UID rogue socket was not rejected before server spawn"
+            return True, "NEX-890 Claude compatibility canary passed"
+    except Exception as exc:
+        detail = redact_text(str(exc))[:300]
+        return False, f"NEX-890 disposable Claude canary failed: {type(exc).__name__}: {detail}"
+
+
 def scenario_needs_desktop_stdio(scenario_dir: Path) -> dict | None:
     """Return the runner-owned stdio MCP marker for a terminal scenario."""
     marker = scenario_dir / "fixtures" / "desktop_stdio.json"
     if not marker.exists():
         return None
-    return json.loads(marker.read_text(encoding="utf-8"))
+    value = json.loads(marker.read_text(encoding="utf-8"))
+    route = value.get("codex_app_server_route") if isinstance(value, dict) else None
+    if route is not None and (
+        route != _CODEX_APP_SERVER_ROUTE
+        or scenario_dir.name != _CODEX_APP_SERVER_SCENARIO
+    ):
+        raise RuntimeError("unsupported Codex app-server route opt-in")
+    return value
+
+
+def _desktop_stdio_spec_for_backend(
+    scenario_dir: Path, desktop_spec: Mapping[str, Any], backend_name: str
+) -> dict[str, Any]:
+    """Keep the app-server route and its new tool guard Codex-only."""
+    effective = dict(desktop_spec)
+    route = effective.get("codex_app_server_route")
+    if route is None or backend_name != "codex":
+        # Keep the Codex app-server route and its action guard Codex-only, while
+        # retaining runner-owned workflow activation for the Claude route.
+        effective.pop("codex_app_server_route", None)
+        if effective.get("nex_mode") is not True:
+            effective["workflow_action_guard"] = False
+            effective.pop("workflow_activation_bundle", None)
+        return effective
+    if (
+        route != _CODEX_APP_SERVER_ROUTE
+        or scenario_dir.name != _CODEX_APP_SERVER_SCENARIO
+        or effective.get("workflow_action_guard") is not True
+    ):
+        raise RuntimeError("unsupported or unguarded Codex app-server route opt-in")
+    return effective
 
 
 def _prepare_stdio_profile(
@@ -860,11 +2350,77 @@ def _prepare_stdio_profile(
     output.chmod(0o444)
 
 
+def _stdio_activation_bundle(scenario_dir: Path, desktop_spec: dict) -> Path | None:
+    """Resolve the runner-owned workflow activation bundle, if configured."""
+    raw = desktop_spec.get("workflow_activation_bundle")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        raise RuntimeError("workflow activation bundle must be a non-empty path")
+    bundle = (scenario_dir / raw).resolve()
+    fixtures = (scenario_dir / "fixtures").resolve()
+    if bundle.is_relative_to(fixtures):
+        raise RuntimeError("workflow activation bundle must not be agent-visible")
+    if not bundle.is_file():
+        raise RuntimeError(f"workflow activation bundle not found: {bundle}")
+    if bundle.stat().st_size > 1024 * 1024:
+        raise RuntimeError("workflow activation bundle exceeds 1 MiB")
+    return bundle
+
+
+def _activate_stdio_workflow(
+    supervisor: Path,
+    bundle: Path,
+    state_dir: Path,
+    desktop_python: str,
+) -> None:
+    """Activate the workflow policy in the same state directory as MCP."""
+    allowed_env = {
+        key: os.environ[key]
+        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
+        if key in os.environ
+    }
+    allowed_env["NXD_DESKTOP_PYTHON"] = desktop_python
+    try:
+        proc = subprocess.run(
+            [
+                str(supervisor),
+                "--data-dir", str(state_dir),
+                "workflow", "activate", "--bundle", str(bundle),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=allowed_env,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            f"stdio workflow activation failed: {redact_text(str(exc))}"
+        ) from None
+    payloads: list[dict[str, Any]] = []
+    for line in proc.stdout.splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            payloads.append(value)
+    if proc.returncode != 0 or not payloads or payloads[-1].get("activated") is not True:
+        detail = redact_text(proc.stderr.strip() or proc.stdout.strip() or "no activation result")
+        raise RuntimeError(
+            f"stdio workflow activation failed: {detail[-1000:]}"
+        )
+
+
 def _desktop_stdio_session(
     scenario_dir: Path,
     desktop_spec: dict,
     workspace: Path,
     tmp: Path,
+    *,
+    trusted_server_env: Mapping[str, str] | None = None,
+    plugin_root: Path | None = None,
+    nex_expected_base_url: str | None = None,
 ) -> tuple[Path, dict[str, str], str, DesktopStdioSession]:
     """Build one runner-owned stdio session and its isolated runtime inputs."""
     bin_dir, env_over, desktop_python = _desktop_runtime(scenario_dir, tmp)
@@ -873,6 +2429,14 @@ def _desktop_stdio_session(
         scenario_dir, desktop_spec, workspace, profile_path, desktop_python
     )
     state_dir = tmp / "stdio-state"
+    bundle = _stdio_activation_bundle(scenario_dir, desktop_spec)
+    if bundle is not None:
+        _activate_stdio_workflow(
+            bin_dir / "nxd-desktop-supervisor",
+            bundle,
+            state_dir,
+            desktop_python,
+        )
     server_args = [
         "--data-dir", str(state_dir),
         "mcp", "serve",
@@ -880,14 +2444,55 @@ def _desktop_stdio_session(
     ]
     session = DesktopStdioSession(
         [bin_dir / "nxd-desktop-supervisor", *server_args],
-        server_env={**env_over, "NXD_DESKTOP_PYTHON": desktop_python},
+        server_env={
+            **env_over,
+            **dict(trusted_server_env or {}),
+            "NXD_DESKTOP_PYTHON": desktop_python,
+        },
         root=tmp / "stdio-session",
         server_name=str(desktop_spec.get("server_name", "nxd-desktop")),
         allowed_tools=desktop_spec.get("allowed_tools"),
+        workflow_action_guard=bool(desktop_spec.get("workflow_action_guard", False)),
         request_timeout_faults=desktop_spec.get("request_timeout_faults"),
+        nex_mode=bool(desktop_spec.get("nex_mode", False)),
+        nex_workspace=workspace if desktop_spec.get("nex_mode") is True else None,
+        nex_protected_paths=[plugin_root] if plugin_root is not None and desktop_spec.get("nex_mode") is True else (),
+        nex_expected_base_url=nex_expected_base_url,
+        idle_timeout_seconds=float(desktop_spec.get("idle_timeout_seconds", 180.0)),
         startup_timeout_s=30.0,
     )
+    session.supervisor_data_dir = state_dir
+    session.desktop_supervisor = bin_dir / "nxd-desktop-supervisor"
+    session.desktop_python = Path(desktop_python)
+    session.codex_app_server_route = desktop_spec.get("codex_app_server_route")
+    session.idle_timeout_seconds = float(
+        desktop_spec.get("idle_timeout_seconds", 180.0)
+    )
     return bin_dir, env_over, desktop_python, session
+
+
+def _trusted_source_server_environment(
+    source_environment: Mapping[str, str],
+) -> dict[str, str]:
+    """Map the fixture source token only into the trusted desktop server."""
+    token = source_environment.get("NXD_EVAL_SOURCE_TOKEN")
+    if not isinstance(token, str) or not token:
+        raise HttpStubSetupError(
+            "NEX-890 requires a runner-provisioned api-source credential"
+        )
+    package_root = EVALS_DIR / "dp-scenarios" / "src"
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    try:
+        from dp_scenarios.credential_contract import API_SOURCE_CREDENTIAL_MAPPING
+    except ImportError as exc:
+        raise HttpStubSetupError(
+            "could not validate the trusted api-source credential mapping"
+        ) from exc
+    return {
+        "NXD_EVAL_SOURCE_TOKEN": token,
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS": API_SOURCE_CREDENTIAL_MAPPING,
+    }
 
 
 def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
@@ -930,6 +2535,45 @@ def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
     if not marker.exists():
         return None
     return json.loads(marker.read_text(encoding="utf-8"))
+
+
+def _http_stub_trusted_server_env(
+    scenario_dir: Path, spec: Mapping[str, Any]
+) -> dict[str, str]:
+    """Resolve NEX-890-only secret values for the trusted MCP server process."""
+    import importlib.util
+
+    if scenario_dir.name != _NEX_890_SCENARIO:
+        if spec.get("trusted_server_env") is not None:
+            raise HttpStubSetupError(
+                "trusted_server_env is only supported by the NEX-890 scenario"
+            )
+        return {}
+    raw = spec.get("trusted_server_env")
+    if not isinstance(raw, Mapping) or set(raw) != {"NXD_EVAL_SOURCE_TOKEN"}:
+        raise HttpStubSetupError(
+            "NEX-890 trusted_server_env must map only NXD_EVAL_SOURCE_TOKEN"
+        )
+    module_path = _http_stub_fixture_path(scenario_dir, spec)
+    module_name = f"_eval_trusted_server_env_{module_path.stem}"
+    module_spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if module_spec is None or module_spec.loader is None:
+        raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    resolved: dict[str, str] = {}
+    for env_name, attribute in raw.items():
+        if not isinstance(attribute, str) or not attribute:
+            raise HttpStubSetupError(
+                "NEX-890 trusted_server_env values must name fixture attributes"
+            )
+        value = getattr(module, attribute, None)
+        if not isinstance(value, str) or not value:
+            raise HttpStubSetupError(
+                f"NEX-890 trusted_server_env attribute {attribute!r} is unavailable"
+            )
+        resolved[str(env_name)] = value
+    return resolved
 
 
 def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str], str]:
@@ -1437,6 +3081,9 @@ def deterministic_check_fact(
         # The observation path is a per-run capability. Inheriting it from the
         # parent would let a no-log checker read or truncate an unrelated log.
         checker_env.pop(STUB_OBSERVATIONS_ENV, None)
+        # Route-specific oracle phases are selected only by this runner call;
+        # do not let a caller environment change Claude or ordinary checks.
+        checker_env.pop("NXD_EVAL_TERMINAL_WORKFLOW_ROUTE", None)
         if env_overrides:
             checker_env.update(env_overrides)
         try:
@@ -1481,6 +3128,148 @@ def deterministic_check_fact(
         # than graded. Carry stderr so that is diagnosable instead of silent.
         facts["detail"] = (stdout[-1500:] + proc.stderr[-1500:]).strip()
     return DETERMINISTIC_CHECK_PREFIX + json.dumps(facts, sort_keys=True)
+
+
+def _load_nex890_checker(scenario_dir: Path):
+    """Compile and import the trusted NEX checker before any agent process starts."""
+    checker_path = scenario_dir / "fixtures" / "check_dlt_api.py"
+    source = checker_path.read_bytes()
+    code = compile(source, str(checker_path), "exec")
+    import types
+
+    module = types.ModuleType(f"_eval_nex890_checker_{secrets.token_hex(8)}")
+    module.__file__ = str(checker_path)
+    exec(code, module.__dict__)
+    checker = getattr(module, "check_nex890", None)
+    if not callable(checker):
+        raise RuntimeError("NEX-890 checker does not export check_nex890")
+    return checker
+
+
+def _nex890_frozen_exports(
+    trace: list[dict[str, Any]],
+    workspace: Path,
+    *,
+    frozen_exports: Mapping[str, Mapping[str, Any]] | None,
+    max_bytes: int = 50 * 1024 * 1024,
+) -> dict[str, bytes]:
+    """Return the unique export archive bytes frozen by the runner bridge.
+
+    The bridge froze the archive when the successful ``export_data_product``
+    response crossed it, before the agent could see (or rewrite) the file.
+    Those frozen bytes are what gets graded. The post-run workspace copy must
+    still be present, contained, and byte-identical (sha256) to them; a
+    missing freeze, a freeze error, or any post-export tampering fails closed
+    by returning no outputs.
+    """
+    export_requests = [
+        record for record in trace
+        if record.get("direction") == "request"
+        and record.get("operation") == "export_data_product"
+        and isinstance(record.get("message"), Mapping)
+    ]
+    if len(export_requests) != 1:
+        return {}
+    request = export_requests[0]
+    request_message = request["message"]
+    params = request_message.get("params")
+    arguments = params.get("arguments") if isinstance(params, Mapping) else None
+    destination = arguments.get("destination") if isinstance(arguments, Mapping) else None
+    request_id = json.dumps(
+        [type(request.get("jsonrpc_id")).__name__, request.get("jsonrpc_id")],
+        sort_keys=True,
+    )
+    responses = [
+        record for record in trace
+        if record.get("direction") == "response"
+        and record.get("operation") == "export_data_product"
+        and json.dumps(
+            [type(record.get("jsonrpc_id")).__name__, record.get("jsonrpc_id")],
+            sort_keys=True,
+        ) == request_id
+        and isinstance(record.get("message"), Mapping)
+    ]
+    if len(responses) != 1:
+        return {}
+    response = responses[0]["message"]
+    archive = _nex_result_payload(response).get("archive_path")
+    if not isinstance(destination, str) or not isinstance(archive, str):
+        return {}
+    if not isinstance(frozen_exports, Mapping):
+        return {}
+    frozen = frozen_exports.get(_desktop_rpc_id_key(request.get("jsonrpc_id")) or "")
+    if (
+        not isinstance(frozen, Mapping)
+        or "error" in frozen
+        or frozen.get("archive_path") != archive
+        or not isinstance(frozen.get("content"), bytes)
+        or not isinstance(frozen.get("sha256"), str)
+        or len(frozen["content"]) > max_bytes
+        or hashlib.sha256(frozen["content"]).hexdigest() != frozen["sha256"]
+    ):
+        return {}
+    root = workspace.resolve(strict=True)
+    logical_root = Path(os.path.normpath(os.path.abspath(workspace)))
+
+    def logical(value: str) -> str:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            return os.path.normpath(os.fspath(candidate))
+        return os.path.normpath(os.fspath(logical_root / candidate))
+
+    def resolve(value: str) -> Path | None:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            resolved = candidate.resolve(strict=True)
+
+            def alias(path: Path) -> str:
+                normalized = os.path.normpath(os.path.abspath(path))
+                return normalized[len("/private"):] if normalized.startswith("/private/") else normalized
+
+            if (
+                not resolved.is_relative_to(root)
+                or alias(candidate) != alias(resolved)
+            ):
+                return None
+            if not resolved.is_file():
+                return None
+            return resolved
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    destination_path = resolve(destination)
+    archive_path = resolve(archive)
+    if destination_path is None or archive_path is None or destination_path != archive_path:
+        return {}
+    try:
+        descriptor = os.open(
+            archive_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
+                return {}
+            chunks: list[bytes] = []
+            total = 0
+            while total <= max_bytes:
+                chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            if total > max_bytes:
+                return {}
+            on_disk = b"".join(chunks)
+            if hashlib.sha256(on_disk).hexdigest() != frozen["sha256"]:
+                # Rewritten after the export response: fail closed.
+                return {}
+            return {logical(archive): bytes(frozen["content"])}
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return {}
 
 
 def deterministic_check_passed(facts: list[str]) -> bool:
@@ -1680,7 +3469,10 @@ def _redact_runtime_secrets(value: Any, secrets_to_redact: tuple[str, ...]) -> A
         return value
     if isinstance(value, dict):
         return {
-            key: _redact_runtime_secrets(item, secrets_to_redact)
+            (
+                _redact_runtime_secrets(key, secrets_to_redact)
+                if isinstance(key, str) else key
+            ): _redact_runtime_secrets(item, secrets_to_redact)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -1733,7 +3525,7 @@ def _redact_agent_artifacts(
         return trace, metrics, False
     raw_metrics = json.dumps(metrics, ensure_ascii=False, default=str)
     scan_trace = _redaction_scan_trace(trace, secrets_to_redact, allowed_input_files)
-    leaked = any(
+    leaked = metrics.get("nex_agent_stream_secret_leak") is True or any(
         secret and (secret in scan_trace or secret in raw_metrics)
         for secret in secrets_to_redact
     )
@@ -1815,8 +3607,44 @@ def _http_stub_agent_env(scenario_dir: Path, spec: Mapping[str, Any]) -> dict[st
     return resolved
 
 
+class _NexHTTPStubEvidence:
+    """Runner-owned NEX observations frozen after the server drains handlers."""
+
+    def __init__(self, module, server, thread, stop_fn) -> None:
+        self._module = module
+        self._server = server
+        self._thread = thread
+        self._stop_fn = stop_fn
+        self._lock = threading.Lock()
+        self._stopped = False
+        self._observations: list[dict[str, object]] | None = None
+        self._error: BaseException | None = None
+
+    def stop_and_freeze(self) -> list[dict[str, object]]:
+        with self._lock:
+            if not self._stopped:
+                self._stopped = True
+                try:
+                    self._stop_fn(self._server, self._thread)
+                    self._observations = self._module.freeze_observations()
+                except BaseException as exc:
+                    self._error = exc
+            if self._error is not None:
+                raise HttpStubTeardownError(
+                    _redacted_exception_detail(self._error)
+                ) from None
+            return [dict(item) for item in (self._observations or [])]
+
+
 @contextlib.contextmanager
-def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
+def http_stub_server(
+    scenario_dir: Path,
+    ws: Path,
+    spec: dict,
+    agent_backend_name: str = "",
+    *,
+    nex_mode: bool = False,
+):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
 
     Runs the fixture module's own ``start``/``stop`` callables IN this process
@@ -1850,6 +3678,7 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     observations: Path | None = None
     log_holder: tempfile.TemporaryDirectory | None = None
     module = None
+    nex_evidence: _NexHTTPStubEvidence | None = None
     setup_complete = False
     setup_error: BaseException | None = None
     setup_cleanup_errors: list[BaseException] = []
@@ -1864,7 +3693,15 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         module = importlib.util.module_from_spec(mod_spec)
         mod_spec.loader.exec_module(module)
 
-        if spec.get("observations"):
+        if nex_mode:
+            if not all(hasattr(module, name) for name in ("reset_observations", "freeze_observations")):
+                raise HttpStubSetupError(
+                    f"{module_path.name} lacks the in-memory NEX observation contract"
+                )
+            module.reset_observations()
+            if hasattr(module, "set_observations_path"):
+                module.set_observations_path(None)
+        elif spec.get("observations"):
             if not hasattr(module, "set_observations_path"):
                 raise HttpStubSetupError(
                     f"{module_path.name} declares observations but defines no "
@@ -1880,6 +3717,8 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         start_fn = getattr(module, str(spec.get("start", "start_server")))
         stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
         server, port, thread = start_fn()
+        if nex_mode:
+            nex_evidence = _NexHTTPStubEvidence(module, server, thread, stop_fn)
         setup_complete = True
     except BaseException as exc:
         setup_error = exc
@@ -1975,7 +3814,7 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         except Exception as exc:
             raise HttpStubSetupError(_redacted_exception_detail(exc)) from None
 
-        yield base_url, observations
+        yield base_url, nex_evidence if nex_mode else observations
     except BaseException as exc:
         # Capture the exception actually propagating from the whole post-start
         # region, including endpoint-file setup. `sys.exc_info()` in a finally
@@ -1988,7 +3827,10 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         # cleanly must not also strand its log directory for the whole run.
         teardown_errors: list[BaseException] = []
         try:
-            stop_fn(server, thread)
+            if nex_evidence is not None:
+                nex_evidence.stop_and_freeze()
+            else:
+                stop_fn(server, thread)
         except BaseException as exc:
             teardown_errors.append(exc)
         finally:
@@ -2032,6 +3874,7 @@ def desktop_stdio_runtime(
     desktop_spec: dict,
     http_spec: dict | None = None,
     agent_backend_name: str = "",
+    plugin_root: Path | None = None,
 ):
     """Own one isolated stdio Desktop session, optionally with an HTTP fixture.
 
@@ -2042,19 +3885,58 @@ def desktop_stdio_runtime(
     agent environment. This is the combined stdio+HTTP lifecycle; HTTP-only
     deterministic checks run after their stub context exits.
     """
+    nex_mode = bool(desktop_spec.get("nex_mode", False))
     stub_ctx: contextlib.AbstractContextManager = (
-        http_stub_server(scenario_dir, workspace, http_spec, agent_backend_name)
+        http_stub_server(
+            scenario_dir, workspace, http_spec, agent_backend_name,
+            nex_mode=nex_mode,
+        )
         if http_spec is not None
         else contextlib.nullcontext((None, None))
     )
     with stub_ctx as (_stub_url, stub_observations):
-        bin_dir, env_over, desktop_python, session = _desktop_stdio_session(
-            scenario_dir, desktop_spec, workspace, tmp
+        session_spec = _desktop_stdio_spec_for_backend(
+            scenario_dir, desktop_spec, agent_backend_name
         )
-        if http_spec is not None:
+        app_server_route = session_spec.get("codex_app_server_route")
+        fixture_agent_env = (
+            _http_stub_agent_env(scenario_dir, http_spec)
+            if http_spec is not None and not nex_mode else {}
+        )
+        trusted_server_env: dict[str, str] = {}
+        if nex_mode:
+            if scenario_dir.name != _NEX_890_SCENARIO or http_spec is None:
+                raise HttpStubSetupError(
+                    "NEX mode requires the NEX-890 runner HTTP fixture"
+                )
+            source_secret = _http_stub_trusted_server_env(scenario_dir, http_spec)
+            trusted_server_env = _trusted_source_server_environment(source_secret)
+        elif app_server_route is not None:
+            if (
+                scenario_dir.name != _CODEX_APP_SERVER_SCENARIO
+                or app_server_route != _CODEX_APP_SERVER_ROUTE
+            ):
+                raise HttpStubSetupError(
+                    "Codex app-server route is only enabled for the terminal DLT API scenario"
+                )
+            trusted_server_env = _trusted_source_server_environment(fixture_agent_env)
+        session_kwargs = (
+            {"trusted_server_env": trusted_server_env}
+            if trusted_server_env else {}
+        )
+        bin_dir, env_over, desktop_python, session = _desktop_stdio_session(
+            scenario_dir,
+            session_spec,
+            workspace,
+            tmp,
+            **session_kwargs,
+            plugin_root=plugin_root,
+            nex_expected_base_url=_stub_url if nex_mode else None,
+        )
+        if http_spec is not None and not nex_mode and app_server_route is None:
             env_over = {
                 **env_over,
-                **_http_stub_agent_env(scenario_dir, http_spec),
+                **fixture_agent_env,
             }
         with session:
             yield bin_dir, env_over, desktop_python, session, stub_observations
@@ -2533,9 +4415,16 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
     h = hashlib.sha256()
     desktop_runtime_key = ""
     if (scenario_needs_desktop(scenario_dir) is not None or scenario_needs_desktop_stdio(scenario_dir) is not None):
+        activation_bundle_key = ""
+        desktop_stdio_spec = scenario_needs_desktop_stdio(scenario_dir)
+        if desktop_stdio_spec is not None:
+            bundle = _stdio_activation_bundle(scenario_dir, desktop_stdio_spec)
+            if bundle is not None:
+                activation_bundle_key = _sha256_file(bundle)
         desktop_runtime_key = "|".join((
             os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", ""),
             os.environ.get("EVAL_DESKTOP_PYTHON", ""),
+            activation_bundle_key,
         ))
     parts = [
         skill_set.name,
@@ -2810,21 +4699,112 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.error = "missing checks.json"
         return res
     checks = json.loads(checks_file.read_text(encoding="utf-8"))
+    try:
+        followup_turns = parse_followup_turns(checks.get("turns"))
+    except ValueError as exc:
+        res.error = f"invalid turns declaration: {exc}"
+        return res
     prompt_md = (scenario_dir / "prompt.md").read_text(encoding="utf-8")
     # Only the task section is agent-facing; the intro + success checks would
     # leak the answer and the rubric. The judge still sees the full prompt.md.
     agent_task = agent_task_from_prompt(prompt_md)
 
     agent_backend = get_agent_backend(args.agent_backend)
-    judge_backend = get_judge_backend(args.judge_backend)
+    is_nex890 = name == _NEX_890_SCENARIO
+    agent_effort_explicit = bool(getattr(args, "_agent_effort_explicit", False))
+    judge_effort_explicit = bool(getattr(args, "_judge_effort_explicit", False))
+    judge_backend_explicit = bool(getattr(args, "_judge_backend_explicit", False))
+    judge_model_explicit = bool(getattr(args, "_judge_model_explicit", False))
+    nex_checker = None
+    agent_effort = args.agent_effort
+    if is_nex890 and followup_turns:
+        return _unsupported_result(
+            res,
+            "NEX-890 Claude stream guards currently support one turn only",
+        )
+    if is_nex890:
+        desktop_marker = scenario_needs_desktop_stdio(scenario_dir)
+        supported = (
+            desktop_marker.get("supported_agent_backends")
+            if isinstance(desktop_marker, Mapping) else None
+        )
+        if supported != ["claude"]:
+            res.error = "NEX-890 supported_agent_backends marker is invalid"
+            return res
+        if agent_backend.name not in supported:
+            return _unsupported_result(
+                res,
+                f"agent backend {agent_backend.name!r} is not supported; NEX-890 requires Claude",
+            )
+        requested_efforts = (
+            ("agent", args.agent_effort, agent_effort_explicit),
+            ("judge", args.judge_effort, judge_effort_explicit),
+        )
+        for label, requested, explicit in requested_efforts:
+            normalized = "medium" if requested == "" else requested
+            if explicit and normalized not in {"low", "medium"}:
+                return _unsupported_result(
+                    res,
+                    f"NEX-890 {label} effort {requested!r} exceeds or cannot prove the medium cap",
+                )
+        agent_effort = (
+            "medium" if not agent_effort_explicit or args.agent_effort == ""
+            else args.agent_effort
+        )
+        preflight_ok, preflight_reason = _nex_security_preflight()
+        if not preflight_ok:
+            return _unsupported_result(res, preflight_reason)
+        try:
+            nex_checker = _load_nex890_checker(scenario_dir)
+        except (OSError, SyntaxError, ImportError, RuntimeError) as exc:
+            return _unsupported_result(
+                res, f"NEX-890 in-process checker could not be preloaded: {type(exc).__name__}"
+            )
+    explicit_model = str(args.judge_model or "").casefold()
+    inferred_backend = (
+        "claude"
+        if explicit_model in {"opus", "sonnet", "haiku"}
+        or explicit_model.startswith("claude-")
+        else "codex"
+    )
+    judge_backend_name = (
+        args.judge_backend
+        if not is_nex890 or judge_backend_explicit
+        else inferred_backend if judge_model_explicit else "codex"
+    )
+    judge_model = (
+        args.judge_model
+        if (
+            (not is_nex890 and args.judge_model is not None)
+            or (is_nex890 and judge_model_explicit)
+        )
+        else ("gpt-6-sol" if judge_backend_name == "codex" else DEFAULT_MODELS["claude"]["judge"])
+        if is_nex890
+        else DEFAULT_MODELS[judge_backend_name]["judge"]
+    )
+    judge_effort = (
+        args.judge_effort
+        if (
+            (not is_nex890 and args.judge_effort is not None)
+            or (is_nex890 and judge_effort_explicit and args.judge_effort != "")
+        )
+        else "medium"
+        if is_nex890
+        else CODEX_DEFAULT_JUDGE_EFFORT
+        if judge_backend_name == "codex"
+        else DEFAULT_JUDGE_EFFORT
+    )
+    judge_backend = get_judge_backend(judge_backend_name)
+    if is_nex890:
+        try:
+            agent_backend.check_dependencies()
+            judge_backend.check_dependencies()
+        except BackendDependencyError as exc:
+            res.error = f"eval dependency check failed: {exc}"
+            return res
 
     # Scripted follow-up turns. Absent/empty ⇒ single-turn, which takes exactly
     # the pre-existing path all the way down to the backend.
-    try:
-        followup_turns = parse_followup_turns(checks.get("turns"))
-    except ValueError as exc:
-        res.error = f"invalid turns declaration: {exc}"
-        return res
     if followup_turns and not getattr(agent_backend, "supports_multi_turn", False):
         # Checked BEFORE a workspace is built or an agent run is burned, and
         # reported as a hard error rather than degrading to single-turn: a
@@ -2847,12 +4827,36 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     desktop_spec = scenario_needs_desktop(scenario_dir)
     desktop_stdio_spec = scenario_needs_desktop_stdio(scenario_dir)
     http_stub_spec = scenario_needs_http_stub(scenario_dir)
+    active_stdio_spec = (
+        _desktop_stdio_spec_for_backend(
+            scenario_dir, desktop_stdio_spec, agent_backend.name
+        )
+        if desktop_stdio_spec is not None else None
+    )
+    app_server_route = (
+        active_stdio_spec.get("codex_app_server_route")
+        if active_stdio_spec is not None else None
+    )
+    if app_server_route is not None:
+        if checks.get("agent_source_isolation"):
+            res.error = (
+                "the Codex app-server route cannot grade agent_source_isolation without "
+                "matching raw-event audit markers"
+            )
+            return res
     fixture_runtime_secrets: tuple[str, ...] = ()
     if desktop_stdio_spec is not None and http_stub_spec is not None:
         try:
-            fixture_runtime_secrets = tuple(
-                _http_stub_agent_env(scenario_dir, http_stub_spec).values()
-            )
+            if desktop_stdio_spec.get("nex_mode") is True:
+                fixture_runtime_secrets = tuple(
+                    _http_stub_trusted_server_env(
+                        scenario_dir, http_stub_spec
+                    ).values()
+                )
+            else:
+                fixture_runtime_secrets = tuple(
+                    _http_stub_agent_env(scenario_dir, http_stub_spec).values()
+                )
         except HttpStubSetupError as exc:
             res.error = f"http stub setup failed: {_redacted_exception_detail(exc)}"
             return res
@@ -2879,9 +4883,13 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         agent_task, args.docs_base, bool(extra_dirs),
         skills_in_workspace=skills_in_workspace,
         source_isolation=bool(checks.get("agent_source_isolation")),
+        workflow_v2_terminal=(
+            agent_backend.name == "codex"
+            and app_server_route == "terminal_workflow_review_v1"
+        ),
     )
     agent_model = effective_agent_model(
-        (desktop_spec is not None or desktop_stdio_spec is not None), agent_backend.name, args.agent_model
+        scenario_uses_desktop(scenario_dir), agent_backend.name, args.agent_model
     )
     preflight_metrics: dict[str, object] = {}
     isolation, isolation_error = _resolve_source_isolation(
@@ -2946,7 +4954,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     # cheap. The judge is never cached (it's cheap and the rubric changes often).
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
     cache_file = None
-    if cache_dir:
+    if cache_dir and not is_nex890:
         workspace_setup_id = (
             INCREMENTAL_FOLLOWUP_WORKSPACE_SETUP_ID
             if followup_turns and name == "incremental-transform-state"
@@ -2954,7 +4962,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         )
         key = _agent_cache_key(
             skill_set, scenario_dir, prompt, agent_backend.name,
-            agent_model, args.agent_effort, followup_turns,
+            agent_model, agent_effort, followup_turns,
             source_isolation_identity=isolation_identity,
             workspace_setup_id=workspace_setup_id,
         )
@@ -3060,7 +5068,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     with semantic_http_server(scenario_dir, mcp_spec) as (_ep, env_over):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
-                            extra_dirs=extra_dirs, effort=args.agent_effort,
+                            extra_dirs=extra_dirs, effort=agent_effort,
                             env_overrides={**env_over, **source_isolation_env}, path_prepend=bin_dir,
                             skill_pack_dir=plugin_dir, **source_audit_kwargs,
                             **turn_kwargs,
@@ -3080,11 +5088,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         desktop_stdio_spec,
                         http_stub_spec,
                         agent_backend.name,
+                        plugin_root=plugin_dir,
                     ) as (bin_dir, env_over, desktop_python, session,
                           stub_observations):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
-                            extra_dirs=[], effort=args.agent_effort,
+                            extra_dirs=[], effort=agent_effort,
                             env_overrides={**env_over, **source_isolation_env},
                             path_prepend=bin_dir, skill_pack_dir=plugin_dir,
                             allowed_tools=str(desktop_stdio_spec.get(
@@ -3095,21 +5104,82 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         runtime_secrets = redaction_values or _runtime_secret_values(
                             http_stub_spec, env_over
                         )
-                        runner_mcp_trace = session.trace_path.read_text(encoding="utf-8")
-                        metrics["stdio_mcp_trace_source"] = "runner"
-                        metrics["stdio_mcp_trace_events"] = len(
-                            [line for line in runner_mcp_trace.splitlines() if line.strip()]
-                        )
-                        if ok and checks.get("deterministic_check"):
-                            checker_env = (
-                                {STUB_OBSERVATIONS_ENV: str(stub_observations)}
-                                if stub_observations is not None else None
+                        if session.nex_mode:
+                            runner_mcp_trace, bridge_error = session.finish_nex_cell()
+                            session.verify_nex_security_files()
+                            metrics.update(session.result_metrics())
+                            trace, metrics, detected_secret_leak = _redact_agent_artifacts(
+                                trace, metrics, runtime_secrets, redaction_input_files
                             )
-                            det_fact = deterministic_check_fact(
-                                scenario_dir, ws, checks["deterministic_check"],
-                                runner_mcp_trace,
-                                env_overrides=checker_env,
+                            agent_runtime_secret_leak = (
+                                agent_runtime_secret_leak or detected_secret_leak
                             )
+                            frozen_observations: list[dict[str, object]] = []
+                            if isinstance(stub_observations, _NexHTTPStubEvidence):
+                                frozen_observations = stub_observations.stop_and_freeze()
+                            else:
+                                bridge_error = bridge_error or "NEX-890 stub evidence handle is unavailable"
+                            file_snapshots = session.nex_file_snapshots()
+                            positive = file_snapshots.get("nex890-positive")
+                            if isinstance(positive, dict):
+                                positive["outputs"] = _nex890_frozen_exports(
+                                    runner_mcp_trace, ws,
+                                    frozen_exports=session.nex_frozen_exports(),
+                                )
+                            metrics["stdio_mcp_trace_source"] = "runner-memory"
+                            metrics["stdio_mcp_trace_events"] = len(runner_mcp_trace)
+                            if bridge_error:
+                                metrics["nex_bridge_error"] = redact_text(bridge_error)
+                            if metrics.get("status") != "INCOMPLETE" and ok:
+                                try:
+                                    grade = nex_checker(
+                                        runner_mcp_trace,
+                                        frozen_observations,
+                                        file_snapshots,
+                                        list(redaction_values),
+                                    )
+                                except Exception as exc:
+                                    grade = {
+                                        "passed": False,
+                                        "failures": ["runner/in-process-checker-error"],
+                                        "infrastructure_error": (
+                                            "NEX-890 in-process checker raised "
+                                            + type(exc).__name__
+                                        ),
+                                    }
+                                if bridge_error:
+                                    grade["passed"] = False
+                                    grade["failures"] = sorted(set([
+                                        *grade.get("failures", []),
+                                        "runner/bridge-evidence-invalid",
+                                    ]))
+                                grade = _nex890_apply_secret_leak_failures(
+                                    grade,
+                                    agent_leak=agent_runtime_secret_leak,
+                                    bridge_leak=metrics.get("nex_bridge_secret_leak") is True,
+                                )
+                                det_fact = DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                                    grade, sort_keys=True
+                                )
+                        else:
+                            runner_mcp_trace = session.trace_path.read_text(encoding="utf-8")
+                            metrics["stdio_mcp_trace_source"] = "runner"
+                            if app_server_route == _CODEX_APP_SERVER_ROUTE:
+                                metrics["runner_mcp_trace"] = runner_mcp_trace
+                            metrics["stdio_mcp_trace_events"] = len(
+                                [line for line in runner_mcp_trace.splitlines() if line.strip()]
+                            )
+                            if ok and checks.get("deterministic_check"):
+                                checker_env = {}
+                                if stub_observations is not None:
+                                    checker_env[STUB_OBSERVATIONS_ENV] = str(stub_observations)
+                                if app_server_route == _CODEX_APP_SERVER_ROUTE:
+                                    checker_env["NXD_EVAL_TERMINAL_WORKFLOW_ROUTE"] = app_server_route
+                                det_fact = deterministic_check_fact(
+                                    scenario_dir, ws, checks["deterministic_check"],
+                                    runner_mcp_trace,
+                                    env_overrides=checker_env or None,
+                                )
                 except HttpStubSetupError as exc:
                     res.error = f"http stub setup failed: {_redacted_exception_detail(exc)}"
                     return res
@@ -3170,7 +5240,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         # under a turn still to come.
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
-                            extra_dirs=[], effort=args.agent_effort,
+                            extra_dirs=[], effort=agent_effort,
                             env_overrides=env_over, path_prepend=bin_dir,
                             skill_pack_dir=plugin_dir, **desktop_kwargs,
                             **source_audit_kwargs, **turn_kwargs,
@@ -3210,7 +5280,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                                           agent_backend.name):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
-                            extra_dirs=extra_dirs, effort=args.agent_effort,
+                            extra_dirs=extra_dirs, effort=agent_effort,
                             skill_pack_dir=plugin_dir, **turn_kwargs,
                         )
                 except HttpStubSetupError as exc:
@@ -3223,7 +5293,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             else:
                 ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,
-                    extra_dirs=extra_dirs, effort=args.agent_effort,
+                    extra_dirs=extra_dirs, effort=agent_effort,
                     env_overrides=source_isolation_env or None,
                     skill_pack_dir=plugin_dir, **source_audit_kwargs,
                     **turn_kwargs,
@@ -3235,9 +5305,46 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             # Redact every fresh agent artifact with the same marker set used by
             # cache replays. This must sit outside the runtime-specific branches:
             # deterministic-check markers are valid for non-stdio scenarios too.
-            trace, metrics, agent_runtime_secret_leak = _redact_agent_artifacts(
+            trace, metrics, detected_secret_leak = _redact_agent_artifacts(
                 trace, metrics, runtime_secrets, redaction_input_files
             )
+            agent_runtime_secret_leak = agent_runtime_secret_leak or detected_secret_leak
+
+            if is_nex890 and metrics.get("status") == "INCOMPLETE":
+                # Timeout/idle cutoff is preserved as partial evidence only;
+                # an incomplete cell never reaches a checker, cache, or judge.
+                res.transcript = trace
+                res.metrics = {
+                    **preflight_metrics,
+                    **metrics,
+                    "agent_model": agent_model,
+                    "agent_effort": agent_effort,
+                }
+                bridge_secret_leak = metrics.get("nex_bridge_secret_leak") is True
+                if agent_runtime_secret_leak or bridge_secret_leak:
+                    leak_grade = _nex890_apply_secret_leak_failures(
+                        {"passed": True, "failures": []},
+                        agent_leak=agent_runtime_secret_leak,
+                        bridge_leak=bridge_secret_leak,
+                    )
+                    res.metrics["status"] = "FAILED"
+                    res.metrics["agent_completion_status"] = "INCOMPLETE"
+                    res.metrics["deterministic_check"] = "failed"
+                    res.facts = [
+                        "PROTECTED CREDENTIAL EXPOSURE: FAIL — the runner observed a protected source credential in NEX-890 artifacts.",
+                        DETERMINISTIC_CHECK_PREFIX + json.dumps(leak_grade, sort_keys=True),
+                    ]
+                    res.metrics["deterministic_check_detail"] = deterministic_check_detail(
+                        res.facts
+                    )
+                    res.verdict = {
+                        "overall_pass": False,
+                        "summary": "NEX-890 failed because the runner detected protected credential exposure.",
+                    }
+                    res.ok = True
+                    return res
+                res.error = str(metrics.get("error", "NEX-890 agent run incomplete"))
+                return res
 
             if ok and name == "incremental-transform-state":
                 _remove_incremental_delta_after_agent(scenario_dir, ws)
@@ -3334,7 +5441,11 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         det_status = ""
 
     res.transcript = trace
-    res.metrics = {**preflight_metrics, **metrics, "agent_model": agent_model}
+    res.metrics = {
+        **preflight_metrics, **metrics,
+        "agent_model": agent_model,
+        "agent_effort": agent_effort,
+    }
     if http_stub_teardown_error is not None:
         # Keep the completed run's evidence available to the caller, but mark
         # the cell as infrastructure-failed and make sure it cannot be cached.
@@ -3344,6 +5455,27 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if det_status == "failed":
             res.metrics["deterministic_check_detail"] = deterministic_check_detail(facts)
     res.facts = facts
+    if is_nex890 and (
+        agent_runtime_secret_leak or metrics.get("nex_bridge_secret_leak") is True
+    ):
+        if not any(fact.startswith(DETERMINISTIC_CHECK_PREFIX) for fact in res.facts):
+            leak_grade = _nex890_apply_secret_leak_failures(
+                {"passed": True, "failures": []},
+                agent_leak=agent_runtime_secret_leak,
+                bridge_leak=metrics.get("nex_bridge_secret_leak") is True,
+            )
+            res.facts.append(
+                DETERMINISTIC_CHECK_PREFIX + json.dumps(leak_grade, sort_keys=True)
+            )
+        res.metrics["deterministic_check"] = "failed"
+        res.metrics["deterministic_check_detail"] = deterministic_check_detail(res.facts)
+        res.verdict = {
+            "overall_pass": False,
+            "summary": "NEX-890 failed because the runner detected protected credential exposure.",
+        }
+        res.error = ""
+        res.ok = True
+        return res
     if not ok:
         res.error = http_stub_teardown_error or str(
             metrics.get("error", "agent run failed")
@@ -3365,9 +5497,14 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     final_answer = metrics.get("final_answer", "")
     res.verdict = run_judge(
         judge_backend, scenario_dir, checks, trace, final_answer,
-        args.judge_model, args.judge_timeout, effort=args.judge_effort,
+        judge_model, args.judge_timeout, effort=judge_effort,
         facts=facts, metrics=metrics,
     )
+    res.metrics.update({
+        "judge_backend": judge_backend_name,
+        "judge_model": judge_model,
+        "judge_effort": judge_effort,
+    })
     if checks.get("desktop_verify") and not desktop_facts_passed(facts):
         # The verifier re-serves the actual published closure and is the hard
         # acceptance gate; facts are not merely advisory evidence for the judge.
@@ -3405,10 +5542,10 @@ def main() -> int:
                         choices=AGENT_BACKENDS,
                         help="Provider driving the agent-under-test "
                              f"(default: {DEFAULT_AGENT_BACKEND}).")
-    parser.add_argument("--judge-backend", default=DEFAULT_JUDGE_BACKEND,
+    parser.add_argument("--judge-backend", default=None,
                         choices=JUDGE_BACKENDS,
                         help="Provider driving the judge "
-                             f"(default: {DEFAULT_JUDGE_BACKEND}).")
+                             f"(default: {DEFAULT_JUDGE_BACKEND}; NEX-890: codex / gpt-6-sol).")
     parser.add_argument("--agent-model", default=None,
                         help="Agent model. Default resolves from --agent-backend "
                              f"({DEFAULT_MODELS}).")
@@ -3451,6 +5588,15 @@ def main() -> int:
     parser.add_argument("--list", action="store_true",
                         help="List skill sets and scenarios, then exit.")
     args = parser.parse_args()
+
+    # Remember explicit CLI choices: NEX-890 has its own Sol/medium default,
+    # while ordinary scenarios retain the shared provider defaults below.
+    args._judge_backend_explicit = args.judge_backend is not None
+    args._judge_model_explicit = args.judge_model is not None
+    args._judge_effort_explicit = args.judge_effort is not None
+    args._agent_effort_explicit = args.agent_effort is not None
+    if args.judge_backend is None:
+        args.judge_backend = DEFAULT_JUDGE_BACKEND
 
     # Resolve per-backend default models when not overridden on the CLI, so
     # `--agent-backend codex` picks a codex model id (not Claude's "sonnet").
@@ -3505,9 +5651,11 @@ def main() -> int:
         print("No scenarios selected.", file=sys.stderr)
         return 2
 
+    selected_scenarios = {scenario.name for scenario in scenarios}
     try:
-        get_agent_backend(args.agent_backend).check_dependencies()
-        get_judge_backend(args.judge_backend).check_dependencies()
+        if selected_scenarios - {_NEX_890_SCENARIO}:
+            get_agent_backend(args.agent_backend).check_dependencies()
+            get_judge_backend(args.judge_backend).check_dependencies()
     except BackendDependencyError as exc:
         print(f"eval dependency check failed: {exc}", file=sys.stderr)
         return 2
@@ -3522,7 +5670,9 @@ def main() -> int:
         with print_lock:
             done[0] += 1
             label = f"{res.skill_set} :: {res.scenario}"
-            if not res.ok:
+            if res.metrics.get("status") == "UNSUPPORTED":
+                line = f"— UNSUPPORTED — {res.metrics.get('reason', 'security preflight did not pass')}"
+            elif not res.ok:
                 line = f"✗ ERROR — {res.error}"
             else:
                 passed = res.verdict.get("overall_pass")
@@ -3573,28 +5723,61 @@ def main() -> int:
     print_summary(results)
 
     if args.report:
+        graded_results = [
+            result
+            for result in results
+            if result.metrics.get("status") != "UNSUPPORTED"
+        ]
+        graded_scenarios = {result.scenario for result in graded_results}
+
+        def common_metric(name: str) -> str | None:
+            values = {
+                str(result.metrics[name])
+                for result in graded_results
+                if result.metrics.get(name) is not None
+            }
+            return next(iter(values)) if len(values) == 1 else None
+
         report = {
             "elapsed_s": round(time.time() - started, 1),
             "agent_backend": args.agent_backend,
-            "judge_backend": args.judge_backend,
-            "agent_model": args.agent_model,
+            "judge_backend": common_metric("judge_backend"),
+            "agent_model": common_metric("agent_model"),
             "scenario_agent_models": {
                 scenario.name: effective_agent_model(
-                    scenario_needs_desktop(scenario) is not None,
+                    scenario_uses_desktop(scenario),
                     args.agent_backend,
                     args.agent_model,
                 )
                 for scenario in scenarios
+                if scenario.name in graded_scenarios
             },
-            "judge_model": args.judge_model,
-            "agent_effort": args.agent_effort,
-            "judge_effort": args.judge_effort,
+            "scenario_agent_efforts": {
+                result.scenario: result.metrics.get("agent_effort")
+                for result in results
+                if result.metrics.get("status") != "UNSUPPORTED"
+                and result.metrics.get("agent_effort")
+            },
+            "judge_model": common_metric("judge_model"),
+            "agent_effort": common_metric("agent_effort"),
+            "judge_effort": common_metric("judge_effort"),
+            "scenario_judges": {
+                result.scenario: {
+                    "backend": result.metrics.get("judge_backend"),
+                    "model": result.metrics.get("judge_model"),
+                    "effort": result.metrics.get("judge_effort"),
+                }
+                for result in results
+                if result.metrics.get("status") != "UNSUPPORTED"
+                and result.metrics.get("judge_model")
+            },
             "concurrency": workers,
             "results": [
                 {
                     "skill_set": r.skill_set,
                     "scenario": r.scenario,
                     "ok": r.ok,
+                    "status": str(r.metrics.get("status", "GRADED" if r.ok else "ERROR")),
                     "error": r.error,
                     "metrics": r.metrics,
                     "verdict": r.verdict,
@@ -3610,7 +5793,10 @@ def main() -> int:
     # Exit non-zero only on infrastructure failures (a run that could not be
     # graded). A graded FAIL is a signal, not a CI break — eval pass rates are
     # tracked, not gated.
-    infra_failures = [r for r in results if not r.ok]
+    infra_failures = [
+        r for r in results
+        if not r.ok and r.metrics.get("status") != "UNSUPPORTED"
+    ]
     return 1 if infra_failures else 0
 
 
@@ -3619,6 +5805,12 @@ def print_summary(results: list[RunResult]) -> None:
     width = max((len(f"{r.skill_set}/{r.scenario}") for r in results), default=10)
     for r in results:
         label = f"{r.skill_set}/{r.scenario}".ljust(width)
+        if r.metrics.get("status") == "UNSUPPORTED":
+            print(
+                f"  {label}  UNSUPPORTED  {r.metrics.get('reason', 'security preflight did not pass')}",
+                file=sys.stderr,
+            )
+            continue
         if not r.ok:
             print(f"  {label}  ERROR  {r.error}", file=sys.stderr)
             continue

@@ -1,7 +1,12 @@
 {
   "server_name": "nxd-desktop",
   "workflow": "terminal-authenticated-dlt-api-ingestion",
+  "supported_agent_backends": ["claude"],
+  "nex_mode": true,
   "profile_builder": "prepare_stdio_profile.py",
+  "workflow_activation_bundle": "../../dp-scenarios/src/dp_scenarios/runner/workflow-execution-activation.json",
+  "workflow_action_guard": true,
+  "idle_timeout_seconds": 180,
   "allowed_tools": ["mcp__nxd-desktop__*"],
   "agent_allowed_tools": "Bash,Read,Write,Edit,Glob,Grep,Skill,mcp__nxd-desktop__*"
 }

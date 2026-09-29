@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -17,12 +18,24 @@ _OBSERVATIONS_PATH: Path | None = None
 
 def set_observations_path(path: Path | str | None) -> None:
     global _OBSERVATIONS_PATH
-    _OBSERVATIONS_PATH = Path(path) if path else None
+    with _OBSERVED_LOCK:
+        _OBSERVATIONS_PATH = Path(path) if path else None
 
 
 def observations() -> list[dict[str, object]]:
     with _OBSERVED_LOCK:
-        return list(OBSERVED)
+        return [dict(item) for item in OBSERVED]
+
+
+def reset_observations() -> None:
+    with _OBSERVED_LOCK:
+        OBSERVED.clear()
+
+
+def freeze_observations() -> list[dict[str, object]]:
+    """Copy finalized observations under the handler lock."""
+    with _OBSERVED_LOCK:
+        return [dict(item) for item in OBSERVED]
 
 
 def _record(item: dict[str, object]) -> None:
@@ -56,7 +69,15 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         auth = self.headers.get("Authorization", "")
         agent = self.headers.get("User-Agent", "")
-        record = {"path": self.path, "authorized": auth == f"Bearer {VALID_TOKEN}", "user_agent": agent}
+        record = {
+            "timestamp_monotonic_ns": time.monotonic_ns(),
+            "path": self.path,
+            "authorized": auth == f"Bearer {VALID_TOKEN}",
+            "user_agent": agent,
+        }
+        case_label = self.headers.get("X-Eval-Case")
+        if case_label:
+            record["X-Eval-Case"] = case_label
         if auth != f"Bearer {VALID_TOKEN}":
             record["status"] = 401
             _record(record)
@@ -102,6 +123,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 def start_server() -> tuple[ThreadingHTTPServer, int, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    # NEX-890 freezes observations only after every in-flight handler returns.
+    server.daemon_threads = False
+    server.block_on_close = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1], thread
