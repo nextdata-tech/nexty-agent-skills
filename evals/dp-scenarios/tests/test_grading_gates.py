@@ -362,6 +362,112 @@ def _workflow_v2_intake(
     }
 
 
+def _workflow_v2_b11_r400_intake(
+    *,
+    publish_initial: bool = False,
+    include_v2_approval: bool = True,
+    v2_approval_turn: int = 8,
+    v2_prepare_turn: int = 7,
+) -> dict[str, object]:
+    """Two prepared workflows shaped like the B11 r400 turns 1/3/7/8."""
+
+    initial_workflow = "crm-pipeline"
+    v2_workflow = "crm-pipeline-current-v2"
+    initial_quote = "Approved the initial CRM pipeline."
+    v2_quote = "Approve the crm-pipeline-current-v2 workflow proposal exactly as prepared."
+    seed = _workflow_v2_intake()
+    seed_observations = seed["observations"]
+    seed_turns = seed_observations["turns"]
+    proposal_content = seed_turns[0]["files_touched"][0]["content"]
+    typed_proposal = json.loads(proposal_content)
+    prefix = "mcp__nxd-desktop__"
+
+    def turn(number: int) -> dict[str, object]:
+        return turns.setdefault(
+            number,
+            {"turn": number, "files_touched": [], "tool_calls": []},
+        )
+
+    def observed_proposal(number: int) -> None:
+        turn(number)["files_touched"].append(
+            {"path": "dp-blueprint.proposal.json", "content": proposal_content}
+        )
+
+    def prepare_call(workflow: str) -> dict[str, object]:
+        return {
+            "name": f"{prefix}prepare_workflow",
+            "arguments": {
+                "workflow": workflow,
+                "blueprint_path": "dp-blueprint.md",
+                "typed_proposal": typed_proposal,
+            },
+            "result": {"is_error": False, "content": {"workflow": workflow}},
+        }
+
+    def advance_call(workflow: str, action: dict[str, object]) -> dict[str, object]:
+        return {
+            "name": f"{prefix}advance_workflow",
+            "arguments": {"workflow": workflow, "action": action},
+            "result": {"is_error": False, "content": {"workflow": workflow}},
+        }
+
+    turns: dict[int, dict[str, object]] = {}
+    observed_proposal(1)
+    turn(1)["tool_calls"].append(prepare_call(initial_workflow))
+    turn(3)["tool_calls"].append(
+        advance_call(
+            initial_workflow,
+            {
+                "type": "session_decision",
+                "parameters": {"approved": True, "quote": initial_quote},
+            },
+        )
+    )
+    if publish_initial:
+        turn(4)["tool_calls"].append(
+            advance_call(initial_workflow, {"type": "start_run", "parameters": {}})
+        )
+    observed_proposal(v2_prepare_turn)
+    turn(v2_prepare_turn)["tool_calls"].append(prepare_call(v2_workflow))
+    v2_relay_quote = v2_quote if include_v2_approval else initial_quote
+    turn(8)["tool_calls"].append(
+        advance_call(
+            v2_workflow,
+            {
+                "type": "session_decision",
+                "parameters": {"approved": True, "quote": v2_relay_quote},
+            },
+        )
+    )
+    v2_start_turn = max(9, v2_prepare_turn + 1)
+    turn(v2_start_turn)["tool_calls"].append(
+        advance_call(v2_workflow, {"type": "start_run", "parameters": {}})
+    )
+
+    rows: list[dict[str, object]] = [
+        {"record_type": "run_manifest"},
+        {
+            "turn": 3,
+            "action_kind": "spec_approved",
+            "artifact_ref": initial_quote,
+        },
+        {"turn": 11, "action_kind": "codegen"},
+    ]
+    if include_v2_approval:
+        rows.insert(
+            2,
+            {
+                "turn": v2_approval_turn,
+                "action_kind": "spec_approved",
+                "artifact_ref": v2_quote,
+            },
+        )
+    return {
+        "rows": rows,
+        "observations": {"turns": [turns[number] for number in sorted(turns)]},
+    }
+
+
 def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval() -> (
     None
 ):
@@ -397,6 +503,26 @@ def test_intake_binds_v2_publication_to_preparation_and_exact_operator_approval(
     malformed_decision["result"]["content"] = ["not", "a", "mapping"]
     malformed = gate_intake(malformed_decision_response)
     assert "intake_workflow_approval_not_relayed" in malformed.codes
+
+
+def test_intake_pairs_each_published_workflow_with_its_own_approval_and_relay() -> None:
+    assert gate_intake(_workflow_v2_b11_r400_intake()).passed
+    assert gate_intake(_workflow_v2_b11_r400_intake(publish_initial=True)).passed
+
+    missing_v2_approval = gate_intake(
+        _workflow_v2_b11_r400_intake(include_v2_approval=False)
+    )
+    assert "intake_workflow_prepare_not_before_approval" in missing_v2_approval.codes
+
+    late_v2_approval = gate_intake(
+        _workflow_v2_b11_r400_intake(v2_approval_turn=9)
+    )
+    assert "intake_workflow_approval_not_relayed" in late_v2_approval.codes
+
+    prepare_on_approval_turn = gate_intake(
+        _workflow_v2_b11_r400_intake(v2_prepare_turn=8)
+    )
+    assert "intake_workflow_prepare_not_before_approval" in prepare_on_approval_turn.codes
 
 
 def test_intake_ignores_a_later_prepared_but_unpublished_workflow() -> None:
