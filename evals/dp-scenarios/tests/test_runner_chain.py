@@ -479,3 +479,91 @@ def test_engine_never_sends_suffix_without_switch_and_discards_unused_prefix() -
         SimpleNamespace(script=script, chain=SPEC), replay, switched,
         generated_operator=False,
     )[0] == "verified"
+
+
+DEALS_VERIFIER = (ROOT / "tests/fixtures/pipeline_stage_in_enum_deals.py").read_bytes()
+DEALS_STAGES = b'STAGES = ("prospecting", "qualification", "negotiation", "closed_won", "closed_lost")'
+
+
+def test_sql_stage_precondition_accepts_constant_model_and_nested_placeholders() -> None:
+    assert _stage_constraint(DEALS_VERIFIER, STAGES, frozenset({"deals"}))
+    # The legacy default (no wiring information) still only trusts a `pipeline` table.
+    assert not _stage_constraint(DEALS_VERIFIER, STAGES)
+    assert not _stage_constraint(DEALS_VERIFIER, STAGES, frozenset({"nxd_decisions"}))
+    assert not _stage_constraint(DEALS_VERIFIER, STAGES, frozenset())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        DEALS_VERIFIER.replace(DEALS_STAGES, DEALS_STAGES.replace(b', "closed_lost"', b"")),
+        DEALS_VERIFIER.replace(DEALS_STAGES, DEALS_STAGES[:-1] + b', "paused")'),
+        DEALS_VERIFIER.replace(b"list(STAGES)", b"list(UNUSED)").replace(
+            b"\n\n@data_product.on_verify", b"\nUNUSED = STAGES\n\n@data_product.on_verify"
+        ),
+        DEALS_VERIFIER.replace(b"    if offending:", b"    if not offending:"),
+        DEALS_VERIFIER.replace(b"VerifyResultEnum.FAILED", b"VerifyResultEnum.PASS"),
+        DEALS_VERIFIER.replace(b'MODEL = "deals"', b'MODEL = "deals"\nMODEL = "pipeline"'),
+        DEALS_VERIFIER.replace(b'table = duckdb.full_table_name(MODEL)', b'table = "deals"'),
+        DEALS_VERIFIER.replace(b"@data_product.on_verify()\n", b""),
+    ],
+)
+def test_sql_stage_precondition_keeps_constant_model_shape_strict(source: bytes) -> None:
+    assert not _stage_constraint(source, STAGES, frozenset({"deals"}))
+
+
+def test_transform_only_raise_is_not_a_stage_precondition() -> None:
+    transform = b'''STAGES = ("prospecting", "qualification", "negotiation", "closed_won", "closed_lost")
+def transform(rows):
+    for row in rows:
+        if row["stage"] not in STAGES:
+            raise ValueError("bad stage")
+'''
+    assert not _stage_constraint(transform, STAGES, frozenset({"deals"}))
+
+
+def _deals_capture(root: Path, *, promised: list[str], stage_model: str) -> None:
+    digest = "b" * 64
+    models = (
+        "from nxd.spec import semantic_model, field\n"
+        f'{stage_model} = semantic_model("{stage_model}").schema({{"id": field(), "stage": field()}})\n'
+        'nxd_decisions = semantic_model("nxd_decisions").schema({"id": field()})\n'
+    ).encode()
+    folder = root / "supervisor-captures" / digest
+    (folder / "contracts/promises").mkdir(parents=True)
+    (folder / "contracts/promises/stage.py").write_bytes(DEALS_VERIFIER)
+    (folder / "models.py").write_bytes(models)
+    _write(root, "supervisor-captures.json", {"schema": CAPTURES_SCHEMA, "captures": [{
+        "capture_sha256": "sha256:" + digest, "run_ids": ["r"],
+        "files": [
+            {"path": "contracts/promises/stage.py", "sha256": _sha(DEALS_VERIFIER)},
+            {"path": "models.py", "sha256": _sha(models)},
+        ],
+    }]})
+    _write(root, "definition-export.json", {"schema": DEFINITION_EXPORT_SCHEMA, "definitions": [{
+        "definition_id": "d", "inventory_valid": True,
+        "output_promises": [{
+            "source": "contracts/promises/stage.py", "source_in_inventory": True,
+            "source_hash_verified": True, "source_sha256": _sha(DEALS_VERIFIER), "models": promised,
+        }],
+        "model_promises": [],
+    }]})
+
+
+@pytest.mark.parametrize(
+    ("promised", "stage_model", "expected"),
+    [
+        (["deals"], "deals", ("valid", "")),
+        (["nxd_decisions"], "deals", ("failed", "drift_prefix_invalid")),
+        ([], "deals", ("failed", "drift_prefix_invalid")),
+        (["deals"], "other_model", ("failed", "drift_prefix_invalid")),
+    ],
+)
+def test_captured_precondition_requires_promise_wired_to_stage_model(
+    tmp_path: Path, promised: list[str], stage_model: str, expected: tuple[str, str]
+) -> None:
+    from dp_scenarios.runner.chain import _captured_precondition
+
+    _deals_capture(tmp_path, promised=promised, stage_model=stage_model)
+    run = {"run_id": "r", "definition_id": "d", "capture_sha256": "sha256:" + "b" * 64}
+    assert _captured_precondition(tmp_path, run, STAGES) == expected
