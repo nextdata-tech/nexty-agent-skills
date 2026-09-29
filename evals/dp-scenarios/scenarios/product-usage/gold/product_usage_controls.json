@@ -1,0 +1,14 @@
+[
+  {
+    "as_of": "2024-04-22T06:00:00Z",
+    "expected_daily_count": 600,
+    "reporting_date": "2024-04-21",
+    "state": "v1"
+  },
+  {
+    "as_of": "2024-04-23T06:00:00Z",
+    "expected_daily_count": 600,
+    "reporting_date": "2024-04-22",
+    "state": "v2"
+  }
+]

@@ -1,0 +1,74 @@
+version: 1
+scenario_id: product-usage
+opening_message: "I need weekly active accounts and feature use, ready each morning."
+turns:
+  - "I need weekly active accounts and feature use, ready each morning."
+  - Please keep this to accounts only -- nothing about individual people.
+  - Please inspect the supplied files and tell me what you need to know.
+  - Please define the weekly output; ask about source handling if needed.
+  - What else do you need to settle before we're ready?
+  - Please bring me the proposed definition.
+  - text: "Approved: one row per week_start with the count of distinct accounts active that week, and one row per week_start and feature with the count of distinct accounts that used that feature that week. Land account-level activity only; exclude anything about the individual person behind an event."
+    substitute_reply: false
+    approval: true
+  - Please prepare the agreed workflow.
+  - Please continue with the typed definition.
+  - Please continue.
+  - Please finish the self-check and prepare for independent review.
+  - Please continue through the review.
+  - Please apply only the review corrections already authorized.
+  - Please prepare the approved workflow for its first build.
+  - Please build and validate the agreed workflow.
+  - Please continue to publication when validation allows.
+  - Please inspect the published run and its status.
+  - "I'm back the next morning; did it finish, and can you update the numbers?"
+  - Please decide the refresh treatment and tell me what you need to know.
+  - Please continue with the lookback decision.
+  - Please revise the workflow for the refresh if needed.
+  - Please rebuild and validate the refreshed workflow.
+  - Please continue to publication when validation allows.
+  - Please inspect the refreshed published run and its status.
+  - Please query the refreshed weekly active accounts and feature adoption.
+  - Please summarize the current numbers and any remaining blocker.
+source_answers:
+  files: The supplied export is usage_events, with a paired usage_export_status control document; there is no separate customer or contact export.
+  event id: event_id is the stable identifier for one usage event.
+  account id: account_id is a synthetic opaque account token.
+  feature: feature is one of search, dashboard, or export.
+  occurred at: occurred_at is when the usage event actually happened.
+  actor: actor carries the individual person who triggered the event and is out of scope; land only account-level activity.
+  export status: usage_export_status carries the export's as-of clock and the day's expected event count, both from the source itself, not the host clock.
+  retention: The export windows roughly the last two weeks and can revise a previously reported day when it is read again.
+decision_answers:
+  usage_events_lookback:
+    terms:
+      - late
+      - window
+    synonyms:
+      late: [arrive after, earlier event time, out of order]
+      window: [lookback, how far back, re-read]
+    answer: Reread at least the prior three calendar days, deduplicate by event_id against already landed keys, and retain older landed history rather than replacing it.
+    available_after_event: B8-late-arrival-refresh
+  review_fix_authorization:
+    terms: [review correction, reported finding]
+    answer: I authorize only the specific corrections already reported. Reset, correct, recapture, and run one fresh independent review; do not validate, admit, or publish until that review is clear. Ask me again before any new behavior-changing decision.
+status_answers:
+  status: The refresh is complete if the revised published run and its governed queries are available; otherwise report the exact remaining blocker.
+opening_forbidden_terms:
+  - late
+  - window
+  - lookback
+  - duplicate
+  - event_id
+  - actor
+  - retention
+  - three calendar days
+  - occurred_after
+open_decision_markers: ["[DECISION NEEDED]"]
+obstacle_terms: []
+driver_forbidden_terms:
+  - usage_events_lookback
+  - B8-late-arrival-refresh
+  - three calendar days
+  - 300 of 600
+  - occurred_after

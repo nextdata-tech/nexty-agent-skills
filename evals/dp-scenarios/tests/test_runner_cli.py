@@ -97,6 +97,125 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     assert captured["max_workers"] == 2
 
 
+def _run_live_cli(monkeypatch, tmp_path: Path, scenarios, *, tier: str = "smoke") -> tuple[int, dict[str, object]]:
+    """Drive ``cli.main(--mode live)`` against a stubbed scenario/session stack."""
+
+    captured: dict[str, object] = {}
+
+    class StubRunner:
+        def __init__(self, scenarios, **kwargs):
+            captured["scenarios"] = scenarios
+            captured.update(kwargs)
+
+        def run(self):
+            return SimpleNamespace(verdict="clean")
+
+    monkeypatch.setattr(cli, "load_scenarios", lambda _root: scenarios)
+    monkeypatch.setattr(
+        cli,
+        "load_claims",
+        lambda _path: SimpleNamespace(baseline=SimpleNamespace(approves_claims_hash="claims-1")),
+    )
+    monkeypatch.setattr(cli, "_read_json", lambda _path: {})
+    monkeypatch.setattr(cli, "_canary_from_mapping", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "write_report", lambda _result, **kwargs: None)
+    monkeypatch.setattr(cli, "TierRunner", StubRunner)
+    monkeypatch.setattr(cli, "load_knob_plan", lambda _path: {})
+
+    status = cli.main(
+        [
+            "--mode", "live",
+            "--scenario-root", str(tmp_path / "scenarios"),
+            "--tier", tier,
+            "--canary-dir", str(tmp_path / "canary"),
+            "--skills-root", str(tmp_path / "skills"),
+            "--canary-replay", str(tmp_path / "canary-replay.json"),
+            "--session-command", "fake-turn",
+            "--supervisor", str(tmp_path / "supervisor"),
+            "--skill-pack-version", "skills-1",
+            "--supervisor-version", "supervisor-1",
+            "--runtime-wheel-version", "wheel-1",
+            "--mock-api-version", "mock-1",
+            "--canary-claims-hash", "claims-1",
+            "--jobs", "1",
+            "--knob-plan", str(tmp_path / "knobs.json"),
+            "--report-json", str(tmp_path / "report.json"),
+        ]
+    )
+    return status, captured
+
+
+def test_live_mode_skips_a_blocked_scenario_but_keeps_the_rest_of_the_tier(monkeypatch, tmp_path: Path) -> None:
+    scenarios = [
+        SimpleNamespace(id="blocked-one", tier="full", live_blocked_reason="upstream gap"),
+        SimpleNamespace(id="clean-one", tier="full", live_blocked_reason=None),
+    ]
+    status, captured = _run_live_cli(monkeypatch, tmp_path, scenarios, tier="full")
+
+    assert status == 0
+    assert {scenario.id for scenario in captured["scenarios"]} == {"clean-one"}
+
+
+def test_live_mode_fails_closed_when_blocking_would_empty_the_tier(monkeypatch, tmp_path: Path) -> None:
+    scenarios = [SimpleNamespace(id="only-blocked", tier="full", live_blocked_reason="upstream gap")]
+
+    with pytest.raises(cli.TierError, match="live-blocked"):
+        _run_live_cli(monkeypatch, tmp_path, scenarios, tier="full")
+
+
+def test_replay_mode_does_not_filter_a_blocked_scenario_out_of_the_tier(monkeypatch, tmp_path: Path) -> None:
+    """The block is a live-dispatch-only concern; a replay run must see everything the tier declares."""
+
+    captured: dict[str, object] = {}
+
+    class StubRunner:
+        def __init__(self, scenarios, **kwargs):
+            captured["scenarios"] = scenarios
+            captured.update(kwargs)
+
+        def run(self):
+            return SimpleNamespace(verdict="clean")
+
+    scenarios = [
+        SimpleNamespace(id="blocked-one", tier="full", live_blocked_reason="upstream gap"),
+        SimpleNamespace(id="clean-one", tier="full", live_blocked_reason=None),
+    ]
+    monkeypatch.setattr(cli, "load_scenarios", lambda _root: scenarios)
+    monkeypatch.setattr(
+        cli,
+        "load_claims",
+        lambda _path: SimpleNamespace(baseline=SimpleNamespace(approves_claims_hash="claims-1")),
+    )
+    monkeypatch.setattr(cli, "_read_json", lambda _path: {})
+    monkeypatch.setattr(cli, "_canary_from_mapping", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "_load_replays", lambda _path, _scenario_ids: {})
+    monkeypatch.setattr(cli, "load_knob_plan", lambda _path: {})
+    monkeypatch.setattr(cli, "write_report", lambda _result, **kwargs: None)
+    monkeypatch.setattr(cli, "TierRunner", StubRunner)
+
+    status = cli.main(
+        [
+            "--mode", "replay",
+            "--scenario-root", str(tmp_path / "scenarios"),
+            "--tier", "full",
+            "--canary-dir", str(tmp_path / "canary"),
+            "--skills-root", str(tmp_path / "skills"),
+            "--canary-replay", str(tmp_path / "canary-replay.json"),
+            "--replay", str(tmp_path / "replay"),
+            "--skill-pack-version", "skills-1",
+            "--supervisor-version", "supervisor-1",
+            "--runtime-wheel-version", "wheel-1",
+            "--mock-api-version", "mock-1",
+            "--canary-claims-hash", "claims-1",
+            "--jobs", "1",
+            "--knob-plan", str(tmp_path / "knobs.json"),
+            "--report-json", str(tmp_path / "report.json"),
+        ]
+    )
+    assert status == 0
+    assert {scenario.id for scenario in captured["scenarios"]} == {"blocked-one", "clean-one"}
+
+
 def test_local_live_cli_accepts_an_explicit_stable_checkpoint_directory(tmp_path: Path) -> None:
     local_cli = _local_claude_cli()
     args = local_cli.build_parser().parse_args(
