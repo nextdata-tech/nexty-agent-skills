@@ -534,7 +534,6 @@ def gate_intake(
                     )
                 )
             else:
-                first_approval = min(int(row["turn"]) for row in approval_rows)
                 if prepare_candidates and not prepared:
                     findings.append(
                         Finding(
@@ -562,30 +561,44 @@ def gate_intake(
                                 "the exact dp-blueprint.proposal.json was not observed by prepare_workflow",
                             )
                         )
-                if not any(
-                    position.turn < first_approval
-                    and workflow in publication_workflows
-                    for position, workflow in prepared
-                ):
-                    findings.append(
-                        Finding(
-                            "intake_workflow_prepare_not_before_approval",
-                            "prepare_workflow did not bind the blueprint before operator approval",
+                for workflow in sorted(publication_workflows):
+                    workflow_decisions = [
+                        (position, quote)
+                        for position, decision_workflow, quote in decisions
+                        if decision_workflow == workflow
+                    ]
+                    relayed_approvals = [
+                        (row, position)
+                        for row in approval_rows
+                        for position, quote in workflow_decisions
+                        if quote == row["artifact_ref"]
+                        and position.turn >= int(row["turn"])
+                    ]
+                    workflow_prepares = [
+                        position
+                        for position, prepared_workflow in prepared
+                        if prepared_workflow == workflow
+                    ]
+                    if not relayed_approvals:
+                        findings.append(
+                            Finding(
+                                "intake_workflow_approval_not_relayed",
+                                "session_decision does not relay this workflow's exact operator approval",
+                                workflow,
+                            )
                         )
-                    )
-                exact_quotes = {str(row["artifact_ref"]) for row in approval_rows}
-                if not any(
-                    position.turn >= first_approval
-                    and workflow in publication_workflows
-                    and quote in exact_quotes
-                    for position, workflow, quote in decisions
-                ):
-                    findings.append(
-                        Finding(
-                            "intake_workflow_approval_not_relayed",
-                            "session_decision does not relay the exact operator approval",
+                    if not any(
+                        prepare_position.turn < int(approval_row["turn"])
+                        for approval_row, _decision_position in relayed_approvals
+                        for prepare_position in workflow_prepares
+                    ):
+                        findings.append(
+                            Finding(
+                                "intake_workflow_prepare_not_before_approval",
+                                "prepare_workflow did not bind this workflow's blueprint before its operator approval",
+                                workflow,
+                            )
                         )
-                    )
     return _result("intake", not findings, findings)
 
 

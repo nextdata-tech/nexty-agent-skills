@@ -42,6 +42,7 @@ def check(output):
         return VerifyResult(VerifyResultEnum.FAILED, {})
     return VerifyResult(VerifyResultEnum.PASS, {})
 '''
+CAPTURED_SQL_VERIFIER = (ROOT / "tests/fixtures/pipeline_declared_stage.py").read_bytes()
 
 
 def _sha(content: bytes) -> str:
@@ -190,9 +191,144 @@ def test_source_switch_failure_withholds_overlay_and_suffix(tmp_path: Path) -> N
 def test_ast_precondition_requires_executable_constraint_and_promised_literal() -> None:
     assert _stage_constraint(VERIFIER, STAGES)
     assert not _stage_constraint(b"# stage not in prospecting qualification negotiation closed_won closed_lost\n", STAGES)
+    assert _stage_constraint(CAPTURED_SQL_VERIFIER, STAGES)
     typed = b"from typing import Literal\nclass Deal:\n    stage: Literal['prospecting', 'qualification', 'negotiation', 'closed_won', 'closed_lost']\n"
     assert _typed_stage_constraint(typed, STAGES, {"Deal"})
     assert not _typed_stage_constraint(typed, STAGES, {"Unpromised"})
+
+
+def test_python_stage_precondition_resolves_fixed_local_stage_literal() -> None:
+    local_literal = b'''from nxd import data_product
+from nxd.core.context import VerifyResult, VerifyResultEnum
+@data_product.on_verify()
+def check(output):
+    official = ("prospecting", "qualification", "negotiation", "closed_won", "closed_lost")
+    if row.stage not in official:
+        return VerifyResult(VerifyResultEnum.FAILED, {})
+    return VerifyResult(VerifyResultEnum.PASS, {})
+'''
+    rebound = local_literal.replace(
+        b'    if row.stage not in official:',
+        b'    official = ("prospecting",)\n    if row.stage not in official:',
+    )
+    mutated = local_literal.replace(
+        b'official = ("prospecting", "qualification", "negotiation", "closed_won", "closed_lost")',
+        b'official = ["prospecting", "qualification", "negotiation", "closed_won", "closed_lost"]\n    official.append("paused")',
+    )
+
+    assert _stage_constraint(local_literal, STAGES)
+    assert not _stage_constraint(rebound, STAGES)
+    assert not _stage_constraint(mutated, STAGES)
+    assert not _stage_constraint(
+        local_literal.replace(
+            b"if row.stage not in official:",
+            b"if row.stage not in official == ():",
+        ),
+        STAGES,
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        CAPTURED_SQL_VERIFIER.replace(
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\")",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\", \"paused\")",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_won\")",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"list(DECLARED_STAGES)", b"list(UNUSED_STAGES)"
+        ).replace(
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")\nUNUSED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"for _ in DECLARED_STAGES", b"for _ in range(5)"
+        ).replace(b"list(DECLARED_STAGES)", b"[]"),
+        CAPTURED_SQL_VERIFIER.replace(
+            b'f"SELECT stage, COUNT(*) FROM {table} "\n            f"WHERE stage IS NULL OR stage NOT IN ({placeholders}) GROUP BY stage"',
+            b'f"SELECT stage FROM {table} WHERE stage NOT IN (__BOUND__)"',
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"WHERE stage IS NULL OR stage NOT IN", b"WHERE status IS NULL OR status NOT IN"
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"if total == 0 or offending:", b"if total == 0 or not offending:"
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"    if total == 0 or offending:",
+            b"    offending.clear()\n    if total == 0 or offending:",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"        return VerifyResult(\n            VerifyResultEnum.FAILED,",
+            b"        return VerifyResult(\n            VerifyResultEnum.PASS,",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"            VerifyResultEnum.FAILED,",
+            b"            VerifyResultEnum.FAILED if False else VerifyResultEnum.PASS,",
+        ),
+        CAPTURED_SQL_VERIFIER.replace(
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+            b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")\nDECLARED_STAGES = (\"prospecting\",)",
+        ),
+    ],
+)
+def test_sql_stage_precondition_rejects_unlinked_or_non_failing_checks(source: bytes) -> None:
+    assert not _stage_constraint(source, STAGES)
+
+
+def test_sql_stage_precondition_accepts_fixed_literal_list_and_frozenset() -> None:
+    list_form = CAPTURED_SQL_VERIFIER.replace(
+        b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+        b"DECLARED_STAGES = [\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\"]",
+    )
+    frozen_form = CAPTURED_SQL_VERIFIER.replace(
+        b"DECLARED_STAGES = (\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\")",
+        b"DECLARED_STAGES = frozenset((\"prospecting\", \"qualification\", \"negotiation\", \"closed_won\", \"closed_lost\"))",
+    )
+    mutated_list = list_form.replace(
+        b"\n\n\n@data_product.on_verify()",
+        b"\nDECLARED_STAGES.append(\"paused\")\n\n\n@data_product.on_verify()",
+    )
+    aliased_list = list_form.replace(
+        b"\n\n\n@data_product.on_verify()",
+        b"\n_STAGE_ALIAS = DECLARED_STAGES\n_STAGE_ALIAS[0] = \"paused\"\n\n\n@data_product.on_verify()",
+    )
+
+    assert _stage_constraint(list_form, STAGES)
+    assert _stage_constraint(frozen_form, STAGES)
+    assert not _stage_constraint(mutated_list, STAGES)
+    assert not _stage_constraint(aliased_list, STAGES)
+
+
+def test_sql_stage_precondition_accepts_explicit_nonempty_offending_rows_check() -> None:
+    source = CAPTURED_SQL_VERIFIER.replace(
+        b"if total == 0 or offending:", b"if total == 0 or len(offending) > 0:"
+    )
+    assert _stage_constraint(source, STAGES)
+
+
+def test_sql_stage_precondition_preserves_literal_sql_rejection() -> None:
+    literal_sql = b'''from nxd import data_product
+from nxd.core.context import VerifyResult, VerifyResultEnum
+@data_product.on_verify()
+def verify(output):
+    connection = output.connection()
+    offending = connection.execute(
+        "SELECT stage FROM pipeline WHERE stage NOT IN ('prospecting', 'qualification', 'negotiation', 'closed_won', 'closed_lost')"
+    ).fetchall()
+    if offending:
+        return VerifyResult(VerifyResultEnum.FAILED, {})
+    return VerifyResult(VerifyResultEnum.PASS, {})
+'''
+    assert _stage_constraint(literal_sql, STAGES)
 
 
 def test_chain_schema_is_strict_and_existing_hash_is_unchanged() -> None:
@@ -259,6 +395,30 @@ def test_unpublished_prefix_scores_failed_in_tier(tmp_path: Path) -> None:
     assert run.stop_condition == "chain_prefix_failed"
     assert run.score.state is ScoreTerminalState.FAILED
     assert len(transport.message_texts) == 2
+
+
+def test_tier_reports_chained_follow_up_reason_once(tmp_path: Path) -> None:
+    base = load_scenario(ROOT / "scenarios/crm-pipeline-drift")
+    assert base.chain is not None
+    scenario = replace(
+        base,
+        chain=replace(base.chain, prefix_turns=2),
+        repeatability=RepeatabilitySpec(
+            RepeatabilityTier.DEMONSTRATED_ONCE, 1, "demonstrated_once", ("build",), None, None
+        ),
+    )
+    result = TierRunner(
+        [scenario],
+        pins=PinnedVersions("skills-1", "supervisor-1", "wheel-1", "mock-1", "claims-1"),
+        canary=CanaryResult(Verdict("clean", (), ()), claims_hash="claims-1"),
+        session_factory=lambda *_args: InMemoryTransport([
+            TurnResult(agent_message="Working on the pipeline."),
+            TurnResult(agent_message="No publication yet."),
+        ]),
+        environment_root=tmp_path,
+    ).run()
+    follow_up = result.scenarios[0].runs[0].score.gates["follow-up"]
+    assert follow_up.codes.count("drift_prefix_publication_missing") == 1
 
 
 def _script() -> OperatorScript:

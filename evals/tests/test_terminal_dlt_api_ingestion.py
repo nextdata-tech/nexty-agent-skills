@@ -835,7 +835,14 @@ def test_transform_contract_rejects_other_hand_written_http_clients() -> None:
         "import aiohttp\n",
         "import socket\n",
         "import pycurl\n",
-        "from dlt.sources.helpers import requests\n",
+        "from dlt.sources.helpers import requests\nrequests.get('/orders')\n",
+        "import requests\nrequests.get('/orders')\n",
+        "import requests as rq\ns = rq.Session()\ns.get('/orders')\n",
+        "import requests\nwith requests.Session() as s:\n    s.post('/orders')\n",
+        "import requests\nrequests.Session().request('GET', '/orders')\n",
+        "from requests import get\n",
+        "import urllib.request\n",
+        "import urllib\nurllib.request.urlopen('/orders')\n",
         "from dlt.sources.helpers import rest_client\n",
         "from dlt.sources.helpers.rest_client import RESTClient\n",
         "from dlt.sources.helpers.rest_client.client import RESTClient\n",
@@ -847,6 +854,51 @@ def test_transform_contract_rejects_other_hand_written_http_clients() -> None:
             {"transform/main.py": (addition + _TEMPLATE_TRANSFORM).encode()}
         )
         assert "direct-http-client" in gaps, addition
+
+
+def test_transform_contract_allows_requests_handed_to_dlt() -> None:
+    checker = _nex890_checker()
+    for addition in (
+        "import requests\n",
+        "from urllib.parse import urljoin\n",
+        "import requests\nclass RefreshingSession(requests.Session):\n"
+        "    def send(self, request, **kwargs):\n"
+        "        try:\n            return super().send(request, **kwargs)\n"
+        "        except requests.exceptions.HTTPError:\n            raise\n",
+    ):
+        gaps = checker._nex_transform_contract_gaps(
+            {"transform/main.py": (addition + _TEMPLATE_TRANSFORM).encode()}
+        )
+        assert "direct-http-client" not in gaps, addition
+
+
+def test_skill_refresh_recipe_satisfies_the_transform_contract() -> None:
+    """The skill tells agents to copy this recipe; the checker must accept it."""
+    checker = _nex890_checker()
+    recipe = (ROOT / "src/nxd-generate-data-product/scripts/api_source_refresh_session.py").read_text()
+    gaps = checker._nex_transform_contract_gaps(
+        {"transform/main.py": (recipe + "\n" + _TEMPLATE_TRANSFORM).encode()}
+    )
+    assert "direct-http-client" not in gaps
+    assert "endpoint-attribute-missing" not in gaps
+
+
+def test_transform_contract_accepts_other_endpoint_attribute_spellings() -> None:
+    checker = _nex890_checker()
+    source = _TEMPLATE_TRANSFORM
+    marker = next(
+        spelling for spelling in ('secrets[f"endpoint_{', "secrets['endpoint_orders']", 'secrets["endpoint_orders"]')
+        if spelling in source
+    )
+    line = next(line for line in source.splitlines() if marker in line)
+    for replacement in (
+        line.replace(line.strip(), 'path = profile.get("endpoint_orders")'),
+        line.replace(line.strip(), 'path = profile["endpoint_" + model]'),
+        line.replace(line.strip(), 'paths = [v for k, v in profile.items() if k.startswith("endpoint_")]'),
+    ):
+        variant = source.replace(line, replacement)
+        gaps = checker._nex_transform_contract_gaps({"transform/main.py": variant.encode()})
+        assert "endpoint-attribute-missing" not in gaps, replacement
 
 
 def test_transform_contract_requires_a_live_rest_connector() -> None:
