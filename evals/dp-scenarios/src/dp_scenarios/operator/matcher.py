@@ -226,10 +226,16 @@ SOLICITATION_PATTERN = re.compile(
     # No question mark and no interrogative opener, so without this a direct
     # instruction to the operator was silently dropped as a yield.
     r"|tell\s+me\s+(?:which|what|whether|if|a|an|the|who|where)|point\s+me)\b"
+    # Review reports can put the requested disposition in a numbered list:
+    # "For finding 2, say whether to apply it." This is addressed to the
+    # operator, unlike a bare "choose" in an implementation task list.
+    r"|\bsay\s+(?:whether|which|if)\b"
+    r"|(?:^|[.!?\n]\s*)\s*(?:name|list|select)\s+(?:the\s+)?(?:findings|issues|blockers)\b"
+    r"|(?:^|[.!?\n]\s*)\s*for\s+each\s+(?:finding|issue|blocker)\s*,?\s*say\b"
     # "Reply with ..." is an addressed instruction to the operator. Unlike
     # a bare "choose" or "confirm" in a task list, it does not narrate a
     # build step; a live review choice used it without a question mark.
-    r"|(?:^|[.!?]\s)\s*(?:please\s+)?reply\b",
+    r"|(?:^|[.!?,;:]\s)\s*(?:please\s+)?reply\b",
     re.IGNORECASE,
 )
 
@@ -334,8 +340,20 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         return None
     request_clauses = _current_request_clauses(message)
     for candidate in request_clauses:
+        # A direct "reply with this:" instruction can put the proposed
+        # disposition in the following block quote. The quote belongs to the
+        # addressed request, despite the intervening blank line.
+        if _REVIEW_REPLY_TEMPLATE_PATTERN.search(candidate) is None:
+            continue
+        tail = prose.split(candidate, 1)[-1]
+        proposed = re.match(r"\s*>?\s*([^\n]{1,300})", tail)
+        if proposed is not None and _REVIEW_FIX_ACTION_PATTERN.search(proposed.group(1)):
+            return f"{candidate} {proposed.group(1)}"
+    for candidate in request_clauses:
         if not candidate:
             continue
+        if _REVIEW_FINDING_SELECTION_PATTERN.search(candidate):
+            return candidate
         if _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(candidate):
             return candidate
         has_review_fix_action = bool(
@@ -397,6 +415,17 @@ CHOICE_PATTERN = re.compile(
     r"\b(which|choose|choice|option|options|prefer|decide|decision|either"
     r"|go-?ahead|approve|approval|sign\s*off|yes\s*/\s*no)\b",
     re.IGNORECASE,
+)
+_DIRECT_CHOICE_PATTERN = re.compile(
+    r"\b(?:choose|choice|option|options|prefer|decide|decision|either|"
+    r"yes\s*/\s*no|approve|approval|sign\s*off)\b"
+    r"|\bwhich\b.{0,60}\b(?:want|prefer|choose)\b",
+    re.IGNORECASE,
+)
+_CONDITIONAL_REVISION_PATTERN = re.compile(
+    r"^\s*if\s+you\s+(?:want|would\s+(?:like|prefer))\b.{0,160}"
+    r"\b(?:chang(?:e|ed)|revis(?:e|ed))\b",
+    re.IGNORECASE | re.DOTALL,
 )
 
 # A review's implementation findings can recap an earlier decision while the
@@ -504,6 +533,15 @@ _REVIEW_APPLY_OR_DECLINE_PATTERN = re.compile(
 _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN = re.compile(
     r"\bproceed\s+with\s+(?:all|both|some|none|either|any)\b", re.IGNORECASE
 )
+_REVIEW_REPLY_TEMPLATE_PATTERN = re.compile(
+    r"\breply\s+with\s+(?:this|the\s+following|something\s+like)\s*:\s*$",
+    re.IGNORECASE,
+)
+_REVIEW_FINDING_SELECTION_PATTERN = re.compile(
+    r"\b(?:name|list|select|reply\s+with)\s+(?:the\s+)?(?:findings|issues|blockers)\s+"
+    r"(?:you\s+)?(?:approve|authorize|would\s+(?:approve|authorize))\b",
+    re.IGNORECASE,
+)
 _PROPOSED_FIX_LIST_PATTERN = re.compile(r"\bfix(?:es)?\b", re.IGNORECASE)
 _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
     r"\breview(?:er)?(?:['’]s)?\b.{0,240}\b(?:found|finding|findings|issue|issues|"
@@ -511,6 +549,12 @@ _REVIEW_FINDING_CONTEXT_PATTERN = re.compile(
     r"|\b(?:finding|findings|issue|issues)\b.{0,140}\breview(?:er)?\b"
     r"|\b(?:finding|findings|issue|issues)\b.{0,160}\b(?:surfaced|reported|identified|raised)\b",
     re.IGNORECASE | re.DOTALL,
+)
+_NEGATED_REVIEW_FINDING_PATTERN = re.compile(
+    r"\b(?:no|without)\s+(?:independent\s+)?review\s+(?:has\s+run|findings?|issues?)\b"
+    r"|\breview\s+(?:has\s+not|hasn't|did\s+not|didn't)\s+(?:happen|run|finish)\b"
+    r"|\bno\s+(?:review\s+)?findings?\b",
+    re.IGNORECASE,
 )
 _REVIEW_FINDING_ID_PATTERN = re.compile(
     r"\b(?:finding|issue)\b[^`\n]{0,140}?`([a-z0-9][a-z0-9_-]{4,})`"
@@ -895,8 +939,11 @@ class MatcherBank:
 
         if not isinstance(message, str):
             raise TypeError("agent message must be a string")
+        prose = _NON_PROSE.sub(" ", message)
+        if _NEGATED_REVIEW_FINDING_PATTERN.search(prose) is not None:
+            return False
         return (
-            _REVIEW_FINDING_CONTEXT_PATTERN.search(_NON_PROSE.sub(" ", message)) is not None
+            _REVIEW_FINDING_CONTEXT_PATTERN.search(prose) is not None
             or _REVIEW_FINDING_ID_PATTERN.search(message) is not None
         )
 
@@ -986,6 +1033,15 @@ class MatcherBank:
         ]
         other_substantive_asks = any(
             _OTHER_ASK_TOPIC_PATTERN.search(clause)
+            and _CONDITIONAL_REVISION_PATTERN.search(clause) is None
+            and (
+                clause not in approval_clauses
+                or re.search(
+                    r"\b(source|data|field|column|endpoint|resource|record|row|input|table)\b",
+                    clause,
+                    re.IGNORECASE,
+                ) is not None
+            )
             for clause in request_clauses
         )
         approval_context = bool(_APPROVAL_CONTEXT_PATTERN.search(prose))
@@ -1010,7 +1066,14 @@ class MatcherBank:
             )
         ):
             review_fix = None
-        review_fix_request = _review_fix_request(message, context)
+        # The caller retains only reports of actual findings as context. A
+        # hypothetical or negated review must not make a plan approval into
+        # authorization to repair work that has never been reviewed.
+        review_context = context if self.has_review_finding_context(context) else ""
+        review_in_play = bool(review_context) or self.has_review_finding_context(message)
+        review_fix_request = (
+            _review_fix_request(message, review_context) if review_in_play else None
+        )
         if (
             review_fix is not None
             and review_fix_request is not None
@@ -1064,7 +1127,9 @@ class MatcherBank:
         # plan-approval routes. If no declared decision covers it, the
         # operator returns its ordinary unknown-decision response rather than
         # silently selecting an answer from recap vocabulary.
-        review_disposition_request = _review_disposition_request(message, context)
+        review_disposition_request = (
+            _review_disposition_request(message, review_context) if review_in_play else None
+        )
         if review_disposition_request is not None and review_fix_request is None:
             if review_fix is not None:
                 return self._decision_result(
@@ -1176,6 +1241,21 @@ class MatcherBank:
                         None,
                     )
                 ),
+            )
+        # A direct choice is about the requested action even when the agent's
+        # recap mentions a source row or table. Keep the source-first legacy
+        # behavior for broad closing questions with no explicit choice.
+        choice_clause = next(
+            (clause for clause in request_clauses if _DIRECT_CHOICE_PATTERN.search(clause)),
+            None,
+        )
+        if choice_clause is not None and solicits_operator(choice_clause):
+            return MatchResult(
+                Category.DECISION_REQUEST,
+                "decision.request",
+                "",
+                matched=True,
+                matched_request_clause=choice_clause,
             )
         if is_question and _contains_term(message, self.question_obstacle_terms):
             return MatchResult(

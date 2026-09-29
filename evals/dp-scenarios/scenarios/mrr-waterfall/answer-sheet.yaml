@@ -51,13 +51,17 @@ decision_answers:
       - within the same month
       - both directions
     synonyms:
-      within the same month: [same month, during one month, in the same month]
+      within the same month: [same month, during one month, in the same month, within a month, within one month, mid-month]
       both directions:
         - down then up
         - down and back up
+        - up and down
+        - down and up
         - dropped then went back up
         - decreased and increased
         - downgrade and upgrade
+        - event-by-event
+        - gross movements
     answer: Initially treat movements gross and show a customer's within-month contraction and expansion as separate directions in that month's bridge.
     available_after_event: B7-same-month
   same_month_classification_revised:
@@ -65,13 +69,17 @@ decision_answers:
       - within the same month
       - both directions
     synonyms:
-      within the same month: [same month, during one month, in the same month]
+      within the same month: [same month, during one month, in the same month, within a month, within one month, mid-month]
       both directions:
         - down then up
         - down and back up
+        - up and down
+        - down and up
         - dropped then went back up
         - decreased and increased
         - downgrade and upgrade
+        - event-by-event
+        - gross movements
     answer: Use each customer's prior-month close and this month's close, so interim within-month changes net out before classifying the monthly movement.
     available_after_event: B7-E8
   event_deduplication:
@@ -82,6 +90,13 @@ decision_answers:
       duplicate event: [duplicate, repeated event, repeated record]
       stable event key: [event_id, event ID, event identifier]
     answer: Use event_id as the key, keep one copy when all fields are exact duplicates, and stop for operator review when copies with the same key conflict.
+    available_after_event: B7-same-month
+  empty_movement_rows:
+    terms: [empty movements, row]
+    synonyms:
+      empty movements: [empty movement, movement with no activity, movements with no activity]
+      row: [rows]
+    answer: Omit waterfall rows for movements with no activity; every emitted amount_cents remains positive. The monthly balance still includes every month, and an absent movement contributes zero to its reconciliation.
     available_after_event: B7-same-month
   review_fix_authorization:
     terms: [review correction, reported finding]
