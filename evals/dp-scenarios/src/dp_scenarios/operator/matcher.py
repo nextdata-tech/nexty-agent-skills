@@ -258,7 +258,11 @@ SOLICITATION_PATTERN = re.compile(
     # Review reports can put the requested disposition in a numbered list:
     # "For finding 2, say whether to apply it." This is addressed to the
     # operator, unlike a bare "choose" in an implementation task list.
-    r"|\bsay\s+(?:whether|which|if)\b"
+    # "so I can't say which fix resolved it" reports a limit; it asks nothing.
+    # Only an unnegated "say which/whether/if" is an instruction to the operator.
+    r"|(?<!can't\s)(?<!can\u2019t\s)(?<!cannot\s)(?<!can\snot\s)(?<!couldn't\s)(?<!couldn\u2019t\s)"
+    r"(?<!won't\s)(?<!won\u2019t\s)(?<!unable\sto\s)(?<!not\s)(?<!never\s)"
+    r"\bsay\s+(?:whether|which|if)\b"
     r"|(?:^|[.!?\n]\s*)\s*(?:name|list|select)\s+(?:the\s+)?(?:findings|issues|blockers)\b"
     r"|(?:^|[.!?\n]\s*)\s*for\s+each\s+(?:finding|issue|blocker)\s*,?\s*say\b"
     r"|\breply\s+(?:yes|no)\b"
@@ -270,7 +274,10 @@ SOLICITATION_PATTERN = re.compile(
     # it, only a single newline, so the boundary accepts ``\n`` alongside
     # clause-start and sentence punctuation -- the same boundary the
     # findings/blockers rule two alternatives up already uses.
-    r"|(?:^|[.!?,;:]\s|\n)\s*(?:please\s+)?reply\b"
+    # Markdown emphasis can sit between the boundary and the words:
+    # "**To continue:** reply with an explicit approval" has "**" between the
+    # colon and the space, and "\n**Reply with ...**" has it after the newline.
+    r"|(?:^|[.!?,;:][*_]{0,2}\s|\n)\s*[*_]{0,2}(?:please\s+)?reply\b"
     # The literal reply token offered as its own bulleted or table-row
     # option ("- **Approve** to recapture the closure...", a markdown table
     # row). Unlike the bare "choose"/"confirm"/"pick" imperatives this file
@@ -489,18 +496,62 @@ def _decision_lookup_text(message: str, ask_clause: str) -> str:
     return text
 
 
+# An optional "amend" offer trailing an explicit ask: "If any answer differs,
+# say which, and I'll amend the plan first." / "Tell me a value, or which
+# timeout you meant, and I'll include it." / "Tell me which if it matters to
+# you." It invites a correction; it is not the question the operator must
+# answer, and must not hijack the explicit ask that precedes it.
+_OPTIONAL_AMEND_OFFER_PATTERN = re.compile(
+    r"^\s*(?:if|otherwise|else)\b[^?]*?\b(?:say|tell\s+me|let\s+me\s+know|send)\b"
+    r"[^?]*?\bi(?:['\u2019]ll|\s+will)\s+(?:amend|revise|change|update|adjust|edit|"
+    r"re-?prepare|prepare|include|add)\b"
+    r"|^\s*(?:tell\s+me|say)\b[^?]*?\b(?:and\s+)?i(?:['\u2019]ll|\s+will)\s+"
+    r"(?:amend|revise|change|update|adjust|edit|re-?prepare|prepare|include|add)\b"
+    r"|^\s*(?:tell\s+me|say)\b[^?]*\bif\s+it\s+matters(?:\s+to\s+you)?\W*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# A trailing status sentence ("... findings awaiting your decision") reports
+# that a decision is pending. It is not itself an ask, so it must not outrank
+# an addressed ask earlier in the message. Approval status ("awaiting your
+# approval") is deliberately excluded: that vocabulary is the approval ask.
+_STATUS_ONLY_PATTERN = re.compile(
+    r"\b(?:awaiting|waiting\s+(?:on|for))\s+your\s+(?:decision|call|answer|choice|input|review)\b",
+    re.IGNORECASE,
+)
+_ADDRESSED_ASK_VERB_PATTERN = re.compile(
+    r"\b(?:please|can\s+you|could\s+you|would\s+you|do\s+you\s+want|tell\s+me|"
+    r"let\s+me\s+know|reply|say\s+(?:whether|which|if))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_status_only_clause(clause: str) -> bool:
+    return (
+        _STATUS_ONLY_PATTERN.search(clause) is not None
+        and "?" not in clause
+        and _ADDRESSED_ASK_VERB_PATTERN.search(clause) is None
+    )
+
+
 def _active_request_clauses(message: str) -> list[str]:
-    """Return only the latest non-conditional ask that needs a reply."""
+    """Return only the latest ask that needs a reply.
+
+    Conditional revision offers, optional "say which and I'll amend" trailers
+    and status-only sentences never displace an earlier explicit ask. If
+    nothing else is left they remain the active clause, as before.
+    """
 
     clauses = _current_request_clauses(message)
-    active_clause = next(
-        (
-            clause
-            for clause in reversed(clauses)
-            if _CONDITIONAL_REVISION_PATTERN.search(clause) is None
-        ),
-        None,
-    )
+    asks = [
+        clause for clause in clauses
+        if _CONDITIONAL_REVISION_PATTERN.search(clause) is None
+    ]
+    primary = [
+        clause for clause in asks
+        if _OPTIONAL_AMEND_OFFER_PATTERN.search(clause) is None
+        and not _is_status_only_clause(clause)
+    ]
+    active_clause = (primary or asks or [None])[-1]
     return [active_clause] if active_clause is not None else []
 
 
@@ -1877,6 +1928,28 @@ class MatcherBank:
             if request_decision is not None:
                 request_decision_clause = clause
                 break
+        if request_decision is None and approval_rule is None:
+            # The active clause is only the latest ask. When it names no
+            # declared decision, another genuine question in the same message
+            # (never a conditional offer or a recap, which are not ask
+            # clauses) may still carry it: r416 asked the declared same-month
+            # question in a bold clause, then closed with a trailing invitation.
+            for clause in reversed(_current_request_clauses(message)):
+                if (
+                    clause in request_clauses
+                    or _QUESTION_CLAUSE_END.search(clause) is None
+                    or _CONDITIONAL_REVISION_PATTERN.search(clause) is not None
+                ):
+                    continue
+                request_decision = self._request_decision(
+                    _decision_lookup_text(message, clause),
+                    excluded_decision_ids=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if request_decision is not None:
+                    request_decision_clause = clause
+                    break
         if request_decision is None:
             confirmation_text = _declared_confirmation_text(message)
             if confirmation_text is not None:
