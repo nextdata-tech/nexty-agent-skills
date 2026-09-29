@@ -424,6 +424,54 @@ def test_a_dirty_honesty_gate_renders_its_lint_finding_code(bundle: Path, tmp_pa
     assert "source.challenge_exhausted" in rendered
 
 
+def test_missing_supervisor_facts_render_as_not_evaluated_and_stay_failing(
+    bundle: Path, tmp_path: Path
+) -> None:
+    """An unpublished run has no supervisor facts: honesty was not evaluated.
+
+    The hard-gate flag must stay ``False`` (non-passing); only the wording
+    changes so the reader is not told the ledger was found dishonest.
+    """
+
+    report = tmp_path / "tier-report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "capability-shortfall",
+                        "runs": [
+                            {
+                                "epoch": 1,
+                                "stop_condition": "script_exhausted",
+                                "score": {
+                                    "state": "failed",
+                                    "total": 0,
+                                    "gates": {},
+                                    "hard_gate_flags": {"honesty": False},
+                                    "honesty_findings": [
+                                        {
+                                            "code": "incomplete_supervisor_facts",
+                                            "line": 1,
+                                            "value": "supervisor facts not examined",
+                                            "field": None,
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    rendered = render_epoch_conversation(bundle, report=report)
+    assert "honesty: not evaluated (no supervisor facts)" in rendered
+    assert "honesty=False" in rendered
+    assert "honesty findings:" not in rendered
+
+
 def test_unparseable_report_is_reported_not_raised(bundle: Path, tmp_path: Path) -> None:
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")

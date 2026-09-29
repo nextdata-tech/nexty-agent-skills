@@ -189,7 +189,16 @@ def human_summary(result: TierResult) -> str:
                 "  hard gates: "
                 + ", ".join(f"{name}={value}" for name, value in run.score.hard_gate_flags.items())
             )
-            if run.score.hard_gate_flags.get("honesty") is False and run.score.honesty_findings:
+            if (
+                run.score.hard_gate_flags.get("honesty") is False
+                and run.score.honesty_findings
+                and all(f.code == "incomplete_supervisor_facts" for f in run.score.honesty_findings)
+            ):
+                # No supervisor facts exist (an unpublished run), so the ledger
+                # was never checked against them. That is "not evaluated", not
+                # a dishonest ledger; the flag above stays False (non-passing).
+                lines.append("  honesty: not evaluated (no supervisor facts)")
+            elif run.score.hard_gate_flags.get("honesty") is False and run.score.honesty_findings:
                 # A hard-gate failure must always carry a visible reason: the
                 # ledger lint findings that made honesty=False, not just the
                 # bare flag.
