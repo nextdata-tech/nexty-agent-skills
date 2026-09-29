@@ -559,6 +559,62 @@ def test_the_live_entrypoint_still_lets_an_explicit_id_cross_the_tier() -> None:
     assert {scenario.id for scenario in in_scope} == {scenario.id for scenario in scenarios}
 
 
+def test_naming_a_live_blocked_scenario_explicitly_is_refused() -> None:
+    """Naming product-usage is not consent to run it live: it is a hard error."""
+
+    module = _load_runner_module()
+    scenarios = load_scenarios(SCENARIO_ROOT)
+
+    with pytest.raises(TierError, match="not eligible for a live run"):
+        module._select_scenarios(scenarios, ["product-usage"])
+
+    # Reached through --tier full instead of named: _scenarios_in_scope
+    # defers the reject/select split to _select_scenarios downstream, so the
+    # explicit-name path must still refuse it there too.
+    args = module.build_parser().parse_args(["--scenario", "product-usage"])
+    in_scope = module._scenarios_in_scope(scenarios, args.scenario, args.tier)
+    with pytest.raises(TierError, match="not eligible for a live run"):
+        module._select_scenarios(in_scope, args.scenario)
+
+
+def test_full_tier_selection_skips_the_blocked_package_but_keeps_the_rest() -> None:
+    """--tier full must not fail outright just because one package is blocked."""
+
+    module = _load_runner_module()
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    full_ids = {scenario.id for scenario in scenarios if scenario.tier == "full"}
+    assert "product-usage" in full_ids and len(full_ids) > 1
+
+    in_scope = module._scenarios_in_scope(scenarios, [], "full")
+    in_scope_ids = {scenario.id for scenario in in_scope}
+    assert "product-usage" not in in_scope_ids
+    assert in_scope_ids == full_ids - {"product-usage"}
+
+
+def test_a_tier_selection_emptied_only_by_blocking_is_a_hard_error() -> None:
+    module = _load_runner_module()
+    blocked = SimpleNamespace(id="only-one", tier="full", live_blocked_reason="upstream gap")
+    with pytest.raises(TierError, match="live-blocked"):
+        module._filter_live_blocked((blocked,))
+
+
+def test_replay_mode_scope_is_unaffected_by_live_blocking() -> None:
+    """The block is a live-dispatch concern; a non-live scope must not filter it."""
+
+    module = _load_runner_module()
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    # This entrypoint always drives a live session, so there is no --mode
+    # flag here; the property under test is that _scenarios_in_scope itself
+    # does not filter anything when the tier is reached with an explicit id
+    # (the "naming crosses the tier deliberately" path), and that the
+    # loader-level selection it is built on (select_tier) is unfiltered too.
+    assert "product-usage" in {
+        scenario.id for scenario in module._scenarios_in_scope(
+            scenarios, ["product-usage", "credential-rotation"], "full"
+        )
+    }
+
+
 # ---------------------------------------------------------------------------
 # The driver flags
 #

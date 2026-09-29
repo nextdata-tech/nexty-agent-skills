@@ -1,0 +1,81 @@
+version: 1
+id: product-usage
+tier: full
+run_order: 15
+live_blocked_reason: >-
+  Blocked pending NXD U1/U2 (design-B8.md section 5): trusted readback
+  currently rejects a transform whose transform_state is stateful
+  (readback/stateful_unsupported), and workflow-v2 admission currently
+  enrolls only new_build, not a rebuild/refresh of an existing workflow.
+  This package's dataset, reference oracle, gold, and follow-up grader are
+  offline-testable now; a live run must wait for the upstream unblock.
+fixture:
+  dataset: product_usage
+  seed: 29
+  variant: rolling-window-late-arrival
+  plant: B8-late-arrival-refresh
+coverage:
+  variant: rolling-window-late-arrival
+  untested: This package grades a synthetic weekly product-usage bridge, a staged late-arrival lookback decision, and publication-bound evidence across a same-workflow refresh; it does not test a live product-usage API, nxd workflow-v2 rebuild admission (blocked upstream pending NXD U1/U2), or an authenticated agent run.
+turn_budget: 26
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [build, query]
+persona: ../_personas/impatient.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 3
+  5: 3
+  6: 3
+  7: 3
+  8: 4
+  9: 4
+  10: 4
+  11: 4
+  12: 4
+  13: 4
+  14: 4
+  15: 5
+  16: 5
+  17: 5
+  18: 6
+  19: 7
+  20: 7
+  21: 7
+  22: 7
+  23: 7
+  24: 7
+  25: 7
+  26: 7
+required_plants:
+  - B8-late-arrival-refresh
+gates:
+  intake:
+  capability:
+  narrowing:
+    kind: narrowing
+    definition_change:
+      trigger_turn: 21
+      changed_metrics:
+        - usage_events_lookback_window
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: product_usage
+gold:
+  answer: gold/product_usage_answer.json
+  feature_adoption: gold/product_usage_feature_adoption.json
+  controls: gold/product_usage_controls.json
+  diagnostics: gold/product_usage_diagnostics.json
+follow_up_artifact: evidence/product_usage.json
+operator:
+  sentinel: null
+  obstacle_terms: []

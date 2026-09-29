@@ -226,6 +226,20 @@ def test_stage_decision_is_absent_until_explicit_overlay_then_retires_prefix_ans
     assert PREFIX_ANSWER not in after.reply
 
 
+def test_overlay_choice_uses_current_enumerated_stage_treatment() -> None:
+    bank = MatcherBank(PERSONA, _sheet())
+    bank.activate_decision_overlay("crm_deals_v2")
+
+    match = bank.reply_for(
+        "Option 1: reject the out-of-list stage. "
+        "Option 2: warn and publish it. Which treatment should I choose?"
+    )
+
+    assert match.rule_id == "decision.answer.new_stage_consequence"
+    assert match.decision_stage == 1
+    assert match.reply == STAGE_ANSWERS[0]
+
+
 def test_unknown_overlay_id_is_rejected() -> None:
     bank = MatcherBank(PERSONA, _sheet())
 

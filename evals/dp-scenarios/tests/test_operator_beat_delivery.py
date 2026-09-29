@@ -299,6 +299,64 @@ def test_the_capability_shortfall_fanout_beat_survives_reply_substitution() -> N
     assert result.ungraded_criteria == frozenset()
 
 
+def _publication_history_reader_for(scenario_id: str):
+    """Return a synthetic publication history for a package whose required
+    plant (or another declared event card) is gated on ``after_published``.
+
+    Agent text in these pack-level tests cannot satisfy that prerequisite by
+    itself, so a package with such a gate is given the minimum runner-owned
+    publication history its cards need. Packages with no such gate get
+    ``None``, unchanged from before this helper existed.
+    """
+
+    if scenario_id == "mrr-waterfall":
+        # B7's later cards are gated on runner-owned publication history.
+        # Two observed releases are needed for its "revised" cards.
+        runs = [
+            {
+                "workflow_id": "workflow-b7",
+                "run_id": run_id,
+                "definition_id": definition_id,
+                "status_history": [{"turn": published_turn, "status": "Published"}],
+            }
+            for run_id, definition_id, published_turn in (
+                ("initial-run", "initial-definition", 18),
+                ("revised-run", "revised-definition", 30),
+            )
+        ]
+    elif scenario_id == "product-usage":
+        # B8's only event card is gated on the first observed publication.
+        runs = [
+            {
+                "workflow_id": "workflow-b8",
+                "run_id": "initial-run",
+                "definition_id": "initial-definition",
+                "status_history": [{"turn": 17, "status": "Published"}],
+            }
+        ]
+    else:
+        return None
+
+    def publication_history_reader():
+        return {
+            "run_records": {"schema": "dp-scenario-run-records-v1", "runs": runs},
+            "publication_history": {
+                "schema": "dp-scenario-publication-history-v1",
+                "releases": [
+                    {
+                        "workflow_id": row["workflow_id"],
+                        "run_id": row["run_id"],
+                        "definition_id": row["definition_id"],
+                        "turn": 1,
+                    }
+                    for row in runs
+                ],
+            },
+        }
+
+    return publication_history_reader
+
+
 def test_every_shipped_scenario_transmits_every_plant_it_declares() -> None:
     """Pack-level property: no shipped scenario can lose a required beat.
 
@@ -318,7 +376,11 @@ def test_every_shipped_scenario_transmits_every_plant_it_declares() -> None:
             [TurnResult(agent_message="Which source should I use?") for _ in scenario.operator_script.turns]
         )
 
-        result = OperatorEngine(scenario.operator_script, transport).run()
+        result = OperatorEngine(
+            scenario.operator_script,
+            transport,
+            publication_history_reader=_publication_history_reader_for(scenario.id),
+        ).run()
 
         assert result.ungraded_criteria == frozenset(), package.name
         assert set(scenario.required_plants) <= set(result.fired_plant_ids), package.name
@@ -405,39 +467,7 @@ def test_every_shipped_event_card_that_declares_text_actually_transmits_it() -> 
             [TurnResult(agent_message="Which source should I use?") for _ in scenario.operator_script.turns]
         )
 
-        publication_history_reader = None
-        if scenario.id == "mrr-waterfall":
-            # B7's later cards are gated on runner-owned publication history.
-            # Give this transmission test two observed releases; agent text
-            # cannot satisfy the prerequisite.
-            runs = [
-                {
-                    "workflow_id": "workflow-b7",
-                    "run_id": run_id,
-                    "definition_id": definition_id,
-                    "status_history": [{"turn": published_turn, "status": "Published"}],
-                }
-                for run_id, definition_id, published_turn in (
-                    ("initial-run", "initial-definition", 18),
-                    ("revised-run", "revised-definition", 30),
-                )
-            ]
-            def publication_history_reader():
-                return {
-                    "run_records": {"schema": "dp-scenario-run-records-v1", "runs": runs},
-                    "publication_history": {
-                        "schema": "dp-scenario-publication-history-v1",
-                        "releases": [
-                            {
-                                "workflow_id": row["workflow_id"],
-                                "run_id": row["run_id"],
-                                "definition_id": row["definition_id"],
-                                "turn": 1,
-                            }
-                            for row in runs
-                        ],
-                    },
-                }
+        publication_history_reader = _publication_history_reader_for(scenario.id)
 
         OperatorEngine(
             scenario.operator_script,

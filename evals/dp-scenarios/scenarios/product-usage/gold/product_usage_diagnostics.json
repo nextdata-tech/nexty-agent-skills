@@ -1,0 +1,46 @@
+{
+  "earliest_late_timestamp": "2024-04-19T12:00:00Z",
+  "expected_model_row_counts": {
+    "usage_events": 9030,
+    "usage_export_status": 1,
+    "weekly_active_accounts": 3,
+    "weekly_feature_adoption": 9
+  },
+  "late_event_ids": [
+    "evt-2024-04-19-1001-search-1",
+    "evt-2024-04-19-1002-search-1",
+    "evt-2024-04-19-1003-search-1",
+    "evt-2024-04-19-1004-search-1",
+    "evt-2024-04-19-1005-search-1",
+    "evt-2024-04-19-1006-search-1",
+    "evt-2024-04-19-1007-search-1",
+    "evt-2024-04-19-1008-search-1",
+    "evt-2024-04-19-1009-search-1",
+    "evt-2024-04-19-1010-search-1",
+    "evt-2024-04-20-1011-dashboard-1",
+    "evt-2024-04-20-1012-dashboard-1",
+    "evt-2024-04-20-1013-dashboard-1",
+    "evt-2024-04-20-1014-dashboard-1",
+    "evt-2024-04-20-1015-dashboard-1",
+    "evt-2024-04-20-1016-dashboard-1",
+    "evt-2024-04-20-1017-dashboard-1",
+    "evt-2024-04-20-1018-dashboard-1",
+    "evt-2024-04-20-1019-dashboard-1",
+    "evt-2024-04-20-1020-dashboard-1",
+    "evt-2024-04-21-1021-export-1",
+    "evt-2024-04-21-1022-export-1",
+    "evt-2024-04-21-1023-export-1",
+    "evt-2024-04-21-1024-export-1",
+    "evt-2024-04-21-1025-export-1",
+    "evt-2024-04-21-1026-export-1",
+    "evt-2024-04-21-1027-export-1",
+    "evt-2024-04-21-1028-export-1",
+    "evt-2024-04-21-1029-export-1",
+    "evt-2024-04-21-1030-export-1"
+  ],
+  "source_row_counts": {
+    "v1": 8400,
+    "v2": 8430,
+    "v3": 8130
+  }
+}

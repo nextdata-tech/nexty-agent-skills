@@ -1,0 +1,13 @@
+- version: 1
+  id: B8-late-arrival-refresh
+  trigger_turn: 18
+  after_published: initial
+  type: back_after_lunch
+  content: "I'm back the next morning; did it finish, and can you update the numbers?"
+  outcome: refresh_requested
+  gap_seconds: 32400
+  fresh_session: false
+  plant: true
+  required_terms:
+    - back the next morning
+    - update the numbers

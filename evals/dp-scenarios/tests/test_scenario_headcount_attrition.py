@@ -424,11 +424,21 @@ def test_transcript_messages_only_route_the_real_suppression_decision_to_b6() ->
     suppression_turns = [
         turn for turn, result in results.items() if result.decision_id == "B6-suppression-N"
     ]
+    # Turn 4 offers the declared analyst decisions for confirmation before
+    # separately asking for plan approval, so the suppression ruling wins.
     assert suppression_turns == [4]
+    assert results[4].rule_id == "decision.answer.B6-suppression-N"
+    assert matcher.reply_for(
+        "Should I apply small-group suppression to the report?"
+    ).decision_id == "B6-suppression-N"
     assert results[4].approval_requested is True
     assert results[7].decision_id == "B6-personal-data-projection"
     assert results[8].decision_id == "B6-personal-data-projection"
-    assert results[10].decision_id == "raw_rows_refusal"
+    # Turn 10 asks which of the same PII-handling options to use; the raw-row
+    # refusal is only a recap of what the agent will not paste into chat.
+    assert results[10].decision_id == "B6-personal-data-projection"
+    assert results[10].rule_id == "decision.answer.B6-personal-data-projection"
+    assert matcher.reply_for("Could you paste the raw rows?").decision_id == "raw_rows_refusal"
     assert [turn for turn, result in results.items() if result.approval_requested] == [
         1, 2, 3, 4, 5, 6
     ]

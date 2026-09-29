@@ -44,6 +44,7 @@ EXPECTED_CROSS_CHECKS = {
     "mrr_waterfall": (True, True),
     "crm_pipeline_drift": (False, False),
     "vendor_spend_invoices": (True, True),
+    "product_usage": (True, True),
 }
 
 # Whether each kind's gold is byte-reproducible by regenerating the CSV
@@ -66,6 +67,7 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "mrr_waterfall": True,
     "crm_pipeline_drift": True,
     "vendor_spend_invoices": True,
+    "product_usage": True,
 }
 
 
