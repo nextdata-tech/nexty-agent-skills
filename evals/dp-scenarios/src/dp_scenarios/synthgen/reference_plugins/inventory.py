@@ -1,4 +1,4 @@
-"""Independent warehouse-join oracle for the inventory-position scenario."""
+"""Independent warehouse-join oracle for inventory-position and rotation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,14 @@ from typing import Any
 from ..reference import ReferenceGold, register_reference_builder
 
 
-def _inventory_gold(data_dir: Path) -> ReferenceGold:
+def _inventory_gold(
+    data_dir: Path,
+    *,
+    answer_filename: str,
+    diagnostics_filename: str,
+    answer_as_bare_rows: bool,
+    include_reference_data: bool,
+) -> ReferenceGold:
     warehouses = list(csv.DictReader((data_dir / "warehouses.csv").open(encoding="utf-8", newline="")))
     positions = list(csv.DictReader((data_dir / "inventory_positions.csv").open(encoding="utf-8", newline="")))
     lookup = {row["warehouse_id"]: row for row in warehouses}
@@ -49,14 +56,44 @@ def _inventory_gold(data_dir: Path) -> ReferenceGold:
         "negative_position_ids": sorted(negative_ids),
         "quality_policy": "warn_and_preserve",
     }
-    reconciliation = {"rows": output_rows}
+    answer = output_rows if answer_as_bare_rows else {"rows": output_rows}
+    data_files = (
+        {"inventory_position_reference.json": {"rows": output_rows}}
+        if include_reference_data
+        else {}
+    )
     return ReferenceGold(
         files={
-            "inventory_position_reconciliation.json": reconciliation,
-            "inventory_position_diagnostics.json": diagnostics,
+            answer_filename: answer,
+            diagnostics_filename: diagnostics,
         },
-        data_files={"inventory_position_reference.json": reconciliation},
+        data_files=data_files,
     )
 
 
-register_reference_builder("inventory_position", _inventory_gold)
+def _inventory_position_gold(data_dir: Path) -> ReferenceGold:
+    """Keep B5's reconciled-row object and reference file byte-for-byte stable."""
+
+    return _inventory_gold(
+        data_dir,
+        answer_filename="inventory_position_reconciliation.json",
+        diagnostics_filename="inventory_position_diagnostics.json",
+        answer_as_bare_rows=False,
+        include_reference_data=True,
+    )
+
+
+def _inventory_rotation_gold(data_dir: Path) -> ReferenceGold:
+    """Return B10 query gold as the bare eight-row result set."""
+
+    return _inventory_gold(
+        data_dir,
+        answer_filename="inventory_rotation_answer.json",
+        diagnostics_filename="inventory_rotation_diagnostics.json",
+        answer_as_bare_rows=True,
+        include_reference_data=False,
+    )
+
+
+register_reference_builder("inventory_position", _inventory_position_gold)
+register_reference_builder("inventory_rotation", _inventory_rotation_gold)
