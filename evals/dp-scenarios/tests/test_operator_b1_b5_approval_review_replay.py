@@ -9,6 +9,7 @@ import pytest
 
 from dp_scenarios.operator.engine import OperatorEngine, OperatorScript
 from dp_scenarios.operator.matcher import MatcherBank
+from dp_scenarios.operator.persona import persona_from_mapping
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
 from dp_scenarios.scenario import load_scenario
 
@@ -57,3 +58,52 @@ def test_declared_decision_in_the_current_ask_still_precedes_approval() -> None:
 
     assert match.rule_id == "decision.answer.negative_stock"
     assert match.reply == scenario.answer_sheet.decision_answers["negative_stock"].answer
+
+
+@pytest.mark.parametrize(
+    ("recommendation", "expected"),
+    [
+        ("I recommend A.", "Go with option A, as you recommend."),
+        ("Recommended: option B.", "Go with option B, as you recommend."),
+        (
+            "I recommend option C.",
+            "Use your judgment: pick the option you'd defend and tell me which one you chose.",
+        ),
+    ],
+)
+def test_undeclared_review_choice_uses_only_an_offered_recommendation(
+    recommendation: str, expected: str
+) -> None:
+    scenario = load_scenario(ROOT / "scenarios/inventory-position")
+    message = (
+        "The independent review found one blocking finding. Choose one:\n"
+        "A. Fix the first issue.\nB. Keep the current behavior.\n"
+        f"{recommendation} Please choose A or B."
+    )
+
+    match = MatcherBank(scenario.persona, scenario.answer_sheet).reply_for(message)
+
+    assert match.rule_id == "review.choice_undeclared"
+    assert match.decision_id is None
+    assert match.reply == expected
+
+
+def test_persona_can_override_both_undeclared_review_choice_templates() -> None:
+    scenario = load_scenario(ROOT / "scenarios/inventory-position")
+    card = scenario.persona.to_mapping()
+    card["reply_bank"].update(
+        review_choice=["Pick the option you can justify and tell me which."],
+        review_choice_recommended=["I accept {option}."],
+    )
+    bank = MatcherBank(persona_from_mapping(card), scenario.answer_sheet)
+    question = (
+        "The review found a blocker. Choose one:\n"
+        "1. Repair it.\n2. Defer it.\n"
+    )
+
+    assert bank.reply_for(question + "I recommend option 1. Reply 1 or 2.").reply == (
+        "I accept option 1."
+    )
+    assert bank.reply_for(question + "Reply 1 or 2.").reply == (
+        "Pick the option you can justify and tell me which."
+    )

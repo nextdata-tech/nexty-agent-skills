@@ -19,8 +19,8 @@
       "source": "dp-b5-sonnet-run4 turn 3, review choice",
       "scenario_id": "inventory-position",
       "message": "The independent review found one blocking finding. Two ways to resolve it: pick one and I will make the fix. Which would you like, option 1 or option 2?",
-      "expected_rule_id": "decision.answer.review_fix_authorization",
-      "expected_decision_id": "review_fix_authorization"
+      "expected_rule_id": "review.choice_undeclared",
+      "expected_decision_id": null
     },
     {
       "source": "choice phrasing without review findings",

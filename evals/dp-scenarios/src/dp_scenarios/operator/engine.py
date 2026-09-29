@@ -1520,6 +1520,27 @@ class OperatorEngine:
                 )
             ):
                 return False
+            # A fixed decision answer belongs to its own ask. Keep it owed
+            # while the agent is explicitly asking something else, then use
+            # the next unoccupied turn (or the matching decision ask). This
+            # includes option-bearing beats without inspecting their wording.
+            fixed_decision_ids = {
+                decision.decision_id
+                for decision in self.script.answer_sheet.decision_answers.values()
+                if turn.text in (decision.stages or (decision.answer,))
+            }
+            if (
+                fixed_decision_ids
+                and current_match is not None
+                and current_match.solicits_operator
+                and current_match.decision_id not in fixed_decision_ids
+            ):
+                return False
+            if (
+                current_match is not None
+                and current_match.rule_id == "persona.diagnostic_request"
+            ):
+                return False
             return True
 
         script_cursor = 0

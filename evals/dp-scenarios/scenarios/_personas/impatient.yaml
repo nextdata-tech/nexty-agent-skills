@@ -37,6 +37,7 @@ reply_bank:
   source_question: ["Can you point me to the numbers?"]
   approval_request: ["You're the expert."]
   decision_request: ["You're the expert."]
+  diagnostic_request: ["I don't have access to that; you'd need to check the build output."]
   status_query: ["Can you just make it work?"]
   other: ["I don't know, you tell me."]
 fallback: "I don't know, you tell me."

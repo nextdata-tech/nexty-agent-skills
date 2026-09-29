@@ -131,15 +131,15 @@ def test_a_message_that_asks_for_approval_and_a_fact_is_still_answered_from_the_
     assert result.approval_requested is True
 
 
-def test_an_approval_solicitation_is_recorded_even_when_another_category_wins() -> None:
-    """The solicitation itself is never lost, whichever rule resolves the reply."""
+def test_an_approval_solicitation_beats_source_nouns_in_the_same_clause() -> None:
+    """A future source task does not replace the current consent request."""
 
     bank = _bank(_sheet())
     message = "Reply approved to lock in the spec, then I will land the source data."
 
     result = bank.classify(message)
 
-    assert result.category is Category.SOURCE_QUESTION
+    assert result.category is Category.APPROVAL_REQUEST
     assert result.approval_requested is True
     assert bank.reply_for(message).approval_requested is True
 
