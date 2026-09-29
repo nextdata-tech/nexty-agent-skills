@@ -3258,6 +3258,12 @@ def test_parse_codex_events_keeps_completed_mcp_error_answered() -> None:
     assert observations[0]["answered"] is True
 
 
+# Tests that drive a real fake app-server child give each app-server request
+# this budget. They assert on the protocol, not on latency, and a loaded
+# machine can take seconds just to start the child's interpreter.
+REAL_CHILD_TIMEOUT_S = 30.0
+
+
 def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) -> None:
     config_path = tmp_path / "mcp.json"
     config_path.write_text(
@@ -3290,7 +3296,7 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/bin/true"),
         desktop_python=Path("/bin/true"),
-        timeout_s=5,
+        timeout_s=REAL_CHILD_TIMEOUT_S,
         append_system_prompt="test",
         mcp_config=config_path,
         strict_mcp_config=True,
@@ -3331,7 +3337,7 @@ def test_codex_adapter_builds_app_server_protocol_configuration(tmp_path: Path) 
         artifact_dir=tmp_path / "artifacts-v2",
         desktop_supervisor=Path("/bin/true"),
         desktop_python=Path("/bin/true"),
-        timeout_s=5,
+        timeout_s=REAL_CHILD_TIMEOUT_S,
         append_system_prompt="test",
         mcp_config=config_path,
         strict_mcp_config=True,
@@ -3398,7 +3404,7 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
         artifact_dir=artifact_dir,
         desktop_supervisor=Path("/bin/true"),
         desktop_python=Path("/bin/true"),
-        timeout_s=5,
+        timeout_s=REAL_CHILD_TIMEOUT_S,
         append_system_prompt="test",
         mcp_config=config_path,
         supervisor_data_dir=tmp_path,
@@ -3450,7 +3456,7 @@ def test_codex_home_is_disposable_even_without_host_auth(tmp_path: Path) -> None
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/bin/true"),
         desktop_python=Path("/bin/true"),
-        timeout_s=5,
+        timeout_s=REAL_CHILD_TIMEOUT_S,
         append_system_prompt="test",
         mcp_config=tmp_path / "mcp.json",
         supervisor_data_dir=tmp_path,
@@ -3524,7 +3530,7 @@ def test_native_codex_home_survives_adapter_restart_and_reuses_rollout(
             artifact_dir=run_root / "artifacts",
             desktop_supervisor=Path("/bin/true"),
             desktop_python=Path("/bin/true"),
-            timeout_s=5,
+            timeout_s=REAL_CHILD_TIMEOUT_S,
             append_system_prompt="test",
             mcp_config=config_path,
             supervisor_data_dir=supervisor_dir,
@@ -3860,7 +3866,7 @@ def test_codex_adapter_keeps_one_app_server_and_mcp_observations_across_turns(
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/bin/true"),
         desktop_python=Path("/bin/true"),
-        timeout_s=5,
+        timeout_s=REAL_CHILD_TIMEOUT_S,
         append_system_prompt="test",
         mcp_config=config_path,
         supervisor_data_dir=tmp_path,
@@ -3901,7 +3907,7 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         "        print(json.dumps({'method': 'item/started', 'params': {'threadId': thread_id, 'turnId': '00000000-0000-4000-8000-000000000021', 'item': call}}), flush=True)\n"
         "        print(json.dumps({'method': 'item/agentMessage/delta', 'params': {'threadId': thread_id, 'turnId': '00000000-0000-4000-8000-000000000021', 'delta': 'partial'}}), flush=True)\n"
         "        os.close(2)\n"
-        "        time.sleep(5)\n",
+        "        time.sleep(600)\n",
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -3920,7 +3926,10 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         artifact_dir=tmp_path / "artifacts",
         desktop_supervisor=Path("/bin/true"),
         desktop_python=Path("/bin/true"),
-        timeout_s=1,
+        # Each app-server handshake request is bounded by timeout_s too, and
+        # child start-up under load must not fail the handshake; the tight
+        # turn budget is applied once the child is up (see below).
+        timeout_s=REAL_CHILD_TIMEOUT_S,
         append_system_prompt="test",
         mcp_config=config_path,
         supervisor_data_dir=tmp_path,
@@ -3937,6 +3946,12 @@ def test_codex_adapter_timeout_retains_partial_app_server_events(tmp_path: Path,
         return original_snapshot(*args, **kwargs)
 
     monkeypatch.setattr(codex_adapter_module, "_snapshot_workspace", count_snapshots)
+
+    adapter.start()
+    # The turn deadline is read when the turn starts, so this narrows only the
+    # timed turn: the child is already running and answering, and it stalls
+    # far past this budget.
+    adapter.timeout_s = 1
 
     result = adapter.send({"message": {"text": "one", "attachments": []}})
     adapter.close()
