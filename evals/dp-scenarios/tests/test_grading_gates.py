@@ -670,12 +670,13 @@ def test_intake_matches_the_r409_turn0_bearer_token_prose_collision() -> None:
     prose ("uses a bearer token for authentication") inside
     ``dp-blueprint.proposal.json`` and, on the very next turn, passed the
     identical inline ``typed_proposal`` to ``prepare_workflow``. All values
-    here are synthetic fixture text, not real credentials. Before the fix,
-    the capture-time redaction in ``evals/desktop_stdio.py`` swept the
-    common word "token" following "bearer" into ``<redacted>`` regardless of
-    length, so the argument channel read "...a bearer <redacted> for
-    authentication..." while the on-disk file kept the agent's literal
-    prose -- an exact-match gate then flagged a verbatim copy as missing.
+    here are synthetic fixture text, not real credentials. The capture-time
+    redaction in ``evals/desktop_stdio.py`` is fail-closed and sweeps any
+    word after "bearer" into ``<redacted>``, so the argument channel reads
+    "...a bearer <redacted> for authentication..." while the on-disk file
+    keeps the agent's literal prose. Before the fix an exact-match gate
+    flagged that verbatim copy as missing; the gate now redacts both sides
+    the same way before comparing.
     """
 
     seed = _workflow_v2_intake()
@@ -695,10 +696,8 @@ def test_intake_matches_the_r409_turn0_bearer_token_prose_collision() -> None:
     argument_proposal["proposal"]["scope"] = dict(
         _redact_json_rpc()({"scope": prose})
     )["scope"]
-    # The fixed redaction no longer touches a short common word like "token"
-    # after "bearer", so the argument channel is untouched prose here -- the
-    # regression guard is that this still matches even so.
-    assert argument_proposal["proposal"]["scope"] == prose
+    # The argument channel really is redacted, so the two raw captures differ.
+    assert argument_proposal["proposal"]["scope"] != prose
 
     result = gate_intake(seed)
     assert result.passed, result.codes
