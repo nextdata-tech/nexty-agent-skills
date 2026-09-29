@@ -949,6 +949,26 @@ def _write_operator_observations(artifact_root: Path, run_result: Any) -> None:
                 "operator_matched_decision_id": turn.match.decision_id,
                 "operator_matched_reply": _json_safe(turn.match.reply),
                 "operator_matched": turn.match.matched,
+                # Selection follows the agent's current request; delivery
+                # follows the outgoing operator message at the start of this
+                # turn. A selected final stage is not authorization until it
+                # appears in the delivered fields on a later turn.
+                "operator_selected_decision_id": turn.match.decision_id,
+                "operator_selected_decision_stage": getattr(
+                    turn, "selected_decision_stage", None
+                ),
+                "operator_selected_decision_final": getattr(
+                    turn, "selected_decision_final", None
+                ),
+                "operator_delivered_decision_id": getattr(
+                    turn, "delivered_decision_id", None
+                ),
+                "operator_delivered_decision_stage": getattr(
+                    turn, "delivered_decision_stage", None
+                ),
+                "operator_delivered_decision_final": getattr(
+                    turn, "delivered_decision_final", None
+                ),
                 "operator_answered_from_ground_truth": turn.match.ground_truth and not turn.operator_repeat_suppressed,
                 "operator_repeat_suppressed": turn.operator_repeat_suppressed,
                 "operator_mode": getattr(turn, "operator_mode", "scripted"),

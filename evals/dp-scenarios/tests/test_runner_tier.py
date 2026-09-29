@@ -3493,6 +3493,13 @@ def test_operator_observations_link_matched_decision_to_next_turn_delivery(tmp_p
     assert turns[1]["operator_matched_rule_id"] == "decision.answer.B6-suppression-N"
     assert turns[1]["operator_matched_decision_id"] == "B6-suppression-N"
     assert turns[1]["operator_matched_reply"] == answer
+    assert turns[1]["operator_selected_decision_id"] == "B6-suppression-N"
+    assert turns[1]["operator_selected_decision_stage"] is None
+    assert turns[1]["operator_selected_decision_final"] is None
+    assert turns[1]["operator_delivered_decision_id"] is None
+    assert turns[2]["operator_delivered_decision_id"] == "B6-suppression-N"
+    assert turns[2]["operator_delivered_decision_stage"] is None
+    assert turns[2]["operator_delivered_decision_final"] is None
     assert answer in turns[2]["operator_message"]
     assert all(isinstance(turn["fired_event_ids"], list) for turn in turns)
     assert turns[0]["fired_event_ids"] == []
