@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from dp_scenarios.operator.answer_sheet import script_turn_text
 from dp_scenarios.operator.matcher import MatcherBank, validate_decision_reachability
 from dp_scenarios.scenario import declared_sentinels, load_scenario
@@ -91,15 +89,19 @@ def test_staged_ruling_advances_only_with_solicitation_count() -> None:
     assert matcher.reply_for("The source is still processing.").decision_id is None
 
 
-@pytest.mark.xfail(strict=True, reason="Parallel persona routing fix must recognize correction-only review asks")
 def test_review_correction_ask_routes_before_persona_challenge() -> None:
     matcher = MatcherBank(B11.persona, B11.answer_sheet)
     matcher.activate_decision_overlay("crm_deals_v2")
     assert matcher.reply_for("May I correct the review finding?").decision_id == "review_fix_authorization"
 
 
-@pytest.mark.xfail(strict=True, reason="Mixed workflow and stage asks need the parallel routing fix")
 def test_mixed_refresh_and_stage_ask_does_not_shadow_workflow_authorization() -> None:
     matcher = MatcherBank(B11.persona, B11.answer_sheet)
+    ask = "Should I make a new workflow to handle the stage?"
+    assert matcher.reply_for(ask).decision_id == "workflow_revision"
     matcher.activate_decision_overlay("crm_deals_v2")
-    assert matcher.reply_for("Should I make a new workflow to handle the stage?").decision_id == "workflow_revision"
+    assert matcher.reply_for(ask).decision_id == "workflow_revision"
+    assert matcher.reply_for(
+        "How should I treat the out-of-list stage?",
+        excluded_decision_ids=frozenset({"workflow_revision"}),
+    ).decision_id == "new_stage_consequence"
