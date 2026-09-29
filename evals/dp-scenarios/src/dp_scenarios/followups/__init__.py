@@ -43,6 +43,7 @@ class FollowUpContext:
     source_evidence: object = _MISSING
     operator_observations: object = _MISSING
     supervisor_history: SupervisorHistoryView | None = None
+    artifact_root: Path | None = None
 
 
 Handler = Callable[["object", object, Mapping[str, object], FollowUpContext], Mapping[str, object]]

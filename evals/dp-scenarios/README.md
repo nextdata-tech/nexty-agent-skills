@@ -720,6 +720,26 @@ the answer actually sent at the start of a turn. Follow-ups that grade an
 authorization use the delivered fields; the last selected answer may never
 have reached the agent.
 
+An optional `scenario.yaml` `chain` block declares `trigger: first_publication`,
+`prefix_turns`, `source_family`, `from_state`, `to_state`, `decision_overlay`,
+and `stage_values`. The loader rejects unknown keys, undeclared overlays, and
+states absent from the declared stateful routes. Its contents contribute to
+the scenario script hash; existing scenarios retain their prior hash. At each
+completed live turn the controller reads runner-owned publication and run
+history. The first attributed published release is frozen in
+`chain-state.json`; a retained, definition-bound verifier or promised typed
+stage model must establish the prefix's executable stage constraint before
+the source changes. The source switch precedes overlay activation and the
+next operator message. Unused prefix slots are skipped, while a prefix with
+no publication never exposes the suffix. The replay records the transition
+and per-turn publication snapshots. Chained native resume is refused before
+starting a session until controller state can be restored from a checkpoint.
+
+Follow-up handlers receive `FollowUpContext.artifact_root` for runner-owned
+history. A missing publication or invalid executable prefix is a failed chain;
+retained capture loss and interrupted source switching are ungraded. A chain
+record is structural evidence and does not claim an observed verifier warning.
+
 ## Adding a scenario
 
 A scenario package is additive: it needs no edit to a shared file, so two

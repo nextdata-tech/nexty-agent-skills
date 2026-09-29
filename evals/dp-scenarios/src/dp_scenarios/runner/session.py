@@ -70,6 +70,12 @@ _RESERVED_HARNESS_ARTIFACT_NAMES = frozenset(
         # Publication cards read these runner-owned files between turns.
         "run-records.json",
         "publication-history.json",
+        "run-failures.json",
+        "tool-calls.json",
+        "query-history.json",
+        "supervisor-captures.json",
+        "definition-export.json",
+        "chain-state.json",
     }
 )
 
@@ -539,12 +545,19 @@ def _immutable_recording_snapshot(turns: Sequence[RecordedTurn]) -> ReplayRecord
 class ReplaySession:
     """Replay structured turns and materialize recorded files into a sandbox."""
 
-    def __init__(self, recording: ReplayRecording | str | Path, *, artifact_root: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        recording: ReplayRecording | str | Path,
+        *,
+        artifact_root: str | Path | None = None,
+        on_turn_complete: Callable[[int], None] | None = None,
+    ) -> None:
         self.recording = recording if isinstance(recording, ReplayRecording) else ReplayRecording.read(recording)
         self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
         self._index = 0
         self._session_counter = 0
         self.sent_messages: list[OperatorMessage] = []
+        self.on_turn_complete = on_turn_complete
 
     def start_fresh_session(self) -> str:
         self._session_counter += 1
@@ -604,6 +617,8 @@ class ReplaySession:
             )
         self._index += 1
         self._materialize(expected.result)
+        if self.on_turn_complete is not None:
+            self.on_turn_complete(self._index)
         return expected.result
 
     send = send_message
