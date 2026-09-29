@@ -326,6 +326,20 @@ class OperatorScript:
             object.__setattr__(self, "sentinel", marker)
         object.__setattr__(self, "obstacle_terms", tuple(self.obstacle_terms))
         object.__setattr__(self, "required_plants", frozenset(self.required_plants) | self.events.planted_card_ids())
+        event_ids = {card.card_id for card in self.events.cards}
+        missing_answer_events = sorted(
+            {
+                answer.available_after_event
+                for answer in self.answer_sheet.decision_answers.values()
+                if answer.available_after_event is not None
+                and answer.available_after_event not in event_ids
+            }
+        )
+        if missing_answer_events:
+            raise ValueError(
+                "staged decision answer references undeclared event id(s): "
+                + ", ".join(missing_answer_events)
+            )
         _validate_plant_deliverability(self.events, resolved_turns)
         normalized_phases = {int(key): int(value) for key, value in dict(self.phase_by_turn).items()}
         if any(key < 1 or value < 1 or value > 7 for key, value in normalized_phases.items()):
@@ -467,7 +481,12 @@ def operator_script_hash(
 
 @dataclass(frozen=True, slots=True)
 class TurnRecord:
-    """Evidence captured for one completed agent turn."""
+    """Evidence captured for one completed agent turn.
+
+    ``match`` is the answer selected from this turn's agent message for a
+    subsequent operator turn. ``delivered_decision_id`` records the decision
+    answer, if any, that the current operator message actually carried.
+    """
 
     turn: int
     phase: int
@@ -512,6 +531,7 @@ class TurnRecord:
     provider_model_calls: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None
+    delivered_decision_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1967,6 +1987,10 @@ class OperatorEngine:
             self.matcher.validate_outgoing_message(message.text)
             prior_operator_messages.append(message.text)
             result = self.transport.send_message(message)
+            # Only events whose beat passed the message-level delivery check
+            # unlock staged answers. ``fired_events`` preserves delivery
+            # order so a later revision event takes precedence when multiple
+            # staged answers match the same question.
             ask_back_acceptance_transmitted = bool(
                 ask_back_acceptance_turn
                 and selected_base is next_reply
@@ -1977,6 +2001,13 @@ class OperatorEngine:
                 and next_match is not None
                 and next_match.decision_id is not None
                 and selected_base is next_reply
+                and next_reply is not None
+                and next_reply in message.text
+            )
+            delivered_decision_id = (
+                next_match.decision_id
+                if decision_answer_delivered and next_match is not None
+                else None
             )
             if decision_answer_delivered and next_match is not None:
                 if next_match.decision_id == "review_fix_authorization":
@@ -2046,7 +2077,11 @@ class OperatorEngine:
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
                 pending_review_finding_keys = _review_finding_keys(agent_message)
-            match = self.matcher.reply_for(agent_message, context=pending_review_context)
+            match = self.matcher.reply_for(
+                agent_message,
+                context=pending_review_context,
+                available_event_ids=tuple(fired_events),
+            )
             if (
                 match.decision_id is not None
                 and match.decision_id != "review_fix_authorization"
@@ -2070,6 +2105,7 @@ class OperatorEngine:
                         agent_message,
                         context=pending_review_context,
                         excluded_decision_ids=frozenset({match.decision_id}),
+                        available_event_ids=tuple(fired_events),
                     )
 
             sheet_key = _served_reply_key(match.rule_id)
@@ -2273,6 +2309,7 @@ class OperatorEngine:
                 provider_model_calls=result.provider_model_calls,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
+                delivered_decision_id=delivered_decision_id,
             )
             records.append(turn_record)
             self._append_row(

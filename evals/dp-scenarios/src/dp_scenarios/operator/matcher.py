@@ -799,6 +799,7 @@ class MatcherBank:
         *,
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
+        available_event_ids: tuple[str, ...] = (),
     ) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 
@@ -811,6 +812,7 @@ class MatcherBank:
                 message,
                 context=context,
                 excluded_decision_ids=excluded_decision_ids,
+                available_event_ids=available_event_ids,
             ),
             message,
         )
@@ -821,6 +823,7 @@ class MatcherBank:
         *,
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
+        available_event_ids: tuple[str, ...] = (),
     ) -> MatchResult:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         prose = _NON_PROSE.sub(" ", message)
@@ -849,6 +852,12 @@ class MatcherBank:
             else None
         )
         review_fix = self.answer_sheet.decision_answers.get("review_fix_authorization")
+        if (
+            review_fix is not None
+            and review_fix.available_after_event is not None
+            and review_fix.available_after_event not in available_event_ids
+        ):
+            review_fix = None
         review_fix_request = _review_fix_request(message, context)
         if (
             review_fix is not None
@@ -865,7 +874,9 @@ class MatcherBank:
                 or _REVIEW_OUTPUT_ADDITION_PATTERN.search(review_fix_request)
             )
             specific = self.answer_sheet.answer_for_decision(
-                repair_text, excluded=excluded_decision_ids
+                repair_text,
+                excluded=excluded_decision_ids,
+                available_event_ids=available_event_ids,
             )
             if (
                 specific is None
@@ -873,7 +884,9 @@ class MatcherBank:
                 and not direct_finding_question
             ):
                 specific = self.answer_sheet.answer_for_decision(
-                    message, excluded=excluded_decision_ids
+                    message,
+                    excluded=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
                 )
             if (
                 specific is not None
@@ -930,7 +943,9 @@ class MatcherBank:
         request_decision_clause = None
         for clause in request_clauses:
             request_decision = self.answer_sheet.answer_for_decision(
-                clause, excluded=excluded_decision_ids
+                clause,
+                excluded=excluded_decision_ids,
+                available_event_ids=available_event_ids,
             )
             if request_decision is not None:
                 request_decision_clause = clause
@@ -954,7 +969,9 @@ class MatcherBank:
         if approval_rule is not None:
             if _CORRECTION_INVITATION_PATTERN.search(prose) is not None:
                 correction_decision = self.answer_sheet.answer_for_decision(
-                    prose, excluded=excluded_decision_ids
+                    prose,
+                    excluded=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
                 )
                 if correction_decision is not None:
                     return MatchResult(
@@ -992,7 +1009,9 @@ class MatcherBank:
         decision = request_decision
         if decision is None:
             decision = self.answer_sheet.answer_for_decision(
-                message, excluded=excluded_decision_ids
+                message,
+                excluded=excluded_decision_ids,
+                available_event_ids=available_event_ids,
             )
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
@@ -1051,6 +1070,7 @@ class MatcherBank:
         *,
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
+        available_event_ids: tuple[str, ...] = (),
     ) -> MatchResult:
         """Classify one message and choose its fixed reply."""
 
@@ -1061,6 +1081,7 @@ class MatcherBank:
                 message,
                 context=context,
                 excluded_decision_ids=excluded_decision_ids,
+                available_event_ids=available_event_ids,
             ),
             message,
         )
@@ -1071,11 +1092,13 @@ class MatcherBank:
         *,
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
+        available_event_ids: tuple[str, ...] = (),
     ) -> MatchResult:
         classified = self.classify(
             message,
             context=context,
             excluded_decision_ids=excluded_decision_ids,
+            available_event_ids=available_event_ids,
         )
         if classified.category is Category.OTHER:
             return classified
