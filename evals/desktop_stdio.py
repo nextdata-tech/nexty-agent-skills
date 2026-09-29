@@ -1597,6 +1597,35 @@ def _walk_json_values(value: Any) -> list[Any]:
     return values
 
 
+_NEX_READER_CLIENT_ERROR_REASONS = (
+    (("exceeds maximum allowed tokens", "max_mcp_output_tokens"),
+     "review reader reply was served but the client rejected it: output token limit"),
+    (("permission", "denied", "hook"),
+     "review reader reply was served but the client rejected it: denied"),
+    (("timed out", "timeout"),
+     "review reader reply was served but the client rejected it: timeout"),
+    (("schema", "structuredcontent", "validation"),
+     "review reader reply was served but the client rejected it: result schema"),
+)
+
+
+def _nex_reader_client_error_reason(content: Any, *, siblings: Any = None) -> str:
+    """Name why the client failed a served reader reply, as a fixed runner string.
+
+    Only the category, the matched fixed marker and the count of identical
+    pending calls at bind time are kept; the client's text never reaches the
+    reason.
+    """
+
+    text = json.dumps(content, ensure_ascii=False).casefold()
+    count = siblings if isinstance(siblings, int) and not isinstance(siblings, bool) else -1
+    for needles, reason in _NEX_READER_CLIENT_ERROR_REASONS:
+        for needle in needles:
+            if needle in text:
+                return f"{reason} (marker={needle}; siblings={count})"
+    return f"review reader response or stream tool_result was unsuccessful (siblings={count})"
+
+
 def _response_is_error(response: Mapping[str, Any]) -> bool:
     """Return whether an MCP/JSON-RPC response reports a failed operation."""
 
@@ -1799,7 +1828,9 @@ class DesktopStdioSession:
         self._nex_server_request_ids: set[str] = set()
         self._nex_server_requests: dict[str, Mapping[str, Any]] = {}
         self._nex_active_workflow: str | None = None
-        self._nex_active_root: str | None = None
+        # Last known authoring root per workflow. A call that names no root
+        # binds to its own workflow's root, never to another cycle's.
+        self._nex_workflow_roots: dict[str, str] = {}
         self._nex_active_child_id: str | None = None
         self._nex_child_count = 0
         self._nex_children_by_workflow: dict[str, int] = {}
@@ -2349,9 +2380,19 @@ class DesktopStdioSession:
                             use["tool_result"] = True
                             use["tool_result_success"] = not error
                             if use.get("name") == _REVIEW_READER_TOOL:
-                                if error or not use.get("response_success"):
+                                if not use.get("response_success"):
+                                    # The reader refused this call (bad path,
+                                    # bounds or operation) and said so to the
+                                    # reviewer; it served nothing, so pairing
+                                    # stays intact. The review proof still
+                                    # needs a successful read.
+                                    pass
+                                elif error:
                                     self._nex_invalid_reason = self._nex_invalid_reason or (
-                                        "review reader response or stream tool_result was unsuccessful"
+                                        _nex_reader_client_error_reason(
+                                            block.get("content", ""),
+                                            siblings=use.get("identical_pending_at_match"),
+                                        )
                                     )
                                 else:
                                     parent_tool_use_id = use.get("parent_tool_use_id")
@@ -2472,6 +2513,7 @@ class DesktopStdioSession:
                 self._nex_invalid_reason = "MCP tools/call ambiguously matches Claude stream tool_use events"
                 return None, self._nex_invalid_reason
             use = pending[0]
+            use["identical_pending_at_match"] = len(pending) - 1
             expected_parent = use.get("parent_tool_use_id")
             if name == _REVIEW_READER_TOOL:
                 if child_id is None or expected_parent != child_id:
@@ -2683,7 +2725,7 @@ class DesktopStdioSession:
             self._nex_review_read_child_id = None
             self._nex_review_child_returned = False
             self._nex_active_workflow = workflow
-            self._nex_active_root = str(logical_authoring_root)
+            self._nex_workflow_roots[workflow] = str(logical_authoring_root)
             case = self._nex_case_snapshots.setdefault(workflow, {})
             if "capture" in case:
                 self._nex_invalid_reason = self._nex_invalid_reason or "workflow has more than one capture snapshot"
@@ -3159,7 +3201,7 @@ class DesktopStdioSession:
                 )
         if root is None and self.nex_mode and operation in _NEX_WORKFLOW_OPERATIONS:
             with self._bridge_state_lock:
-                root = self._nex_active_root
+                root = self._nex_workflow_roots.get(workflow) if isinstance(workflow, str) else None
         if root_override is not None:
             root = root_override
         request_key = _rpc_id_key(request.get("id"))
@@ -3666,7 +3708,10 @@ class DesktopStdioSession:
                                             trace_workflow = self._nex_active_workflow
                                     if trace_root is None and operation in _NEX_WORKFLOW_OPERATIONS:
                                         with self._bridge_state_lock:
-                                            trace_root = self._nex_active_root
+                                            trace_root = (
+                                                self._nex_workflow_roots.get(trace_workflow)
+                                                if isinstance(trace_workflow, str) else None
+                                            )
 
                                 if should_block(request) and operation is not None:
                                     response_line = blocked_review_response(request, operation)
@@ -3688,7 +3733,7 @@ class DesktopStdioSession:
                                     with self._bridge_state_lock:
                                         self._nex_active_workflow = workflow
                                         if root is not None:
-                                            self._nex_active_root = root
+                                            self._nex_workflow_roots[workflow] = root
                                 if self.nex_mode:
                                     if _is_nex_validation_advance(request):
                                         self._nex_snapshot_validation(request)
