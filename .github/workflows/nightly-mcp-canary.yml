@@ -48,6 +48,37 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
+      # Select "newest" from NXD's immutable nxd-py-artifact-<sha> releases, then
+      # consume that release through the action's pinned path, which verifies
+      # it is a main-branch build of that source. The action's unpinned lookup
+      # lists nxd.ci.yml runs, and that listing served this PAT a run list
+      # frozen at 2026-09-14 (canary runs 36526678390, 36542841278) whose
+      # artifacts had all expired. The release list is not sorted by date, so
+      # sort client-side.
+      - name: Select the newest published NXD main release
+        id: newest
+        env:
+          GH_TOKEN: ${{ env.NXD_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'NXD_DISPATCH_PAT is unavailable; the nightly MCP canary cannot resolve an NXD artifact.' >&2
+            exit 1
+          fi
+          source_sha="$(gh api 'repos/nextdata-tech/nxd/releases?per_page=100' --jq '
+            [.[]
+              | select(.draft == false and .prerelease == false)
+              | select(.tag_name | test("^nxd-py-artifact-[0-9a-f]{40}$"))]
+            | sort_by(.published_at)
+            | .[-1].tag_name // ""
+            | ltrimstr("nxd-py-artifact-")')"
+          if [ -z "$source_sha" ]; then
+            echo 'No published nxd-py-artifact-<sha> release found in nextdata-tech/nxd' >&2
+            exit 1
+          fi
+          echo "Newest published NXD release: nxd-py-artifact-$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
       # No NXD source checkout and no tree-sha expectations: the point of this
       # lane is to take whatever main most recently published. The provenance
       # is then READ from the manifest and reported, rather than asserted.
@@ -61,6 +92,7 @@ jobs:
           token_missing_message: 'NXD_DISPATCH_PAT is unavailable; the nightly MCP canary cannot resolve an NXD artifact.'
           artifact_prefix: nxd-py-linux-x86_64-
           selector_label: 'the newest NXD main build'
+          expect_source_sha: ${{ steps.newest.outputs.source_sha }}
           require_mcp_provenance: 'true'
           install_project_dir: evals/mcp
 

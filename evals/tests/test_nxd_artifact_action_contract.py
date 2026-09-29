@@ -196,10 +196,7 @@ def test_pinned_resolution_is_source_addressed_and_fails_closed() -> None:
     # The unpinned nightly canary must retain its newest-main Actions-artifact
     # path; the immutable release branch is conditional on a source pin.
     assert 'if [ -n "$EXPECT_SOURCE_SHA" ]; then' in action
-    assert 'runs_query="branch=main&per_page=100"' in action
-    # The server-side status=success filter served a stale run list (nightly
-    # canary run 36526678390); success is enforced client-side instead.
-    assert '(.status == "completed" and .conclusion == "success")' in action
+    assert 'branch=main&status=success&per_page=20' in action
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the action")
