@@ -9,10 +9,8 @@ import shutil
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
-import yaml
 
 from _repo_paths import REPO_ROOT
 
@@ -39,6 +37,10 @@ from dp_scenarios.runner.supervisor_history import (
     SupervisorHistory,
     TOOL_CALLS_SCHEMA,
     _safe_failure_facts,
+)
+from dp_scenarios.runner.evidence_context import (
+    HistoryEvidenceError,
+    load_supervisor_history_view,
 )
 
 
@@ -1552,6 +1554,9 @@ def test_definition_export_matches_both_compiled_manifests_and_inventory(
             )
             assert promise["verifier_kind"] == "script"
             assert promise["source_in_inventory"] is True
+            # This trimmed fixture retains inventory metadata but deliberately
+            # omits compiled source bytes. Membership alone is not hash proof.
+            assert promise["source_hash_verified"] is False
             assert promise["source_sha256"] == hashes[promise["source"]]
             assert promise["driver"] == "nxd:local/python/compute:0.1.0"
 
@@ -1575,6 +1580,181 @@ def test_definition_export_matches_both_compiled_manifests_and_inventory(
     assert corrupt_entry["inventory_valid"] is True
     assert corrupt_entry["output_promises"] == []
     assert corrupt_entry["model_promises"] == []
+
+
+def test_definition_source_hash_requires_actual_matching_bytes(tmp_path: Path) -> None:
+    state_dir = _copy_state(tmp_path / "state")
+    fixture_manifest = json.loads(MANIFEST_FIXTURE.read_text(encoding="utf-8"))
+    definition_id = fixture_manifest["ids"]["workflows"][WORKFLOW_CRM]["definition_id"]
+    definition_dir = _definition_dir(state_dir, definition_id)
+    inventory_path = definition_dir / "definition.json"
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    source = "contracts/promises/current-deals-non-deleted.py"
+    content = b"def verify(rows):\n    return True\n"
+    source_path = definition_dir / source
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(content)
+    entry = next(item for item in inventory["files"] if item["path"] == source)
+    entry["size"] = len(content)
+    entry["sha256"] = "sha256:" + hashlib.sha256(content).hexdigest()
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+    good_artifacts = tmp_path / "good-artifacts"
+    history, _facts, built_runs = _replay(state_dir, good_artifacts)
+    assert history is not None
+    good = _read_json(good_artifacts / "definition-export.json")["definitions"]
+    good_definition = next(item for item in good if item["definition_id"] == definition_id)
+    good_promise = next(item for item in good_definition["output_promises"] if item["source"] == source)
+    assert good_definition["inventory_valid"] is True
+    assert good_promise["source_in_inventory"] is True
+    assert good_promise["source_hash_verified"] is True
+
+    source_path.write_bytes(content + b"# changed\n")
+    history.observe_turn(
+        turn=history.last_turn + 1,
+        observations=[],
+        built_runs=built_runs,
+        state_dir=state_dir,
+    )
+    history.write()
+    resumed = _read_json(good_artifacts / "definition-export.json")["definitions"]
+    resumed_definition = next(item for item in resumed if item["definition_id"] == definition_id)
+    resumed_promise = next(item for item in resumed_definition["output_promises"] if item["source"] == source)
+    assert resumed_promise["source_hash_verified"] is False
+
+    bad_artifacts = tmp_path / "bad-artifacts"
+    _replay(state_dir, bad_artifacts)
+    bad = _read_json(bad_artifacts / "definition-export.json")["definitions"]
+    bad_definition = next(item for item in bad if item["definition_id"] == definition_id)
+    bad_promise = next(item for item in bad_definition["output_promises"] if item["source"] == source)
+    assert bad_definition["inventory_valid"] is True
+    assert bad_promise["source_in_inventory"] is True
+    assert bad_promise["source_hash_verified"] is False
+
+    source_path.write_bytes(content)
+    inventory["files"].append(dict(entry))
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+    duplicate_artifacts = tmp_path / "duplicate-artifacts"
+    _replay(state_dir, duplicate_artifacts)
+    duplicates = _read_json(duplicate_artifacts / "definition-export.json")["definitions"]
+    duplicate_definition = next(item for item in duplicates if item["definition_id"] == definition_id)
+    duplicate_promise = next(item for item in duplicate_definition["output_promises"] if item["source"] == source)
+    assert duplicate_definition["inventory_valid"] is True
+    assert duplicate_promise["source_hash_verified"] is False
+
+
+def test_evidence_view_links_only_the_crm_runs_own_captures(tmp_path: Path) -> None:
+    state_dir = _copy_state(tmp_path / "state")
+    artifact_dir = tmp_path / "artifacts"
+    _replay(state_dir, artifact_dir)
+    view = load_supervisor_history_view(artifact_dir)
+    assert view.status == "ready"
+    releases = view.rows("publication-history")
+    assert len(releases) == 2
+    linked = [view.linked_release(release) for release in releases]
+    assert {item.run["run_id"] for item in linked} == {RUN_CRM, RUN_CRM_V2}
+    for item in linked:
+        assert item.definition["definition_id"] == item.release["definition_id"]
+        assert item.capture is not None
+        assert item.run["run_id"] in item.capture.record["run_ids"]
+        assert item.capture.files
+        assert set(item.capture.files).issubset({"transform/main.py", "dp-blueprint.approved.md"})
+        assert "SENSITIVE" not in item.capture.files
+
+    # An otherwise valid release cannot borrow the other run's identity.
+    wrong = dict(releases[0])
+    wrong["definition_id"] = releases[1]["definition_id"]
+    with pytest.raises(HistoryEvidenceError):
+        view.linked_release(wrong)
+
+    capture_manifest = artifact_dir / "supervisor-captures.json"
+    document = _read_json(capture_manifest)
+    affected_digest = document["captures"][0]["capture_sha256"]
+    document["captures"][0]["run_ids"] = ["unrelated-run"]
+    capture_manifest.write_text(json.dumps(document), encoding="utf-8")
+    poisoned = load_supervisor_history_view(artifact_dir)
+    assert poisoned.status == "ready"
+    affected_release = next(
+        release
+        for release in poisoned.rows("publication-history")
+        if next(
+            run for run in poisoned.rows("run-records")
+            if run["run_id"] == release["run_id"]
+        )["capture_sha256"] == affected_digest
+    )
+    with pytest.raises(HistoryEvidenceError, match="capture run_ids association differs"):
+        poisoned.linked_release(affected_release)
+
+
+def test_evidence_view_keeps_two_synthetic_releases_and_captures_separate(
+    tmp_path: Path,
+) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    documents: dict[str, dict[str, object]] = {
+        "publication-history": {"schema": PUBLICATION_SCHEMA, "releases": []},
+        "run-records": {"schema": RUN_RECORDS_SCHEMA, "runs": []},
+        "run-failures": {"schema": RUN_FAILURES_SCHEMA, "failures": []},
+        "tool-calls": {"schema": TOOL_CALLS_SCHEMA, "calls": []},
+        "query-history": {"schema": QUERY_HISTORY_SCHEMA, "queries": []},
+        "supervisor-captures": {"schema": CAPTURES_SCHEMA, "captures": []},
+        "definition-export": {"schema": DEFINITION_EXPORT_SCHEMA, "definitions": []},
+    }
+    for index in (1, 2):
+        run_id = f"run-{index}"
+        definition_id = f"sha256-v1:{index:064x}"
+        capture_sha = f"sha256:{index:064x}"
+        content = f"approved definition {index}".encode()
+        snapshot = artifact_dir / "supervisor-captures" / f"{index:064x}" / "dp-blueprint.approved.md"
+        snapshot.parent.mkdir(parents=True)
+        snapshot.write_bytes(content)
+        documents["publication-history"]["releases"].append({
+            "run_id": run_id, "workflow_id": "mrr-waterfall",
+            "definition_id": definition_id, "artifact_id": f"artifact-{index}",
+            "publish_sequence": str(index), "verification_outcome": "passed",
+        })
+        documents["run-records"]["runs"].append({
+            "run_id": run_id, "workflow_id": "mrr-waterfall",
+            "definition_id": definition_id, "artifact_id": f"artifact-{index}",
+            "publish_sequence": str(index), "capture_sha256": capture_sha,
+            "status": "Published",
+        })
+        documents["definition-export"]["definitions"].append({
+            "definition_id": definition_id, "run_ids": [run_id],
+            "workflow_ids": ["mrr-waterfall"], "output_promises": [],
+        })
+        documents["supervisor-captures"]["captures"].append({
+            "capture_sha256": capture_sha, "run_ids": [run_id],
+            "workflow_ids": ["mrr-waterfall"], "files": [{
+                "path": "dp-blueprint.approved.md", "size": len(content),
+                "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+            }],
+        })
+    for name, document in documents.items():
+        (artifact_dir / f"{name}.json").write_text(json.dumps(document), encoding="utf-8")
+
+    view = load_supervisor_history_view(artifact_dir)
+    assert view.status == "ready"
+    first, second = (view.linked_release(row) for row in view.rows("publication-history"))
+    assert first.capture is not None and second.capture is not None
+    assert first.capture.files["dp-blueprint.approved.md"] == b"approved definition 1"
+    assert second.capture.files["dp-blueprint.approved.md"] == b"approved definition 2"
+
+    documents["run-records"]["runs"][1]["capture_sha256"] = documents["run-records"]["runs"][0]["capture_sha256"]
+    (artifact_dir / "run-records.json").write_text(json.dumps(documents["run-records"]), encoding="utf-8")
+    poisoned = load_supervisor_history_view(artifact_dir)
+    with pytest.raises(HistoryEvidenceError, match="capture run_ids association differs"):
+        poisoned.linked_release(poisoned.rows("publication-history")[1])
+
+    documents["run-records"]["runs"][1]["capture_sha256"] = f"sha256:{2:064x}"
+    (artifact_dir / "run-records.json").write_text(json.dumps(documents["run-records"]), encoding="utf-8")
+    snapshot.write_bytes(b"tampered")
+    poisoned = load_supervisor_history_view(artifact_dir)
+    with pytest.raises(HistoryEvidenceError, match="hash or size differs"):
+        poisoned.linked_release(poisoned.rows("publication-history")[1])
+
+    (artifact_dir / "run-failures.json").unlink()
+    assert load_supervisor_history_view(artifact_dir).status == "missing"
 
 
 def test_invalid_definition_id_is_not_exported(tmp_path: Path) -> None:

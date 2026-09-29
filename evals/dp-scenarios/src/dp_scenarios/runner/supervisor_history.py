@@ -65,9 +65,10 @@ supervisor facts or structured MCP facts:
   inventory_valid reports a matching definition.json schema and id with valid
   file entries. Promise records copy manifest names, descriptions where
   applicable, models, source, verifier_kind, source_in_inventory, and driver;
-  output promises also copy source_sha256 from the inventory. port and
-  source_name identify structural attachment. model_promises stores port and
-  model names. Source code is never copied.
+  output promises also copy source_sha256 from the inventory and
+  source_hash_verified only when the inventoried source bytes match that
+  digest and size. port and source_name identify structural attachment.
+  model_promises stores port and model names. Source code is never copied.
 
 The only retained capture files are the explicit allowlist below. Every source
 path is resolved inside the supervisor state directory, SQLite is opened in
@@ -1832,6 +1833,7 @@ class SupervisorHistory:
         state_dir: Path,
         inventory_paths: set[str],
         inventory_hashes: Mapping[str, str],
+        verified_sources: set[str],
     ) -> tuple[
         list[dict[str, object]],
         list[dict[str, object]],
@@ -1841,7 +1843,7 @@ class SupervisorHistory:
 
         def source_facts(
             source_value: object,
-        ) -> tuple[str | None, str, bool, str | None]:
+        ) -> tuple[str | None, str, bool, str | None, bool]:
             source = source_value if isinstance(source_value, str) else None
             parsed = _relative_path(source)
             if parsed is None:
@@ -1850,6 +1852,7 @@ class SupervisorHistory:
                     "none" if source_value is None else "unknown",
                     False,
                     None,
+                    False,
                 )
             relative = parsed.as_posix()
             source_in_inventory = relative in inventory_paths
@@ -1869,6 +1872,7 @@ class SupervisorHistory:
                 verifier,
                 source_in_inventory,
                 inventory_hashes.get(relative),
+                relative in verified_sources,
             )
 
         def strings(value: object, *, max_items: int = 256) -> list[str]:
@@ -1894,7 +1898,7 @@ class SupervisorHistory:
             name = _safe_string(item.get("name"), limit=256)
             if name is None:
                 return None
-            source, verifier, source_in_inventory, source_sha256 = source_facts(
+            source, verifier, source_in_inventory, source_sha256, source_hash_verified = source_facts(
                 item.get(source_key)
             )
             service = item.get("computeService")
@@ -1912,6 +1916,7 @@ class SupervisorHistory:
                 "verifier_kind": verifier,
                 "source_in_inventory": source_in_inventory,
                 "source_sha256": source_sha256,
+                "source_hash_verified": source_hash_verified,
                 "driver": driver,
             }
 
@@ -1976,6 +1981,7 @@ class SupervisorHistory:
                             "source": projected["source"],
                             "verifier_kind": projected["verifier_kind"],
                             "source_in_inventory": projected["source_in_inventory"],
+                            "source_hash_verified": projected["source_hash_verified"],
                             "driver": projected["driver"],
                         }
                     )
@@ -2044,6 +2050,8 @@ class SupervisorHistory:
             present = safe_dir is not None and safe_dir.is_dir()
             inventory_paths: set[str] = set()
             inventory_hashes: dict[str, str] = {}
+            verified_sources: set[str] = set()
+            duplicate_paths: set[str] = set()
             inventory_valid = False
             if present and safe_dir is not None:
                 inventory_path = _within(
@@ -2087,12 +2095,45 @@ class SupervisorHistory:
                         ):
                             entries_valid = False
                             break
-                        inventory_paths.add(relative.as_posix())
-                        inventory_hashes[relative.as_posix()] = digest_value
+                        source_name = relative.as_posix()
+                        if source_name in inventory_paths:
+                            duplicate_paths.add(source_name)
+                        inventory_paths.add(source_name)
+                        inventory_hashes[source_name] = digest_value
+                        # The inventory's syntax and membership are separate
+                        # from evidence that a compiled verifier file matches
+                        # its declared bytes. Read only contract sources; no
+                        # other definition content is needed for this flag.
+                        if relative.parts[0] == "contracts" and len(relative.parts) >= 2:
+                            source_file = _within(state_dir, safe_dir.joinpath(*relative.parts))
+                            if source_file is not None and source_file.is_file():
+                                try:
+                                    actual_size = source_file.stat().st_size
+                                    declared_size = (
+                                        size if isinstance(size, int)
+                                        else size.lstrip("0") or "0"
+                                    )
+                                    size_matches = (
+                                        actual_size == declared_size
+                                        if isinstance(declared_size, int)
+                                        else str(actual_size) == declared_size
+                                    )
+                                    if size_matches:
+                                        digest = hashlib.sha256()
+                                        with source_file.open("rb") as stream:
+                                            for chunk in iter(lambda: stream.read(65536), b""):
+                                                digest.update(chunk)
+                                        expected = digest_value.removeprefix("sha256:")
+                                        if digest.hexdigest() == expected:
+                                            verified_sources.add(source_name)
+                                except OSError:
+                                    pass
                     inventory_valid = entries_valid
+                    verified_sources.difference_update(duplicate_paths)
                     if not inventory_valid:
                         inventory_paths.clear()
                         inventory_hashes.clear()
+                        verified_sources.clear()
 
             manifest: Mapping[str, object] = {}
             if present and safe_dir is not None:
@@ -2115,6 +2156,7 @@ class SupervisorHistory:
                         state_dir=state_dir,
                         inventory_paths=inventory_paths,
                         inventory_hashes=inventory_hashes,
+                        verified_sources=verified_sources,
                     )
                 )
             else:
@@ -2130,16 +2172,17 @@ class SupervisorHistory:
                 "model_promises": model_promises,
                 "input_expectations": input_expectations,
             }
-            self._definitions.setdefault(definition_id, entry)
-            current = self._definitions[definition_id]
-            if current.get("definition_id") == definition_id:
-                current["run_ids"] = sorted(
-                    set(current.get("run_ids", [])) | aggregate["run_ids"]
-                )
-                current["workflow_ids"] = sorted(
-                    set(current.get("workflow_ids", []))
-                | aggregate["workflow_ids"]
-                )
+            current = self._definitions.setdefault(definition_id, entry)
+            # A resumed writer can load an older export without the hash flag,
+            # and a definition file can change after its first observation.
+            # Refresh the compiled projection every time before grading.
+            prior_run_ids = set(current.get("run_ids", []))
+            prior_workflow_ids = set(current.get("workflow_ids", []))
+            current.update(entry)
+            current["run_ids"] = sorted(prior_run_ids | aggregate["run_ids"])
+            current["workflow_ids"] = sorted(
+                prior_workflow_ids | aggregate["workflow_ids"]
+            )
 
     def _capture_root(
         self,
