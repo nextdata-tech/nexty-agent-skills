@@ -98,8 +98,14 @@ BEHAVIOR_KEYS = frozenset(
     }
 )
 REPLY_CATEGORIES = frozenset(
-    {"source_question", "approval_request", "decision_request", "status_query", "other"}
+    {"source_question", "approval_request", "decision_request", "status_query", "other",
+     "review_choice", "review_choice_recommended", "diagnostic_request"}
 )
+OPTIONAL_REPLY_CATEGORIES = frozenset(
+    {"review_choice", "review_choice_recommended", "diagnostic_request"}
+)
+DEFAULT_REVIEW_CHOICE = "Use your judgment: pick the option you'd defend and tell me which one you chose."
+DEFAULT_REVIEW_CHOICE_RECOMMENDED = "Go with {option}, as you recommend."
 
 
 def _mapping(value: object, location: str) -> dict[str, Any]:
@@ -158,7 +164,19 @@ class PersonaCard:
     def replies_for(self, category: str) -> tuple[str, ...]:
         """Return the fixed reply bank for one matcher category."""
 
+        if category == "review_choice":
+            return self.reply_bank.get(category, (DEFAULT_REVIEW_CHOICE,))
         return self.reply_bank.get(category, (self.fallback,))
+
+    def review_choice_reply(self, recommended_option: str | None) -> str:
+        """Accept a named recommendation or delegate an undeclared choice."""
+
+        if recommended_option is None:
+            return self.replies_for("review_choice")[0]
+        template = self.reply_bank.get(
+            "review_choice_recommended", (DEFAULT_REVIEW_CHOICE_RECOMMENDED,)
+        )[0]
+        return template.replace("{option}", recommended_option)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "PersonaCard":
@@ -203,10 +221,18 @@ def persona_from_mapping(value: Mapping[str, object]) -> PersonaCard:
     reply_raw = _mapping(raw["reply_bank"], "persona.reply_bank")
     _unknown(reply_raw, REPLY_CATEGORIES, "persona.reply_bank")
     replies: dict[str, tuple[str, ...]] = {}
-    for category in sorted(REPLY_CATEGORIES):
+    for category in sorted(REPLY_CATEGORIES - OPTIONAL_REPLY_CATEGORIES):
         if category not in reply_raw:
             raise PersonaError(f"persona.reply_bank is missing category {category!r}")
+    for category in sorted(reply_raw):
         replies[category] = _string_tuple(reply_raw[category], f"persona.reply_bank.{category}")
+    if any(
+        "{option}" not in reply
+        for reply in replies.get("review_choice_recommended", ())
+    ):
+        raise PersonaError(
+            "persona.reply_bank.review_choice_recommended must name {option}"
+        )
     fallback = _string(raw["fallback"], "persona.fallback")
     stance = raw.get("stance_when_unknown", DEFAULT_STANCE_WHEN_UNKNOWN)
     if stance not in STANCE_WHEN_UNKNOWN:

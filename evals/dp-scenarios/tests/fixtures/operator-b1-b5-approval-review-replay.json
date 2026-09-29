@@ -34,8 +34,8 @@
       "source": "dp-b5-sonnet-regress1 turn 9",
       "scenario_id": "inventory-position",
       "message": "The amended build is captured and reviewed, but the review found one blocking issue. Nothing is validated or published.\n\n**Blocking finding: missing promised counts**\nThe approved plan promises negative and orphan counts; the built product has only a plain position count.\n\n**Choose one:**\n1. Add dedicated negative and orphan count metrics. Amend the plan, approve again, rebuild and re-review.\n2. Keep the build as approved. Publish and report counts through filtered queries.\n\nI lean toward option 2. Your call: reply \"1\" or \"2\".\n\n**Things to know:** the source connectivity probe was written but never run.",
-      "expected_rule_id": "decision.answer.review_fix_authorization",
-      "expected_next_operator_text": "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, or publish until that review is clear; ask me again before any new behavior-changing decision."
+      "expected_rule_id": "review.choice_undeclared",
+      "expected_next_operator_text": "Go with option 2, as you recommend."
     },
     {
       "source": "dp-b5-sonnet-main-run4 turn 4",

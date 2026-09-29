@@ -60,13 +60,9 @@ class MatchResult:
     approval_requested: bool = False
     """Whether the agent solicited approval, orthogonally to ``category``.
 
-    Agents present a spec and ask a factual question in the same breath --
-    "Please approve the blueprint. Also, what does updatedAt mean on a deal?"
-    Making approval a first-match *category* stole exactly those messages from
-    the source/decision/ground-truth lookup, so the operator answered a stock
-    approval line instead of the fact it knows, precisely when the fact
-    mattered most. The solicitation is therefore recorded as a flag on
-    whatever category actually resolves the reply.
+    An actual approval ask wins over factual vocabulary within that ask. A
+    later, separate factual question can still resolve to a declared fact.
+    This flag also records approval vocabulary orthogonally to the category.
     """
 
     solicits_operator: bool = False
@@ -169,6 +165,20 @@ _APPROVAL_CONTEXT_PATTERN = re.compile(
     r"waiting\s+for|awaiting|without)\b.{0,140}\bapproval\b",
     re.IGNORECASE | re.DOTALL,
 )
+_ADDRESSED_APPROVAL_ASK_PATTERN = re.compile(
+    r"\b(?:do|can|could|would|will)\s+you\s+(?:explicitly\s+|please\s+)?(?:approve|sign\s*off)\b"
+    r"|\bshould\s+(?:i|we)\s+approve\b"
+    r"|^\s*(?:\*\*)?approve\b"
+    r"|\bplease\s+(?:explicitly\s+)?approve\b"
+    r"|\bplease\b[^.!?\n]{0,140}\b(?:explicitly\s+)?(?:approve|sign\s*off)\b"
+    r"|\b(?:reply|respond|state|send|give|confirm|relay|record)\b[^.!?\n]{0,100}"
+    r"\b(?:approval|approved)\b"
+    r"|\b(?:need|require|await|waiting\s+for|without|asking\s+for)\b[^.!?\n]{0,110}"
+    r"\b(?:your|explicit)\s+approval\b"
+    r"|\bi'?d\s+like\s+your\s+(?:approval|sign\s*off)\b"
+    r"|\b(?:let\s+me\s+know|tell\s+me)\b[^.!?\n]{0,100}\bapprove\b",
+    re.IGNORECASE,
+)
 _OTHER_ASK_TOPIC_PATTERN = re.compile(
     # "data" excludes "data product": the platform's own generic deliverable
     # name ("generate and build the data product") names nothing substantive
@@ -208,7 +218,7 @@ SOLICITING_OPENER_PATTERN = re.compile(r"\s*which\b", re.IGNORECASE)
 SOLICITATION_PATTERN = re.compile(
     # "Please explicitly authorize repairs for X" (live B2, Luna) is as much an
     # ask as "please approve"; the adverb and "authorize" were both missing.
-    r"\b(please\s+(?:explicitly\s+)?(approve|authori[sz]e|confirm|decide|choose|pick|review|tell\s+me|let\s+me\s+know)"
+    r"\b(please\s+(?:explicitly\s+)?(approve|authori[sz]e|confirm|decide|choose|pick|review|send|tell\s+me|let\s+me\s+know)"
     r"|please\s+adjudicate"
     r"|can\s+you|could\s+you|would\s+you|do\s+you\s+want|what\s+would\s+you\s+like"
     r"|let\s+me\s+know|up\s+to\s+you|sign\s*off\s+on|go-?ahead"
@@ -216,7 +226,9 @@ SOLICITATION_PATTERN = re.compile(
     # First person only. "I need a decision" is an ask; "something does need
     # your call" is a promise of a future one, and reading it as present drew
     # a refusal on live turn 8 for a decision nobody had requested.
-    r"|\b(?:i|we)\s+need\s+(?:a|an|your)\s+(?:decision|answer|call|steer|confirmation|sign\s*off)"
+    r"|\b(?:i|we)\s+need\s+(?:a|an|your)\s+(?:decision|answer|call|steer|confirmation|choice|sign\s*off)"
+    r"|\bwhat\s+i\s+need\s*:\s*\**\s*an?\s+(?:explicit\s+)?choice"
+    r"|\b(?:i|we)\s+can\s+only\s+(?:relay|record|accept)\s+your\s+approval\s+if\s+you\s+(?:state|give|send)"
     r"|\b(?:i|we)\s+need\s+you\s+to"
     # There is no "confirm" alternative of its own. An addressed confirm is
     # already covered -- "please confirm" by the first alternative, "can you
@@ -905,6 +917,125 @@ _REVIEW_CHOICE_PROMPT_PATTERN = re.compile(
     r"choose\s+one|reply\s+[\"']?\d+[\"']?\s+(?:or|/)\s+[\"']?\d+[\"']?)\b",
     re.IGNORECASE,
 )
+_REVIEW_ALTERNATIVES_PATTERN = re.compile(
+    r"\boption\s*(?:\(?[a-z]\)?|\d+)(?!\w)"
+    r"|^\s*(?:[-*]\s*)?(?:[a-z]|\d+)[.):]\s+\S+"
+    r"|\bshould\s+(?:i|we)\b[^?\n]{0,160}\bor\b[^?\n]{0,160}\?",
+    re.IGNORECASE | re.MULTILINE,
+)
+_REVIEW_RECOMMENDATION_PATTERN = re.compile(
+    r"\b(?:i\s+lean\s+towards?|i\s+(?:would\s+)?recommend|"
+    r"what\s+i\s+recommend|(?:my\s+)?recommendation|recommended)\b"
+    r"(?:\s+is)?[\s*(:-]*"
+    r"(?:(?:choose|pick|select)\s+)?(?:option|choice)?[\s*(]*"
+    r"(?P<label>[a-z]|\d+)(?!\w)",
+    re.IGNORECASE,
+)
+_REVIEW_OFFERED_LABEL_PATTERN = re.compile(
+    r"^\s*(?:[-*]\s*)?(?P<listed>[a-z]|\d+)[.):]\s+\S+"
+    r"|\boption\s*\(?(?P<named>[a-z]|\d+)\)?(?!\w)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_DIAGNOSTIC_KIND_PATTERN = re.compile(
+    r"\b(?:error\s+(?:output|text|class|message)|build\s+output|"
+    r"(?:scratch|build|transform|runner)\s+(?:run\s+)?(?:logs?|traces?|diagnostics?)|"
+    r"(?:failing|failed)\s+page|stack\s*trace|traceback|run\s+id)\b",
+    re.IGNORECASE,
+)
+_DIAGNOSTIC_REQUEST_PATTERN = re.compile(
+    r"\b(?:give|send|share|paste|show|provide)\s+(?:me\s+)?[^.!?\n]{0,130}"
+    r"|\b(?:what\s+(?:would|could)\s+unblock|how\s+to\s+unblock|"
+    r"i\s+need\s+(?:one\s+of\s+these|the|a)|what\s+i\s+need)\b"
+    r".{0,420}",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _explicit_review_choice(message: str, request_clause: str) -> bool:
+    """Whether a live review ask selects among offered alternatives."""
+
+    return bool(
+        _REVIEW_ALTERNATIVES_PATTERN.search(_NON_PROSE.sub(" ", message))
+        and (
+            _REVIEW_CHOICE_PROMPT_PATTERN.search(request_clause)
+            or re.search(r"\bplease\s+choose\s+one\b", request_clause, re.I)
+            or re.search(
+                r"\b(?:choose|pick|option|alternative|choice)s?\b"
+                r"|\bwhich\b.{0,80}\b(?:finding|fix|review|option|choice)s?\b"
+                r"|\bapprove\s*\([a-z]\)",
+                request_clause,
+                re.I,
+            )
+        )
+    )
+
+
+def _recommended_review_option(message: str, request_clause: str) -> str | None:
+    """Read a named recommendation from this ask, never from prior context."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    ask_offset = prose.rfind(request_clause)
+    current_text = prose[:ask_offset] if ask_offset >= 0 else prose
+    # A recommendation cannot make its own label an offered alternative.
+    # Find labels in the choice list or addressed ask after masking the
+    # recommendation phrase itself.
+    offered_text = message
+    for recommendation in reversed(list(_REVIEW_RECOMMENDATION_PATTERN.finditer(message))):
+        offered_text = (
+            offered_text[:recommendation.start()]
+            + " " * (recommendation.end() - recommendation.start())
+            + offered_text[recommendation.end():]
+        )
+    offered = {
+        (match.group("listed") or match.group("named")).casefold()
+        for match in _REVIEW_OFFERED_LABEL_PATTERN.finditer(offered_text)
+    }
+    for match in reversed(list(_REVIEW_RECOMMENDATION_PATTERN.finditer(current_text))):
+        label = match.group("label")
+        if label.casefold() not in offered:
+            continue
+        option = f"option {label.upper() if label.isalpha() else label}"
+        if re.match(r"\s*\)?\s+for\s+both\b", current_text[match.end():], re.I):
+            option += " for both findings"
+        return option
+    return None
+
+
+def _declares_review_choice(answer: str, message: str) -> bool:
+    """A declared repair answer can itself name one offered option."""
+
+    selected = re.match(
+        r"\s*(?:choose|pick|select)\s+(?:option|choice)\s*\(?([a-z]|\d+)\)?(?!\w)",
+        answer,
+        re.I,
+    )
+    return bool(
+        selected is not None
+        and re.search(
+            rf"\b(?:option|choice)\s*\(?{re.escape(selected.group(1))}\)?(?!\w)",
+            message,
+            re.I,
+        )
+    )
+
+
+def _requests_build_diagnostics(message: str) -> bool:
+    """Recognize a request for local run evidence, never a source fact."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    active = _active_request_clauses(message)
+    if active:
+        latest = active[-1]
+        if _DIAGNOSTIC_KIND_PATTERN.search(latest):
+            return True
+        # A later, independent factual question owns the current ask even if
+        # an earlier sentence requested logs or error text.
+        if _FACTUAL_QUESTION_OPENER_PATTERN.match(latest):
+            return False
+    return any(
+        _DIAGNOSTIC_KIND_PATTERN.search(candidate.group())
+        for candidate in _DIAGNOSTIC_REQUEST_PATTERN.finditer(prose)
+    )
 _CORRECTION_INVITATION_PATTERN = re.compile(
     r"\bopen\s+to\s+your\s+correction\b",
     re.IGNORECASE,
@@ -1417,18 +1548,12 @@ class MatcherBank:
             clause
             for clause in request_clauses
             if APPROVAL_REQUEST_PATTERN.search(clause)
+            and _ADDRESSED_APPROVAL_ASK_PATTERN.search(clause)
         ]
         other_substantive_asks = any(
             _OTHER_ASK_TOPIC_PATTERN.search(clause)
+            and clause not in approval_clauses
             and _CONDITIONAL_REVISION_PATTERN.search(clause) is None
-            and (
-                clause not in approval_clauses
-                or re.search(
-                    r"\b(source|data|field|column|endpoint|resource|record|row|input|table)\b",
-                    clause,
-                    re.IGNORECASE,
-                ) is not None
-            )
             for clause in request_clauses
         )
         approval_context = bool(_APPROVAL_CONTEXT_PATTERN.search(request_text))
@@ -1460,8 +1585,7 @@ class MatcherBank:
         # is the only blocker.
         approval_rule = (
             _approval_request_rule(" ".join(approval_clauses)) or "approval.request"
-            if explicit_approval_ask and not other_substantive_asks
-            else None
+            if explicit_approval_ask else None
         )
         review_fix = self.answer_sheet.decision_answers.get("review_fix_authorization")
         if (
@@ -1477,6 +1601,78 @@ class MatcherBank:
         # authorization to repair work that has never been reviewed.
         review_context = context if self.has_review_finding_context(context) else ""
         review_in_play = bool(review_context) or self.has_review_finding_context(message)
+        review_choice_clause = next(
+            (
+                clause for clause in reversed(request_clauses)
+                if _explicit_review_choice(message, clause)
+            ),
+            None,
+        ) if review_in_play else None
+        if review_choice_clause is not None:
+            specific_choice = self._request_decision(
+                _decision_lookup_text(message, review_choice_clause),
+                excluded_decision_ids=excluded_decision_ids,
+                available_event_ids=available_event_ids,
+                active_overlay_ids=active_overlays,
+            )
+            alternatives = _referenced_options_text(message, review_choice_clause)
+            if specific_choice is None and alternatives is not None:
+                specific_choice = self._request_decision(
+                    alternatives,
+                    excluded_decision_ids=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if specific_choice is None:
+                    partial = [
+                        decision
+                        for decision in self.answer_sheet.decision_answers.values()
+                        if decision.decision_id not in excluded_decision_ids
+                        and decision.decision_id != "review_fix_authorization"
+                        and self.decision_is_available(
+                            decision.decision_id,
+                            available_event_ids=available_event_ids,
+                        )
+                        and (
+                            decision.available_after_overlay is None
+                            or decision.available_after_overlay in active_overlays
+                        )
+                        and (
+                            decision.retired_after_overlay is None
+                            or decision.retired_after_overlay not in active_overlays
+                        )
+                        and any(
+                            _decision_term_present(term, alternatives.casefold())
+                            for term in decision.terms
+                        )
+                    ]
+                    if len(partial) == 1:
+                        specific_choice = partial[0]
+            if specific_choice is not None and specific_choice.decision_id != "review_fix_authorization":
+                return self._decision_result(
+                    specific_choice,
+                    decision_stage_counts=stage_counts,
+                    matched_request_clause=review_choice_clause,
+                )
+            if (
+                review_fix is not None
+                and review_fix.decision_id not in excluded_decision_ids
+                and _declares_review_choice(review_fix.answer, message)
+            ):
+                return self._decision_result(
+                    review_fix,
+                    decision_stage_counts=stage_counts,
+                    matched_request_clause=review_choice_clause,
+                )
+            return MatchResult(
+                Category.DECISION_REQUEST,
+                "review.choice_undeclared",
+                self.persona.review_choice_reply(
+                    _recommended_review_option(message, review_choice_clause)
+                ),
+                matched=False,
+                matched_request_clause=review_choice_clause,
+            )
         review_fix_request = (
             _review_fix_request(message, review_context) if review_in_play else None
         )
@@ -1676,6 +1872,18 @@ class MatcherBank:
                 ),
             )
 
+        # A scratch/build error is local run evidence. Source-answer nouns in
+        # the same request (page, record, data) do not make it source data.
+        if _requests_build_diagnostics(message):
+            return MatchResult(
+                Category.OTHER,
+                "persona.diagnostic_request",
+                self.persona.replies_for("diagnostic_request")[0],
+                matched=False,
+                solicits_operator=True,
+                matched_request_clause=request_clauses[-1] if request_clauses else None,
+            )
+
         decision = request_decision
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
@@ -1833,6 +2041,8 @@ class MatcherBank:
             decision_stage_counts=decision_stage_counts,
         )
         if classified.category is Category.OTHER:
+            return classified
+        if classified.rule_id == "review.choice_undeclared":
             return classified
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
             return classified
