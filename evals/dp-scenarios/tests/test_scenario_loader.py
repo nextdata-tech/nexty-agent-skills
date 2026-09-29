@@ -56,6 +56,7 @@ EXPECTED_TIERS = {
     "headcount-attrition": "full",
     "mrr-waterfall": "full",
     "crm-pipeline-drift": "full",
+    "product-usage": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -66,12 +67,13 @@ _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
     | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline", "crm-pipeline-drift"} else set())
-    | ({"narrowing"} if scenario_id == "mrr-waterfall" else set())
+    | ({"narrowing"} if scenario_id in {"mrr-waterfall", "product-usage"} else set())
     | ({"query"} if scenario_id in {
         "parent-child-grain-trap",
         "application-reconciliation",
         "locale-timezone",
         "mrr-waterfall",
+        "product-usage",
     } else set())
     for scenario_id in EXPECTED_TIERS
 }
@@ -172,7 +174,7 @@ def test_public_scenarios_declare_the_expected_required_gate_set() -> None:
     staged_definition_change = {
         scenario.id for scenario in scenarios if scenario.stages_definition_change
     }
-    assert staged_definition_change == {"mrr-waterfall"}
+    assert staged_definition_change == {"mrr-waterfall", "product-usage"}
 
     staged_capability = {
         scenario.id for scenario in scenarios if scenario.stages_capability_shortfall
@@ -577,6 +579,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "marketing-attribution")
     shutil.rmtree(root / "mrr-waterfall")
     shutil.rmtree(root / "crm-pipeline-drift")
+    shutil.rmtree(root / "product-usage")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -852,4 +855,5 @@ def test_only_scenarios_declaring_answer_gold_have_scoreable_query_gates() -> No
         "application-reconciliation",
         "locale-timezone",
         "mrr-waterfall",
+        "product-usage",
     }

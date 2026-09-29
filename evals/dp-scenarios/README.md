@@ -197,6 +197,10 @@ the routine core suite:
 - **mrr-waterfall** — B7's effective-dated subscription bridge, staged
   same-month classification and deduplication decisions, post-publication
   challenges, and revised-release query checks.
+- **product-usage** — B8's rolling-window weekly usage bridge and a staged
+  late-arrival lookback decision, graded from a same-workflow refresh.
+  Offline-testable only: `live_blocked_reason` refuses live dispatch until
+  nxd's stateful readback and workflow-v2 rebuild admission (U1/U2) land.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -208,6 +212,15 @@ the routine core suite:
 `requires_live_session` makes the deterministic CLI refuse `--tier live` outside
 `--mode live`, before loading any package, rather than produce a replay-mode
 report indistinguishable from a real one.
+
+A package can also be individually blocked from a live run while remaining
+fully loadable, replayable, and unit-testable: `scenario.yaml`'s optional
+`live_blocked_reason` field (see `product-usage` above) names an upstream gap
+the harness cannot paper over. `scenario.live_blocked` returns every such
+scenario in a set; both live-dispatch entry points --
+`scripts/run_local_claude.py` and `runner/cli.py` in `--mode live` -- refuse
+to start one, whether it was reached through `--tier` or named explicitly
+with `--scenario`.
 
 Each scenario's own `README.md` states its fixture, execution, goal, assertions
 and limitations.
@@ -235,6 +248,7 @@ scenario.
 | [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign matching, unmatched-CPA policy, and out-of-scope export sentinel scan |
 | [headcount-attrition](scenarios/headcount-attrition/README.md) | full | 13 | monthly headcount and attrition with PII exclusion and small-cell suppression |
 | [mrr-waterfall](scenarios/mrr-waterfall/README.md) | full | 14 | effective-dated MRR waterfall with staged decisions and revised-publication evidence |
+| [product-usage](scenarios/product-usage/README.md) | full | 15 | rolling-window usage events, late-arrival lookback decision, same-workflow refresh evidence (offline-testable only; blocked from live dispatch) |
 | [crm-pipeline-drift](scenarios/crm-pipeline-drift/README.md) | full | 20 | chained CRM source drift, staged ruling, separate publication, and structural warning evidence |
 
 ## Running

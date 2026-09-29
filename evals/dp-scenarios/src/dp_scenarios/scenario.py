@@ -235,6 +235,15 @@ class Scenario:
     # artifact root; hidden gold is never inferred from this path.
     follow_up_artifact: str | None = None
     chain: ChainSpec | None = None
+    # A non-empty reason means this package is not selectable for a live
+    # agent session yet -- typically an upstream dependency the harness
+    # cannot fake (see B8/product-usage: nxd trusted readback currently
+    # rejects a stateful transform). The package still loads, replays, and
+    # unit-tests normally; only live dispatch (``scripts/run_local_claude.py``)
+    # refuses it, whether named by ``--scenario`` or reached through
+    # ``--tier``. ``None`` means this scenario carries no such block, the
+    # same as every scenario before this field existed.
+    live_blocked_reason: str | None = None
 
     @property
     def id(self) -> str:
@@ -755,7 +764,7 @@ _SCENARIO_KEYS = {
 # package, so they live outside ``_SCENARIO_KEYS`` rather than being added to
 # it, which would make every existing scenario.yaml fail the "missing key(s)"
 # check the moment this key exists at all.
-_OPTIONAL_SCENARIO_KEYS = {"route_table", "follow_up_artifact", "chain"}
+_OPTIONAL_SCENARIO_KEYS = {"route_table", "follow_up_artifact", "chain", "live_blocked_reason"}
 _FIXTURE_KEYS = {"dataset", "seed", "variant", "plant"}
 _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
@@ -788,6 +797,23 @@ def requires_live_session(tier: str) -> bool:
     """
 
     return _TIER_ALIASES.get(tier, tier) in _LIVE_ONLY_TIERS
+
+
+def live_blocked(scenarios: Iterable["Scenario"]) -> tuple["Scenario", ...]:
+    """Return the scenarios in ``scenarios`` that declare ``live_blocked_reason``.
+
+    A package can be selectable for smoke/core/full *replay* and unit tests
+    while still being unfit for an actual live agent session -- for example
+    B8/product-usage, whose evidence contract depends on nxd workflow-v2
+    readback/admission changes this repo does not ship. A tier or an
+    explicit ``--scenario`` selection can silently include such a package;
+    this is the single place both live-dispatch entry points (``runner/cli.py``
+    in ``--mode live`` and ``scripts/run_local_claude.py``) check before
+    spending a live session on it. It is a query, not an enforcement point,
+    so each caller raises its own error type with its own message.
+    """
+
+    return tuple(scenario for scenario in scenarios if getattr(scenario, "live_blocked_reason", None))
 
 
 def _canonical_hash(value: object) -> str:
@@ -1219,6 +1245,11 @@ def load_scenario(path: str | Path) -> Scenario:
         route_table=route_table,
         turn_count=len(answer_sheet.turns),
     )
+    live_blocked_reason = raw.get("live_blocked_reason")
+    if live_blocked_reason is not None:
+        live_blocked_reason = _string(live_blocked_reason, "live_blocked_reason")
+        if not live_blocked_reason.strip():
+            raise ScenarioError("live_blocked_reason must be non-empty text when declared")
     script = OperatorScript.from_components(
         persona,
         answer_sheet,
@@ -1254,6 +1285,7 @@ def load_scenario(path: str | Path) -> Scenario:
         route_table=route_table,
         follow_up_artifact=follow_up_artifact,
         chain=chain,
+        live_blocked_reason=live_blocked_reason,
     )
 
 

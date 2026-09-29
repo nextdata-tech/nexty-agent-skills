@@ -1054,6 +1054,7 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
         "marketing-attribution",
         "headcount-attrition",
         "mrr-waterfall",
+        "product-usage",
     }
     for name in with_conduct:
         assert contracts[name]["conduct"], f"{name} declares an artifact but no conduct"

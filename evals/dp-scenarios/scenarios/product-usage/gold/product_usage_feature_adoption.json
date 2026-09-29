@@ -1,0 +1,47 @@
+[
+  {
+    "active_accounts": 200,
+    "feature": "dashboard",
+    "week_start": "2024-04-08"
+  },
+  {
+    "active_accounts": 200,
+    "feature": "export",
+    "week_start": "2024-04-08"
+  },
+  {
+    "active_accounts": 200,
+    "feature": "search",
+    "week_start": "2024-04-08"
+  },
+  {
+    "active_accounts": 110,
+    "feature": "dashboard",
+    "week_start": "2024-04-15"
+  },
+  {
+    "active_accounts": 110,
+    "feature": "export",
+    "week_start": "2024-04-15"
+  },
+  {
+    "active_accounts": 110,
+    "feature": "search",
+    "week_start": "2024-04-15"
+  },
+  {
+    "active_accounts": 100,
+    "feature": "dashboard",
+    "week_start": "2024-04-22"
+  },
+  {
+    "active_accounts": 100,
+    "feature": "export",
+    "week_start": "2024-04-22"
+  },
+  {
+    "active_accounts": 100,
+    "feature": "search",
+    "week_start": "2024-04-22"
+  }
+]

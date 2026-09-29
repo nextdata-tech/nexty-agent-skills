@@ -49,7 +49,7 @@ from dp_scenarios.runner.review_guard import (
 )
 from dp_scenarios.runner.session import LiveSession
 from dp_scenarios.runner.tier import RunBudgets, TierError, TierRunner, run_drift_canary
-from dp_scenarios.scenario import SCENARIO_TIERS, Scenario, load_scenarios, select_tier
+from dp_scenarios.scenario import SCENARIO_TIERS, Scenario, live_blocked, load_scenarios, select_tier
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -344,7 +344,28 @@ def _select_scenarios(all_scenarios: Sequence[Scenario], selected: Sequence[str]
     if unknown:
         raise TierError("unknown scenario id(s): " + ", ".join(unknown))
     selected_set = set(selected)
-    return tuple(scenario for scenario in all_scenarios if scenario.id in selected_set)
+    return _reject_live_blocked(
+        tuple(scenario for scenario in all_scenarios if scenario.id in selected_set)
+    )
+
+
+def _reject_live_blocked(scenarios: Sequence[Scenario]) -> tuple[Scenario, ...]:
+    """Refuse any scenario carrying a declared ``live_blocked_reason``.
+
+    A blocked package (for example B8/product-usage, which needs nxd
+    workflow-v2 readback/admission changes this repo cannot supply) still
+    loads, replays, and unit-tests normally -- only a live dispatch is
+    refused, and it is refused whether the package was reached through
+    ``--tier`` or named explicitly with ``--scenario``: naming it is not
+    consent to spend a live session on evidence the harness cannot yet
+    produce correctly.
+    """
+
+    blocked = live_blocked(scenarios)
+    if blocked:
+        detail = ", ".join(f"{scenario.id} ({scenario.live_blocked_reason})" for scenario in blocked)
+        raise TierError(f"scenario(s) not eligible for a live run: {detail}")
+    return tuple(scenarios)
 
 
 def _scenarios_in_scope(
@@ -363,7 +384,7 @@ def _scenarios_in_scope(
 
     if selected:
         return tuple(all_scenarios)
-    return select_tier(all_scenarios, tier)
+    return _reject_live_blocked(select_tier(all_scenarios, tier))
 
 
 def _configure_scenarios(

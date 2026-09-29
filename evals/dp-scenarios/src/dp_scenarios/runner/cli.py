@@ -20,6 +20,7 @@ from dp_scenarios.canary import load_claims
 from dp_scenarios.knobs import KnobError, SupervisorKnobs, load_knob_plan
 from dp_scenarios.scenario import (
     SCENARIO_TIERS,
+    live_blocked,
     load_scenarios,
     requires_live_session,
     select_tier,
@@ -302,6 +303,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "recording rather than an agent"
         )
     scenarios = select_tier(load_scenarios(args.scenario_root), args.tier)
+    if args.mode == "live":
+        blocked = live_blocked(scenarios)
+        if blocked:
+            # Selectable for tier/replay does not mean fit for a live session.
+            # A blocked package (see scenario.live_blocked) still needs a
+            # harness or upstream change this repo does not carry yet; naming
+            # its tier is not consent to spend a live session on it.
+            detail = ", ".join(f"{scenario.id} ({scenario.live_blocked_reason})" for scenario in blocked)
+            raise TierError(f"scenario(s) not eligible for a live run: {detail}")
     pins = PinnedVersions(
         skill_pack_version=args.skill_pack_version,
         supervisor_version=args.supervisor_version,
