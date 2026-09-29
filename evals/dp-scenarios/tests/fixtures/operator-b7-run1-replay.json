@@ -1,0 +1,10 @@
+{
+  "schema": "operator-b7-run1-replay-v1",
+  "source": "Trimmed agent asks from mrr-waterfall epoch 1; tool output and business values omitted.",
+  "turn_4_same_month_choice": "A customer drops and recovers mid-month. Option A nets the month; option B counts the movements event-by-event. Which do you want: A or B?",
+  "turn_7_empty_movement_choice": "The plan says every amount is positive, but an empty movement would need a zero row. Which do you want: omit empty movements, or keep all five rows with zero?",
+  "turn_13_no_review": "No independent review has happened. There are no review findings. If the review later returns findings, I will ask before changing anything.",
+  "turn_21_plan_approval": "The revised plan is ready. Nothing has been captured or reviewed yet. Reply with an explicit approval to proceed, or tell me what to change.",
+  "turn_23_review_choice": "The independent review found three findings. Two are blocking and one is advisory. What I need from you: For finding 1, say whether to add the proposed rows. For finding 2, choose A or B. For finding 3, say whether to leave it as is.",
+  "turn_33_review_choice": "The review found two blocking findings and one advisory finding. Waiting on you: the review findings need your decisions. To proceed with my recommendations, reply with this:\n\n> Approve fixing finding 1 and finding 2; leave finding 3."
+}
