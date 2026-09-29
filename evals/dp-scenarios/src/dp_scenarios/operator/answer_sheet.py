@@ -174,6 +174,7 @@ class DecisionAnswer:
     terms: tuple[str, ...]
     answer: str
     synonyms: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    available_after_event: str | None = None
 
     def to_mapping(self) -> dict[str, object]:
         """Return the canonical answer entry."""
@@ -181,6 +182,8 @@ class DecisionAnswer:
         entry: dict[str, object] = {"terms": list(self.terms), "answer": self.answer}
         if self.synonyms:
             entry["synonyms"] = {term: list(values) for term, values in self.synonyms.items()}
+        if self.available_after_event is not None:
+            entry["available_after_event"] = self.available_after_event
         return entry
 
 
@@ -271,7 +274,11 @@ class AnswerSheet:
         return answer_sheet_from_mapping(value)
 
     def answer_for_decision(
-        self, question: str, *, excluded: frozenset[str] = frozenset()
+        self,
+        question: str,
+        *,
+        excluded: frozenset[str] = frozenset(),
+        available_event_ids: Sequence[str] = (),
     ) -> DecisionAnswer | None:
         """Return the declared decision answer whose terms match the question.
 
@@ -282,13 +289,34 @@ class AnswerSheet:
         a "conversion" record. Each required term can also declare synonyms;
         one of those alternatives satisfies that term without changing the
         other required terms. Multiword terms keep their literal contract.
+
+        An answer with ``available_after_event`` is considered only after that
+        event id appears in ``available_event_ids``. If multiple answers for
+        the same ask are unlocked, the one unlocked by the most recently
+        delivered event takes precedence; unstaged answers retain their
+        existing decision-id ordering.
         """
 
         lowered = question.casefold()
-        for decision_id in sorted(self.decision_answers):
-            if decision_id in excluded:
+        event_order = {event_id: index for index, event_id in enumerate(available_event_ids)}
+        eligible = [
+            decision
+            for decision in self.decision_answers.values()
+            if decision.available_after_event is None
+            or decision.available_after_event in event_order
+        ]
+        # Keep the established lexical order for all legacy answers. Staged
+        # answers sort ahead of older answers only after their gate event was
+        # delivered, with the latest delivered gate winning on a revision.
+        eligible.sort(
+            key=lambda decision: (
+                -event_order.get(decision.available_after_event, -1),
+                decision.decision_id,
+            )
+        )
+        for decision in eligible:
+            if decision.decision_id in excluded:
                 continue
-            decision = self.decision_answers[decision_id]
             if all(
                 any(
                     _decision_term_present(candidate, lowered)
@@ -378,13 +406,18 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
     result: dict[str, DecisionAnswer] = {}
     for decision_id, entry in raw.items():
         identifier = _string(decision_id, "answer_sheet.decision_answers key")
+        available_after_event = None
         if isinstance(entry, str):
             terms = (identifier.replace("_", " "),)
             answer = entry
             synonyms: dict[str, tuple[str, ...]] = {}
         else:
             data = _mapping(entry, f"answer_sheet.decision_answers.{identifier}")
-            _unknown(data, {"terms", "answer", "synonyms"}, f"answer_sheet.decision_answers.{identifier}")
+            _unknown(
+                data,
+                {"terms", "answer", "synonyms", "available_after_event"},
+                f"answer_sheet.decision_answers.{identifier}",
+            )
             if not {"terms", "answer"}.issubset(data):
                 raise AnswerSheetError(
                     f"answer_sheet.decision_answers.{identifier} requires terms and answer"
@@ -404,11 +437,20 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
                     synonyms[term] = _strings(
                         values, f"answer_sheet.decision_answers.{identifier}.synonyms.{term}"
                     )
+            available_after_event = (
+                _string(
+                    data["available_after_event"],
+                    f"answer_sheet.decision_answers.{identifier}.available_after_event",
+                )
+                if "available_after_event" in data
+                else None
+            )
         result[identifier] = DecisionAnswer(
             identifier,
             terms,
             _string(answer, f"decision {identifier}.answer"),
             MappingProxyType(synonyms),
+            available_after_event,
         )
     return result
 
