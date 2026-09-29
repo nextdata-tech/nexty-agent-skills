@@ -510,7 +510,7 @@ def test_discovery_does_not_need_a_python_registry() -> None:
     assert [item.id for item in discovered] == [item.id for item in direct]
 
 
-def test_mrr_revised_decision_stays_staged_if_publication_waits_past_turn_23() -> None:
+def test_mrr_revised_decision_stays_staged_if_publication_waits_past_turn_32() -> None:
     scenario = load_scenario(SCENARIO_ROOT / "mrr-waterfall")
     script_turns = scenario.script.turns
     approval_turns = [turn for turn in script_turns if turn.approval]
@@ -526,7 +526,7 @@ def test_mrr_revised_decision_stays_staged_if_publication_waits_past_turn_23() -
         "B7-billing-contact-request",
     }
     delayed_events = {
-        "B7-billing-contact-request": 20,
+        "B7-billing-contact-request": 29,
     }
     empty_runs = {"schema": "dp-scenario-run-records-v1", "runs": []}
     empty_history = {
@@ -538,7 +538,7 @@ def test_mrr_revised_decision_stays_staged_if_publication_waits_past_turn_23() -
     )
     visible_before_revision = ("same month", "decreased and increased", "prior-month close")
 
-    for turn_number in (21, 22, 23):
+    for turn_number in (30, 31, 32):
         injections = scenario.events.fire(
             turn_number,
             run_records=empty_runs,
@@ -555,6 +555,87 @@ def test_mrr_revised_decision_stays_staged_if_publication_waits_past_turn_23() -
             available_event_ids=tuple(delayed_ids),
         )
         assert answer is None
+
+
+def test_mrr_turn_budget_is_fifty_and_p3_cards_are_milestone_timed() -> None:
+    """B7's diagnosed run-2 exhausted its 34-turn budget waiting on an answer,
+    having never published. The owner-approved fix raises the budget to 50 and
+    times the P3 persona's challenge cards off the runner-owned publication
+    mechanism (``after_published``/``after_event``) instead of low fixed turn
+    numbers, so they land after a build/publication rather than mid-construction.
+    """
+
+    scenario = load_scenario(SCENARIO_ROOT / "mrr-waterfall")
+    assert scenario.turn_budget == 50
+    assert len(scenario.answer_sheet.turns) == 50
+
+    cards = {card.id: card for card in scenario.events.cards}
+    # The intake plant (B7-same-month) is deliberately turn-fixed: it must
+    # land during narrowing, before any construction has started.
+    assert cards["B7-same-month"].trigger_turn == 4
+    assert not cards["B7-same-month"].publication_triggered
+
+    # Every P3 challenge/reversal card that follows construction is timed off
+    # a publication or a prior delivered event, not a bare early turn number.
+    for card_id in ("B7-spreadsheet-challenge", "B7-billing-contact-request", "B7-E8", "B7-E3"):
+        assert cards[card_id].publication_triggered, card_id
+
+    assert cards["B7-spreadsheet-challenge"].after_published == "initial"
+    assert cards["B7-billing-contact-request"].after_event == "B7-spreadsheet-challenge"
+    assert cards["B7-E8"].after_published == "initial"
+    assert cards["B7-E8"].after_event == "B7-billing-contact-request"
+    assert cards["B7-E3"].after_published == "revised"
+    assert cards["B7-E3"].after_event == "B7-E8"
+
+    # Their floors sit well after the first query milestone (phase 6, turn 26)
+    # instead of interrupting construction, and stay strictly ordered.
+    query_phase_turn = 26
+    assert scenario.phase_map[query_phase_turn] == 6
+    floors = [cards[c].trigger_turn for c in (
+        "B7-spreadsheet-challenge", "B7-billing-contact-request", "B7-E8", "B7-E3"
+    )]
+    assert floors == sorted(floors)
+    assert floors[0] > query_phase_turn
+
+    # The revised-publication return card (E3) leaves real room for resume
+    # and a final query before the budget runs out.
+    assert scenario.turn_budget - cards["B7-E3"].trigger_turn >= 3
+
+
+def test_mrr_p3_challenges_are_bounded_and_cannot_consume_the_budget() -> None:
+    """The three P3 challenge/reversal cards fire at most once each (the
+    schedule enforces unique ids), land within a narrow window, and leave the
+    bulk of the 50-turn budget for the two construction/publication cycles
+    rather than for repeated persona pushback.
+    """
+
+    scenario = load_scenario(SCENARIO_ROOT / "mrr-waterfall")
+    cards = {card.id: card for card in scenario.events.cards}
+    p3_challenge_ids = ("B7-spreadsheet-challenge", "B7-billing-contact-request", "B7-E8")
+
+    # Exactly three bounded P3 challenge cards -- no repeated/unbounded
+    # denominator-style pushback is scripted into the fixture itself.
+    assert len(p3_challenge_ids) == 3
+    assert len({cards[c].id for c in p3_challenge_ids}) == 3
+
+    # They are confined to a narrow window right after the first publication,
+    # not spread across the whole budget.
+    floors = [cards[c].trigger_turn for c in p3_challenge_ids]
+    assert max(floors) - min(floors) <= 2
+
+    # The window they occupy is small relative to the 50-turn budget, and the
+    # revision cycle that follows keeps the majority of the remaining budget.
+    assert (max(floors) - min(floors) + 1) <= scenario.turn_budget * 0.1
+    revision_cycle_turns = cards["B7-E3"].trigger_turn - max(floors)
+    assert revision_cycle_turns >= scenario.turn_budget * 0.3
+
+    # A run that never publishes never sees any of these cards fire, no
+    # matter how many turns elapse -- they cannot themselves eat the budget.
+    schedule = scenario.events
+    used = ["B7-same-month"]
+    delivered = {"B7-same-month": 4}
+    for turn in range(5, scenario.turn_budget + 1):
+        assert schedule.fire(turn, used_event_ids=used, delivered_event_turns=delivered) == ()
 
 
 def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> None:

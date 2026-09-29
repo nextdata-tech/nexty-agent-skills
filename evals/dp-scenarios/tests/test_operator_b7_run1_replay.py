@@ -113,9 +113,9 @@ def test_b7_run1_review_choice_replaces_the_next_persona_turn() -> None:
 
 
 def _publications(*, revised: bool) -> dict[str, object]:
-    runs = [("initial-run", "definition-a", 18)]
+    runs = [("initial-run", "definition-a", 22)]
     if revised:
-        runs.append(("revised-run", "definition-b", 30))
+        runs.append(("revised-run", "definition-b", 40))
     return {
         "run_records": {
             "schema": "dp-scenario-run-records-v1",
@@ -144,14 +144,14 @@ def test_b7_publication_cards_wait_for_real_publication_and_then_fire_in_order()
     used = ["B7-same-month"]
     delivered = {"B7-same-month": 4}
 
-    assert schedule.fire(19, used_event_ids=used, delivered_event_turns=delivered) == ()
+    assert schedule.fire(28, used_event_ids=used, delivered_event_turns=delivered) == ()
     for turn, card_id in (
-        (19, "B7-spreadsheet-challenge"),
-        (20, "B7-billing-contact-request"),
-        (21, "B7-E8"),
-        (31, "B7-E3"),
+        (28, "B7-spreadsheet-challenge"),
+        (29, "B7-billing-contact-request"),
+        (30, "B7-E8"),
+        (47, "B7-E3"),
     ):
-        snapshot = _publications(revised=turn == 31)
+        snapshot = _publications(revised=turn == 47)
         fired = schedule.fire(
             turn,
             run_records=snapshot["run_records"],
@@ -176,7 +176,7 @@ def test_b7_engine_transmits_all_cards_with_runner_owned_publications() -> None:
     result = OperatorEngine(
         scenario.operator_script,
         InMemoryTransport(
-            [TurnResult(agent_message="I am continuing the work.") for _ in range(34)]
+            [TurnResult(agent_message="I am continuing the work.") for _ in range(50)]
         ),
         publication_history_reader=lambda: snapshot,
     ).run()
