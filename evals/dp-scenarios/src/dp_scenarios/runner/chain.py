@@ -193,7 +193,7 @@ def _bound_constant(node: ast.expr, constants: Mapping[str, tuple[str, ...]]) ->
 
 
 def _placeholder_constant(verifier: ast.AST, name: str, before_line: int) -> str | None:
-    assignments = [s for s in getattr(verifier, "body", []) if isinstance(s, ast.Assign)
+    assignments = [s for s in ast.walk(verifier) if isinstance(s, ast.Assign)
                    and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name) and s.targets[0].id == name]
     stores = [n for n in ast.walk(verifier) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, (ast.Store, ast.Del))]
     if len(assignments) != 1 or len(stores) != 1 or stores[0] is not assignments[0].targets[0] or assignments[0].lineno >= before_line:
@@ -237,7 +237,53 @@ def _has_failed_rows_branch(verifier: ast.AST, rows: str) -> bool:
     return any(isinstance(n, ast.If) and positive(n.test) and _fails_directly(n.body) for n in ast.walk(verifier))
 
 
-def _sql_stage_rejection(verifier: ast.AST, stages: tuple[str, ...], constants: Mapping[str, tuple[str, ...]]) -> bool:
+def _string_constants(body: list[ast.stmt], scope: ast.AST) -> dict[str, str]:
+    """Names bound exactly once, in ``body``, to a plain string literal."""
+
+    found: dict[str, str] = {}
+    for statement in body:
+        if not (
+            isinstance(statement, ast.Assign) and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str)
+        ):
+            continue
+        target = statement.targets[0]
+        stores = [n for n in ast.walk(scope) if isinstance(n, ast.Name) and n.id == target.id
+                  and isinstance(n.ctx, (ast.Store, ast.Del))]
+        if len(stores) == 1 and stores[0] is target:
+            found[target.id] = statement.value.value
+    return found
+
+
+def _table_model(verifier: ast.AST, name: str, strings: Mapping[str, str], before_line: int) -> str | None:
+    """Model named by ``name = <output>.full_table_name(<literal or fixed string>)``."""
+
+    assignments = [s for s in getattr(verifier, "body", []) if isinstance(s, ast.Assign)
+                   and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name) and s.targets[0].id == name]
+    stores = [n for n in ast.walk(verifier) if isinstance(n, ast.Name) and n.id == name
+              and isinstance(n.ctx, (ast.Store, ast.Del))]
+    if len(assignments) != 1 or len(stores) != 1 or stores[0] is not assignments[0].targets[0] or assignments[0].lineno >= before_line:
+        return None
+    call = assignments[0].value
+    if not (
+        isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "full_table_name"
+        and len(call.args) == 1 and not call.keywords
+    ):
+        return None
+    arg = call.args[0]
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if isinstance(arg, ast.Name):
+        return strings.get(arg.id)
+    return None
+
+
+def _sql_stage_rejection(
+    verifier: ast.AST, stages: tuple[str, ...], constants: Mapping[str, tuple[str, ...]],
+    strings: Mapping[str, str] | None = None, allowed_models: frozenset[str] | None = None,
+) -> bool:
+    strings = {**(strings or {}), **_string_constants(getattr(verifier, "body", []), verifier)}
     for query in (n for n in ast.walk(verifier) if isinstance(n, ast.Call) and _name(n.func).endswith(".execute")):
         if len(query.args) not in {1, 2} or query.keywords:
             continue
@@ -269,12 +315,9 @@ def _sql_stage_rejection(verifier: ast.AST, stages: tuple[str, ...], constants: 
                 marker = f"__VALUE_{i}__"
                 if i == parameter_index:
                     sql = sql.replace(marker, "__BOUND__")
-                elif isinstance(value, ast.Name) and any(
-                    isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
-                    and s.targets[0].id == value.id and isinstance(s.value, ast.Call)
-                    and isinstance(s.value.func, ast.Attribute) and s.value.func.attr == "full_table_name"
-                    and len(s.value.args) == 1 and isinstance(s.value.args[0], ast.Constant)
-                    and s.value.args[0].value == "pipeline" for s in getattr(verifier, "body", [])
+                elif isinstance(value, ast.Name) and (
+                    (table_model := _table_model(verifier, value.id, strings, query.lineno)) is not None
+                    and (table_model in allowed_models if allowed_models is not None else table_model == "pipeline")
                 ) and re.search(rf"\bFROM\s+{marker}\b", sql, re.I):
                     sql = sql.replace(marker, "pipeline")
                 else:
@@ -327,7 +370,9 @@ def _sql_stage_rejection(verifier: ast.AST, stages: tuple[str, ...], constants: 
     return False
 
 
-def _stage_constraint(source: bytes, stages: tuple[str, ...]) -> bool:
+def _stage_constraint(
+    source: bytes, stages: tuple[str, ...], models: frozenset[str] | None = None
+) -> bool:
     """Recognize an executable five-stage rejection, never a comment/prose claim.
 
     A captured custom verifier may test rows directly in Python or query them
@@ -349,13 +394,39 @@ def _stage_constraint(source: bytes, stages: tuple[str, ...]) -> bool:
     if not verifiers:
         return False
     module_constants = _module_stage_constants(tree, stages)
+    module_strings = _string_constants(tree.body, tree)
     for verifier in verifiers:
         constants = {**module_constants, **_local_stage_constants(verifier, stages)}
         if _python_stage_rejection(verifier, stages, constants) or _sql_stage_rejection(
-            verifier, stages, constants
+            verifier, stages, constants, module_strings, models
         ):
             return True
     return False
+
+
+def _stage_carrier_models(source: bytes) -> frozenset[str] | None:
+    """Names of semantic models whose schema declares a ``stage`` field."""
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, UnicodeError, ValueError):
+        return None
+    carriers: set[str] = set()
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        names = [
+            n.args[0].value for n in ast.walk(statement.value)
+            if isinstance(n, ast.Call) and _name(n.func).split(".")[-1] == "semantic_model"
+            and n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)
+        ]
+        has_stage = any(
+            isinstance(n, ast.Dict) and any(isinstance(k, ast.Constant) and k.value == "stage" for k in n.keys)
+            for n in ast.walk(statement.value)
+        )
+        if has_stage:
+            carriers.update(names)
+    return frozenset(carriers)
 
 
 def _typed_stage_constraint(source: bytes, stages: tuple[str, ...], model_names: set[str]) -> bool:
@@ -453,7 +524,13 @@ def _captured_precondition(
         if content is None:
             unavailable = True
             continue
-        if _stage_constraint(content, stages):
+        promised = frozenset(
+            name.split(".")[-1] for name in _items_or_strings(promise.get("models"))
+        )
+        models_source = captured_source("models.py") if "models.py" in files else None
+        carriers = _stage_carrier_models(models_source) if models_source is not None else None
+        wired = promised if carriers is None else promised & carriers
+        if _stage_constraint(content, stages, wired):
             return "valid", ""
     if model_names:
         for source_path in files:
