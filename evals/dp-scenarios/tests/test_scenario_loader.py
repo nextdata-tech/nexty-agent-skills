@@ -13,6 +13,7 @@ from dp_scenarios.grading import GATE_PHASES
 from dp_scenarios.scenario import (
     SCENARIO_TIERS,
     ScenarioError,
+    live_blocked,
     load_scenario,
     load_scenarios,
     requires_live_session,
@@ -857,3 +858,57 @@ def test_only_scenarios_declaring_answer_gold_have_scoreable_query_gates() -> No
         "mrr-waterfall",
         "product-usage",
     }
+
+
+def test_live_blocked_reason_is_optional_and_defaults_to_none() -> None:
+    scenario = load_scenario(SCENARIO_ROOT / "parent-child-grain-trap")
+    assert scenario.live_blocked_reason is None
+
+
+def test_product_usage_declares_its_live_blocked_reason() -> None:
+    scenario = load_scenario(SCENARIO_ROOT / "product-usage")
+    assert isinstance(scenario.live_blocked_reason, str)
+    assert scenario.live_blocked_reason.strip()
+    assert "U1" in scenario.live_blocked_reason or "U2" in scenario.live_blocked_reason
+
+
+def test_live_blocked_reason_must_be_non_empty_text(tmp_path: Path) -> None:
+    package = _copy_parent_child_package(tmp_path)
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+
+    source["live_blocked_reason"] = "  "
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ScenarioError, match="live_blocked_reason"):
+        load_scenario(package)
+
+    source["live_blocked_reason"] = 12345
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ScenarioError, match="live_blocked_reason"):
+        load_scenario(package)
+
+    source["live_blocked_reason"] = "blocked pending an upstream change"
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+    scenario = load_scenario(package)
+    assert scenario.live_blocked_reason == "blocked pending an upstream change"
+
+
+def test_live_blocked_finds_only_the_scenarios_that_declare_a_reason() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    blocked = live_blocked(scenarios)
+    assert {scenario.id for scenario in blocked} == {"product-usage"}
+
+
+def test_full_tier_selection_at_the_loader_layer_still_includes_the_blocked_package() -> None:
+    """Blocking is a live-dispatch decision, not a loader/tier-membership one.
+
+    ``select_tier`` and replay/local-grading callers must keep seeing
+    product-usage in the full tier: the dataset, fixture, and follow-up
+    grader are all offline-testable now, and only an actual live session is
+    refused. See ``run_local_claude`` and ``runner.cli``'s ``--mode live``
+    handling for where the refusal actually happens.
+    """
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    full = select_tier(scenarios, "full")
+    assert "product-usage" in {scenario.id for scenario in full}

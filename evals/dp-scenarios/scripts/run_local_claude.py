@@ -352,13 +352,11 @@ def _select_scenarios(all_scenarios: Sequence[Scenario], selected: Sequence[str]
 def _reject_live_blocked(scenarios: Sequence[Scenario]) -> tuple[Scenario, ...]:
     """Refuse any scenario carrying a declared ``live_blocked_reason``.
 
-    A blocked package (for example B8/product-usage, which needs nxd
-    workflow-v2 readback/admission changes this repo cannot supply) still
-    loads, replays, and unit-tests normally -- only a live dispatch is
-    refused, and it is refused whether the package was reached through
-    ``--tier`` or named explicitly with ``--scenario``: naming it is not
+    Used only where a scenario was named explicitly with ``--scenario``:
+    naming a blocked package (for example B8/product-usage, which needs nxd
+    workflow-v2 readback/admission changes this repo cannot supply) is not
     consent to spend a live session on evidence the harness cannot yet
-    produce correctly.
+    produce correctly, so this is a hard error rather than a silent skip.
     """
 
     blocked = live_blocked(scenarios)
@@ -366,6 +364,32 @@ def _reject_live_blocked(scenarios: Sequence[Scenario]) -> tuple[Scenario, ...]:
         detail = ", ".join(f"{scenario.id} ({scenario.live_blocked_reason})" for scenario in blocked)
         raise TierError(f"scenario(s) not eligible for a live run: {detail}")
     return tuple(scenarios)
+
+
+def _filter_live_blocked(scenarios: Sequence[Scenario]) -> tuple[Scenario, ...]:
+    """Drop live-blocked scenarios out of a tier selection, loudly.
+
+    Reaching a blocked package through ``--tier`` (rather than naming it) is
+    not a deliberate choice to run it, so this skips it instead of failing
+    the whole tier -- one blocked package must not take every other full-tier
+    scenario down with it. Each skip is printed with its reason so a report
+    from this run cannot be mistaken for one that covered every full-tier
+    package. If blocking empties the selection entirely, that is still a
+    hard error: a report over zero scenarios would look like an empty-tier
+    bug, not a deliberate block.
+    """
+
+    blocked = live_blocked(scenarios)
+    if not blocked:
+        return tuple(scenarios)
+    blocked_ids = {scenario.id for scenario in blocked}
+    for scenario in blocked:
+        print(f"skipping {scenario.id} for this live run: {scenario.live_blocked_reason}")
+    remaining = tuple(scenario for scenario in scenarios if scenario.id not in blocked_ids)
+    if not remaining:
+        detail = ", ".join(f"{scenario.id} ({scenario.live_blocked_reason})" for scenario in blocked)
+        raise TierError(f"no scenario left to run: every selected scenario is live-blocked: {detail}")
+    return remaining
 
 
 def _scenarios_in_scope(
@@ -384,7 +408,7 @@ def _scenarios_in_scope(
 
     if selected:
         return tuple(all_scenarios)
-    return _reject_live_blocked(select_tier(all_scenarios, tier))
+    return _filter_live_blocked(select_tier(all_scenarios, tier))
 
 
 def _configure_scenarios(
