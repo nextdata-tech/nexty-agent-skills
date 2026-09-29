@@ -2170,6 +2170,11 @@ class OperatorEngine:
                 ask_back_acceptance_transmitted
             ):
                 pending_ask_back_decision = False
+            elif approval_turn or decision_answer_delivered:
+                # A concrete scripted approval or declared decision settles
+                # the earlier hand-back. Do not let its stale acceptance flag
+                # answer an unrelated later plan-approval request.
+                pending_ask_back_decision = False
             elif (
                 self.script.persona.stance_when_unknown == "ask_back"
                 and next_match is not None
