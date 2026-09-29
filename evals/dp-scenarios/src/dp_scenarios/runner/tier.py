@@ -68,6 +68,7 @@ from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, l
 
 from .environment import PinnedVersions, RunEnvironment
 from .evidence_context import load_supervisor_history_view
+from .supervisor_history import PUBLICATION_SCHEMA, RUN_RECORDS_SCHEMA
 from .checkpoint import (
     CheckpointIdentity,
     CheckpointState,
@@ -587,6 +588,112 @@ def _load_json(path: Path) -> object | None:
         return None
 
 
+def _publication_schedule_snapshot_from_values(
+    run_records: object,
+    publication_history: object,
+) -> Mapping[str, object] | None:
+    """Project only the runner-owned identities needed by publication cards."""
+
+    if (
+        not isinstance(run_records, Mapping)
+        or run_records.get("schema") != RUN_RECORDS_SCHEMA
+        or not isinstance(publication_history, Mapping)
+        or publication_history.get("schema") != PUBLICATION_SCHEMA
+    ):
+        return None
+    runs_value = run_records.get("runs")
+    releases_value = publication_history.get("releases")
+    if (
+        not isinstance(runs_value, Sequence)
+        or isinstance(runs_value, (str, bytes, bytearray))
+        or len(runs_value) > 4096
+        or not isinstance(releases_value, Sequence)
+        or isinstance(releases_value, (str, bytes, bytearray))
+        or len(releases_value) > 4096
+    ):
+        return None
+
+    runs: list[dict[str, object]] = []
+    for run in runs_value:
+        if not isinstance(run, Mapping):
+            continue
+        workflow_id, run_id, definition_id = (
+            run.get("workflow_id"),
+            run.get("run_id"),
+            run.get("definition_id"),
+        )
+        history = run.get("status_history")
+        if not all(isinstance(value, str) and value.strip() for value in (workflow_id, run_id, definition_id)):
+            continue
+        if not isinstance(history, Sequence) or isinstance(history, (str, bytes, bytearray)) or len(history) > 128:
+            continue
+        statuses = [
+            {"turn": entry["turn"], "status": entry["status"]}
+            for entry in history
+            if isinstance(entry, Mapping)
+            and isinstance(entry.get("turn"), int)
+            and not isinstance(entry.get("turn"), bool)
+            and entry.get("turn") > 0
+            and isinstance(entry.get("status"), str)
+            and entry.get("status")
+        ]
+        runs.append(
+            {
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "definition_id": definition_id,
+                "status_history": statuses,
+            }
+        )
+
+    releases: list[dict[str, object]] = []
+    for release in releases_value:
+        if not isinstance(release, Mapping):
+            continue
+        workflow_id, run_id, definition_id = (
+            release.get("workflow_id"),
+            release.get("run_id"),
+            release.get("definition_id"),
+        )
+        if not all(isinstance(value, str) and value.strip() for value in (workflow_id, run_id, definition_id)):
+            continue
+        releases.append(
+            {
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "definition_id": definition_id,
+            }
+        )
+    return {
+        "run_records": {"schema": RUN_RECORDS_SCHEMA, "runs": runs},
+        "publication_history": {"schema": PUBLICATION_SCHEMA, "releases": releases},
+    }
+
+
+def _publication_schedule_snapshot(artifact_root: Path) -> Mapping[str, object] | None:
+    """Read only the two runner-owned identity artifacts used by event scheduling."""
+
+    return _publication_schedule_snapshot_from_values(
+        _load_json(artifact_root / "run-records.json"),
+        _load_json(artifact_root / "publication-history.json"),
+    )
+
+
+def _recorded_publication_schedule_snapshot(
+    recording: ReplayRecording,
+) -> Mapping[str, object] | None:
+    """Return the bounded, runner-owned prior-run snapshot in a replay."""
+
+    return _publication_schedule_snapshot_from_values(
+        recording.metadata.get("publication_schedule", {}).get("run_records")
+        if isinstance(recording.metadata.get("publication_schedule"), Mapping)
+        else None,
+        recording.metadata.get("publication_schedule", {}).get("publication_history")
+        if isinstance(recording.metadata.get("publication_schedule"), Mapping)
+        else None,
+    )
+
+
 def _first_json(root: Path, names: Sequence[str]) -> object | None:
     for name in names:
         value = _load_json(root / name)
@@ -611,7 +718,11 @@ def _replay_verification(
         return "not-attempted", "generated operator output is not assumed deterministic"
     try:
         transport = ReplaySession(recording)
-        replay = OperatorEngine(scenario.script, transport).run()
+        replay = OperatorEngine(
+            scenario.script,
+            transport,
+            publication_history_reader=lambda: _recorded_publication_schedule_snapshot(recording),
+        ).run()
         if transport.remaining_turns:
             return "mismatch", f"replay left {transport.remaining_turns} turn(s) unconsumed"
     except Exception as exc:
@@ -2670,6 +2781,11 @@ class TierRunner:
                             marker_values(environment.generated_fixture_manifest)
                             | declared_sentinels(scenario)
                         ),
+                        publication_history_reader=(
+                            (lambda: _recorded_publication_schedule_snapshot(recording))
+                            if recording is not None
+                            else (lambda: _publication_schedule_snapshot(artifact_root))
+                        ),
                     )
                     run_result = engine.run()
                     if isinstance(transport, ReplaySession) and transport.remaining_turns:
@@ -2677,7 +2793,15 @@ class TierRunner:
                             f"replay recording for {scenario.id} has {transport.remaining_turns} unconsumed turn(s)"
                         )
                     if isinstance(transport, RecordingSession) and transport.turns:
-                        replay = transport.recording(manifest=environment.manifest.to_dict())
+                        metadata: dict[str, object] = {}
+                        if scenario.script.events.publication_card_ids:
+                            schedule_snapshot = _publication_schedule_snapshot(artifact_root)
+                            if schedule_snapshot is not None:
+                                metadata["publication_schedule"] = schedule_snapshot
+                        replay = transport.recording(
+                            manifest=environment.manifest.to_dict(),
+                            metadata=metadata,
+                        )
                         _write_json(artifact_root / "session-replay.json", replay.to_dict())
                     elif recording is not None:
                         replay = recording

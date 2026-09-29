@@ -1,8 +1,8 @@
 """Strict event cards and deterministic turn-time injections.
 
-An event is data with a declared trigger and recorded outcome.  The schedule
-fires by turn number, never by elapsed time or agent state, so a run cannot
-silently skip a planted event.
+An event is data with a declared trigger and recorded outcome. Fixed events
+fire by turn number. Publication-triggered events use only runner-owned
+``run-records.status_history`` observations from turns before the current one.
 """
 
 from __future__ import annotations
@@ -56,6 +56,8 @@ EVENT_KEYS = frozenset(
         "version",
         "id",
         "trigger_turn",
+        "after_published",
+        "after_event",
         "type",
         "content",
         "outcome",
@@ -154,6 +156,10 @@ class EventCard:
     # count as delivered.  Declared as scenario data so the delivery check is
     # a property of the fixture, never a hardcoded predicate in the engine.
     required_terms: tuple[str, ...] = ()
+    # Publication prerequisites are optional so legacy fixed-turn cards keep
+    # their original constructor order and hash representation.
+    after_published: str | None = None
+    after_event: str | None = None
 
     @property
     def id(self) -> str:
@@ -189,7 +195,17 @@ class EventCard:
             "plant": self.plant,
             "required_terms": list(self.required_terms),
         }
+        if self.after_published is not None:
+            result["after_published"] = self.after_published
+        if self.after_event is not None:
+            result["after_event"] = self.after_event
         return result
+
+    @property
+    def publication_triggered(self) -> bool:
+        """Whether the card waits for a runner-observed prerequisite."""
+
+        return self.after_published is not None or self.after_event is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +250,13 @@ def event_from_mapping(value: Mapping[str, object]) -> EventCard:
     turn = raw["trigger_turn"]
     if isinstance(turn, bool) or not isinstance(turn, int) or turn < 1:
         raise EventError("event.trigger_turn must be a positive integer")
+    after_published = raw.get("after_published")
+    if after_published is not None:
+        if not isinstance(after_published, str) or after_published not in {"initial", "revised"}:
+            raise EventError("event.after_published must be 'initial' or 'revised'")
+    after_event = raw.get("after_event")
+    if after_event is not None:
+        after_event = _string(after_event, "event.after_event")
     content = raw["content"]
     if content is not None and not isinstance(content, str):
         raise EventError("event.content must be text or null")
@@ -278,6 +301,8 @@ def event_from_mapping(value: Mapping[str, object]) -> EventCard:
         version=version,
         card_id=_string(raw["id"], "event.id"),
         trigger_turn=turn,
+        after_published=after_published,
+        after_event=after_event,
         event_type=event_type,
         content=content,
         outcome=_string(raw["outcome"], "event.outcome"),
@@ -338,11 +363,107 @@ class EventSchedule:
             raise EventError("event card ids must be unique")
         if tuple(sorted(self.cards, key=lambda card: (card.trigger_turn, card.card_id))) != self.cards:
             raise EventError("event cards must be sorted by trigger_turn and id")
+        by_id = {card.card_id: card for card in self.cards}
+        for card in self.cards:
+            if card.after_event is not None and card.after_event not in by_id:
+                raise EventError(
+                    f"event {card.card_id!r} references unknown after_event id {card.after_event!r}"
+                )
+            if card.after_event == card.card_id:
+                raise EventError(f"event {card.card_id!r} cannot follow itself")
+        # A dependency cycle can never produce a delivered predecessor. Catch
+        # it during fixture loading instead of leaving the cards dormant.
+        dependencies = {
+            card.card_id: card.after_event
+            for card in self.cards
+            if card.after_event is not None
+        }
+        for card_id in dependencies:
+            visited: set[str] = set()
+            current: str | None = card_id
+            while current in dependencies:
+                if current in visited:
+                    raise EventError("event after_event dependencies must not contain a cycle")
+                visited.add(current)
+                current = dependencies[current]
 
-    def fire(self, turn: int) -> tuple[EventInjection, ...]:
-        """Return every card declared for a turn, independent of agent state."""
+    def fire(
+        self,
+        turn: int,
+        *,
+        run_records: Mapping[str, object] | None = None,
+        publication_history: Mapping[str, object] | None = None,
+        delivered_event_turns: Mapping[str, int] | None = None,
+        used_event_ids: Sequence[str] = (),
+        fixed_beats_pending: bool = False,
+    ) -> tuple[EventInjection, ...]:
+        """Resolve fixed events and at most one eligible publication card.
 
-        return tuple(inject_event(card) for card in self.cards if card.trigger_turn == turn)
+        ``run_records`` must be the harness-owned artifact with schema
+        ``dp-scenario-run-records-v1``. A status observation only counts when
+        its status-history turn is strictly before ``turn``. ``delivered_event_turns``
+        contains actual operator delivery turns, never declared trigger turns.
+        """
+
+        used = set(used_event_ids)
+        fixed_due = tuple(
+            card
+            for card in self.cards
+            if not card.publication_triggered
+            and card.trigger_turn == turn
+            and card.card_id not in used
+        )
+        if fixed_due:
+            # Fixed cards keep their declared slot. Publication cards wait for
+            # a later turn if a fixed card is due now.
+            return tuple(inject_event(card) for card in fixed_due)
+        if fixed_beats_pending:
+            return ()
+
+        event_turns = delivered_event_turns or {}
+        publications = _published_runs(
+            run_records,
+            publication_history,
+            before_turn=turn,
+        )
+        for card in self.cards:
+            if not card.publication_triggered or card.trigger_turn > turn or card.card_id in used:
+                continue
+            event_turn = None
+            if card.after_event is not None:
+                candidate = event_turns.get(card.after_event)
+                if (
+                    not isinstance(candidate, int)
+                    or isinstance(candidate, bool)
+                    or candidate < 1
+                    or candidate >= turn
+                ):
+                    continue
+                event_turn = candidate
+            if card.after_published == "initial":
+                if not publications:
+                    continue
+            elif card.after_published == "revised":
+                if not publications:
+                    continue
+                if not any(
+                    revised.workflow_id == initial.workflow_id
+                    and revised.run_id != initial.run_id
+                    and revised.definition_id != initial.definition_id
+                    and revised.published_turn > initial.published_turn
+                    and (event_turn is None or revised.published_turn > event_turn)
+                    for initial in publications
+                    for revised in publications
+                ):
+                    continue
+            return (inject_event(card),)
+        return ()
+
+    @property
+    def publication_card_ids(self) -> frozenset[str]:
+        """Stable ids of cards that need runner publication observations."""
+
+        return frozenset(card.card_id for card in self.cards if card.publication_triggered)
 
     def planted_card_ids(self) -> frozenset[str]:
         """Return cards whose declared ceiling or plant must execute."""
@@ -353,6 +474,88 @@ class EventSchedule:
         """Return cards in their stable schedule order."""
 
         return [card.to_mapping() for card in self.cards]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublishedRun:
+    workflow_id: str
+    run_id: str
+    definition_id: str
+    published_turn: int
+
+
+def _published_runs(
+    run_records: Mapping[str, object] | None,
+    publication_history: Mapping[str, object] | None,
+    *,
+    before_turn: int,
+) -> tuple[_PublishedRun, ...]:
+    """Cross-check Published status observations against exact release identity.
+
+    ``publication-history.turn`` is deliberately ignored: it records run
+    start, not the observed turn on which the run became Published.
+    """
+
+    if run_records is None or run_records.get("schema") != "dp-scenario-run-records-v1":
+        return ()
+    if (
+        publication_history is None
+        or publication_history.get("schema") != "dp-scenario-publication-history-v1"
+    ):
+        return ()
+    raw_releases = publication_history.get("releases")
+    if not isinstance(raw_releases, Sequence) or isinstance(raw_releases, (str, bytes, bytearray)):
+        return ()
+    released_ids = {
+        (release.get("workflow_id"), release.get("run_id"), release.get("definition_id"))
+        for release in raw_releases
+        if isinstance(release, Mapping)
+        and all(
+            isinstance(release.get(key), str) and release.get(key).strip()
+            for key in ("workflow_id", "run_id", "definition_id")
+        )
+    }
+    raw_runs = run_records.get("runs")
+    if not isinstance(raw_runs, Sequence) or isinstance(raw_runs, (str, bytes, bytearray)):
+        return ()
+    observed: list[_PublishedRun] = []
+    seen_run_ids: set[tuple[str, str]] = set()
+    for raw_run in raw_runs:
+        if not isinstance(raw_run, Mapping):
+            continue
+        workflow_id = raw_run.get("workflow_id")
+        run_id = raw_run.get("run_id")
+        definition_id = raw_run.get("definition_id")
+        history = raw_run.get("status_history")
+        if not all(isinstance(value, str) and value.strip() for value in (workflow_id, run_id, definition_id)):
+            continue
+        if (workflow_id, run_id, definition_id) not in released_ids:
+            continue
+        run_key = (workflow_id, run_id)
+        if run_key in seen_run_ids:
+            # Duplicate identities make the association ambiguous; fail closed
+            # for this id instead of choosing whichever copy appears first.
+            observed = [item for item in observed if (item.workflow_id, item.run_id) != run_key]
+            continue
+        seen_run_ids.add(run_key)
+        if not isinstance(history, Sequence) or isinstance(history, (str, bytes, bytearray)):
+            continue
+        turns = [
+            entry.get("turn")
+            for entry in history
+            if isinstance(entry, Mapping)
+            and entry.get("status") == "Published"
+            and isinstance(entry.get("turn"), int)
+            and not isinstance(entry.get("turn"), bool)
+            and 0 < entry.get("turn") < before_turn
+        ]
+        if turns:
+            observed.append(
+                _PublishedRun(workflow_id, run_id, definition_id, min(turns))
+            )
+    return tuple(
+        sorted(observed, key=lambda item: (item.published_turn, item.workflow_id, item.run_id, item.definition_id))
+    )
 
 
 def load_event_cards(path: str | Path) -> EventSchedule:

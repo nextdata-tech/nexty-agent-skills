@@ -500,13 +500,17 @@ def test_replay_rejects_touched_file_escape(tmp_path: Path) -> None:
         replay.send_message("expected")
 
 
-def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "name",
+    ("row_counts.json", "run-records.json", "publication-history.json"),
+)
+def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path, name: str) -> None:
     recording = ReplayRecording(
         (
             RecordedTurn(
                 OperatorMessage("expected"),
                 TurnResult(
-                    files_touched=(TouchedFile("row_counts.json", b'{"model": 1}'),),
+                    files_touched=(TouchedFile(name, b'{"model": 1}'),),
                 ),
             ),
         )
@@ -516,6 +520,20 @@ def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path) -> None
 
     with pytest.raises(Exception, match="reserved for harness-owned evidence"):
         replay.send_message("expected")
+
+
+@pytest.mark.parametrize("name", ("run-records.json", "publication-history.json"))
+def test_live_recording_rejects_agent_owned_publication_history(
+    tmp_path: Path, name: str
+) -> None:
+    recorder = RecordingSession(
+        InMemoryTransport([TurnResult(files_touched=(TouchedFile(name, b"{}"),))]),
+        artifact_root=tmp_path / "artifacts",
+    )
+    recorder.start_fresh_session()
+
+    with pytest.raises(SessionError, match="reserved for harness-owned evidence"):
+        recorder.send_message("expected")
 
 
 def test_live_timeout_returns_a_recordable_turn_timeout() -> None:

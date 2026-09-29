@@ -16,7 +16,7 @@ import json
 import re
 import unicodedata
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -857,6 +857,7 @@ class OperatorEngine:
         generated_operator: GeneratedOperator | None = None,
         driver: DriverOperator | None = None,
         extra_sentinels: Sequence[bytes | str] = (),
+        publication_history_reader: Callable[[], Mapping[str, object] | None] | None = None,
     ) -> None:
         if generated_operator is not None and driver is not None:
             raise ValueError("an engine takes a generated operator or a driver, never both")
@@ -870,6 +871,7 @@ class OperatorEngine:
             )
         self.script = script
         self.transport = transport
+        self.publication_history_reader = publication_history_reader
         self.driver = driver
         self.ledger_writer = ledger_writer
         self.supervisor_reader = supervisor_reader
@@ -1340,6 +1342,7 @@ class OperatorEngine:
         self.transport.start_fresh_session()
         records: list[TurnRecord] = []
         fired_events: list[str] = []
+        delivered_event_turns: dict[str, int] = {}
         fired_plants: list[str] = []
         active_sentinels: list[bytes] = [self.script.sentinel] if self.script.sentinel is not None else []
         pending_failure = False
@@ -1419,7 +1422,41 @@ class OperatorEngine:
 
         for index, scheduled_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
-            injections = self.script.events.fire(index)
+            publication_snapshot: Mapping[str, object] | None = None
+            if self.script.events.publication_card_ids and self.publication_history_reader is not None:
+                try:
+                    publication_snapshot = self.publication_history_reader()
+                except Exception:
+                    # Missing or unreadable runner history leaves a
+                    # publication card dormant and therefore ungraded. It
+                    # must never be replaced with a claim from agent prose.
+                    publication_snapshot = None
+            snapshot_run_records = (
+                publication_snapshot.get("run_records")
+                if isinstance(publication_snapshot, Mapping)
+                else None
+            )
+            snapshot_publications = (
+                publication_snapshot.get("publication_history")
+                if isinstance(publication_snapshot, Mapping)
+                else None
+            )
+            injections = self.script.events.fire(
+                index,
+                run_records=(
+                    snapshot_run_records
+                    if isinstance(snapshot_run_records, Mapping)
+                    else None
+                ),
+                publication_history=(
+                    snapshot_publications
+                    if isinstance(snapshot_publications, Mapping)
+                    else None
+                ),
+                delivered_event_turns=delivered_event_turns,
+                used_event_ids=fired_events,
+                fixed_beats_pending=bool(owed_fixed_beats),
+            )
             # The ``spec_approved`` row's ``artifact_ref`` is minted from what
             # the operator actually sent, so an approval turn transmits its
             # declared line: substituting a matcher reply there would record
@@ -1980,6 +2017,7 @@ class OperatorEngine:
                 served_reply_keys.add(pending_sheet_key)
             for injection in delivered:
                 fired_events.append(injection.card_id)
+                delivered_event_turns[injection.card_id] = index
                 if injection.sentinel_bytes is not None:
                     active_sentinels.append(injection.sentinel_bytes)
                 if injection.plant:
