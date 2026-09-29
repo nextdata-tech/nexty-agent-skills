@@ -36,6 +36,27 @@ revised definition and fresh approval. E3 arrives only after the revised run
 has been observed as Published; it keeps the same session and expects the agent
 to consult supervisor records before answering.
 
+The operator turn budget is 50, not the 34 turns from an earlier version of
+this package. A live run of that earlier version went ungraded after
+exhausting its 34-turn budget without ever publishing: the two construction
+cycles plus the P3 persona's challenges did not reliably fit in 34 turns. The
+50-turn script keeps the same beats but gives the first construction/build/
+query cycle and the post-reversal rebuild/republish cycle far more room, and
+times the P3 persona's cards off the existing publication-triggered card
+mechanism (`after_published`/`after_event`) instead of low fixed turn
+numbers. `B7-spreadsheet-challenge`, `B7-billing-contact-request`, and
+`B7-E8` only become eligible after the *initial* run is observed Published,
+each in a narrow, bounded window (turns 28-30) right after the first query
+milestone, so a slower build never gets interrupted mid-construction and a
+fast one never gets buried in persona pushback before it can publish. `B7-E3`
+only becomes eligible after the *revised* run is observed Published (floor
+turn 47), leaving turns 48-50 to resume and query. Because every one of these
+cards is publication- or event-gated, a run that never publishes never sees
+any of them fire, regardless of how many turns elapse -- the P3 challenges
+can delay a run but can never themselves exhaust the budget. `B7-same-month`
+is the one exception: it stays a plain turn-4 plant, since it must land
+during narrowing, before construction has even started.
+
 The follow-up evidence contract asks for generic publication, governed-query,
 and decision references. It does not predeclare decision IDs, decision values,
 answer text, or numeric gold. The grader associates the final query and release

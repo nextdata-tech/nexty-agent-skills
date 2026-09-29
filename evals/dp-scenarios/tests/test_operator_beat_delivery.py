@@ -320,8 +320,8 @@ def _publication_history_reader_for(scenario_id: str):
                 "status_history": [{"turn": published_turn, "status": "Published"}],
             }
             for run_id, definition_id, published_turn in (
-                ("initial-run", "initial-definition", 18),
-                ("revised-run", "revised-definition", 30),
+                ("initial-run", "initial-definition", 22),
+                ("revised-run", "revised-definition", 44),
             )
         ]
     elif scenario_id == "product-usage":
