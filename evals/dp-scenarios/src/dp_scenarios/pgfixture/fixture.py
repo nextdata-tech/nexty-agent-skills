@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from .seed import SeededData, seed_inventory
+from .seed import DATASET_GRAIN_TRAP, SUPPORTED_DATASETS, SeededData, seed_inventory
 
 
 SKIP_UNAVAILABLE_MARKER = "SKIP_FIXTURE_UNAVAILABLE"
@@ -161,6 +161,7 @@ class PostgresFixture:
         self,
         seed: int,
         *,
+        dataset: str = DATASET_GRAIN_TRAP,
         image: str = _POSTGRES_IMAGE,
         docker_binary: str = "docker",
         readiness_timeout: float = 30.0,
@@ -168,11 +169,16 @@ class PostgresFixture:
     ) -> None:
         if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
             raise ValueError("seed must be a non-negative integer")
+        if dataset not in SUPPORTED_DATASETS:
+            raise ValueError(
+                f"unsupported pgfixture dataset {dataset!r}; expected one of {SUPPORTED_DATASETS!r}"
+            )
         if not image.strip():
             raise ValueError("image must be non-empty")
         if readiness_timeout <= 0:
             raise ValueError("readiness_timeout must be positive")
         self.seed = seed
+        self.dataset = dataset
         self.image = image
         self.docker_binary = docker_binary
         self.readiness_timeout = readiness_timeout
@@ -282,7 +288,7 @@ class PostgresFixture:
         self._ensure_runtime()
         try:
             self._temporary = tempfile.TemporaryDirectory(prefix="dp-pgfixture-")
-            self._seeded = seed_inventory(self.seed, self._temporary.name)
+            self._seeded = seed_inventory(self.seed, self._temporary.name, dataset=self.dataset)
             self._run_docker(
                 [
                     "run",
@@ -340,19 +346,29 @@ class PostgresFixture:
                 error.add_note(f"Postgres fixture teardown failed: {teardown_error}")
             raise
 
-    def advance_rotation(self, step: int | None = None) -> RotationRecord:
-        """Explicitly advance exactly one rotation step and return its oracle record."""
+    def advance_rotation(
+        self, step: int | None = None, *, new_password: str | None = None
+    ) -> RotationRecord:
+        """Explicitly advance exactly one rotation step and return its oracle record.
+
+        ``new_password`` is only accepted for step 2 (the full credential
+        reissue): it lets a caller pin the exact synthetic secret an event
+        hands to the agent, instead of a fixture-generated one. Omit it to
+        keep the prior fixture-generated behavior.
+        """
 
         if not self.started or self._admin is None or self._credentials is None:
             raise RuntimeError("Postgres fixture has not started")
         target = self._live_step + 1 if step is None else step
         if target != self._live_step + 1 or target not in {1, 2}:
             raise RotationError(f"rotation must advance one step from {self._live_step}")
+        if new_password is not None and target != 2:
+            raise RotationError("new_password is only accepted when advancing to step 2")
         try:
             if target == 1:
                 record = self._rotate_select_revoke()
             else:
-                record = self._rotate_full_revoke()
+                record = self._rotate_full_revoke(new_password=new_password)
             self._history.append(record)
             self._live_step = record.step
             return record
@@ -535,6 +551,35 @@ class PostgresFixture:
                 time.sleep(0.05)
         raise FixtureUnavailable(f"Postgres did not accept SELECT 1 before readiness deadline: {last_error}")
 
+    def _create_table(self, cursor: Any, schema: str, table: str, ddl: str) -> None:
+        cursor.execute(
+            "CREATE TABLE "
+            + _identifier(schema)
+            + "."
+            + _identifier(table)
+            + " ("
+            + ddl
+            + ")"
+        )
+
+    def _insert_rows(
+        self, cursor: Any, schema: str, table: str, rows: Any
+    ) -> None:
+        rows = list(rows)
+        if not rows:
+            return
+        columns = list(rows[0].keys())
+        column_sql = ", ".join(_identifier(column) for column in columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        query = (
+            "INSERT INTO "
+            + _identifier(schema)
+            + "."
+            + _identifier(table)
+            + f" ({column_sql}) VALUES ({placeholders})"
+        )
+        cursor.executemany(query, [tuple(row[column] for column in columns) for row in rows])
+
     def _initialize_database(self) -> None:
         assert self._admin is not None and self._seeded is not None
         # This assertion deliberately precedes the first REVOKE below.  The
@@ -554,54 +599,15 @@ class PostgresFixture:
                         self._role_password,
                     )
                 )
-                cursor.execute(
-                    "CREATE TABLE inventory.orders ("
-                    "order_id text NOT NULL, region text NOT NULL, "
-                    "order_timestamp timestamptz NOT NULL, order_amount numeric(18,2) NOT NULL, "
-                    "status text NOT NULL)"
+                for table_name, ddl in self._seeded.table_ddl.items():
+                    self._create_table(cursor, _INVENTORY_SCHEMA, table_name, ddl)
+                self._create_table(
+                    cursor, _LOOKUP_SCHEMA, self._seeded.probe_table, self._seeded.probe_ddl
                 )
-                cursor.execute(
-                    "CREATE TABLE inventory.line_items ("
-                    "line_item_id text NOT NULL, order_id text NOT NULL, product text NOT NULL, "
-                    "quantity integer NOT NULL, unit_price numeric(18,2) NOT NULL)"
-                )
-                cursor.execute(
-                    "CREATE TABLE lookup.product_catalog ("
-                    "product text PRIMARY KEY, category text NOT NULL, "
-                    "reference_price numeric(18,2) NOT NULL)"
-                )
-                cursor.executemany(
-                    "INSERT INTO inventory.orders VALUES (%s, %s, %s, %s, %s)",
-                    [
-                        (
-                            row["order_id"],
-                            row["region"],
-                            row["order_timestamp"],
-                            row["order_amount"],
-                            row["status"],
-                        )
-                        for row in self._seeded.tables["orders"]
-                    ],
-                )
-                cursor.executemany(
-                    "INSERT INTO inventory.line_items VALUES (%s, %s, %s, %s, %s)",
-                    [
-                        (
-                            row["line_item_id"],
-                            row["order_id"],
-                            row["product"],
-                            row["quantity"],
-                            row["unit_price"],
-                        )
-                        for row in self._seeded.tables["line_items"]
-                    ],
-                )
-                cursor.executemany(
-                    "INSERT INTO lookup.product_catalog VALUES (%s, %s, %s)",
-                    [
-                        (row["product"], row["category"], row["reference_price"])
-                        for row in self._seeded.lookup_rows
-                    ],
+                for table_name, rows in self._seeded.tables.items():
+                    self._insert_rows(cursor, _INVENTORY_SCHEMA, table_name, rows)
+                self._insert_rows(
+                    cursor, _LOOKUP_SCHEMA, self._seeded.probe_table, self._seeded.lookup_rows
                 )
                 cursor.execute("REVOKE ALL PRIVILEGES ON DATABASE " + _identifier(_DATABASE) + " FROM PUBLIC")
                 cursor.execute(
@@ -651,12 +657,21 @@ class PostgresFixture:
         finally:
             connection.close()
 
+    def _primary_table_count_sql(self) -> str:
+        assert self._seeded is not None
+        return (
+            "SELECT count(*) FROM "
+            + _identifier(_INVENTORY_SCHEMA)
+            + "."
+            + _identifier(self._seeded.primary_table)
+        )
+
     def _probe_steady_state(self, credentials: ConnectionInfo) -> Mapping[str, Any]:
         lookup = self._probe_lookup_visibility(credentials)
         connection = self._connect(credentials)
         try:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT count(*) FROM inventory.line_items")
+                cursor.execute(self._primary_table_count_sql())
                 row_count = cursor.fetchone()[0]
         finally:
             connection.close()
@@ -702,7 +717,8 @@ class PostgresFixture:
                 cursor.execute(
                     "SELECT c.relname FROM pg_catalog.pg_class AS c "
                     "JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace "
-                    "WHERE n.nspname = 'lookup' AND c.relname = 'product_catalog'"
+                    "WHERE n.nspname = 'lookup' AND c.relname = %s",
+                    (self._seeded.probe_table,),
                 )
                 relations_catalog_visible = cursor.fetchone() is not None
                 query_denied = self._lookup_query_denied(cursor)
@@ -715,10 +731,16 @@ class PostgresFixture:
             "query_denied": query_denied,
         }
 
-    @staticmethod
-    def _lookup_query_denied(cursor: Any) -> bool:
+    def _lookup_query_denied(self, cursor: Any) -> bool:
+        assert self._seeded is not None
+        query = (
+            "SELECT count(*) FROM "
+            + _identifier(_LOOKUP_SCHEMA)
+            + "."
+            + _identifier(self._seeded.probe_table)
+        )
         try:
-            cursor.execute("SELECT count(*) FROM lookup.product_catalog")
+            cursor.execute(query)
         except Exception as exc:
             return getattr(exc, "sqlstate", None) == "42501"
         return False
@@ -762,7 +784,7 @@ class PostgresFixture:
             login_succeeds = True
             try:
                 with fresh.cursor() as cursor:
-                    cursor.execute("SELECT count(*) FROM inventory.line_items")
+                    cursor.execute(self._primary_table_count_sql())
             except Exception as exc:
                 sqlstate = getattr(exc, "sqlstate", None)
                 if sqlstate != "42501":
@@ -797,13 +819,20 @@ class PostgresFixture:
             self._credentials,
         )
 
-    def _rotate_full_revoke(self) -> RotationRecord:
+    def _rotate_full_revoke(self, new_password: str | None = None) -> RotationRecord:
         assert self._admin is not None and self._credentials is not None
         self._assert_owned()
         old_credentials = self._credentials
-        new_password = self._new_password(
-            excluding=(self._admin_password, old_credentials.password)
-        )
+        excluded = (self._admin_password, old_credentials.password)
+        if new_password is not None:
+            if not isinstance(new_password, str) or not new_password:
+                raise ValueError("new_password must be a non-empty string")
+            if new_password in excluded:
+                raise ValueError(
+                    "new_password must differ from the admin and current role passwords"
+                )
+        else:
+            new_password = self._new_password(excluding=excluded)
         connection = self._connect(self._admin)
         try:
             connection.autocommit = False
@@ -888,7 +917,7 @@ class PostgresFixture:
         fresh = self._connect(new_credentials)
         try:
             with fresh.cursor() as cursor:
-                cursor.execute("SELECT count(*) FROM inventory.line_items")
+                cursor.execute(self._primary_table_count_sql())
                 row_count = cursor.fetchone()[0]
         finally:
             fresh.close()

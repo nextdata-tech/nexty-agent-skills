@@ -155,6 +155,43 @@ def _review_finding_keys(message: str) -> frozenset[str]:
     return frozenset(f"id:{identifier}" for identifier in identifiers)
 
 
+_CHALLENGE_STOP_WORDS = frozenset(
+    {
+        "about", "after", "again", "already", "also", "am", "an", "and", "any",
+        "are", "as", "at", "be", "before", "between", "can", "could", "did",
+        "do", "does", "for", "from", "get", "give", "has", "have", "how", "i",
+        "if", "in", "is", "it", "its", "me", "my", "of", "on", "or", "our",
+        "please", "should", "show", "tell", "that", "the", "their", "them", "then",
+        "there", "this", "to", "use", "was", "we", "what", "when", "where", "which",
+        "who", "why", "will", "with", "would", "you", "your",
+    }
+)
+
+
+def _source_challenge_topic(match: MatchResult, message: str, script: "OperatorScript") -> str:
+    """Return a stable topic key for bounding repeated source-question prompts."""
+
+    question = (match.matched_request_clause or message).casefold()
+    declared_terms = [*script.persona.vocabulary, *script.answer_sheet.source_answers]
+    declared_terms.extend(
+        term
+        for fact in script.answer_sheet.ground_truth.values()
+        for term in fact.terms
+    )
+    matched_terms = [term for term in declared_terms if term_present(term, question)]
+    if matched_terms:
+        # Prefer the most specific declared topic when a question mentions a
+        # broad vocabulary term alongside its subject (for example, a
+        # denominator question that also mentions the rate).
+        return "term:" + min(matched_terms, key=lambda term: (-len(term), term.casefold())).casefold()
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", question)
+        if len(token) > 2 and token not in _CHALLENGE_STOP_WORDS
+    }
+    return "words:" + " ".join(sorted(tokens))
+
+
 def _is_ask_back_acceptance_request(match: MatchResult, message: str) -> bool:
     """Whether this current message asks to accept the agent's own proposal."""
 
@@ -1421,6 +1458,7 @@ class OperatorEngine:
         served_reply_keys: set[str] = set()
         delivered_decision_clauses: dict[str, set[str]] = {}
         delivered_decision_stage_counts: dict[str, int] = {}
+        source_challenge_counts: dict[str, int] = {}
         pending_ask_back_decision = False
         review_fix_authorized = False
         reapproval_uses = 0
@@ -2266,6 +2304,25 @@ class OperatorEngine:
             for overlay_id in self._pending_decision_overlays:
                 self.matcher.activate_decision_overlay(overlay_id)
             self._pending_decision_overlays.clear()
+
+            if match.rule_id == "persona.source_question":
+                topic = _source_challenge_topic(match, agent_message, self.script)
+                prior_challenges = source_challenge_counts.get(topic, 0)
+                if prior_challenges >= 2:
+                    # A repeated persona challenge must not pin the agent on
+                    # the same topic. After two turns, say plainly that this
+                    # operator cannot supply the fact and hand the work back.
+                    match = MatchResult(
+                        Category.OTHER,
+                        "source.challenge_exhausted",
+                        self.script.persona.no_leading_fallback,
+                        matched=False,
+                        approval_requested=match.approval_requested,
+                        solicits_operator=match.solicits_operator,
+                        matched_request_clause=match.matched_request_clause,
+                    )
+                else:
+                    source_challenge_counts[topic] = prior_challenges + 1
 
             sheet_key = _served_reply_key(match.rule_id)
             repeated_review_authorization = bool(

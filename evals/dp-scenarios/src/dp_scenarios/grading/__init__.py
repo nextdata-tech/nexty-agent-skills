@@ -63,6 +63,18 @@ from .scans import (
     sentinel_byte_scan,
     supported_path_scan,
 )
+from .secret_sinks import (
+    EditApplicationError,
+    Mutation,
+    SinkLocation,
+    SinkScanResult,
+    Surface,
+    TextEdit,
+    apply_edits,
+    resolve_sink_location,
+    scan_mutation_for_secret,
+    scan_surfaces_for_secret,
+)
 from .statistics import (
     DemonstratedOnce,
     GateRate,
@@ -137,4 +149,14 @@ __all__ = [
     "meaning_preserving_bounding_scan",
     "sentinel_byte_scan",
     "proxy_labelling_scan",
+    "EditApplicationError",
+    "Mutation",
+    "SinkLocation",
+    "SinkScanResult",
+    "Surface",
+    "TextEdit",
+    "apply_edits",
+    "resolve_sink_location",
+    "scan_mutation_for_secret",
+    "scan_surfaces_for_secret",
 ]
