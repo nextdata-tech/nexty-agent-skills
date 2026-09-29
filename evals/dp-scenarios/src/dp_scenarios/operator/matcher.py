@@ -917,9 +917,14 @@ _REVIEW_CHOICE_PROMPT_PATTERN = re.compile(
     r"choose\s+one|reply\s+[\"']?\d+[\"']?\s+(?:or|/)\s+[\"']?\d+[\"']?)\b",
     re.IGNORECASE,
 )
+# A lettered/numbered option line is commonly bold-wrapped in live agent
+# markdown ("**A: ...**"), so the label can sit behind one or two emphasis
+# markers rather than right after the bullet. It can also open a markdown
+# table row ("| **A: ...** | ..."), so a leading "|" is accepted as a bullet
+# marker alongside "-"/"*".
 _REVIEW_ALTERNATIVES_PATTERN = re.compile(
     r"\boption\s*(?:\(?[a-z]\)?|\d+)(?!\w)"
-    r"|^\s*(?:[-*]\s*)?(?:[a-z]|\d+)[.):]\s+\S+"
+    r"|^\s*(?:[-*|]\s*)?[*_]{0,2}(?:[a-z]|\d+)[.):]\s+\S+"
     r"|\bshould\s+(?:i|we)\b[^?\n]{0,160}\bor\b[^?\n]{0,160}\?",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -931,8 +936,19 @@ _REVIEW_RECOMMENDATION_PATTERN = re.compile(
     r"(?P<label>[a-z]|\d+)(?!\w)",
     re.IGNORECASE,
 )
+# The mirror shape: the label leads its own option line and the
+# recommendation marker trails at the end of that same line ("A: ISO 8601
+# ... (recommended).") rather than a leading "I recommend ..." phrase. Only
+# the parenthetical marker itself is masked out of ``offered_text`` in
+# ``_recommended_review_option`` -- the option line still has to stand on its
+# own as an offered alternative.
+_REVIEW_RECOMMENDED_LABEL_SUFFIX_PATTERN = re.compile(
+    r"(?m)^\s*(?:[-*|]\s*)?[*_]{0,2}(?:option\s+)?(?P<label>[a-z]|\d+)(?:[.):])?"
+    r"\s*[^\n]{0,200}?(?P<marker>\(\s*recommended\s*\))",
+    re.IGNORECASE,
+)
 _REVIEW_OFFERED_LABEL_PATTERN = re.compile(
-    r"^\s*(?:[-*]\s*)?(?P<listed>[a-z]|\d+)[.):]\s+\S+"
+    r"^\s*(?:[-*|]\s*)?[*_]{0,2}(?P<listed>[a-z]|\d+)[.):]\s+\S+"
     r"|\boption\s*\(?(?P<named>[a-z]|\d+)\)?(?!\w)",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -951,6 +967,30 @@ _DIAGNOSTIC_REQUEST_PATTERN = re.compile(
 )
 
 
+def _names_offered_alternative_labels(message: str, request_clause: str) -> bool:
+    """Whether the ask clause itself names at least two offered labels.
+
+    A "choose among these" ask does not always use a choice verb or noun --
+    live text such as "tell me A or B" names two of the offered option
+    labels directly. That structural repetition (the same labels the message
+    just offered, bare, side by side in the ask) is itself a generic signal
+    that the ask is the choice, without hardcoding "or"/"tell me"/any other
+    specific connective wording.
+    """
+
+    offered = {
+        (match.group("listed") or match.group("named")).casefold()
+        for match in _REVIEW_OFFERED_LABEL_PATTERN.finditer(message)
+    }
+    if len(offered) < 2:
+        return False
+    named = {
+        match.group(0).casefold()
+        for match in re.finditer(r"(?<![\w'-])[a-z0-9](?![\w'-])", request_clause, re.I)
+    }
+    return len(offered & named) >= 2
+
+
 def _explicit_review_choice(message: str, request_clause: str) -> bool:
     """Whether a live review ask selects among offered alternatives."""
 
@@ -966,6 +1006,7 @@ def _explicit_review_choice(message: str, request_clause: str) -> bool:
                 request_clause,
                 re.I,
             )
+            or _names_offered_alternative_labels(message, request_clause)
         )
     )
 
@@ -986,11 +1027,31 @@ def _recommended_review_option(message: str, request_clause: str) -> str | None:
             + " " * (recommendation.end() - recommendation.start())
             + offered_text[recommendation.end():]
         )
+    # The suffix shape's own marker ("(recommended)") is masked out too, so
+    # it cannot itself be misread as offering a label, but only the marker
+    # is blanked -- the option line's label still has to stand on its own as
+    # an offered alternative in ``offered``.
+    for suffix_recommendation in reversed(
+        list(_REVIEW_RECOMMENDED_LABEL_SUFFIX_PATTERN.finditer(message))
+    ):
+        offered_text = (
+            offered_text[: suffix_recommendation.start("marker")]
+            + " " * (suffix_recommendation.end("marker") - suffix_recommendation.start("marker"))
+            + offered_text[suffix_recommendation.end("marker") :]
+        )
     offered = {
         (match.group("listed") or match.group("named")).casefold()
         for match in _REVIEW_OFFERED_LABEL_PATTERN.finditer(offered_text)
     }
-    for match in reversed(list(_REVIEW_RECOMMENDATION_PATTERN.finditer(current_text))):
+    candidates = sorted(
+        (
+            *_REVIEW_RECOMMENDATION_PATTERN.finditer(current_text),
+            *_REVIEW_RECOMMENDED_LABEL_SUFFIX_PATTERN.finditer(current_text),
+        ),
+        key=lambda match: match.start(),
+        reverse=True,
+    )
+    for match in candidates:
         label = match.group("label")
         if label.casefold() not in offered:
             continue
