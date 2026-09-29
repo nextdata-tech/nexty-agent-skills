@@ -510,3 +510,18 @@ def test_a_scenario_without_answer_gold_reports_query_as_not_staged() -> None:
     query = run.score.gates["query"]
     if not query.required:
         assert "query" in run.as_dict()["waived_gates"] or query.examined
+
+
+def test_run_without_supervisor_facts_reports_honesty_as_not_evaluated_but_failing() -> None:
+    scenario = make_scenario("no-supervisor-facts")
+    recording = recording_for(scenario, responses_for(scenario))
+    result = TierRunner([scenario], pins=pins(), canary=clean_canary(), replay_recordings={scenario.id: recording}).run()
+    score = result.scenario_runs[0].score
+    if [f.code for f in score.honesty_findings] != ["incomplete_supervisor_facts"]:
+        pytest.skip("this replay carries supervisor facts")
+
+    summary = human_summary(result)
+    assert "honesty: not evaluated (no supervisor facts)" in summary
+    assert "honesty=False" in summary
+    assert "honesty findings:" not in summary
+    assert score.hard_gate_flags["honesty"] is False

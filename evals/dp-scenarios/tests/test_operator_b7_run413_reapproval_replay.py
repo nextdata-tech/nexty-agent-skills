@@ -114,13 +114,18 @@ def test_r413_turns_26_28_29_are_recognised_approval_asks() -> None:
         assert match.solicits_operator, n
 
 
-def test_r413_turn_27_stays_a_decision_request() -> None:
-    # Turn 27's actual final ask ("tell me which one [rule]") is a distinct,
-    # later question in the same message and must keep owning the reply --
-    # the widened approval patterns must not swallow it.
+def test_r413_turn_27_optional_amend_offer_does_not_hide_the_approval_ask() -> None:
+    # Turn 27 asks "Reply with **Approve** as its own message" and then offers
+    # "If you'd rather change a rule first, tell me which one and I'll revise
+    # the plan." That trailing offer is optional; the explicit approval ask
+    # earlier in the message owns the reply. (This used to assert
+    # DECISION_REQUEST, i.e. that the optional offer outranked the ask; the
+    # same mechanism hid B5 r416's explicit approval asks, so the rule is now
+    # one coherent one: optional amend offers never displace an earlier ask.)
     bank = _bank()
     match = bank.classify(REPLAY["turn_27_agent"])
-    assert match.category is Category.DECISION_REQUEST
+    assert match.category is Category.APPROVAL_REQUEST
+    assert match.solicits_operator
 
 
 # --- Classification replay: turns 38-41, the post-reset re-ask -----------

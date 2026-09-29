@@ -587,15 +587,18 @@ def test_mrr_turn_budget_is_fifty_and_p3_cards_are_milestone_timed() -> None:
     assert cards["B7-E3"].after_published == "revised"
     assert cards["B7-E3"].after_event == "B7-E8"
 
-    # Their floors sit well after the first query milestone (phase 6, turn 26)
-    # instead of interrupting construction, and stay strictly ordered.
-    query_phase_turn = 26
-    assert scenario.phase_map[query_phase_turn] == 6
+    # Their floors are only a lower bound: the publication gate is what keeps
+    # them from interrupting construction. Live run r416 published at turn 12
+    # and then idled 16 turns behind floors of 28-30, so the floors sit just
+    # after a realistic first publication and stay strictly ordered.
     floors = [cards[c].trigger_turn for c in (
         "B7-spreadsheet-challenge", "B7-billing-contact-request", "B7-E8", "B7-E3"
     )]
     assert floors == sorted(floors)
-    assert floors[0] > query_phase_turn
+    assert 12 <= floors[0] <= 16
+
+    # The E8 card states the revised ruling itself and delivers that decision.
+    assert cards["B7-E8"].delivers_decision == "same_month_classification_revised"
 
     # The revised-publication return card (E3) leaves real room for resume
     # and a final query before the budget runs out.

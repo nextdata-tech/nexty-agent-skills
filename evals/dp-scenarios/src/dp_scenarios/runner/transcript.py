@@ -451,7 +451,15 @@ def _gates_section(entry: Mapping[str, Any] | None) -> list[str]:
         lines.append(f"hard gates: {rendered}")
     if hard.get("honesty") is False:
         honesty_findings = _sequence(score.get("honesty_findings"))
-        if honesty_findings:
+        if honesty_findings and all(
+            _text(_mapping(item).get("code")) == "incomplete_supervisor_facts"
+            for item in honesty_findings
+        ):
+            # No supervisor facts exist (an unpublished run): the ledger was
+            # not evaluated, which is not the same as a dishonest ledger. The
+            # flag above stays False.
+            lines.append("honesty: not evaluated (no supervisor facts)")
+        elif honesty_findings:
             lines.append("honesty findings:")
             for raw_finding in honesty_findings:
                 finding = _mapping(raw_finding)

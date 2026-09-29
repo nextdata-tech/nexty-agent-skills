@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..operator.events import is_revised_release
 from ..support import ScenarioError
 from . import FollowUpContext, FollowUpKind, _ungraded, register
 
@@ -428,6 +429,89 @@ def _e3_resumed(view: object, e3_turn: int, workflow_id: object, run_id: object)
     return read and not action
 
 
+def _turn_texts(turns: Sequence[Mapping[str, object]]) -> tuple[tuple[int, str, str], ...]:
+    return tuple(
+        (int(turn["turn"]), turn["agent_message"], turn["operator_message"])
+        for turn in turns
+        if isinstance(turn.get("agent_message"), str) and isinstance(turn.get("operator_message"), str)
+    )
+
+
+def _prepare_turn(view: object, workflow_id: object) -> int | None:
+    """First turn on which the agent prepared this workflow, from supervisor history."""
+
+    values = [
+        row["turn"] for row in view.rows("tool-calls")
+        if row.get("tool") == "prepare_workflow" and row.get("workflow_id") == workflow_id
+        and type(row.get("turn")) is int
+    ]
+    return min(values) if values else None
+
+
+def _revised_release(
+    linked: Sequence[tuple[int, LinkedRelease]], initial: LinkedRelease | None,
+    e8_turn: int | None, turns: Sequence[Mapping[str, object]], view: object,
+) -> LinkedRelease | None:
+    """The latest later Published run that revises ``initial``.
+
+    Same workflow with a different definition, or a successor workflow the
+    operator authorized after the agent asked for a new versioned product (the
+    shipped skill forbids revising a published workflow in place). A successor
+    must be authorized before the agent prepared it and must carry the revised
+    same-month ruling in its own approved decisions.
+    """
+
+    if initial is None or e8_turn is None:
+        return None
+    texts = _turn_texts(turns)
+    initial_published = _published_turn(initial.run)
+    if initial_published is None:
+        return None
+    matches = []
+    for published, item in linked:
+        release = item.release
+        successor = release.get("workflow_id") != initial.release.get("workflow_id")
+        deadline = _prepare_turn(view, release.get("workflow_id")) if successor else None
+        if published <= e8_turn or not is_revised_release(
+            initial_workflow_id=initial.release.get("workflow_id"),
+            initial_run_id=initial.run.get("run_id"),
+            initial_definition_id=initial.release.get("definition_id"),
+            initial_published_turn=initial_published,
+            workflow_id=release.get("workflow_id"),
+            run_id=item.run.get("run_id"),
+            definition_id=release.get("definition_id"),
+            published_turn=published,
+            floor_turn=e8_turn,
+            turn_texts=texts,
+            authorization_deadline=deadline,
+        ):
+            continue
+        if successor and not _revised_ruling(
+            _ruling(_approved_decisions(item), "same_month_classification", target="mrr_movement_amount_cents")
+        ):
+            continue
+        matches.append(item)
+    return matches[-1] if matches else None
+
+
+def _card_delivered_decision(
+    scenario: object, turns: Sequence[Mapping[str, object]], *, card_id: str, decision_key: str,
+) -> bool:
+    """Whether a declared card carrying the ruling itself was delivered as that decision."""
+
+    events = getattr(scenario, "events", None)
+    card = next((item for item in getattr(events, "cards", ()) if item.card_id == card_id), None)
+    if card is None or card.delivers_decision != decision_key or not isinstance(card.content, str):
+        return False
+    return any(
+        turn.get("operator_delivered_decision_id") == decision_key
+        and card_id in (turn.get("fired_event_ids") or ())
+        and isinstance(turn.get("operator_message"), str)
+        and card.content.casefold() in turn["operator_message"].casefold()
+        for turn in turns
+    )
+
+
 def check(scenario: object, target: object, settings: Mapping[str, object], context: FollowUpContext) -> Mapping[str, object]:
     """Tie the revision, compiled promise, and final governed rows to one run."""
     from ..runner.evidence_context import HistoryEvidenceError
@@ -473,29 +557,28 @@ def check(scenario: object, target: object, settings: Mapping[str, object], cont
         return _ungraded("b7_supervisor_history_identity_invalid")
     linked.sort(key=lambda pair: pair[0])
     initial_release = None
-    revised_release = None
     if e8_turn is not None:
         before = [(turn, item) for turn, item in linked if turn < e8_turn]
         if before:
             initial_release = before[-1][1]
-            later = [
-                (turn, item) for turn, item in linked
-                if turn > e8_turn
-                and item.release.get("workflow_id") == initial_release.release.get("workflow_id")
-                and item.release.get("definition_id") != initial_release.release.get("definition_id")
-            ]
-            if later:
-                revised_release = later[-1][1]
+    revised_release = _revised_release(linked, initial_release, e8_turn, turns, view)
     if revised_release is None:
         findings.append("b7_revised_release_missing")
     if (
         plant_turn is None or e8_turn is None or not isinstance(dedup_text, str)
         or not _delivered_answer(turns, decision_key="event_deduplication", answer=dedup_text, after_turn=plant_turn, before_turn=e8_turn)
         or e8_turn is None or not isinstance(revised_text, str)
-        or not _delivered_answer(
-            turns, decision_key="same_month_classification_revised",
-            answer=revised_text, after_turn=e8_turn,
-            before_turn=_published_turn(revised_release.run) if revised_release else None,
+        or not (
+            # The E8 card states the revised ruling itself and is linked to
+            # this decision; a compliant agent has no reason to ask again.
+            _card_delivered_decision(
+                scenario, turns, card_id="B7-E8", decision_key="same_month_classification_revised",
+            )
+            or _delivered_answer(
+                turns, decision_key="same_month_classification_revised",
+                answer=revised_text, after_turn=e8_turn,
+                before_turn=_published_turn(revised_release.run) if revised_release else None,
+            )
         )
     ):
         if "b7_decision_exchange_missing" not in findings:
