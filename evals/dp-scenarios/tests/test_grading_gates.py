@@ -4273,3 +4273,49 @@ def test_capability_off_contract_covers_one_bad_row_among_clean_ones() -> None:
     assert result.passed is False
     assert result.codes == ("capability_decisions_off_contract",)
     assert "superseded" in " ".join(result.findings[0].value["breaches"])
+
+
+def _decision_round(*, applied: tuple[str, ...], deferred: tuple[str, ...], accepted: tuple[str, ...]) -> dict[str, object]:
+    ids = sorted(set(applied) | set(deferred) | set(accepted))
+    return {
+        "status": "complete",
+        "started_at_unix_ms": 1,
+        "ended_at_unix_ms": 2,
+        "budget_ms": 10,
+        "findings": [
+            {
+                "id": finding_id, "claim": "claim", "evidence": ["ref"],
+                "classification": "behavior_affecting", "proposed_effect": "effect",
+                "applied_files": ["f.py"] if finding_id in applied else [],
+                "state": "applied" if finding_id in applied else "not_applied",
+            }
+            for finding_id in ids
+        ],
+        "adjudications": [
+            {"finding_id": finding_id, "disposition": "accepted", "citation": None}
+            for finding_id in ids
+        ],
+        "user_decision": {
+            "approved_at_unix_ms": 3, "citation": "operator turn",
+            "approved_finding_ids": sorted(applied),
+        },
+        "deferred_finding_ids": sorted(deferred),
+    }
+
+
+def test_unresolved_accepted_finding_ids_are_named_in_the_review_round_rule() -> None:
+    from dp_scenarios.grading.gates import _review_round_invalid_rule, _valid_review_round
+
+    # F-2 is accepted as behavior-affecting but neither applied nor deferred.
+    round_ = _decision_round(applied=("F-1",), deferred=(), accepted=("F-1", "F-2"))
+    rule = _review_round_invalid_rule(round_)
+
+    assert rule is not None
+    assert rule.startswith("accepted behavior-affecting findings must be applied or deferred")
+    assert "neither applied nor deferred: F-2" in rule
+    assert "F-1" not in rule.split("deferred:", 1)[1]
+    # Diagnostics only: the same round stays invalid.
+    assert not _valid_review_round(round_)
+    assert _review_round_invalid_rule(
+        _decision_round(applied=("F-1",), deferred=("F-2",), accepted=("F-1", "F-2"))
+    ) is None

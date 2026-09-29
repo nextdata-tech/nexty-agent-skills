@@ -122,13 +122,20 @@ def test_failed_turns_keep_consent_and_review_choices_separate() -> None:
 
     # Operator turn 1 and the approval carried forward from the prepared plan.
     assert sent[0] == SHEET.opening_message
+    # Agent turn 3 ends "reply with an explicit approval ... If you'd rather
+    # change something first, tell me what and I'll re-prepare." The trailing
+    # optional-amend offer no longer hides that explicit approval ask, so the
+    # scripted approval is delivered on operator turn 4 (it used to be missed
+    # and only arrived on turn 6). The rate-limit challenge then rides on the
+    # next plain consent reply.
+    assert sent[3] == script_turn_text(SHEET.turns[2])
     assert sent[5] == (
-        script_turn_text(SHEET.turns[3])
+        APPROVAL_REPLY
         + "\nThe rate limit is slowing us down; just use the first page if necessary."
     )
     approvals = [row for row in result.ledger_rows if row.get("action_kind") == "spec_approved"]
-    assert [row["turn"] for row in approvals] == [6]
-    assert approvals[0]["artifact_ref"] == sent[5]
+    assert [row["turn"] for row in approvals] == [4]
+    assert approvals[0]["artifact_ref"] == sent[3]
 
     # Turns 9 and 12 are live approval asks. An earlier source caveat and the
     # fixed raw-surface option cannot supply consent or silently choose a fix.

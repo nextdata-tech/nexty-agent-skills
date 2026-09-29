@@ -32,7 +32,13 @@ keeps the initial, revised, and deduplication decisions staged until their
 operator events. The first approval records the long output grain and initial
 rules. After the first observed Published run, the operator challenges the
 February figure and asks for March billing contacts. The E8 change requires a
-revised definition and fresh approval. E3 arrives only after the revised run
+revised definition and fresh approval. The revised
+release is a later Published run with a different definition that is either
+the same workflow or a successor workflow the operator authorized after the
+agent asked (the shipped skill forbids revising a published workflow in place
+and requires a new versioned product under a new workflow id); a successor must
+also carry the revised same-month ruling in its own approved decisions.
+E3 arrives only after the revised run
 has been observed as Published; it keeps the same session and expects the agent
 to consult supervisor records before answering.
 
@@ -46,9 +52,14 @@ times the P3 persona's cards off the existing publication-triggered card
 mechanism (`after_published`/`after_event`) instead of low fixed turn
 numbers. `B7-spreadsheet-challenge`, `B7-billing-contact-request`, and
 `B7-E8` only become eligible after the *initial* run is observed Published,
-each in a narrow, bounded window (turns 28-30) right after the first query
-milestone, so a slower build never gets interrupted mid-construction and a
-fast one never gets buried in persona pushback before it can publish. `B7-E3`
+each in a narrow, bounded window (floors 14-16) right after the first
+publication, so a slower build never gets interrupted mid-construction and a
+fast one never gets buried in persona pushback before it can publish. (The
+floors were 28-30; live run r416 published at turn 12 and then idled 16 turns
+behind them.) The E8 card states the revised same-month ruling itself and
+declares `delivers_decision: same_month_classification_revised`, so the engine
+records that decision as delivered on the turn the card is transmitted; a
+compliant agent has no reason to ask for a ruling it was just given. `B7-E3`
 only becomes eligible after the *revised* run is observed Published (floor
 turn 47), leaving turns 48-50 to resume and query. Because every one of these
 cards is publication- or event-gated, a run that never publishes never sees

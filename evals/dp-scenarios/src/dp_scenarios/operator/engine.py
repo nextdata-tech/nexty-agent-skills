@@ -400,6 +400,17 @@ class OperatorScript:
                 "staged decision answer references undeclared event id(s): "
                 + ", ".join(missing_answer_events)
             )
+        unknown_delivered = sorted(
+            card.delivers_decision
+            for card in self.events.cards
+            if card.delivers_decision is not None
+            and card.delivers_decision not in self.answer_sheet.decision_answers
+        )
+        if unknown_delivered:
+            raise ValueError(
+                "event delivers_decision references undeclared decision id(s): "
+                + ", ".join(unknown_delivered)
+            )
         _validate_plant_deliverability(self.events, resolved_turns)
         normalized_phases = {int(key): int(value) for key, value in dict(self.phase_by_turn).items()}
         if any(key < 1 or value < 1 or value > 7 for key, value in normalized_phases.items()):
@@ -1644,6 +1655,12 @@ class OperatorEngine:
                     if isinstance(snapshot_publications, Mapping)
                     else None
                 ),
+                turn_texts=tuple(
+                    (record.turn, record.agent_message, record.operator_message.text)
+                    for record in records
+                    if isinstance(record.agent_message, str)
+                    and isinstance(record.operator_message.text, str)
+                ),
                 delivered_event_turns=delivered_event_turns,
                 used_event_ids=fired_events,
                 fixed_beats_pending=bool(owed_fixed_beats),
@@ -2239,6 +2256,16 @@ class OperatorEngine:
                 if decision_answer_delivered and next_match is not None
                 else None
             )
+            if delivered_decision_id is None:
+                # A card that states a declared ruling itself delivers it.
+                delivered_decision_id = next(
+                    (
+                        injection.delivers_decision
+                        for injection in delivered
+                        if injection.delivers_decision is not None
+                    ),
+                    None,
+                )
             if decision_answer_delivered and next_match is not None:
                 if next_match.decision_stage is not None:
                     decision_id = next_match.decision_id or ""
