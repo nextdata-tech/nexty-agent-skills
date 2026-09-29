@@ -55,6 +55,7 @@ EXPECTED_TIERS = {
     "marketing-attribution": "full",
     "headcount-attrition": "full",
     "mrr-waterfall": "full",
+    "crm-pipeline-drift": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -64,7 +65,7 @@ _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
 # only by their scenario-specific follow-up.
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
-    | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
+    | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline", "crm-pipeline-drift"} else set())
     | ({"narrowing"} if scenario_id == "mrr-waterfall" else set())
     | ({"query"} if scenario_id in {
         "parent-child-grain-trap",
@@ -176,7 +177,7 @@ def test_public_scenarios_declare_the_expected_required_gate_set() -> None:
     staged_capability = {
         scenario.id for scenario in scenarios if scenario.stages_capability_shortfall
     }
-    assert staged_capability == {"capability-shortfall", "crm-pipeline"}
+    assert staged_capability == {"capability-shortfall", "crm-pipeline", "crm-pipeline-drift"}
 
 
 def test_every_gate_has_a_public_staging_scenario_or_an_explicit_follow_up_allowlist() -> None:
@@ -575,6 +576,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "locale-timezone")
     shutil.rmtree(root / "marketing-attribution")
     shutil.rmtree(root / "mrr-waterfall")
+    shutil.rmtree(root / "crm-pipeline-drift")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -802,7 +804,9 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             if turn.approval
         ]
         expected_count = (
-            3
+            4
+            if scenario.id == "crm-pipeline-drift"
+            else 3
             if scenario.id == "crm-pipeline"
             else 2
             if scenario.id in {

@@ -2354,6 +2354,14 @@ class ClaudeCodeAdapter:
                 workflow=workflow if isinstance(workflow, str) and workflow else None,
             )
         _write_supervisor_facts(self._facts, artifact_dir=self.artifact_dir)
+        prior_history_status = None
+        try:
+            prior_history_status = json.loads(
+                (self.artifact_dir / "history-completeness.json").read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, ValueError):
+            pass
+        history_complete = False
         history = getattr(self, "_history", None)
         if history is None:
             try:
@@ -2375,10 +2383,22 @@ class ClaudeCodeAdapter:
                     state_dir=self._state_dir,
                 )
                 history.write()
+                history_complete = not (
+                    isinstance(prior_history_status, Mapping)
+                    and prior_history_status.get("complete") is False
+                )
             except Exception:
                 # History evidence must never turn an otherwise completed
                 # operator turn into an adapter failure.
                 pass
+        _write_json(
+            self.artifact_dir / "history-completeness.json",
+            {
+                "schema": "dp-scenario-history-completeness-v1",
+                "turn": getattr(self, "_turn", 0),
+                "complete": history_complete,
+            },
+        )
         self._record_review_guard_state()
         with contextlib.suppress(OSError):
             trace_path = getattr(self._stdio, "trace_path", None)
