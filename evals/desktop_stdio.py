@@ -89,6 +89,9 @@ _NEX_WORKFLOWS = (
 _NEX_DIAG_METHOD_LABELS = frozenset({"initialize", "tools/list", "tools/call"})
 _NEX_MAX_SNAPSHOT_FILES = 256
 _NEX_MAX_SNAPSHOT_FILE_BYTES = 1024 * 1024
+# Upper bound on an export archive frozen at the moment its response crosses
+# the bridge (the runner grades these bytes, not the post-run workspace).
+_NEX_MAX_EXPORT_ARCHIVE_BYTES = 50 * 1024 * 1024
 _NEX_STREAM_PAIR_WAIT_S = 3.0
 # Preflight keeps at most this many characters of redacted tool_result text.
 _NEX_PREFLIGHT_RESULT_TEXT_CHARS = 2000
@@ -705,6 +708,53 @@ def _review_entry_is_sensitive(name: str) -> bool:
         or lowered.startswith(".env.")
         or lowered.endswith((".pem", ".key", ".p12", ".pfx"))
     )
+
+
+def _nex_snapshot_excludes(name: str, *, is_directory: bool) -> bool:
+    """The one entry filter shared by capture and validation snapshots.
+
+    Both envelopes are compared file-by-file (``reviewed-files-unchanged``),
+    so they must drop exactly the same entries: credential-shaped names and the
+    supervisor's own ``failure.json`` diagnostic. Oversized and non-regular
+    files are dropped by :func:`_nex_snapshot_read_file` for both as well.
+    """
+
+    if _review_entry_is_sensitive(name):
+        return True
+    return not is_directory and name == "failure.json"
+
+
+class _NexSnapshotBoundExceeded(Exception):
+    """A file grew past the snapshot bound between fstat and read."""
+
+
+def _nex_snapshot_read_file(
+    path: Path, *, skip_oversize: bool = True
+) -> tuple[bytes, int] | None:
+    """Read one bounded regular file without following a final symlink.
+
+    Returns ``None`` for skipped entries: non-regular files, and (when
+    ``skip_oversize``) files larger than the per-file bound at fstat time.
+    Raises ``OSError`` when the file is unreadable and
+    ``_NexSnapshotBoundExceeded`` when it is (or grew) past the bound and is
+    not skipped.
+    """
+
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_size > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+            if skip_oversize:
+                return None
+            raise _NexSnapshotBoundExceeded()
+        data = os.read(descriptor, _NEX_MAX_SNAPSHOT_FILE_BYTES + 1)
+        if len(data) > _NEX_MAX_SNAPSHOT_FILE_BYTES:
+            raise _NexSnapshotBoundExceeded()
+        return bytes(data), stat.S_IMODE(info.st_mode)
+    finally:
+        os.close(descriptor)
 
 
 def _review_reader_roots(
@@ -1604,6 +1654,11 @@ def _response_satisfies_review(response: Mapping[str, Any]) -> bool:
             return True
         if value.get("code") == "workflow/review_satisfied":
             return True
+        if (
+            value.get("code") == "workflow/requirement_satisfied"
+            and value.get("requirement_id") == "review"
+        ):
+            return True
         requirements = value.get("requirements")
         if isinstance(requirements, Mapping):
             review = requirements.get("review")
@@ -1756,6 +1811,10 @@ class DesktopStdioSession:
         self._nex_review_directories: set[str] = set()
         self._nex_review_aliases: dict[str, str] = {}
         self._nex_case_snapshots: dict[str, dict[str, Any]] = {}
+        # Export archives frozen when their successful response crossed the
+        # bridge, keyed by JSON-RPC id key; the agent can still write the
+        # workspace afterwards, so these bytes are the graded evidence.
+        self._nex_frozen_exports: dict[str, dict[str, Any]] = {}
         self._nex_pending_static_snapshots: list[dict[str, Any]] = []
         self._nex_static_snapshots_attached = False
         self._nex_agent_exited = False
@@ -2390,10 +2449,29 @@ class DesktopStdioSession:
             if child_id is not None and name != _REVIEW_READER_TOOL:
                 self._nex_invalid_reason = "parent MCP call arrived while review child is active"
                 return None, self._nex_invalid_reason
-            if len(exact_matches) != 1:
+            # Identical unmatched tool_use blocks (same normalized name,
+            # canonical arguments, and parent linkage -- all enforced by
+            # matching_uses) are interchangeable: only their stream ids differ,
+            # and each id is still paired with exactly one response and one
+            # tool_result. Claude dispatches tool_use blocks in stream order,
+            # so bind the oldest one (FIFO). A use whose tool_result already
+            # arrived was answered without reaching this bridge (e.g. denied
+            # client-side) and is skipped. Candidates whose recorded state
+            # differs in any other way are genuinely ambiguous.
+            pending = [use for use in exact_matches if not use.get("tool_result")]
+            if not pending:
                 self._nex_invalid_reason = "MCP tools/call ambiguously matches Claude stream tool_use events"
                 return None, self._nex_invalid_reason
-            use = exact_matches[0]
+            identity = {
+                self._nex_json({
+                    key: value for key, value in use.items() if key != "id"
+                })
+                for use in pending
+            }
+            if len(identity) != 1:
+                self._nex_invalid_reason = "MCP tools/call ambiguously matches Claude stream tool_use events"
+                return None, self._nex_invalid_reason
+            use = pending[0]
             expected_parent = use.get("parent_tool_use_id")
             if name == _REVIEW_READER_TOOL:
                 if child_id is None or expected_parent != child_id:
@@ -2525,7 +2603,7 @@ class DesktopStdioSession:
                 for current, child_dirs, filenames in os.walk(root, followlinks=False):
                     child_dirs[:] = [
                         name for name in child_dirs
-                        if not _review_entry_is_sensitive(name)
+                        if not _nex_snapshot_excludes(name, is_directory=True)
                         and not Path(current, name).is_symlink()
                     ]
                     current_path = Path(current)
@@ -2534,25 +2612,20 @@ class DesktopStdioSession:
                     directories.add(str(logical_directory))
                     remember_alias(current_path, str(logical_directory))
                     for filename in sorted(filenames):
-                        if _review_entry_is_sensitive(filename):
+                        if _nex_snapshot_excludes(filename, is_directory=False):
                             continue
                         path = current_path / filename
                         try:
-                            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                            try:
-                                info = os.fstat(descriptor)
-                                if not stat.S_ISREG(info.st_mode) or info.st_size > _NEX_MAX_SNAPSHOT_FILE_BYTES:
-                                    continue
-                                data = os.read(descriptor, _NEX_MAX_SNAPSHOT_FILE_BYTES + 1)
-                                if len(data) > _NEX_MAX_SNAPSHOT_FILE_BYTES:
-                                    self._nex_invalidate("capture file exceeded the snapshot byte bound")
-                                    return
-                                mode = stat.S_IMODE(info.st_mode)
-                            finally:
-                                os.close(descriptor)
+                            read = _nex_snapshot_read_file(path)
+                        except _NexSnapshotBoundExceeded:
+                            self._nex_invalidate("capture file exceeded the snapshot byte bound")
+                            return
                         except OSError:
                             self._nex_invalidate("capture snapshot encountered an unreadable file")
                             return
+                        if read is None:
+                            continue
+                        data, mode = read
                         if len(snapshot) >= _NEX_MAX_SNAPSHOT_FILES:
                             self._nex_invalidate("capture snapshot exceeded its file bound")
                             return
@@ -2634,9 +2707,14 @@ class DesktopStdioSession:
 
     def _nex_snapshot_workspace_root(
         self, request: Mapping[str, Any], root_value: object,
-        *, require_workspace: bool = True,
+        *, require_workspace: bool = True, capture_filter: bool = False,
     ) -> dict[str, Any] | None:
-        """Snapshot a bounded workspace root without following any symlink."""
+        """Snapshot a bounded workspace root without following any symlink.
+
+        ``capture_filter`` applies exactly the capture snapshot's entry rules
+        (shared filter, oversized files skipped rather than fatal) so the
+        validation envelope is comparable file-for-file with the capture.
+        """
         if not isinstance(root_value, str) or not root_value:
             return None
         root = Path(root_value)
@@ -2659,33 +2737,31 @@ class DesktopStdioSession:
         logical_root = Path(os.path.normpath(os.path.abspath(root)))
         files: dict[str, dict[str, Any]] = {}
         for current, child_dirs, filenames in os.walk(resolved_root, followlinks=False):
-            child_dirs[:] = [name for name in child_dirs if not Path(current, name).is_symlink()]
+            child_dirs[:] = [
+                name for name in child_dirs
+                if not Path(current, name).is_symlink()
+                and not (capture_filter and _nex_snapshot_excludes(name, is_directory=True))
+            ]
             for filename in sorted(filenames):
-                if filename == "failure.json":
+                if capture_filter:
+                    if _nex_snapshot_excludes(filename, is_directory=False):
+                        continue
+                elif filename == "failure.json":
                     continue
                 path = Path(current) / filename
                 try:
-                    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                    try:
-                        info = os.fstat(descriptor)
-                        if not stat.S_ISREG(info.st_mode):
-                            continue
-                        if info.st_size > _NEX_MAX_SNAPSHOT_FILE_BYTES:
-                            self._nex_invalidate("profile snapshot file exceeded the byte bound")
-                            return None
-                        data = os.read(descriptor, _NEX_MAX_SNAPSHOT_FILE_BYTES + 1)
-                        if len(data) > _NEX_MAX_SNAPSHOT_FILE_BYTES:
-                            self._nex_invalidate("profile snapshot file exceeded the byte bound")
-                            return None
-                    finally:
-                        os.close(descriptor)
+                    read = _nex_snapshot_read_file(path, skip_oversize=capture_filter)
+                except _NexSnapshotBoundExceeded:
+                    self._nex_invalidate("profile snapshot file exceeded the byte bound")
+                    return None
                 except OSError:
                     self._nex_invalidate("profile snapshot encountered an unreadable file")
                     return None
+                if read is None:
+                    continue
+                data, mode = read
                 relative = path.relative_to(resolved_root)
-                files[str(logical_root / relative)] = {
-                    "content": bytes(data), "mode": stat.S_IMODE(info.st_mode)
-                }
+                files[str(logical_root / relative)] = {"content": data, "mode": mode}
                 if len(files) > _NEX_MAX_SNAPSHOT_FILES:
                     self._nex_invalidate("profile snapshot exceeded its file-count bound")
                     return None
@@ -2721,7 +2797,7 @@ class DesktopStdioSession:
             self._nex_invalidate("validation capture roots are unavailable")
             return
         envelope = self._nex_snapshot_workspace_root(
-            request, root, require_workspace=False
+            request, root, require_workspace=False, capture_filter=True
         )
         if envelope is None:
             return
@@ -2812,6 +2888,77 @@ class DesktopStdioSession:
     def nex_file_snapshots(self) -> dict[str, dict[str, Any]]:
         with self._bridge_state_lock:
             return copy.deepcopy(self._nex_case_snapshots)
+
+    def nex_frozen_exports(self) -> dict[str, dict[str, Any]]:
+        """Return export archives frozen at response time, by JSON-RPC id key.
+
+        Each entry has ``archive_path`` plus either ``content``/``sha256``/
+        ``size`` or an ``error`` label; consumers must fail closed on errors.
+        """
+        with self._bridge_state_lock:
+            return copy.deepcopy(self._nex_frozen_exports)
+
+    def _nex_freeze_export(
+        self, request: Mapping[str, Any], response: Mapping[str, Any]
+    ) -> None:
+        """Freeze a successful export's archive bytes before the agent sees it."""
+        request_id = _rpc_id_key(request.get("id"))
+        result = response.get("result")
+        if request_id is None or not isinstance(result, Mapping) or result.get("isError") is True:
+            return
+        archive = _nex_result_payload(response).get("archive_path")
+        if not isinstance(archive, str) or not archive:
+            return
+        entry: dict[str, Any] = {"archive_path": archive}
+        path = Path(archive)
+        if not path.is_absolute():
+            if self.nex_workspace is None:
+                path = None
+            else:
+                path = self.nex_workspace / path
+        if path is None:
+            entry["error"] = "relative archive path without a workspace"
+        else:
+            try:
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    info = os.fstat(descriptor)
+                    if not stat.S_ISREG(info.st_mode):
+                        entry["error"] = "archive is not a regular file"
+                    elif info.st_size > _NEX_MAX_EXPORT_ARCHIVE_BYTES:
+                        entry["error"] = "archive exceeds the freeze bound"
+                    else:
+                        chunks: list[bytes] = []
+                        total = 0
+                        while total <= _NEX_MAX_EXPORT_ARCHIVE_BYTES:
+                            chunk = os.read(
+                                descriptor,
+                                min(1024 * 1024, _NEX_MAX_EXPORT_ARCHIVE_BYTES + 1 - total),
+                            )
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            total += len(chunk)
+                        if total > _NEX_MAX_EXPORT_ARCHIVE_BYTES:
+                            entry["error"] = "archive exceeds the freeze bound"
+                        else:
+                            content = b"".join(chunks)
+                            entry.update({
+                                "content": content,
+                                "sha256": hashlib.sha256(content).hexdigest(),
+                                "size": len(content),
+                            })
+                finally:
+                    os.close(descriptor)
+            except OSError:
+                entry["error"] = "archive could not be read"
+        with self._bridge_state_lock:
+            if request_id in self._nex_frozen_exports:
+                self._nex_invalid_reason = self._nex_invalid_reason or (
+                    "duplicate frozen export for one JSON-RPC id"
+                )
+                return
+            self._nex_frozen_exports[request_id] = entry
 
     def _nex_reader_response(self, request: Mapping[str, Any]) -> dict[str, Any]:
         params = request.get("params")
@@ -3583,6 +3730,10 @@ class DesktopStdioSession:
                                     with self._bridge_state_lock:
                                         self._review_capture_in_flight = True
                                 if self.nex_mode and operation == _REVIEW_READER_TOOL:
+                                    # Synthesized locally: no supervisor response
+                                    # will ever pop this id's context.
+                                    if request_id is not None:
+                                        request_context.pop(request_id, None)
                                     result = self._nex_reader_response(request)
                                     response_message = {
                                         "jsonrpc": "2.0", "id": request.get("id"),
@@ -3677,6 +3828,8 @@ class DesktopStdioSession:
                                             response, separators=(",", ":")
                                         ).encode() + b"\n"
                                 update_review_guard(original, response)
+                                if operation == "export_data_product":
+                                    self._nex_freeze_export(original, response)
                                 if workflow_override == "__static__":
                                     self._nex_bind_static_generation(original, response)
                                 self._nex_record_response(

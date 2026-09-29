@@ -3120,3 +3120,184 @@ def test_trace_writes_remain_parseable_under_concurrency(tmp_path):
         thread.join()
     records = [json.loads(line) for line in path.read_text().splitlines()]
     assert len(records) == 40
+
+
+def test_review_clear_accepts_requirement_satisfied_for_review():
+    """Main's supervisor code still clears the review guard."""
+    report = {
+        "result": {
+            "code": "workflow/requirement_satisfied",
+            "requirement_id": "review",
+        }
+    }
+    assert ds._response_satisfies_review(report)
+    other = {"result": {"code": "workflow/requirement_satisfied", "requirement_id": "capture"}}
+    assert not ds._response_satisfies_review(other)
+
+
+def test_review_clear_accepts_review_satisfied_code():
+    assert ds._response_satisfies_review({"result": {"code": "workflow/review_satisfied"}})
+
+
+def _nex_stream_tool_use(session, *uses):
+    session.observe_claude_stream_event({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": identifier, "name": f"mcp__nxd-desktop__{name}", "input": arguments}
+        for identifier, name, arguments in uses
+    ]}})
+
+
+def _nex_call(request_id, name, arguments):
+    return {
+        "jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+
+
+def test_nex_identical_tool_uses_match_fifo():
+    session = ds.DesktopStdioSession([sys.executable, "-c", "pass"], nex_mode=True)
+    _nex_stream_tool_use(
+        session,
+        ("u1", "inspect_run", {"workflow": "w"}),
+        ("u2", "inspect_run", {"workflow": "w"}),
+    )
+    first, error = session._nex_match_tool_call(_nex_call(1, "inspect_run", {"workflow": "w"}))
+    assert error is None and first["id"] == "u1"
+    second, error = session._nex_match_tool_call(_nex_call(2, "inspect_run", {"workflow": "w"}))
+    assert error is None and second["id"] == "u2"
+    assert session._nex_invalid_reason is None
+
+
+def test_nex_fifo_skips_identical_use_already_answered_client_side():
+    session = ds.DesktopStdioSession([sys.executable, "-c", "pass"], nex_mode=True)
+    _nex_stream_tool_use(
+        session,
+        ("u1", "inspect_run", {}),
+        ("u2", "inspect_run", {}),
+    )
+    # u1 was answered (e.g. denied) without ever reaching the bridge.
+    session.observe_claude_stream_event(_tool_results(
+        {"type": "tool_result", "tool_use_id": "u1", "is_error": True, "content": "denied"},
+    ))
+    use, error = session._nex_match_tool_call(_nex_call(1, "inspect_run", {}))
+    assert error is None and use["id"] == "u2"
+
+
+def test_nex_differing_arguments_are_not_conflated_by_fifo():
+    session = ds.DesktopStdioSession([sys.executable, "-c", "pass"], nex_mode=True)
+    _nex_stream_tool_use(
+        session,
+        ("u1", "inspect_run", {"workflow": "a"}),
+        ("u2", "inspect_run", {"workflow": "b"}),
+    )
+    use, error = session._nex_match_tool_call(_nex_call(1, "inspect_run", {"workflow": "b"}))
+    assert error is None and use["id"] == "u2"
+
+
+def test_nex_capture_and_validation_snapshots_share_one_entry_filter(tmp_path):
+    capture = tmp_path / "capture"
+    (capture / "transform").mkdir(parents=True)
+    (capture / "secrets").mkdir()
+    (capture / "transform" / "main.py").write_text("print(1)\n")
+    (capture / "infra-profile.yaml").write_text("profile: x\n")
+    (capture / "transform" / ".env").write_text("TOKEN=x\n")
+    (capture / "transform" / "client.pem").write_text("pem\n")
+    (capture / "secrets" / "token.txt").write_text("x\n")
+    (capture / "transform" / "big.bin").write_bytes(b"0" * (ds._NEX_MAX_SNAPSHOT_FILE_BYTES + 1))
+    blueprint = capture / "dp-blueprint.md"
+    blueprint.write_text("# blueprint\n")
+    capture_resolved = capture.resolve()
+    session = ds.DesktopStdioSession([sys.executable, "-c", "pass"], nex_mode=True)
+    session.nex_workspace = tmp_path.resolve()
+    authoring = str(tmp_path / "authoring")
+    capture_request = _nex_call(1, "advance_workflow", {
+        "workflow": "nex890-positive", "authoring_root": authoring,
+        "action": {"type": "capture"},
+    })
+    capture_response = {"jsonrpc": "2.0", "id": 1, "result": {"requirements": [{
+        "id": "review",
+        "review_input": {
+            "retained_capture_root": str(capture_resolved),
+            "retained_blueprint_path": str(blueprint.resolve()),
+        },
+    }]}}
+    session._nex_snapshot_review_input(capture_request, capture_response)
+    assert session._nex_invalid_reason is None
+    session._nex_snapshot_validation(_nex_call(2, "advance_workflow", {
+        "workflow": "nex890-positive", "authoring_root": authoring,
+    }))
+    assert session._nex_invalid_reason is None
+    case = session.nex_file_snapshots()["nex890-positive"]
+    capture_files = set(case["files"])
+    validation_files = set(case["validation"]["files"])
+    names = {Path(path).name for path in capture_files}
+    assert "main.py" in names and "infra-profile.yaml" in names
+    assert not names & {".env", "client.pem", "token.txt", "big.bin"}
+    assert validation_files == capture_files
+    for path in capture_files:
+        assert case["files"][path] == case["validation"]["files"][path]
+
+
+EXPORT_SERVER = r"""
+import json, sys
+for raw in sys.stdin:
+    message = json.loads(raw)
+    if message.get("method") == "tools/call":
+        archive = message["params"]["arguments"]["destination"]
+        with open(archive, "wb") as handle:
+            handle.write(b"frozen-archive-bytes")
+        payload = {"archive_path": archive}
+        print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+        }}), flush=True)
+"""
+
+
+def test_nex_export_archive_is_frozen_before_the_response_is_forwarded(tmp_path):
+    session, proxy_side = _nex_bridge_harness(tmp_path, EXPORT_SERVER)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session.nex_workspace = workspace.resolve()
+    archive = str(workspace.resolve() / "export.zip")
+    _nex_stream_tool_use(session, ("u1", "export_data_product", {"destination": archive}))
+    try:
+        _nex_send(proxy_side, _nex_call(7, "export_data_product", {"destination": archive}))
+        reply = json.loads(proxy_side.makefile("rb").readline())
+        # The agent may rewrite the workspace only after seeing the response.
+        Path(archive).write_bytes(b"tampered")
+        frozen = session.nex_frozen_exports()
+    finally:
+        proxy_side.close()
+        session.cleanup()
+    assert reply["id"] == 7
+    entry = frozen[ds._rpc_id_key(7)]
+    assert entry["archive_path"] == archive
+    assert entry["content"] == b"frozen-archive-bytes"
+    import hashlib
+    assert entry["sha256"] == hashlib.sha256(b"frozen-archive-bytes").hexdigest()
+
+
+def test_nex_review_reader_request_does_not_leave_stale_request_context(tmp_path, monkeypatch):
+    session, proxy_side = _nex_bridge_harness(tmp_path, SILENT_SERVER)
+    seen = {}
+    original_reader = session._nex_reader_response
+    monkeypatch.setattr(session, "_nex_match_tool_call", lambda request: ({"id": "u"}, None))
+
+    def reader(request):
+        seen["called"] = True
+        return original_reader(request)
+
+    monkeypatch.setattr(session, "_nex_reader_response", reader)
+    try:
+        request = _nex_call(5, ds._REVIEW_READER_TOOL, {"path": "/nope", "operation": "read"})
+        _nex_send(proxy_side, request)
+        json.loads(proxy_side.makefile("rb").readline())
+        # Reusing the id after the synthesized reply must not be treated as a
+        # duplicate in-flight request.
+        _nex_send(proxy_side, request)
+        second = json.loads(proxy_side.makefile("rb").readline())
+    finally:
+        proxy_side.close()
+        session.cleanup()
+    assert seen["called"]
+    assert second["id"] == 5
+    assert "duplicate in-flight" not in (session._nex_invalid_reason or "")

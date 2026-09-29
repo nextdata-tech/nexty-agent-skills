@@ -70,6 +70,7 @@ from desktop_stdio import (
     DesktopStdioSession,
     _is_review_requirement_report,
     _nex_result_payload,
+    _rpc_id_key as _desktop_rpc_id_key,
     redact_text,
 )
 import nex890_write_policy_hook as _nex_hook
@@ -3146,9 +3147,21 @@ def _load_nex890_checker(scenario_dir: Path):
 
 
 def _nex890_frozen_exports(
-    trace: list[dict[str, Any]], workspace: Path, *, max_bytes: int = 50 * 1024 * 1024
+    trace: list[dict[str, Any]],
+    workspace: Path,
+    *,
+    frozen_exports: Mapping[str, Mapping[str, Any]] | None,
+    max_bytes: int = 50 * 1024 * 1024,
 ) -> dict[str, bytes]:
-    """Read only the unique export archive named by the runner bridge trace."""
+    """Return the unique export archive bytes frozen by the runner bridge.
+
+    The bridge froze the archive when the successful ``export_data_product``
+    response crossed it, before the agent could see (or rewrite) the file.
+    Those frozen bytes are what gets graded. The post-run workspace copy must
+    still be present, contained, and byte-identical (sha256) to them; a
+    missing freeze, a freeze error, or any post-export tampering fails closed
+    by returning no outputs.
+    """
     export_requests = [
         record for record in trace
         if record.get("direction") == "request"
@@ -3181,6 +3194,19 @@ def _nex890_frozen_exports(
     response = responses[0]["message"]
     archive = _nex_result_payload(response).get("archive_path")
     if not isinstance(destination, str) or not isinstance(archive, str):
+        return {}
+    if not isinstance(frozen_exports, Mapping):
+        return {}
+    frozen = frozen_exports.get(_desktop_rpc_id_key(request.get("jsonrpc_id")) or "")
+    if (
+        not isinstance(frozen, Mapping)
+        or "error" in frozen
+        or frozen.get("archive_path") != archive
+        or not isinstance(frozen.get("content"), bytes)
+        or not isinstance(frozen.get("sha256"), str)
+        or len(frozen["content"]) > max_bytes
+        or hashlib.sha256(frozen["content"]).hexdigest() != frozen["sha256"]
+    ):
         return {}
     root = workspace.resolve(strict=True)
     logical_root = Path(os.path.normpath(os.path.abspath(workspace)))
@@ -3235,7 +3261,11 @@ def _nex890_frozen_exports(
                 total += len(chunk)
             if total > max_bytes:
                 return {}
-            return {logical(archive): b"".join(chunks)}
+            on_disk = b"".join(chunks)
+            if hashlib.sha256(on_disk).hexdigest() != frozen["sha256"]:
+                # Rewritten after the export response: fail closed.
+                return {}
+            return {logical(archive): bytes(frozen["content"])}
         finally:
             os.close(descriptor)
     except OSError:
@@ -5093,7 +5123,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             positive = file_snapshots.get("nex890-positive")
                             if isinstance(positive, dict):
                                 positive["outputs"] = _nex890_frozen_exports(
-                                    runner_mcp_trace, ws
+                                    runner_mcp_trace, ws,
+                                    frozen_exports=session.nex_frozen_exports(),
                                 )
                             metrics["stdio_mcp_trace_source"] = "runner-memory"
                             metrics["stdio_mcp_trace_events"] = len(runner_mcp_trace)
