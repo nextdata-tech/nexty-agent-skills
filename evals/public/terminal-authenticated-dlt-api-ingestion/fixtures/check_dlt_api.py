@@ -815,6 +815,28 @@ _NEX_ENDPOINT = "/v1/orders"
 _NEX_SECRET_ENV = "NXD_EVAL_SOURCE_TOKEN"
 _NEX_FORBIDDEN_DIAGNOSTIC_TERMS = ("coordinator", "stale", "dependency", "unsupported")
 _NEX_REVIEW_VERDICTS = {"clear", "findings", "rejected", "indeterminate"}
+# Topology means a concrete host or the fixture path. A bare scheme prefix
+# (a "must be a path" guard, or ``f"https://{host}"`` built from the profile)
+# is not an endpoint. Shared by the positive transform contract and the
+# static hard-coded-endpoint case so the two cannot drift apart.
+_NEX_TOPOLOGY_PATTERNS = (
+    ("url-host", r"https?://[A-Za-z0-9\[]"),
+    ("loopback", r"127\.0\.0\.1|localhost"),
+    ("fixture-path", r"/v1/orders"),
+)
+_NEX_TOPOLOGY_RE = re.compile("|".join(f"(?:{pattern})" for _kind, pattern in _NEX_TOPOLOGY_PATTERNS))
+# Hand-written HTTP: any client other than the DLT REST connector. The DLT
+# ``rest_client`` paginator/auth submodules configure the connector and stay
+# allowed; its ``RESTClient``/``paginate`` fetch loop does not.
+_NEX_HTTP_MODULES = {"requests", "urllib", "urllib3", "httpx", "aiohttp", "socket", "pycurl"}
+_NEX_HTTP_DOTTED_MODULES = {
+    "http.client",
+    "dlt.sources.helpers.requests",
+    "dlt.sources.helpers.rest_client",
+    "dlt.sources.helpers.rest_client.client",
+}
+_NEX_HTTP_NAMES = {"RESTClient", "paginate"}
+_NEX_REST_CONNECTORS = {"rest_api_resources", "rest_api_source"}
 
 
 def _nex_id_key(value: Any) -> str:
@@ -892,24 +914,6 @@ def _nex_requirement(
         if isinstance(item, Mapping) and item.get("id") == requirement_id
     ]
     return matches[0] if len(matches) == 1 else {}
-
-
-def _nex_selfcheck_failed(payload: Mapping[str, Any]) -> bool:
-    """Require a structured self-check failure, never a textual claim."""
-    if payload.get("outcome") != "fail":
-        return False
-    stages = payload.get("stages")
-    if not isinstance(stages, list):
-        return False
-    return any(
-        isinstance(stage, Mapping)
-        and isinstance(stage.get("checks"), list)
-        and any(
-            isinstance(check, Mapping) and check.get("status") == "fail"
-            for check in stage["checks"]
-        )
-        for stage in stages
-    )
 
 
 def _nex_structured_objects(message: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -1201,9 +1205,9 @@ def _nex_python_files(files: Mapping[str, tuple[bytes, int | None]], prefix: str
     }
 
 
-def _nex_non_message_constants(tree: ast.AST) -> list[str]:
+def _nex_non_message_constants(tree: ast.AST, dead: set[int] = frozenset()) -> list[str]:
     """String constants that are neither docstrings nor raise/assert messages."""
-    excluded: set[int] = set()
+    excluded: set[int] = set(dead)
     for parent in ast.walk(tree):
         body = getattr(parent, "body", None)
         if isinstance(body, list) and body and isinstance(body[0], ast.Expr):
@@ -1219,6 +1223,138 @@ def _nex_non_message_constants(tree: ast.AST) -> list[str]:
     ]
 
 
+def _nex_parents(tree: ast.AST) -> dict[int, ast.AST]:
+    return {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+
+def _nex_dead_nodes(tree: ast.AST) -> set[int]:
+    """Ids of nodes under a constant-false branch (``if False:``, ``if 0:``)."""
+    dead: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.If, ast.While, ast.IfExp)):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Constant):
+            continue
+        if isinstance(node, ast.IfExp):
+            branches = [node.orelse] if test.value else [node.body]
+        else:
+            branches = list(node.orelse) if test.value else list(node.body)
+            if isinstance(node, ast.While) and test.value:
+                branches = []
+        for branch in branches:
+            dead.update(id(child) for child in ast.walk(branch))
+    return dead
+
+
+def _nex_call_name(node: ast.Call) -> str:
+    fn = node.func
+    return fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+
+
+def _nex_live_rest_connector(tree: ast.AST) -> bool:
+    """Whether a DLT REST connector call's result is actually used.
+
+    A call under a constant-false branch, a discarded expression statement,
+    or an assignment whose name is never read again does not ingest anything.
+    The result counts once it is returned/yielded, iterated, passed to another
+    call (``pipeline.run``, ``dlt.source`` ...), or bound to a name read later.
+    """
+    parents = _nex_parents(tree)
+    dead = _nex_dead_nodes(tree)
+    loaded_names = {
+        node.id for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        and id(node) not in dead
+    }
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _nex_call_name(node) in _NEX_REST_CONNECTORS):
+            continue
+        if id(node) in dead:
+            continue
+        child: ast.AST = node
+        parent = parents.get(id(child))
+        # Containers and wrappers carry the value outward unchanged.
+        while isinstance(parent, (
+            ast.Starred, ast.List, ast.Tuple, ast.Set, ast.Dict, ast.Await,
+            ast.IfExp, ast.BoolOp,
+        )):
+            child, parent = parent, parents.get(id(parent))
+        if isinstance(parent, ast.NamedExpr) and parent.target.id in loaded_names:
+            return True
+        if isinstance(parent, (ast.Return, ast.Yield, ast.YieldFrom, ast.Lambda)):
+            return True
+        if isinstance(parent, (ast.For, ast.AsyncFor, ast.comprehension)) and parent.iter is child:
+            return True
+        if isinstance(parent, ast.keyword):
+            return True
+        if isinstance(parent, ast.Call) and child is not parent.func:
+            return True
+        if isinstance(parent, (ast.Assign, ast.AnnAssign)):
+            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            names = {
+                target.id for item in targets for target in ast.walk(item)
+                if isinstance(target, ast.Name)
+            }
+            if names & loaded_names:
+                return True
+    return False
+
+
+def _nex_hand_written_http(tree: ast.AST) -> bool:
+    """Whether a transform imports or calls an HTTP client other than DLT REST."""
+
+    def forbidden_module(module: str) -> bool:
+        if module.split(".", 1)[0] in _NEX_HTTP_MODULES:
+            return True
+        if module in _NEX_HTTP_DOTTED_MODULES:
+            return True
+        # Connector configuration (paginators, auth) is not a fetch loop.
+        if module.startswith("dlt.sources.helpers.rest_client."):
+            return False
+        return any(module.startswith(item + ".") for item in _NEX_HTTP_DOTTED_MODULES)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(forbidden_module(alias.name) for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            module = node.module or ""
+            if module == "dlt.sources.helpers.rest_client":
+                if any(alias.name not in {"paginators", "auth"} for alias in node.names):
+                    return True
+            elif forbidden_module(module):
+                return True
+            if any(
+                forbidden_module(f"{module}.{alias.name}") or alias.name in _NEX_HTTP_NAMES
+                for alias in node.names
+            ):
+                return True
+        elif isinstance(node, ast.Name) and node.id in _NEX_HTTP_NAMES:
+            return True
+        elif isinstance(node, ast.Attribute) and node.attr in _NEX_HTTP_NAMES:
+            return True
+        elif isinstance(node, ast.Call):
+            name = _nex_call_name(node)
+            fn = node.func
+            if name in {"get", "post", "urlopen", "urlretrieve", "request", "Session", "Client", "AsyncClient", "ClientSession", "PoolManager", "HTTPConnection", "HTTPSConnection", "create_connection", "Curl"} and isinstance(fn, ast.Attribute):
+                owner = fn.value
+                if isinstance(owner, ast.Name) and owner.id in _NEX_HTTP_MODULES | {"http"}:
+                    return True
+            # ``__import__("requests")`` / ``importlib.import_module("httpx")``
+            if name in {"__import__", "import_module"} and any(
+                isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                and forbidden_module(arg.value)
+                for arg in node.args
+            ):
+                return True
+    return False
+
+
 def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
     """Whether a DLT REST transform carries a literal endpoint in its code.
 
@@ -1226,7 +1362,6 @@ def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
     matching the fixture topology counts, however it reaches the connector
     (a name, a dict slot, a helper's return value).
     """
-    pattern = r"(?:https?://|127\.0\.0\.1|/v1/orders)"
     rest_call = False
     literal = False
     for path, payload in transform_files.items():
@@ -1236,12 +1371,14 @@ def _nex_hardcoded_endpoint_ast(transform_files: Mapping[str, bytes]) -> bool:
             tree = ast.parse(payload.decode("utf-8", errors="replace"))
         except (SyntaxError, ValueError):
             continue
+        dead = _nex_dead_nodes(tree)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                fn = node.func
-                name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
-                rest_call = rest_call or name in {"rest_api_resources", "rest_api_source"}
-        literal = literal or any(re.search(pattern, value) for value in _nex_non_message_constants(tree))
+            if isinstance(node, ast.Call) and id(node) not in dead:
+                rest_call = rest_call or _nex_call_name(node) in _NEX_REST_CONNECTORS
+        literal = literal or any(
+            _NEX_TOPOLOGY_RE.search(value)
+            for value in _nex_non_message_constants(tree, dead)
+        )
     return rest_call and literal
 
 
@@ -1293,21 +1430,11 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
             message = parent.exc if isinstance(parent, ast.Raise) else parent.msg if isinstance(parent, ast.Assert) else None
             if message is not None:
                 docstrings.update(id(child) for child in ast.walk(message))
+        # Hand-written HTTP is rejected even in dead code; only the connector
+        # evidence below has to be live.
+        forbidden_http_import = forbidden_http_import or _nex_hand_written_http(tree)
+        found_rest_connector = found_rest_connector or _nex_live_rest_connector(tree)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                if any(alias.name.split(".", 1)[0] in {"requests", "urllib", "httpx"} for alias in node.names):
-                    forbidden_http_import = True
-            elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".", 1)[0] in {"requests", "urllib", "httpx"}:
-                forbidden_http_import = True
-            if isinstance(node, ast.Call):
-                fn = node.func
-                name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
-                if name in {"rest_api_resources", "rest_api_source"}:
-                    found_rest_connector = True
-                if name in {"get", "urlopen", "urlretrieve", "request", "Session"} and isinstance(fn, ast.Attribute):
-                    owner = fn.value
-                    if isinstance(owner, ast.Name) and owner.id in {"requests", "httpx", "urllib"}:
-                        forbidden_http_import = True
             if isinstance(node, ast.Subscript):
                 outer = node.value
                 sl = node.slice
@@ -1341,14 +1468,9 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
                 and any(isinstance(arg, ast.Constant) and arg.value == "header_" for arg in node.args)
             ):
                 found_profile_header = True
-            # Topology means a concrete host or the fixture path; a bare scheme
-            # prefix in a "must be a path" guard is not an endpoint.
+            # See _NEX_TOPOLOGY_PATTERNS: a bare scheme prefix is not topology.
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
-                for kind, pattern in (
-                    ("url-host", r"https?://[A-Za-z0-9\[]"),
-                    ("loopback", r"127\.0\.0\.1|localhost"),
-                    ("fixture-path", r"/v1/orders"),
-                ):
+                for kind, pattern in _NEX_TOPOLOGY_PATTERNS:
                     if re.search(pattern, node.value):
                         hardcoded_topology = True
                         topology_kinds.add(kind)
@@ -1395,10 +1517,14 @@ def _nex_root_binding_mismatch(call_root: str, authoring_root: str) -> str | Non
     a subdirectory such as the closure. All of those stay inside the cycle.
     """
     base = os.path.dirname(authoring_root)
-    resolved = os.path.realpath(
-        call_root if os.path.isabs(call_root) else os.path.join(base, call_root)
-    )
-    root = os.path.realpath(authoring_root)
+    try:
+        resolved = os.path.realpath(
+            call_root if os.path.isabs(call_root) else os.path.join(base, call_root)
+        )
+        root = os.path.realpath(authoring_root)
+    except (OSError, ValueError):
+        # An unresolvable spelling (e.g. an embedded NUL) binds to nothing.
+        return "outside"
     if resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep):
         return None
     if os.path.dirname(resolved) == os.path.dirname(root):
@@ -2170,7 +2296,13 @@ def check_nex890(
             _nex_profile_fields(profile[0].decode("utf-8", errors="replace")),
             "endpoint_orders",
         )
-        if endpoint is not None and endpoint[0] is not None and endpoint[0] != _NEX_ENDPOINT:
+        # The prompt defines the malformed case as a complete URL in the
+        # endpoint path slot, not merely any value other than the path.
+        if (
+            endpoint is not None
+            and isinstance(endpoint[0], str)
+            and re.fullmatch(r"https?://[^\s/?#]+(?:[/?#]\S*)?", endpoint[0])
+        ):
             malformed_ok = True
     omitted_ok = any(
         not _nex_profile_fields(files["infra-profile.yaml"][0].decode("utf-8", errors="replace")).get("endpoint_orders")
@@ -2487,7 +2619,11 @@ def check_nex890(
                 for member in bundle.infolist():
                     if any(marker in bundle.read(member) for marker in markers):
                         export_redacted = False
-        except (OSError, zipfile.BadZipFile, RuntimeError):
+        except Exception:  # noqa: BLE001 - fail closed, never an infra error
+            # Any archive that cannot be read end to end is unverified:
+            # zipfile.BadZipFile, zlib.error / EOFError (corrupt or truncated
+            # deflate stream), RuntimeError (encrypted member),
+            # NotImplementedError (unsupported compression), lzma/bz2 errors.
             export_redacted = False
     mark("export/frozen-output-redaction", export_redacted)
     mark("redaction/no-marker-in-frozen-outputs", not any(

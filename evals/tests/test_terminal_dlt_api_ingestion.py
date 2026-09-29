@@ -334,7 +334,7 @@ def test_checker_parses_supervisor_text_payload_and_nested_review_requirement() 
     }) == {}
 
 
-def test_checker_reads_only_known_nested_operation_diagnostic_and_selfcheck_failure() -> None:
+def test_checker_reads_only_known_nested_operation_diagnostic() -> None:
     spec = importlib.util.spec_from_file_location("nex890_checker_diagnostics", CHECKER)
     assert spec is not None and spec.loader is not None
     checker = importlib.util.module_from_spec(spec)
@@ -361,14 +361,6 @@ def test_checker_reads_only_known_nested_operation_diagnostic_and_selfcheck_fail
             "diagnostic": diagnostic,
         })}]}
     }) == []
-    assert checker._nex_selfcheck_failed({
-        "outcome": "fail",
-        "stages": [{"checks": [{"status": "fail", "code": "structure/invalid"}]}],
-    })
-    assert not checker._nex_selfcheck_failed({
-        "outcome": "fail",
-        "stages": [{"checks": [{"status": "pass", "detail": "validation failed"}]}],
-    })
 
 
 def test_checker_maps_workflow_v2_session_decision_to_consent_stage() -> None:
@@ -629,6 +621,24 @@ def test_hard_coded_endpoint_ast_sees_a_config_dict_bound_to_a_name() -> None:
     message_only = from_profile + b"assert True, 'expected a path like /v1/orders'\n"
     assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": message_only})
     assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": from_profile})
+    # A scheme prefix around a profile-derived host is not a planted endpoint.
+    scheme_prefix = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"def t(secrets):\n"
+        b"    base = f\"https://{secrets['host']}\"\n"
+        b"    return rest_api_resources({'client': {'base_url': base}})\n"
+    )
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": scheme_prefix})
+    assert checker._nex_hardcoded_endpoint_ast({
+        "transform/main.py": scheme_prefix.replace(b"{secrets['host']}", b"127.0.0.1:{port}")
+    })
+    # A literal and connector only under ``if False:`` plant nothing.
+    dead_only = (
+        b"from dlt.sources.rest_api import rest_api_resources\n"
+        b"if False:\n"
+        b"    rest_api_resources({'resources': [{'endpoint': {'path': '/v1/orders'}}]})\n"
+    )
+    assert not checker._nex_hardcoded_endpoint_ast({"transform/main.py": dead_only})
 
 
 _TEMPLATE_TRANSFORM = """\
@@ -805,3 +815,302 @@ def test_checker_scans_export_entries_for_secret_leaks(tmp_path: Path) -> None:
     result = _run_checker(tmp_path)
     assert result.returncode != 0
     assert "redaction/marker-in-export-entry" in result.stdout
+
+
+def test_transform_contract_rejects_other_hand_written_http_clients() -> None:
+    checker = _nex890_checker()
+    assert checker._nex_transform_contract_gaps({"transform/main.py": _TEMPLATE_TRANSFORM.encode()}) == []
+    # DLT paginator/auth configuration objects stay allowed.
+    configured = (
+        "from dlt.sources.helpers.rest_client.paginators import PageNumberPaginator\n"
+        "from dlt.sources.helpers.rest_client.auth import BearerTokenAuth\n"
+        + _TEMPLATE_TRANSFORM
+    )
+    assert checker._nex_transform_contract_gaps({"transform/main.py": configured.encode()}) == []
+    for addition in (
+        "import urllib3\n",
+        "import http.client\n",
+        "from http import client\n",
+        "from http.client import HTTPSConnection\n",
+        "import aiohttp\n",
+        "import socket\n",
+        "import pycurl\n",
+        "from dlt.sources.helpers import requests\n",
+        "from dlt.sources.helpers import rest_client\n",
+        "from dlt.sources.helpers.rest_client import RESTClient\n",
+        "from dlt.sources.helpers.rest_client.client import RESTClient\n",
+        "import dlt.sources.helpers.rest_client\n",
+        "def pages(client):\n    return client.paginate('/orders')\n",
+        "httpx = __import__('httpx')\n",
+    ):
+        gaps = checker._nex_transform_contract_gaps(
+            {"transform/main.py": (addition + _TEMPLATE_TRANSFORM).encode()}
+        )
+        assert "direct-http-client" in gaps, addition
+
+
+def test_transform_contract_requires_a_live_rest_connector() -> None:
+    checker = _nex890_checker()
+    returned = 'return rest_api_resources({"client": {"headers": _headers_from(secrets), "auth": token}})'
+    assert returned in _TEMPLATE_TRANSFORM
+    for replacement in (
+        # Dead branch.
+        "if False:\n        rest_api_resources({})\n    return []",
+        "if 0:\n        return rest_api_resources({})\n    return []",
+        # Result discarded or bound to a name nobody reads.
+        "rest_api_resources({})\n    return []",
+        "unused = rest_api_resources({})\n    return []",
+    ):
+        source = _TEMPLATE_TRANSFORM.replace(returned, replacement)
+        gaps = checker._nex_transform_contract_gaps({"transform/main.py": source.encode()})
+        assert "rest-connector-missing" in gaps, replacement
+    for replacement in (
+        "resources = rest_api_resources({})\n    return resources",
+        "pipeline.run(rest_api_resources({}))",
+        "yield from rest_api_resources({})",
+        "return [*rest_api_resources({})]",
+    ):
+        source = _TEMPLATE_TRANSFORM.replace(returned, replacement)
+        assert checker._nex_transform_contract_gaps({"transform/main.py": source.encode()}) == [], replacement
+
+
+def test_root_binding_treats_an_unresolvable_path_as_outside() -> None:
+    checker = _nex890_checker()
+    assert checker._nex_root_binding_mismatch("/ws/nex890-401\x00x", "/ws/nex890-401") == "outside"
+    assert checker._nex_root_binding_mismatch("nex890-401", "/ws/nex\x00") == "outside"
+
+
+# --- check_nex890 end to end -------------------------------------------------
+
+_NEX_WS = "/nex890-ws"
+_NEX_BASE_URL = "http://127.0.0.1:18080"
+_NEX_UA = "nexty-dlt-client/1.0"
+
+
+def _nex_profile(**overrides: str | None) -> bytes:
+    fields = {
+        "base_url": _NEX_BASE_URL,
+        "auth_type": "bearer",
+        "header_user_agent": _NEX_UA,
+        "credential_env": "NXD_EVAL_SOURCE_TOKEN",
+        "endpoint_orders": "/v1/orders",
+    }
+    fields.update(overrides)
+    lines = ["services:", "  - name: api-source", "    attributes:"]
+    for key, value in fields.items():
+        if value is not None:
+            lines += [f"      - key: {key}", f"        value: {value}", "        public: true"]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _nex_seal(envelope: dict) -> dict:
+    """Bind an envelope exactly as the runner does (see _nex_snapshot_hash_matches)."""
+    import hashlib
+
+    manifest = [
+        {"path": os.path.normpath(path), "sha256": hashlib.sha256(entry["content"]).hexdigest(), "mode": entry["mode"]}
+        for path, entry in sorted(envelope["files"].items())
+    ]
+    identifier = envelope["jsonrpc_id"]
+    binding = {
+        "jsonrpc_id": json.dumps([type(identifier).__name__, identifier], sort_keys=True, separators=(",", ":")),
+        "workflow": envelope["workflow"],
+        "root": os.path.normpath(envelope["root"]),
+        "generation": envelope.get("generation"),
+        "expected_base_url": envelope.get("expected_base_url"),
+        "files": manifest,
+    }
+    encoded = json.dumps(binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return {**envelope, "snapshot_sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def _nex_files(root: str, files: dict[str, bytes]) -> dict:
+    return {f"{root}/{path}": {"content": data, "mode": 0o644} for path, data in files.items()}
+
+
+def _nex890_evidence(
+    *,
+    verdicts: dict[str, str] | None = None,
+    transforms: dict[str, bytes] | None = None,
+    malformed_endpoint: str = "http://127.0.0.1:18080/v1/orders",
+    export_bytes: bytes | None = None,
+    drop_status: int | None = None,
+) -> tuple[list, list, dict, list]:
+    """A minimal complete NEX-890 evidence set that ``check_nex890`` passes."""
+    verdicts = verdicts or {}
+    transforms = transforms or {}
+    trace: list[dict] = []
+    observations: list[dict] = []
+    clock = iter(range(1_000, 10**9, 100))
+    ids = iter(range(1, 10**6))
+
+    def call(operation: str, workflow: str | None, arguments: dict, payload: dict, *,
+             root: str | None = None, reader: bool = False, during=None) -> dict:
+        number, start = next(ids), next(clock)
+        meta = {"operation": operation, "workflow": workflow}
+        if root is not None:
+            meta["root"] = root
+        request = {"direction": "request", "jsonrpc_id": number, "timestamp_monotonic_ns": start, **meta,
+                   "message": {"jsonrpc": "2.0", "id": number, "method": "tools/call",
+                               "params": {"name": operation, "arguments": arguments}}}
+        if reader:
+            request["synthetic"] = False
+        if during is not None:
+            during(start)
+        response = {"direction": "response", "jsonrpc_id": number, "timestamp_monotonic_ns": next(clock), **meta,
+                    "message": {"jsonrpc": "2.0", "id": number,
+                                "result": {"content": [{"type": "text", "text": json.dumps(payload)}]}}}
+        if reader:
+            response["synthetic"] = True
+        trace.extend([request, response])
+        return {"id": number}
+
+    def pages(start: int) -> None:
+        stamp = iter(range(start + 1, start + 99))
+        for page, rows in ((1, 10), (2, 10), (3, 3)):
+            observations.append({"timestamp_monotonic_ns": next(stamp), "path": "/v1/orders", "status": 200,
+                                 "authorized": True, "user_agent": _NEX_UA, "status_filter": None,
+                                 "page": page, "rows": rows, "total": 23, "pages": 3, "per_page": 10})
+        for page, rows in ((1, 10), (2, 6)):
+            observations.append({"timestamp_monotonic_ns": next(stamp), "path": "/v1/orders?status=paid", "status": 200,
+                                 "authorized": True, "user_agent": _NEX_UA, "status_filter": "paid",
+                                 "page": page, "rows": rows, "total": 16, "pages": 2, "per_page": 10})
+
+    def failing(status: int, path: str, agent: str, authorized: bool):
+        def emit(start: int) -> None:
+            if status != drop_status:
+                observations.append({"timestamp_monotonic_ns": start + 1, "path": path, "status": status,
+                                     "authorized": authorized, "user_agent": agent})
+        return emit
+
+    static = []
+    static_files = {
+        "malformed-endpoint-profile": {"infra-profile.yaml": _nex_profile(endpoint_orders=malformed_endpoint)},
+        "omitted-endpoint-profile": {"infra-profile.yaml": _nex_profile(endpoint_orders=None)},
+        "hard-coded-endpoint": {"transform/main.py": (
+            b"from dlt.sources.rest_api import rest_api_resources\n"
+            b"def source():\n"
+            b"    return rest_api_resources({'resources': [{'endpoint': {'path': '/v1/orders'}}]})\n"
+        )},
+    }
+    for case, files in static_files.items():
+        root = f"{_NEX_WS}/.eval-cases/{case}"
+        number = call("check_data_product", "__static__", {"definition": root}, {"outcome": "pass"})["id"]
+        static.append(_nex_seal({"jsonrpc_id": number, "workflow": "__static__", "root": root,
+                                 "generation": None, "expected_base_url": _NEX_BASE_URL,
+                                 "files": _nex_files(root, files)}))
+
+    profiles = {
+        "nex890-positive": _nex_profile(),
+        "nex890-401": _nex_profile(auth_type=None),
+        "nex890-403": _nex_profile(header_user_agent="wrong-agent/0.1"),
+        "nex890-404": _nex_profile(endpoint_orders="/v1/missing"),
+    }
+    during_validation = {
+        "nex890-positive": pages,
+        "nex890-401": failing(401, "/v1/orders", _NEX_UA, False),
+        "nex890-403": failing(403, "/v1/orders", "wrong-agent/0.1", True),
+        "nex890-404": failing(404, "/v1/missing", _NEX_UA, True),
+    }
+    diagnostic = {"operation": {"diagnostic": {"code": "validation/scratch_transform_failed", "phase": "scratch_transform"}}}
+    export_path = f"{_NEX_WS}/exports/nex890.zip"
+    snapshots: dict = {}
+    for workflow, profile in profiles.items():
+        root = f"{_NEX_WS}/{workflow}"
+
+        def advance(action: dict, payload: dict, during=None) -> dict:
+            return call("advance_workflow", workflow, {"workflow": workflow, "action": action}, payload,
+                        root=root, during=during)
+
+        advance({"type": "session_decision"}, {"next_actions": [{"action": "capture"}]})
+        capture = advance(
+            {"type": "capture", "parameters": {"authoring_root": root}},
+            {"requirements": [{"id": "review", "generation": 1, "review_input": {"retained_capture_root": "/state/r"}}]},
+        )
+        call("read_review_input", workflow, {"path": "/state/r", "operation": "list"}, {"entries": []},
+             root=root, reader=True)
+        advance(
+            {"type": "report_requirement", "parameters": {"requirement_id": "review",
+             "report": {"verdict": verdicts.get(workflow, "clear"), "findings": []}}},
+            {"next_actions": [{"action": "start_requirement", "requirement_id": "validation"}]},
+        )
+        validation = advance(
+            {"type": "start_requirement", "parameters": {"requirement_id": "validation"}},
+            {} if workflow == "nex890-positive" else diagnostic,
+            during=during_validation[workflow],
+        )
+        files = {"infra-profile.yaml": profile,
+                 "transform/main.py": transforms.get(workflow, _TEMPLATE_TRANSFORM.encode())}
+        common = {"workflow": workflow, "root": root, "generation": 1, "expected_base_url": _NEX_BASE_URL,
+                  "files": _nex_files(root, files)}
+        snapshots[workflow] = _nex_seal({**common, "jsonrpc_id": capture["id"]})
+        snapshots[workflow]["validation"] = _nex_seal({**common, "jsonrpc_id": validation["id"]})
+        if workflow == "nex890-positive":
+            advance({"type": "start_run"}, {"status": "published"}, during=pages)
+            call("inspect_run", workflow, {"run_id": "run-1"},
+                 {"run": {"run_id": "run-1", "definition_id": "sha256:" + "a" * 64, "workflow": workflow}})
+            call("resume_data_product", workflow, {"workflow": workflow}, {"semantic_endpoint": "local"})
+            call("run_semantic_query", workflow,
+                 {"measures": ["order_count"], "filters": [{"dimension": "status", "op": "=", "value": "paid"}]},
+                 {"row_count": 1, "rows": [[16]]})
+            call("export_data_product", workflow, {"destination": export_path}, {"archive_path": export_path})
+    snapshots["nex890-positive"]["static"] = static
+    if export_bytes is None:
+        buffer = __import__("io").BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("infra-profile.yaml", "credential_env: NXD_EVAL_SOURCE_TOKEN\n")
+        export_bytes = buffer.getvalue()
+    snapshots["nex890-positive"]["outputs"] = {export_path: {"content": export_bytes}}
+    return trace, observations, snapshots, [SECRET]
+
+
+def test_check_nex890_passes_a_complete_synthetic_run() -> None:
+    checker = _nex890_checker()
+    result = checker.check_nex890(*_nex890_evidence())
+    assert result["failures"] == []
+    assert result["passed"] is True
+    json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ({"drop_status": 401}, "wire/nex890-401/status-interval-bound"),
+        ({"verdicts": {"nex890-positive": "findings"}}, "review/nex890-positive/report-verdict-findings"),
+        ({"transforms": {"nex890-404": _TEMPLATE_TRANSFORM.encode() + b"# drift\n"}},
+         "transform/byte-identical-across-workflows"),
+        ({"transforms": {name: b"import urllib3\n" + _TEMPLATE_TRANSFORM.encode()
+                         for name in ("nex890-positive", "nex890-401", "nex890-403", "nex890-404")}},
+         "transform/dlt-profile-credential-contract/direct-http-client"),
+        ({"malformed_endpoint": "orders"}, "static/malformed-endpoint-profile"),
+        ({"export_bytes": b"PK\x03\x04 truncated"}, "export/frozen-output-redaction"),
+    ],
+)
+def test_check_nex890_fails_closed_on_each_mutation(mutation: dict, expected: str) -> None:
+    checker = _nex890_checker()
+    result = checker.check_nex890(*_nex890_evidence(**mutation))
+    assert result["passed"] is False
+    assert expected in result["failures"], result["failures"]
+
+
+def test_check_nex890_corrupt_deflate_member_is_a_check_failure() -> None:
+    checker = _nex890_checker()
+    buffer = __import__("io").BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("export.json", json.dumps({"rows": list(range(500))}))
+    data = bytearray(buffer.getvalue())
+    header = 30 + len("export.json")
+    data[header:header + 16] = b"\xff" * 16  # corrupt the deflate stream, keep the directory
+    result = checker.check_nex890(*_nex890_evidence(export_bytes=bytes(data)))
+    assert "export/frozen-output-redaction" in result["failures"]
+
+
+def test_check_nex890_nul_in_call_root_is_a_check_failure() -> None:
+    checker = _nex890_checker()
+    trace, observations, snapshots, markers = _nex890_evidence()
+    victim = next(r for r in trace if r.get("operation") == "read_review_input" and r["direction"] == "request")
+    victim["root"] = f"{_NEX_WS}/nex890-401\x00"
+    response = next(r for r in trace if r["direction"] == "response" and r["jsonrpc_id"] == victim["jsonrpc_id"])
+    response["root"] = victim["root"]
+    result = checker.check_nex890(trace, observations, snapshots, markers)
+    assert result["passed"] is False
