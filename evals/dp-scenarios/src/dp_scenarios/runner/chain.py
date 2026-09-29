@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -52,6 +53,280 @@ def _name(node: ast.AST) -> str:
     return ""
 
 
+def _literal_stage_values(node: ast.AST) -> tuple[str, ...] | None:
+    if isinstance(node, (ast.Tuple, ast.List)):
+        values = node.elts
+    elif (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "frozenset"
+        and len(node.args) == 1 and not node.keywords
+        and isinstance(node.args[0], (ast.Tuple, ast.List, ast.Set))
+    ):
+        values = node.args[0].elts
+    else:
+        return None
+    if not all(isinstance(value, ast.Constant) and isinstance(value.value, str) for value in values):
+        return None
+    return tuple(value.value for value in values if isinstance(value, ast.Constant))
+
+
+def _module_stage_constants(tree: ast.Module, stages: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    constants: dict[str, tuple[str, ...]] = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target, value = statement.targets[0], statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            target, value = statement.target, statement.value
+        else:
+            continue
+        if not isinstance(target, ast.Name) or value is None:
+            continue
+        values = _literal_stage_values(value)
+        if values is None:
+            continue
+        stores = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == target.id and isinstance(n.ctx, (ast.Store, ast.Del))]
+        mutators = {"append", "clear", "extend", "insert", "pop", "remove", "reverse", "sort"}
+        mutated = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == target.id and n.func.attr in mutators
+            for n in ast.walk(tree)
+        ) or any(
+            isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == target.id
+            and isinstance(n.ctx, (ast.Store, ast.Del)) for n in ast.walk(tree)
+        )
+        aliased_list = isinstance(value, ast.List) and any(
+            isinstance(n, (ast.Assign, ast.AnnAssign))
+            and isinstance(n.value, ast.Name) and n.value.id == target.id
+            for n in ast.walk(tree)
+        )
+        if (
+            len(stores) == 1 and stores[0] is target and not mutated and not aliased_list
+            and len(values) == len(stages) and len(set(values)) == len(values) and set(values) == set(stages)
+        ):
+            constants[target.id] = values
+    return constants
+
+
+def _local_stage_constants(
+    verifier: ast.FunctionDef | ast.AsyncFunctionDef, stages: tuple[str, ...]
+) -> dict[str, tuple[str, ...]]:
+    constants: dict[str, tuple[str, ...]] = {}
+    for statement in verifier.body:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target, value = statement.targets[0], statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            target, value = statement.target, statement.value
+        else:
+            continue
+        if not isinstance(target, ast.Name) or value is None:
+            continue
+        values = _literal_stage_values(value)
+        if values is None:
+            continue
+        stores = [
+            n for n in ast.walk(verifier)
+            if isinstance(n, ast.Name) and n.id == target.id and isinstance(n.ctx, (ast.Store, ast.Del))
+        ]
+        mutators = {"append", "clear", "extend", "insert", "pop", "remove", "reverse", "sort"}
+        mutated = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == target.id and n.func.attr in mutators
+            for n in ast.walk(verifier)
+        ) or any(
+            isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == target.id
+            and isinstance(n.ctx, (ast.Store, ast.Del)) for n in ast.walk(verifier)
+        )
+        aliased_list = isinstance(value, ast.List) and any(
+            isinstance(n, (ast.Assign, ast.AnnAssign))
+            and isinstance(n.value, ast.Name) and n.value.id == target.id
+            for n in ast.walk(verifier)
+        )
+        if (
+            len(stores) == 1 and stores[0] is target and not mutated and not aliased_list
+            and len(values) == len(stages) and len(set(values)) == len(values) and set(values) == set(stages)
+        ):
+            constants[target.id] = values
+    return constants
+
+
+def _failed_return(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Return) and isinstance(node.value, ast.Call)
+        and _name(node.value.func).split(".")[-1] == "VerifyResult"
+        and bool(node.value.args)
+        and _name(node.value.args[0]) == "VerifyResultEnum.FAILED"
+    )
+
+
+def _fails_directly(body: list[ast.stmt]) -> bool:
+    returns = [node for stmt in body for node in ast.walk(stmt) if isinstance(node, ast.Return)]
+    return len(returns) == 1 and returns[0] in body and _failed_return(returns[0])
+
+
+def _stage_values(expression: ast.expr, stages: tuple[str, ...], constants: Mapping[str, tuple[str, ...]]) -> bool:
+    values = _literal_stage_values(expression)
+    if values is None and isinstance(expression, ast.Name):
+        values = constants.get(expression.id)
+    return values is not None and len(values) == len(stages) and len(set(values)) == len(values) and set(values) == set(stages)
+
+
+def _python_stage_rejection(verifier: ast.AST, stages: tuple[str, ...], constants: Mapping[str, tuple[str, ...]]) -> bool:
+    return any(
+        isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+        and len(node.test.ops) == 1 and _fails_directly(node.body)
+        and "stage" in ast.unparse(node.test.left).casefold()
+        and any(isinstance(op, ast.NotIn) and _stage_values(right, stages, constants)
+                for op, right in zip(node.test.ops, node.test.comparators))
+        for node in ast.walk(verifier)
+    )
+
+
+def _bound_constant(node: ast.expr, constants: Mapping[str, tuple[str, ...]]) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id if node.id in constants else None
+    if (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in {"list", "tuple", "frozenset"} and len(node.args) == 1 and not node.keywords
+        and isinstance(node.args[0], ast.Name) and node.args[0].id in constants
+    ):
+        return node.args[0].id
+    return None
+
+
+def _placeholder_constant(verifier: ast.AST, name: str, before_line: int) -> str | None:
+    assignments = [s for s in getattr(verifier, "body", []) if isinstance(s, ast.Assign)
+                   and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name) and s.targets[0].id == name]
+    stores = [n for n in ast.walk(verifier) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, (ast.Store, ast.Del))]
+    if len(assignments) != 1 or len(stores) != 1 or stores[0] is not assignments[0].targets[0] or assignments[0].lineno >= before_line:
+        return None
+    call = assignments[0].value
+    if not (
+        isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "join"
+        and isinstance(call.func.value, ast.Constant) and call.func.value.value in {",", ", "}
+        and len(call.args) == 1 and not call.keywords and isinstance(call.args[0], ast.GeneratorExp)
+    ):
+        return None
+    gen = call.args[0]
+    if (
+        isinstance(gen.elt, ast.Constant) and gen.elt.value in {"?", "%s"}
+        and len(gen.generators) == 1 and not gen.generators[0].ifs
+        and isinstance(gen.generators[0].iter, ast.Name)
+    ):
+        return gen.generators[0].iter.id
+    return None
+
+
+def _has_failed_rows_branch(verifier: ast.AST, rows: str) -> bool:
+    def positive(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == rows
+        if isinstance(node, ast.BoolOp):
+            checks = [positive(value) for value in node.values]
+            return any(checks) if isinstance(node.op, ast.Or) else all(checks)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "bool":
+            return len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == rows
+        if (
+            isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1
+            and isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Name) and node.left.func.id == "len"
+            and len(node.left.args) == 1 and isinstance(node.left.args[0], ast.Name) and node.left.args[0].id == rows
+            and isinstance(node.comparators[0], ast.Constant)
+            and node.comparators[0].value == 0 and isinstance(node.ops[0], (ast.Gt, ast.NotEq))
+        ):
+            return True
+        return False
+
+    return any(isinstance(n, ast.If) and positive(n.test) and _fails_directly(n.body) for n in ast.walk(verifier))
+
+
+def _sql_stage_rejection(verifier: ast.AST, stages: tuple[str, ...], constants: Mapping[str, tuple[str, ...]]) -> bool:
+    for query in (n for n in ast.walk(verifier) if isinstance(n, ast.Call) and _name(n.func).endswith(".execute")):
+        if len(query.args) not in {1, 2} or query.keywords:
+            continue
+        expression = query.args[0]
+        if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+            sql, formatted = expression.value, []
+        elif isinstance(expression, ast.JoinedStr):
+            formatted = [n.value for n in expression.values if isinstance(n, ast.FormattedValue)]
+            if any(not isinstance(n, ast.Constant) or not isinstance(n.value, str) for n in expression.values if not isinstance(n, ast.FormattedValue)):
+                continue
+            sql = "".join(
+                n.value if isinstance(n, ast.Constant) else f"__VALUE_{formatted.index(n.value)}__"
+                for n in expression.values
+            )
+        else:
+            continue
+
+        parameter = _bound_constant(query.args[1], constants) if len(query.args) == 2 else None
+        parameter_index = None
+        if formatted:
+            indexes = [i for i, value in enumerate(formatted)
+                       if isinstance(value, ast.Name) and parameter is not None
+                       and _placeholder_constant(verifier, value.id, query.lineno) == parameter]
+            if len(indexes) > 1:
+                continue
+            parameter_index = indexes[0] if indexes else None
+            valid = True
+            for i, value in enumerate(formatted):
+                marker = f"__VALUE_{i}__"
+                if i == parameter_index:
+                    sql = sql.replace(marker, "__BOUND__")
+                elif isinstance(value, ast.Name) and any(
+                    isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+                    and s.targets[0].id == value.id and isinstance(s.value, ast.Call)
+                    and isinstance(s.value.func, ast.Attribute) and s.value.func.attr == "full_table_name"
+                    and len(s.value.args) == 1 and isinstance(s.value.args[0], ast.Constant)
+                    and s.value.args[0].value == "pipeline" for s in getattr(verifier, "body", [])
+                ) and re.search(rf"\bFROM\s+{marker}\b", sql, re.I):
+                    sql = sql.replace(marker, "pipeline")
+                else:
+                    valid = False
+                    break
+            if not valid:
+                continue
+
+        clause = re.search(r"\bstage\b\s+NOT\s+IN\s*\((?P<values>[^()]*)\)", sql, re.I | re.S)
+        if clause is None:
+            clause = re.search(r"NOT\s*\(\s*\bstage\b\s+IN\s*\((?P<values>[^()]*)\)\s*\)", sql, re.I | re.S)
+        if clause is None:
+            continue
+        values = clause.group("values").strip()
+        if values == "__BOUND__":
+            if parameter is None or parameter_index is None or re.search(r"\?|%s", sql.replace("__BOUND__", "")):
+                continue
+        elif re.fullmatch(r"\s*(?:\?|%s)(?:\s*,\s*(?:\?|%s))*\s*", values):
+            if parameter is None or len(re.findall(r"\?|%s", values)) != len(stages) or len(re.findall(r"\?|%s", sql)) != len(stages):
+                continue
+        else:
+            quoted = re.findall(r"'([^']*)'|\"([^\"]*)\"", values)
+            literal = tuple(a or b for a, b in quoted)
+            if len(query.args) != 1 or not re.fullmatch(r"\s*(?:'[^']*'|\"[^\"]*\")(?:\s*,\s*(?:'[^']*'|\"[^\"]*\"))*\s*", values):
+                continue
+            if len(literal) != len(stages) or len(set(literal)) != len(literal) or set(literal) != set(stages):
+                continue
+
+        for result in ast.walk(verifier):
+            if not (
+                isinstance(result, ast.Assign) and len(result.targets) == 1 and isinstance(result.targets[0], ast.Name)
+                and isinstance(result.value, ast.Call) and isinstance(result.value.func, ast.Attribute)
+                and result.value.func.attr == "fetchall" and isinstance(result.value.func.value, ast.Call)
+                and result.value.func.value is query
+            ):
+                continue
+            rows = result.targets[0].id
+            stores = [n for n in ast.walk(verifier) if isinstance(n, ast.Name) and n.id == rows and isinstance(n.ctx, (ast.Store, ast.Del))]
+            mutators = {"append", "clear", "extend", "insert", "pop", "remove", "reverse", "sort"}
+            mutated_rows = any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name) and n.func.value.id == rows and n.func.attr in mutators
+                for n in ast.walk(verifier)
+            ) or any(
+                isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == rows
+                and isinstance(n.ctx, (ast.Store, ast.Del)) for n in ast.walk(verifier)
+            )
+            if len(stores) == 1 and not mutated_rows and _has_failed_rows_branch(verifier, rows):
+                return True
+    return False
+
+
 def _stage_constraint(source: bytes, stages: tuple[str, ...]) -> bool:
     """Recognize an executable five-stage rejection, never a comment/prose claim.
 
@@ -73,29 +348,12 @@ def _stage_constraint(source: bytes, stages: tuple[str, ...]) -> bool:
     ]
     if not verifiers:
         return False
+    module_constants = _module_stage_constants(tree, stages)
     for verifier in verifiers:
-        nodes = list(ast.walk(verifier))
-        constants = [node.value for node in nodes if isinstance(node, ast.Constant) and isinstance(node.value, str)]
-        if not set(stages).issubset(set(constants) | {
-            token for value in constants for token in (value.replace("'", "\"").split('"'))
-        }):
-            # SQL constants hold all values in one string rather than as
-            # separate AST nodes.
-            if not any(all(stage in value for stage in stages) for value in constants):
-                continue
-        out_of_list = any(
-            isinstance(node, ast.Compare)
-            and any(isinstance(op, ast.NotIn) for op in node.ops)
-            and "stage" in ast.unparse(node.left).casefold()
-            for node in nodes
-        ) or any("stage" in value.casefold() and "not in" in value.casefold() for value in constants)
-        failed_return = any(
-            isinstance(node, ast.Return)
-            and node.value is not None
-            and any(_name(child) == "VerifyResultEnum.FAILED" for child in ast.walk(node.value))
-            for node in nodes
-        )
-        if out_of_list and failed_return:
+        constants = {**module_constants, **_local_stage_constants(verifier, stages)}
+        if _python_stage_rejection(verifier, stages, constants) or _sql_stage_rejection(
+            verifier, stages, constants
+        ):
             return True
     return False
 

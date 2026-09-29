@@ -3274,11 +3274,15 @@ class TierRunner:
                 chain_reason = chain_state.get("reason")
             if chain_status != "switched":
                 reason = chain_reason if isinstance(chain_reason, str) and chain_reason else "drift_chain_history_unavailable"
+                chain_finding = (
+                    () if reason in follow_up.codes
+                    else (Finding(reason, "chained publication boundary did not complete"),)
+                )
                 follow_up = GateResult(
                     "follow-up",
                     False,
                     0,
-                    follow_up.findings + (Finding(reason, "chained publication boundary did not complete"),),
+                    follow_up.findings + chain_finding,
                     examined=chain_status == "failed",
                     ungraded=chain_status != "failed",
                 )
