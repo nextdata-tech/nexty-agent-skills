@@ -21,7 +21,12 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Pattern
 
-from .answer_sheet import AnswerSheet, DecisionAnswer, script_turn_text
+from .answer_sheet import (
+    AnswerSheet,
+    DecisionAnswer,
+    _decision_term_present,
+    script_turn_text,
+)
 from .persona import PersonaCard
 from .text_match import contains_any_term
 
@@ -463,6 +468,11 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"|\b(?:authorize|approve)\b[^?\n]{0,160}\b(?:findings?|repairs?)\b"
     r"|\brepair(?:s|ing)?\b[^?\n]{0,140}\b(?:findings?|issues?|blockers?)\b"
     r"|\bmay\s+i\s+repair\b"
+    # A correction-only question can name the finding as its object without
+    # using "fix", "repair", or "apply": "May I correct the review finding?"
+    # The review-context and actual-ask gates in _review_fix_request keep this
+    # from turning ordinary correction questions into review authorization.
+    r"|\bcorrect(?:ing)?\b[^?\n]{0,140}\b(?:findings?|issues?|corrections?)\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
     r"(?:applied|apply|applies|applying|leave|left|keep|skip|defer)\b"
     r"|\bauthorize\b[^?\n]{0,160}\b(?:catch(?:ing)?|correct(?:ing)?|"
@@ -928,6 +938,55 @@ class MatcherBank:
             decision_final=final,
         )
 
+    def _request_decision(
+        self,
+        clause: str,
+        *,
+        excluded_decision_ids: frozenset[str],
+        available_event_ids: tuple[str, ...],
+        active_overlay_ids: tuple[str, ...],
+    ) -> DecisionAnswer | None:
+        """Select the best declared decision for one actual request clause.
+
+        The answer sheet's default lookup retains its established lexical
+        order. For matcher routing only, a decision supported by more of its
+        explicit terms outranks one that needs synonyms to capture incidental
+        vocabulary in the same clause. Ties keep the answer sheet's existing
+        event and lexical order. This lets "make a new workflow to handle the
+        stage" resolve to the directly named workflow choice while leaving a
+        later, distinct stage question eligible for its ruling.
+        """
+
+        matches: list[DecisionAnswer] = []
+        excluded = set(excluded_decision_ids)
+        while True:
+            decision = self.answer_sheet.answer_for_decision(
+                clause,
+                excluded=frozenset(excluded),
+                available_event_ids=available_event_ids,
+                active_overlay_ids=active_overlay_ids,
+            )
+            if decision is None:
+                break
+            matches.append(decision)
+            excluded.add(decision.decision_id)
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+
+        lowered = clause.casefold()
+        event_order = {
+            event_id: index for index, event_id in enumerate(available_event_ids)
+        }
+        return max(
+            matches,
+            key=lambda decision: (
+                event_order.get(decision.available_after_event, -1),
+                sum(_decision_term_present(term, lowered) for term in decision.terms),
+            ),
+        )
+
     def _validate_replies(self) -> None:
         """Compatibility hook retained for callers that explicitly revalidate a bank."""
 
@@ -1153,9 +1212,9 @@ class MatcherBank:
         request_decision = None
         request_decision_clause = None
         for clause in request_clauses:
-            request_decision = self.answer_sheet.answer_for_decision(
+            request_decision = self._request_decision(
                 clause,
-                excluded=excluded_decision_ids,
+                excluded_decision_ids=excluded_decision_ids,
                 available_event_ids=available_event_ids,
                 active_overlay_ids=active_overlays,
             )
@@ -1217,9 +1276,9 @@ class MatcherBank:
 
         decision = request_decision
         if decision is None:
-            decision = self.answer_sheet.answer_for_decision(
+            decision = self._request_decision(
                 message,
-                excluded=excluded_decision_ids,
+                excluded_decision_ids=excluded_decision_ids,
                 available_event_ids=available_event_ids,
                 active_overlay_ids=active_overlays,
             )

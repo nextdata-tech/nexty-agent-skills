@@ -6,6 +6,7 @@ from dp_scenarios.operator.answer_sheet import load_answer_sheet
 from dp_scenarios.operator.engine import OperatorEngine, OperatorScript
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
+from dp_scenarios.scenario import load_scenario
 
 
 ROOT = Path(__file__).parents[1]
@@ -15,6 +16,7 @@ WEEKEND_ANSWER = FINANCE_CLOSE.decision_answers["weekend_fx"].answer
 REVIEW_FIX_ANSWER = FINANCE_CLOSE.decision_answers[
     "review_fix_authorization"
 ].answer
+CRM_PIPELINE_DRIFT = load_scenario(ROOT / "scenarios/crm-pipeline-drift")
 
 
 def _script(turn_count: int) -> OperatorScript:
@@ -113,3 +115,39 @@ def test_review_fix_authorization_is_answered_on_every_request() -> None:
     assert transport.message_texts[2:4] == (REVIEW_FIX_ANSWER, REVIEW_FIX_ANSWER)
     assert result.turns[1].match.rule_id == "decision.answer.review_fix_authorization"
     assert result.turns[2].match.rule_id == "decision.answer.review_fix_authorization"
+
+
+def test_mixed_workflow_ask_then_distinct_stage_ask_routes_through_engine() -> None:
+    sheet = CRM_PIPELINE_DRIFT.answer_sheet
+    script = OperatorScript.from_components(
+        CRM_PIPELINE_DRIFT.persona,
+        sheet,
+        turns=(
+            sheet.opening_message,
+            "Please continue.",
+            "Please continue again.",
+            "Please finish.",
+        ),
+        turn_budget=4,
+        phase_by_turn={1: 1, 2: 2, 3: 3, 4: 4},
+    )
+    mixed_ask = "Should I make a new workflow to handle the stage?"
+    stage_ask = "How should I treat the out-of-list stage?"
+    transport = InMemoryTransport(
+        [
+            TurnResult(agent_message="What is the source?"),
+            TurnResult(agent_message=mixed_ask),
+            TurnResult(agent_message=stage_ask),
+            TurnResult(agent_message="Done.", reported=True),
+        ]
+    )
+    engine = OperatorEngine(script, transport)
+    engine.activate_decision_overlay("crm_deals_v2")
+
+    result = engine.run()
+
+    assert result.turns[1].match.decision_id == "workflow_revision"
+    assert result.turns[2].match.decision_id == "new_stage_consequence"
+    assert result.turns[2].selected_decision_stage == 1
+    assert transport.message_texts[2] == sheet.decision_answers["workflow_revision"].answer
+    assert transport.message_texts[3] == sheet.decision_answers["new_stage_consequence"].stages[0]
