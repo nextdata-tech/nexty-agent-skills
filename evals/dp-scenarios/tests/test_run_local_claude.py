@@ -588,7 +588,7 @@ def test_full_tier_selection_skips_the_blocked_package_but_keeps_the_rest() -> N
     in_scope = module._scenarios_in_scope(scenarios, [], "full")
     in_scope_ids = {scenario.id for scenario in in_scope}
     assert "product-usage" not in in_scope_ids
-    assert in_scope_ids == full_ids - {"product-usage"}
+    assert in_scope_ids == full_ids - {"product-usage", "vendor-spend-invoices"}
 
 
 def test_a_tier_selection_emptied_only_by_blocking_is_a_hard_error() -> None:
