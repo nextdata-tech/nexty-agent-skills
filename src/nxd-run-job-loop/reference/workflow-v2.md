@@ -588,6 +588,14 @@ wait. A new review finding requires a new user decision for its IDs. Only
 accepted findings the user approved may be applied; rejected, out-of-scope,
 and structural findings stay unapplied and are not deferred.
 
+A user reply that decides only some of the round's IDs is a partial decision.
+Once a round carries a `user_decision`, every accepted behavior-affecting
+finding in it must be applied or listed in `deferred_finding_ids`; the ledger
+validator rejects the round otherwise. So record a partial approval either by
+deferring the still-open IDs in that round, or by leaving `user_decision: null`
+on the `needs_user` round and recording the decision in the next round. An
+applied structural note needs no user decision.
+
 There is exactly one retained-input review per capture generation, not one per
 workflow lifetime. When an accepted finding changes behavior, record the user
 decision in the external ledger, reset the returned capture requirement, edit
