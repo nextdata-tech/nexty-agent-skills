@@ -237,6 +237,7 @@ SOLICITATION_PATTERN = re.compile(
     r"|\bsay\s+(?:whether|which|if)\b"
     r"|(?:^|[.!?\n]\s*)\s*(?:name|list|select)\s+(?:the\s+)?(?:findings|issues|blockers)\b"
     r"|(?:^|[.!?\n]\s*)\s*for\s+each\s+(?:finding|issue|blocker)\s*,?\s*say\b"
+    r"|\breply\s+(?:yes|no)\b"
     # "Reply with ..." is an addressed instruction to the operator. Unlike
     # a bare "choose" or "confirm" in a task list, it does not narrate a
     # build step; a live review choice used it without a question mark.
@@ -298,7 +299,10 @@ def _operator_request_clauses(message: str) -> list[str]:
         if not candidate:
             continue
         is_question = bool(_QUESTION_CLAUSE_END.search(candidate))
-        is_explicit_ask = bool(SOLICITATION_PATTERN.search(candidate))
+        is_explicit_ask = bool(
+            SOLICITATION_PATTERN.search(candidate)
+            or SOLICITING_OPENER_PATTERN.match(candidate)
+        )
         if is_question or is_explicit_ask:
             clauses.append(candidate)
     return clauses
@@ -318,13 +322,253 @@ def _current_request_clauses(message: str) -> list[str]:
         clauses.extend(
             part.strip()
             for part in re.split(
-                r";(?=\s*(?:please\s+)?(?:can|could|would|do|does|should|may|how|what|which|reply)\b)",
+                r";(?=\s*(?:(?:please\s+)?(?:can|could|would|do|does|should|may|how|what|which|reply)|otherwise\b))",
                 clause,
                 flags=re.IGNORECASE,
             )
             if part.strip()
         )
     return clauses
+
+
+_OFFERED_OPTION_PATTERN = re.compile(
+    r"\boption\s+(?:[A-Z]|[0-9]+)\b[^.;?\n]*", re.IGNORECASE
+)
+
+
+def _decision_lookup_text(message: str, ask_clause: str) -> str:
+    """Pair the addressed ask with its local question and option context.
+
+    A compact final question such as "Which A or B?" depends on the options
+    just offered, and a same-sentence semicolon preamble can identify what the
+    generic "what should I do?" refers to. Context is bounded to the current
+    paragraph and a directly preceding block of labeled alternatives.
+    """
+
+    text = ask_clause
+    for parent_clause in _operator_request_clauses(message):
+        if ask_clause in _current_request_clauses(parent_clause):
+            text = parent_clause
+            break
+    prose = _NON_PROSE.sub(" ", message)
+    ask_offset = prose.rfind(ask_clause)
+    direct_choice = _DIRECT_CHOICE_PATTERN.search(ask_clause) is not None
+    approval_ask = APPROVAL_REQUEST_PATTERN.search(ask_clause) is not None
+    review_action = bool(
+        _REVIEW_FIX_ACTION_PATTERN.search(ask_clause)
+        or _REVIEW_OUTPUT_ADDITION_PATTERN.search(ask_clause)
+        or _CORRECTION_INVITATION_PATTERN.search(ask_clause)
+    )
+    contextual_ask = _CONTEXTUAL_DECISION_ASK_PATTERN.search(ask_clause) is not None
+    if (
+        ask_offset >= 0
+        and _CONDITIONAL_REVISION_PATTERN.search(ask_clause) is None
+        and (
+            (
+                direct_choice
+                and (
+                    not approval_ask
+                    or review_action
+                    or _AUTHORIZATION_ALTERNATIVE_PATTERN.search(ask_clause)
+                )
+            )
+            or (contextual_ask and not approval_ask)
+            or review_action
+            or _AUTHORIZATION_ALTERNATIVE_PATTERN.search(ask_clause)
+        )
+    ):
+        paragraph_start = prose.rfind("\n\n", 0, ask_offset) + 2
+        paragraph_end = prose.find("\n\n", ask_offset)
+        if paragraph_end < 0:
+            paragraph_end = len(prose)
+        paragraph = prose[paragraph_start:paragraph_end]
+        text = paragraph
+        if _AUTHORIZATION_ALTERNATIVE_PATTERN.search(ask_clause):
+            preceding_paragraph = prose[:paragraph_start].rstrip().rsplit("\n\n", 1)
+            if preceding_paragraph:
+                # Deictic authorization choices such as "that required
+                # classification" refer to the immediately preceding
+                # paragraph. Keep that bounded context instead of searching
+                # unrelated message recaps.
+                text = preceding_paragraph[-1] + "\n\n" + paragraph
+        # Some prompts explain numbered alternatives in separate Markdown
+        # paragraphs before asking which one to use. Add only the immediately
+        # preceding labeled option blocks, never earlier narrative recaps.
+        previous_paragraphs = [
+            candidate
+            for candidate in prose[:paragraph_start].split("\n\n")
+            if candidate.strip()
+        ]
+        option_blocks: list[str] = []
+        skipped_intervening_paragraph = False
+        for candidate in reversed(previous_paragraphs):
+            if (
+                _OFFERED_OPTION_PATTERN.search(candidate)
+                or _LETTERED_REVIEW_CHOICE_PATTERN.search(candidate)
+            ):
+                option_blocks.append(candidate)
+                continue
+            if (
+                option_blocks
+                and re.search(r"\b(?:each\s+)?(?:option|choice|alternative)s?\b", candidate, re.I)
+            ):
+                option_blocks.append(candidate)
+                continue
+            if (
+                not option_blocks
+                and not skipped_intervening_paragraph
+                and len(candidate) <= 500
+            ):
+                # A short advisory/finding paragraph can sit between a review
+                # choice list and its final question. Skip at most that one
+                # nearby paragraph while looking for the offered alternatives.
+                skipped_intervening_paragraph = True
+                continue
+            break
+        if option_blocks:
+            text = "\n\n".join((*reversed(option_blocks), paragraph))
+    return text
+
+
+def _active_request_clauses(message: str) -> list[str]:
+    """Return only the latest non-conditional ask that needs a reply."""
+
+    clauses = _current_request_clauses(message)
+    active_clause = next(
+        (
+            clause
+            for clause in reversed(clauses)
+            if _CONDITIONAL_REVISION_PATTERN.search(clause) is None
+        ),
+        None,
+    )
+    return [active_clause] if active_clause is not None else []
+
+
+_DECLARED_CONFIRMATION_PATTERN = re.compile(
+    r"\bdecisions?\b[^\n]{0,180}\b(?:worth|need(?:s)?|require(?:s)?)\s+confirming\b",
+    re.IGNORECASE,
+)
+_PROPOSED_CORRECTION_PATTERN = re.compile(
+    r"\b(?:proposed|suggested)\s+(?:defaults|decisions|choices)\b"
+    r".{0,120}\bopen\s+to\s+your\s+correction\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_REFERENCED_OPTIONS_PATTERN = re.compile(
+    r"\bwhich\s+of\s+the\s+(?P<count>\d+|two|three|four)\s+"
+    r"(?P<topic>[\w-]+(?:\s+[\w-]+){0,3}\s+)?(?:options|choices|alternatives)\b",
+    re.IGNORECASE,
+)
+_CHOICE_RECAP_PATTERN = re.compile(
+    r"\b(?:choice|choose|pick)\b[^\n]{0,120}\b(?:the\s+)?"
+    r"(?P<count>\d+|two|three|four)\s+(?:options|choices|alternatives)\b"
+    r"[^\n]{0,100}\((?P<alternatives>[^)\n]{10,240})\)",
+    re.IGNORECASE,
+)
+
+
+def _declared_confirmation_text(message: str) -> str | None:
+    """Find a decision list expressly offered for confirmation before approval."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    heading = _DECLARED_CONFIRMATION_PATTERN.search(prose)
+    if heading is None:
+        return None
+    correction = _PROPOSED_CORRECTION_PATTERN.search(prose, heading.end())
+    if correction is None:
+        return None
+    decision_text = prose[heading.start() : correction.end()]
+    if re.search(
+        r"\b(?:non[- ]?blocking|neither\s+blocking|no\s+decisions?)\b",
+        decision_text,
+        re.I,
+    ):
+        return None
+    return decision_text
+
+
+def _referenced_options_text(message: str, ask_clause: str) -> str | None:
+    """Resolve an addressed options reference against its own earlier recap."""
+
+    reference = _REFERENCED_OPTIONS_PATTERN.search(ask_clause)
+    if reference is None:
+        return None
+    prose = _NON_PROSE.sub(" ", message)
+    ask_offset = prose.rfind(ask_clause)
+    if ask_offset < 0:
+        return None
+    topic = reference.group("topic") or ""
+    topic_terms = {
+        word for word in re.findall(r"[a-z0-9]+", topic.casefold())
+        if len(word) > 2 and word not in {"handling", "decision", "finding", "issue"}
+    }
+    for recap in reversed(list(_CHOICE_RECAP_PATTERN.finditer(prose[:ask_offset]))):
+        if recap.group("count").casefold() != reference.group("count").casefold():
+            continue
+        paragraph_start = prose.rfind("\n\n", 0, recap.start()) + 2
+        paragraph_end = prose.find("\n\n", recap.end())
+        if paragraph_end < 0:
+            paragraph_end = ask_offset
+        paragraph = prose[paragraph_start:paragraph_end]
+        if topic_terms and not topic_terms.intersection(
+            re.findall(r"[a-z0-9]+", paragraph.casefold())
+        ):
+            continue
+        alternatives = recap.group("alternatives")
+        if alternatives.count("/") < 2:
+            continue
+        return alternatives
+    return None
+
+
+def _numbered_list_item_text(message: str, ask_clause: str) -> str | None:
+    """Return the list item containing a current ask, if it is in a list."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    ask_offset = prose.rfind(ask_clause)
+    if ask_offset < 0:
+        return None
+    markers = list(re.finditer(r"(?m)^[ \t]*[0-9]+[.)][ \t]+", prose))
+    if len(markers) < 2:
+        return None
+    item_index = next(
+        (
+            index
+            for index in range(len(markers) - 1, -1, -1)
+            if markers[index].start() <= ask_offset
+        ),
+        None,
+    )
+    if item_index is None:
+        return None
+    start = markers[item_index].start()
+    next_marker = markers[item_index + 1].start() if item_index + 1 < len(markers) else len(prose)
+    paragraph_break = re.search(r"\n[ \t]*\n", prose[start:])
+    paragraph_end = (
+        start + paragraph_break.start() if paragraph_break is not None else len(prose)
+    )
+    end = min(next_marker, paragraph_end)
+    if ask_offset >= end:
+        return None
+    return prose[start:end]
+
+
+_REVIEW_FIX_FOLLOWUP_PATTERN = re.compile(
+    r"\b(?:which\s+(?:finding|issue|blocker)\s+ids?|"
+    r"answer\s+(?:those|these|both|the\s+two)|"
+    r"yes\s*/\s*no\s+on\s+(?:each|these)|"
+    r"(?:those|these)\s+(?:two|findings|fixes))\b",
+    re.IGNORECASE,
+)
+_REVIEW_FIX_FOLLOWUP_ACTION_PATTERN = re.compile(
+    r"\b(?:fix|apply|repair|address|add|correct|resolve)\b",
+    re.IGNORECASE,
+)
+_FACTUAL_QUESTION_OPENER_PATTERN = re.compile(
+    r"^\s*(?:(?:what|which|where|how)\s+(?:is|are|was|were|does|do|did|source|field|column|table|endpoint)\b"
+    r"|(?:can|could|would)\s+you\s+(?:tell|show|identify|provide|give)\b)",
+    re.IGNORECASE,
+)
 
 
 def _review_fix_request(message: str, context: str = "") -> str | None:
@@ -343,8 +587,41 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         and _REVIEW_FINDING_ID_PATTERN.search(context) is None
     ):
         return None
-    request_clauses = _current_request_clauses(message)
-    for candidate in request_clauses:
+    active_clauses = _active_request_clauses(message)
+    all_request_clauses = _current_request_clauses(message)
+    active_is_independent_ask = bool(
+        active_clauses
+        and (
+            APPROVAL_REQUEST_PATTERN.search(active_clauses[-1])
+            or _FACTUAL_QUESTION_OPENER_PATTERN.search(active_clauses[-1])
+        )
+    )
+    request_clauses = active_clauses if active_is_independent_ask else all_request_clauses
+    if active_clauses and _REVIEW_FIX_FOLLOWUP_PATTERN.search(active_clauses[-1]):
+        active_clause = active_clauses[-1]
+        preceding_fix_asks = [
+            candidate
+            for candidate in all_request_clauses
+            if candidate != active_clause
+            and _CONDITIONAL_REVISION_PATTERN.search(candidate) is None
+            and (
+                _REVIEW_FIX_ACTION_PATTERN.search(candidate)
+                or _REVIEW_OUTPUT_ADDITION_PATTERN.search(candidate)
+                or _REVIEW_FIX_CHOICE_PATTERN.search(candidate)
+                or _REVIEW_APPLY_OR_DECLINE_PATTERN.search(candidate)
+                or _REVIEW_FIX_FOLLOWUP_ACTION_PATTERN.search(candidate)
+            )
+        ]
+        if preceding_fix_asks:
+            # A final anaphoric request (answer those two, which finding IDs,
+            # yes/no on each) continues the explicit review choice already
+            # posed in this same message. Carry only those preceding fix asks
+            # into the active follow-up; an independent plan approval or source
+            # question never inherits the review authorization.
+            return " ".join((*preceding_fix_asks, active_clause))
+    for candidate in reversed(request_clauses):
+        if _CONDITIONAL_REVISION_PATTERN.search(candidate) is not None:
+            continue
         # A direct "reply with this:" instruction can put the proposed
         # disposition in the following block quote. The quote belongs to the
         # addressed request, despite the intervening blank line.
@@ -354,7 +631,9 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         proposed = re.match(r"\s*>?\s*([^\n]{1,300})", tail)
         if proposed is not None and _REVIEW_FIX_ACTION_PATTERN.search(proposed.group(1)):
             return f"{candidate} {proposed.group(1)}"
-    for candidate in request_clauses:
+    for candidate in reversed(request_clauses):
+        if _CONDITIONAL_REVISION_PATTERN.search(candidate) is not None:
+            continue
         if not candidate:
             continue
         if _REVIEW_FINDING_SELECTION_PATTERN.search(candidate):
@@ -382,7 +661,9 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
             return candidate
     # Some agents request authorization with an imperative such as
     # "type Approved to authorize applying fix A" rather than a question.
-    for candidate in _current_request_clauses(message):
+    for candidate in _active_request_clauses(message):
+        if _CONDITIONAL_REVISION_PATTERN.search(candidate) is not None:
+            continue
         if SOLICITATION_PATTERN.search(candidate) is None:
             continue
         has_review_fix_action = bool(
@@ -424,11 +705,37 @@ CHOICE_PATTERN = re.compile(
 _DIRECT_CHOICE_PATTERN = re.compile(
     r"\b(?:choose|choice|option|options|prefer|decide|decision|either|"
     r"yes\s*/\s*no|approve|approval|sign\s*off)\b"
-    r"|\bwhich\b.{0,60}\b(?:want|prefer|choose)\b",
+    r"|\bwhich\b.{0,60}\b(?:want|prefer|choose)\b"
+    r"|\bwhich\b.{0,60}\b(?:should|would|can)\s+(?:i|we)\s+(?:use|choose|select)\b"
+    r"|\bwhat\s+(?:do|would|should)\s+you\s+want\b"
+    r"|\bwhat\s+should\s+i\s+do\b"
+    r"|\bwhich\b.{0,60}\b(?:one|option|alternative|path|treatment|disposition)\b"
+    r"|\b(?:do\s+you\s+mean|is\s+that\s+what\s+you\s+mean)\b"
+    r"|\b(?:yes|no)\s*,?\s*[a-z]\b(?:.{0,40}\?)?"
+    r"|\breply\s+(?:yes|no)\b"
+    r"|\b(?:reply|answer)\s+with\s+(?:a\s+)?(?:single|one)\s+(?:letter|number)\b",
+    re.IGNORECASE,
+)
+_CONTEXTUAL_DECISION_ASK_PATTERN = re.compile(
+    r"\b(?:should\s+(?:i|we)\s+(?:use|apply|add|drop|keep|choose)|"
+    r"would\s+you\s+(?:like|prefer)\s+me\s+to|"
+    r"if\s+you\s+(?:want|would\s+like)\s+something\s+adjusted|"
+    r"let\s+me\s+know\s+specifically|"
+    r"adjudicate\s+(?:this\s+)?finding|pick\s+one)\b",
+    re.IGNORECASE,
+)
+_FACTUAL_CHOICE_QUESTION_PATTERN = re.compile(
+    r"\bwhich\s+(?:one|convention|rounding\s+rule)\b",
+    re.IGNORECASE,
+)
+_AUTHORIZATION_ALTERNATIVE_PATTERN = re.compile(
+    r"\b(?:authorize|authorise|approve|approval)\b[^?]{0,140}"
+    r"\b(?:or|versus|vs\.?)\b[^?]{0,100}\b(?:stop|decline|skip|leave)\b",
     re.IGNORECASE,
 )
 _CONDITIONAL_REVISION_PATTERN = re.compile(
-    r"^\s*if\s+you\s+(?:want|would\s+(?:like|prefer))\b.{0,160}"
+    r"^\s*(?:if|(?:let\s+me\s+know|tell\s+me)\s+if)\s+you\s+"
+    r"(?:want|would\s+(?:(?:like|prefer)|rather))\b.{0,160}"
     r"\b(?:chang(?:e|ed)|revis(?:e|ed))\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -479,6 +786,7 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"exclud(?:e|ing)|flag(?:ging)?|treat(?:ing)?|handl(?:e|ing))\b"
     r"|\bfix\b[^?\n]{0,160}\byes\s*(?:/\s*|or\s+)no\b"
     r"|\bapprove\b[^?\n]{0,80}\bfixing\b"
+    r"|\badjudicat(?:e|es|ed|ing)\b[^?\n]{0,120}\bfinding\b"
     # A live turn asked "How would you like me to proceed on the two blocking
     # items?" with no "fix" vocabulary at all -- the repair itself was named
     # only in the finding recap, not in this clause. This alternative is
@@ -549,7 +857,8 @@ _REVIEW_REPLY_TEMPLATE_PATTERN = re.compile(
 )
 _REVIEW_FINDING_SELECTION_PATTERN = re.compile(
     r"\b(?:name|list|select|reply\s+with)\s+(?:the\s+)?(?:findings|issues|blockers)\s+"
-    r"(?:you\s+)?(?:approve|authorize|would\s+(?:approve|authorize))\b",
+    r"(?:you\s+)?(?:approve|authorize|would\s+(?:approve|authorize))\b"
+    r"|\bwhich\s+(?:finding|issue|blocker)\s+ids?\s+should\s+i\s+(?:fix|repair|address)\b",
     re.IGNORECASE,
 )
 _PROPOSED_FIX_LIST_PATTERN = re.compile(r"\bfix(?:es)?\b", re.IGNORECASE)
@@ -577,13 +886,23 @@ _REVIEW_DISPOSITION_ACTION_PATTERN = re.compile(
     r"declin(?:e|ed|ing)|defer(?:red|ring)?|apply|applied|applying|"
     r"fix(?:es|ed|ing)?|repair(?:s|ed|ing)?|restructur(?:e|ed|ing)|"
     r"chang(?:e|ed|ing)|skip(?:s|ped|ping)|omit(?:s|ted|ting)|"
-    r"leave|leaving|keep|keeping)\b",
+    r"leave|leaving|keep|keeping|want|need|needs|do|adjudicat(?:e|es|ed|ing))\b",
     re.IGNORECASE,
 )
 _REVIEW_DISPOSITION_TARGET_PATTERN = re.compile(
     r"\b(?:finding|findings|issue|issues|blocker|blockers|"
     r"correction|corrections|fix|fixes|as\s+is|as-is|current\s+behavior|"
-    r"current\s+behaviour|restructure)\b",
+    r"current\s+behaviour|restructure|choice|choices|option|options)\b",
+    re.IGNORECASE,
+)
+_LETTERED_REVIEW_CHOICE_PATTERN = re.compile(
+    r"(?m)^\s*(?:[-*]\s*)?(?:[A-Z]|[0-9]+)[.):]\s+\S+", re.IGNORECASE
+)
+_REVIEW_CHOICE_PROMPT_PATTERN = re.compile(
+    r"\b(?:what\s+(?:do|would|should)\s+you\s+want|"
+    r"what\s+should\s+i\s+do|needs?\s+your\s+choice|"
+    r"reply\s+with\s+(?:a\s+)?(?:single|one)\s+(?:letter|number)|"
+    r"choose\s+one|reply\s+[\"']?\d+[\"']?\s+(?:or|/)\s+[\"']?\d+[\"']?)\b",
     re.IGNORECASE,
 )
 _CORRECTION_INVITATION_PATTERN = re.compile(
@@ -609,9 +928,16 @@ def _review_disposition_request(message: str, context: str = "") -> str | None:
         and _REVIEW_FINDING_ID_PATTERN.search(context) is None
     ):
         return None
-    for current_ask in _current_request_clauses(message):
+    for current_ask in _active_request_clauses(message):
+        if _CONDITIONAL_REVISION_PATTERN.search(current_ask) is not None:
+            continue
         if not solicits_operator(current_ask):
             continue
+        if (
+            _LETTERED_REVIEW_CHOICE_PATTERN.search(prose) is not None
+            and _REVIEW_CHOICE_PROMPT_PATTERN.search(current_ask) is not None
+        ):
+            return current_ask
         actions = _REVIEW_DISPOSITION_ACTION_PATTERN.findall(current_ask)
         if not actions:
             continue
@@ -625,10 +951,13 @@ def _review_disposition_request(message: str, context: str = "") -> str | None:
         has_review_target = bool(_REVIEW_DISPOSITION_TARGET_PATTERN.search(current_ask))
         if has_alternative and len(actions) >= 2 and has_review_target:
             return current_ask
-        if has_review_target and re.search(
+        if has_review_target and (
+            re.search(r"\badjudicat(?:e|es|ed|ing)\b", current_ask, re.IGNORECASE)
+            or re.search(
             r"\b(?:what|how|whether|should|would|could|can|do|does|may|shall)\b",
             current_ask,
             re.IGNORECASE,
+            )
         ):
             return current_ask
     return None
@@ -692,10 +1021,9 @@ def solicits_operator(message: str) -> bool:
     )
 
 _RULES = (
-    # For non-approval asks this remains first-match-wins, with source lookup
-    # taking precedence over the broader question/status rules. Explicit
-    # approval and review-fix asks are resolved from their request clauses
-    # before reaching this bank, so recap vocabulary cannot capture them.
+    # For non-approval asks this remains first-match-wins within the addressed
+    # request clauses, with source lookup taking precedence over broader
+    # question/status rules. Recap vocabulary is never a source-question trigger.
     _Rule(
         "source.question",
         Category.SOURCE_QUESTION,
@@ -954,7 +1282,8 @@ class MatcherBank:
         vocabulary in the same clause. Ties keep the answer sheet's existing
         event and lexical order. This lets "make a new workflow to handle the
         stage" resolve to the directly named workflow choice while leaving a
-        later, distinct stage question eligible for its ruling.
+        later, distinct stage question eligible for its ruling. The caller
+        limits this lookup to the current ask and its local option context.
         """
 
         matches: list[DecisionAnswer] = []
@@ -1082,8 +1411,7 @@ class MatcherBank:
         stage_counts = decision_stage_counts or {}
         active_overlays = tuple(self._active_decision_overlays)
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
-        prose = _NON_PROSE.sub(" ", message)
-        request_clauses = _operator_request_clauses(message)
+        request_clauses = _active_request_clauses(message)
         request_text = " ".join(request_clauses)
         approval_clauses = [
             clause
@@ -1103,7 +1431,26 @@ class MatcherBank:
             )
             for clause in request_clauses
         )
-        approval_context = bool(_APPROVAL_CONTEXT_PATTERN.search(prose))
+        approval_context = bool(_APPROVAL_CONTEXT_PATTERN.search(request_text))
+        if (
+            not approval_context
+            and request_clauses
+            and re.search(r"\b(?:reply|confirm|respond)\b", request_clauses[-1], re.I)
+        ):
+            # "I cannot build without approval. Could you reply plainly?"
+            # is one approval ask, even though the final sentence is
+            # anaphoric. Keep the borrowed context inside that paragraph so
+            # an earlier plan recap cannot supply an unrelated answer.
+            prose = _NON_PROSE.sub(" ", message)
+            ask_offset = prose.rfind(request_clauses[-1])
+            if ask_offset >= 0:
+                paragraph_start = prose.rfind("\n\n", 0, ask_offset) + 2
+                paragraph_end = prose.find("\n\n", ask_offset)
+                if paragraph_end < 0:
+                    paragraph_end = len(prose)
+                approval_context = bool(
+                    _APPROVAL_CONTEXT_PATTERN.search(prose[paragraph_start:paragraph_end])
+                )
         explicit_approval_ask = bool(approval_clauses) or (
             approval_context and not other_substantive_asks
         )
@@ -1142,28 +1489,16 @@ class MatcherBank:
             # than this generic authorization. For a pure "which option?"
             # choice, retain scenario-specific decisions described in the
             # finding; an explicit fix action still wins over recap terms.
-            repair_text = review_fix_request.casefold()
             direct_finding_question = bool(
                 _REVIEW_FIX_DIRECT_FINDING_QUESTION_PATTERN.search(review_fix_request)
                 or _REVIEW_OUTPUT_ADDITION_PATTERN.search(review_fix_request)
             )
             specific = self.answer_sheet.answer_for_decision(
-                repair_text,
+                _decision_lookup_text(message, review_fix_request),
                 excluded=excluded_decision_ids,
                 available_event_ids=available_event_ids,
                 active_overlay_ids=active_overlays,
             )
-            if (
-                specific is None
-                and _REVIEW_FIX_ACTION_PATTERN.search(repair_text) is None
-                and not direct_finding_question
-            ):
-                specific = self.answer_sheet.answer_for_decision(
-                    message,
-                    excluded=excluded_decision_ids,
-                    available_event_ids=available_event_ids,
-                    active_overlay_ids=active_overlays,
-                )
             if (
                 specific is not None
                 and specific.decision_id != "review_fix_authorization"
@@ -1190,6 +1525,21 @@ class MatcherBank:
             _review_disposition_request(message, review_context) if review_in_play else None
         )
         if review_disposition_request is not None and review_fix_request is None:
+            disposition_decision = self.answer_sheet.answer_for_decision(
+                review_disposition_request,
+                excluded=excluded_decision_ids,
+                available_event_ids=available_event_ids,
+                active_overlay_ids=active_overlays,
+            )
+            if (
+                disposition_decision is not None
+                and disposition_decision.decision_id != "review_fix_authorization"
+            ):
+                return self._decision_result(
+                    disposition_decision,
+                    decision_stage_counts=stage_counts,
+                    matched_request_clause=review_disposition_request,
+                )
             if review_fix is not None:
                 return self._decision_result(
                     review_fix,
@@ -1211,9 +1561,11 @@ class MatcherBank:
         # "approve the install?").
         request_decision = None
         request_decision_clause = None
-        for clause in request_clauses:
+        for clause in reversed(request_clauses):
+            if _CONDITIONAL_REVISION_PATTERN.search(clause) is not None:
+                continue
             request_decision = self._request_decision(
-                clause,
+                _decision_lookup_text(message, clause),
                 excluded_decision_ids=excluded_decision_ids,
                 available_event_ids=available_event_ids,
                 active_overlay_ids=active_overlays,
@@ -1221,6 +1573,55 @@ class MatcherBank:
             if request_decision is not None:
                 request_decision_clause = clause
                 break
+        if request_decision is None:
+            confirmation_text = _declared_confirmation_text(message)
+            if confirmation_text is not None:
+                request_decision = self._request_decision(
+                    confirmation_text,
+                    excluded_decision_ids=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if request_decision is not None:
+                    request_decision_clause = confirmation_text
+        if request_decision is None and request_clauses:
+            alternatives = _referenced_options_text(message, request_clauses[-1])
+            if alternatives is not None:
+                request_decision = self._request_decision(
+                    alternatives,
+                    excluded_decision_ids=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if request_decision is None:
+                    # The recap can abbreviate a previously enumerated choice.
+                    # A single explicit term may identify it, but ambiguity
+                    # must leave the operator asking for the decision instead.
+                    partial = [
+                        decision
+                        for decision in self.answer_sheet.decision_answers.values()
+                        if decision.decision_id not in excluded_decision_ids
+                        and self.decision_is_available(
+                            decision.decision_id,
+                            available_event_ids=available_event_ids,
+                        )
+                        and (
+                            decision.available_after_overlay is None
+                            or decision.available_after_overlay in active_overlays
+                        )
+                        and (
+                            decision.retired_after_overlay is None
+                            or decision.retired_after_overlay not in active_overlays
+                        )
+                        and any(
+                            _decision_term_present(term, alternatives.casefold())
+                            for term in decision.terms
+                        )
+                    ]
+                    if len(partial) == 1:
+                        request_decision = partial[0]
+                if request_decision is not None:
+                    request_decision_clause = request_clauses[-1]
         if (
             request_decision is not None
             and request_decision.decision_id != "review_fix_authorization"
@@ -1236,9 +1637,17 @@ class MatcherBank:
         # ground-truth or source term in an earlier recap must not turn it into
         # an unrelated factual answer (especially one already repeat-suppressed).
         if approval_rule is not None:
-            if _CORRECTION_INVITATION_PATTERN.search(prose) is not None:
+            correction_invitation_clause = next(
+                (
+                    clause
+                    for clause in reversed(request_clauses)
+                    if _CORRECTION_INVITATION_PATTERN.search(clause)
+                ),
+                None,
+            )
+            if correction_invitation_clause is not None:
                 correction_decision = self.answer_sheet.answer_for_decision(
-                    prose,
+                    _decision_lookup_text(message, correction_invitation_clause),
                     excluded=excluded_decision_ids,
                     available_event_ids=available_event_ids,
                     active_overlay_ids=active_overlays,
@@ -1247,26 +1656,19 @@ class MatcherBank:
                     return self._decision_result(
                         correction_decision,
                         decision_stage_counts=stage_counts,
-                        matched_request_clause=next(
-                            (
-                                clause
-                                for clause in request_clauses
-                                if _CORRECTION_INVITATION_PATTERN.search(clause)
-                            ),
-                            None,
-                        ),
+                        matched_request_clause=correction_invitation_clause,
                     )
             return MatchResult(
                 Category.APPROVAL_REQUEST,
                 approval_rule,
                 "",
                 matched_request_clause=(
-                    approval_clauses[0]
+                    next(reversed(approval_clauses))
                     if approval_clauses
                     else next(
                         (
                             clause
-                            for clause in request_clauses
+                            for clause in reversed(request_clauses)
                             if _APPROVAL_CONTEXT_PATTERN.search(clause)
                         ),
                         None,
@@ -1275,13 +1677,6 @@ class MatcherBank:
             )
 
         decision = request_decision
-        if decision is None:
-            decision = self._request_decision(
-                message,
-                excluded_decision_ids=excluded_decision_ids,
-                available_event_ids=available_event_ids,
-                active_overlay_ids=active_overlays,
-            )
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
         # "no review finding was reported" cannot consume a later decision.
@@ -1302,12 +1697,30 @@ class MatcherBank:
                 ),
             )
         # A direct choice is about the requested action even when the agent's
-        # recap mentions a source row or table. Keep the source-first legacy
-        # behavior for broad closing questions with no explicit choice.
+        # recap mentions a source row or table. Broad closing questions retain
+        # the ordinary rule bank, but source facts require source wording in an
+        # actual request clause.
         choice_clause = next(
-            (clause for clause in request_clauses if _DIRECT_CHOICE_PATTERN.search(clause)),
+            (
+                clause
+                for clause in reversed(request_clauses)
+                if _CONDITIONAL_REVISION_PATTERN.search(clause) is None
+                and _DIRECT_CHOICE_PATTERN.search(clause)
+            ),
             None,
         )
+        if (
+            choice_clause is not None
+            and solicits_operator(choice_clause)
+            and self.answer_sheet.answer_for_source(choice_clause) is not None
+        ):
+            return MatchResult(
+                Category.SOURCE_QUESTION,
+                "source.question",
+                "",
+                matched=True,
+                matched_request_clause=choice_clause,
+            )
         if choice_clause is not None and solicits_operator(choice_clause):
             return MatchResult(
                 Category.DECISION_REQUEST,
@@ -1316,6 +1729,37 @@ class MatcherBank:
                 matched=True,
                 matched_request_clause=choice_clause,
             )
+        source_clause = request_clauses[-1] if request_clauses else None
+        if (
+            source_clause is not None
+            and solicits_operator(source_clause)
+            and (
+                self.answer_sheet.answer_for_source(source_clause) is not None
+                or self.answer_sheet.answer_for_ground_truth(source_clause) is not None
+            )
+        ):
+            return MatchResult(
+                Category.SOURCE_QUESTION,
+                "source.question",
+                "",
+                matched=True,
+                matched_request_clause=source_clause,
+            )
+        if source_clause is not None and solicits_operator(source_clause):
+            list_item = _numbered_list_item_text(message, source_clause)
+            if list_item is not None:
+                list_decision = self.answer_sheet.answer_for_decision(
+                    list_item,
+                    excluded=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if list_decision is not None:
+                    return self._decision_result(
+                        list_decision,
+                        decision_stage_counts=stage_counts,
+                        matched_request_clause=source_clause,
+                    )
         if is_question and _contains_term(message, self.question_obstacle_terms):
             return MatchResult(
                 Category.OTHER,
@@ -1325,16 +1769,18 @@ class MatcherBank:
                 obstacle_question=True,
             )
         for rule in _RULES:
-            # Approval and review-fix asks were resolved from their request
-            # clauses above. For the ordinary source-first rule bank, keep
-            # scanning the complete message: an agent can recap a fact and
-            # then ask a broad closing question such as "anything else?".
-            # Restricting source terms to that closing clause discarded the
-            # fact the operator had previously been expected to provide.
-            routing_text = message if rule.rule_id == "source.question" else request_text or message
+            # Preserve the legacy classification of a standalone source
+            # statement. When there is an addressed ask, only its clauses are
+            # classified; reply_for separately limits factual lookup to the
+            # matched current request, so recap terms cannot provide facts.
+            routing_text = request_text or message
             if rule.pattern.search(routing_text):
                 matched_clause = next(
-                    (clause for clause in request_clauses if rule.pattern.search(clause)),
+                    (
+                        clause
+                        for clause in reversed(request_clauses)
+                        if rule.pattern.search(clause)
+                    ),
                     None,
                 )
                 return MatchResult(
@@ -1390,9 +1836,21 @@ class MatcherBank:
             return classified
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
             return classified
-        request_text = _operator_request_text(message)
-        lookup_text = request_text or message
+        request_text = " ".join(_active_request_clauses(message))
+        lookup_text = classified.matched_request_clause or request_text or message
         if classified.category is Category.SOURCE_QUESTION:
+            if (
+                classified.matched_request_clause is None
+                or not solicits_operator(classified.matched_request_clause)
+            ):
+                bank = self.persona.replies_for(classified.category.value)
+                return MatchResult(
+                    classified.category,
+                    f"persona.{classified.category.value}",
+                    bank[0],
+                    matched=False,
+                    matched_request_clause=classified.matched_request_clause,
+                )
             # The brief is consulted before the source answers, not only after
             # them. A ground-truth fact fires only when its *whole* declared
             # term set is present, so a matching fact is strictly more specific
@@ -1402,8 +1860,6 @@ class MatcherBank:
             # answer was the wrong answer to that question. Scenarios that
             # declare no brief are unaffected: an empty mapping never matches.
             found = self.answer_sheet.answer_for_ground_truth(lookup_text)
-            if found is None and lookup_text != message:
-                found = self.answer_sheet.answer_for_ground_truth(message)
             if found is not None:
                 key, fact = found
                 return MatchResult(
@@ -1415,8 +1871,6 @@ class MatcherBank:
                     matched_request_clause=classified.matched_request_clause,
                 )
             source = self.answer_sheet.answer_for_source(lookup_text)
-            if source is None and lookup_text != message:
-                source = self.answer_sheet.answer_for_source(message)
             if source is not None:
                 key, answer = source
                 return MatchResult(
@@ -1426,11 +1880,9 @@ class MatcherBank:
                     answer_key=key,
                     matched_request_clause=classified.matched_request_clause,
                 )
-            return self._unmatched(classified, message)
+            return self._unmatched(classified, message, lookup_text=lookup_text)
         if classified.category is Category.STATUS_QUERY:
             status = self.answer_sheet.answer_for_status(lookup_text)
-            if status is None and lookup_text != message:
-                status = self.answer_sheet.answer_for_status(message)
             if status is not None:
                 key, answer = status
                 return MatchResult(
@@ -1442,7 +1894,62 @@ class MatcherBank:
                 )
             return self._unmatched(classified, message, lookup_text=lookup_text)
         if classified.category is Category.DECISION_REQUEST:
-            return self._unmatched(classified, message)
+            if (
+                classified.matched_request_clause is not None
+                and _FACTUAL_CHOICE_QUESTION_PATTERN.search(
+                    classified.matched_request_clause
+                )
+            ):
+                fact = self.answer_sheet.answer_for_ground_truth(
+                    _decision_lookup_text(
+                        message, classified.matched_request_clause
+                    )
+                )
+                if fact is not None:
+                    key, answer = fact
+                    return MatchResult(
+                        Category.SOURCE_QUESTION,
+                        f"ground_truth.{key}",
+                        answer,
+                        answer_key=key,
+                        ground_truth=True,
+                        matched_request_clause=classified.matched_request_clause,
+                    )
+            if (
+                classified.matched
+                and classified.matched_request_clause is not None
+                and "?" not in classified.matched_request_clause
+                and re.match(r"\s*which\b", classified.matched_request_clause, re.I)
+                and re.search(
+                    r"\bshould\s+i\s+(?:use|choose|select)\b",
+                    classified.matched_request_clause,
+                    re.I,
+                )
+            ):
+                bank = self.persona.replies_for(classified.category.value)
+                return MatchResult(
+                    classified.category,
+                    f"persona.{classified.category.value}",
+                    bank[0],
+                    matched=True,
+                    matched_request_clause=classified.matched_request_clause,
+                )
+            if self.answer_sheet.ground_truth:
+                return MatchResult(
+                    classified.category,
+                    f"unmatched.{classified.category.value}",
+                    self.persona.no_leading_fallback,
+                    matched=False,
+                    matched_request_clause=classified.matched_request_clause,
+                )
+            bank = self.persona.replies_for(classified.category.value)
+            return MatchResult(
+                classified.category,
+                f"persona.{classified.category.value}",
+                bank[0],
+                matched=False,
+                matched_request_clause=classified.matched_request_clause,
+            )
         # APPROVAL_REQUEST has no declared-fact lookup: whether to approve is
         # a persona behavioral choice, not a fact a ground-truth brief holds.
         bank = self.persona.replies_for(classified.category.value)
@@ -1480,7 +1987,11 @@ class MatcherBank:
             )
         candidate = lookup_text or message
         found = self.answer_sheet.answer_for_ground_truth(candidate)
-        if found is None and candidate != message:
+        if (
+            found is None
+            and candidate != message
+            and classified.category is not Category.SOURCE_QUESTION
+        ):
             found = self.answer_sheet.answer_for_ground_truth(message)
         if found is not None:
             key, fact = found

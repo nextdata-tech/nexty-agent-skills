@@ -1,0 +1,48 @@
+{
+  "schema": "operator-b1-b5-approval-review-replay-v1",
+  "note": "Sanitized excerpts retain the ask order and review options from the recorded agent turns; source paths, raw records, tool traces, and credentials are omitted.",
+  "cases": [
+    {
+      "source": "dp-b1-sonnet-regress1 turn 1",
+      "scenario_id": "crm-pipeline",
+      "message": "I've prepared the CRM pipeline plan and need your approval before I build anything. Nothing has been generated or published yet.\n\n**What I'll build**\n- It answers two questions:\n  1. Which deals are currently in the pipeline, with stage, amount and last update time?\n  2. How many current deals, and how much total amount, are in each stage?\n\n**Two readings of current for you to confirm**\n1. Deleted deals: I assume deleted is the literal status value.\n2. Duplicate versions: If the source returns several versions, only the latest counts.\n\nIf this matches what you want, reply with an explicit approval such as I approve this blueprint, please proceed. Once you do, I'll build, review, and publish.",
+      "expected_rule_id": "persona.approval_request",
+      "expected_next_operator_text": "You're the expert."
+    },
+    {
+      "source": "dp-b1-sonnet-main-run2 turn 1",
+      "scenario_id": "crm-pipeline",
+      "message": "The prepared blueprint is ready for your review. The current deals output excludes deleted records and redacts owner details. Questions it answers: the current-deal list and a stage-level summary.\n\nDo you approve this plan so I can proceed to generate and publish the data product?",
+      "expected_rule_id": "persona.approval_request",
+      "expected_next_operator_text": "You're the expert."
+    },
+    {
+      "source": "dp-b5-sonnet-regress1 turn 1",
+      "scenario_id": "inventory-position",
+      "message": "The plan is written and registered with the supervisor, but I haven't built anything yet. I need your approval first.\n\n**Questions it will answer:**\n- How many positions are there, and how many carry a problem?\n- Which positions are negative or orphaned, and which warehouse ids are the orphans?\n\n**Two open questions, neither blocking**\n1. Should negative stock be flagged and kept, as planned, or held out of the close?\n2. Should any position status or as-of date be excluded? The plan applies no filter.\n\nI made no Decisions. The flag-and-preserve approach is my reading of your question. Tell me if you want it changed.\n\nReply with an explicit approval, such as approved, go ahead, and I'll build it. A correction alone won't count as approval.",
+      "expected_rule_id": "persona.approval_request",
+      "expected_next_operator_text": "Just increase the timeout."
+    },
+    {
+      "source": "dp-b5-sonnet-main-run4 turn 1",
+      "scenario_id": "inventory-position",
+      "message": "The blueprint is prepared and validated by the supervisor. Before I generate the closure, I need your explicit approval of this plan. Bad rows are flagged and preserved rather than dropped.\n\nIf this matches what you want, reply with your approval and I'll generate, capture, review, validate, and publish the data product, then answer your question from the governed query results. Let me know if you want the warn-and-preserve policy changed or anything else adjusted first.",
+      "expected_rule_id": "persona.approval_request",
+      "expected_next_operator_text": "Just increase the timeout."
+    },
+    {
+      "source": "dp-b5-sonnet-regress1 turn 9",
+      "scenario_id": "inventory-position",
+      "message": "The amended build is captured and reviewed, but the review found one blocking issue. Nothing is validated or published.\n\n**Blocking finding: missing promised counts**\nThe approved plan promises negative and orphan counts; the built product has only a plain position count.\n\n**Choose one:**\n1. Add dedicated negative and orphan count metrics. Amend the plan, approve again, rebuild and re-review.\n2. Keep the build as approved. Publish and report counts through filtered queries.\n\nI lean toward option 2. Your call: reply \"1\" or \"2\".\n\n**Things to know:** the source connectivity probe was written but never run.",
+      "expected_rule_id": "decision.answer.review_fix_authorization",
+      "expected_next_operator_text": "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, or publish until that review is clear; ask me again before any new behavior-changing decision."
+    },
+    {
+      "source": "dp-b5-sonnet-main-run4 turn 4",
+      "scenario_id": "inventory-position",
+      "message": "The independent review came back with three behavior-affecting findings. No fix, reset, or recapture will happen until you decide.\n\n**What I need from you:** which finding IDs should I fix? I recommend fixing all three. Options per finding: fix it, reject the claim, or explicitly defer it. Let me know the IDs and disposition you want, and I'll reset, repair, recapture, and get a fresh review.",
+      "expected_rule_id": "decision.answer.review_fix_authorization",
+      "expected_next_operator_text": "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review. Do not validate, admit, or publish until that review is clear; ask me again before any new behavior-changing decision."
+    }
+  ]
+}
