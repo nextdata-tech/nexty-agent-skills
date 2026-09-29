@@ -54,6 +54,7 @@ EXPECTED_TIERS = {
     "locale-timezone": "core",
     "marketing-attribution": "full",
     "headcount-attrition": "full",
+    "mrr-waterfall": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -64,14 +65,16 @@ _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
 EXPECTED_REQUIRED_GATES = {
     scenario_id: _BASE_REQUIRED_GATES
     | ({"capability"} if scenario_id in {"capability-shortfall", "crm-pipeline"} else set())
+    | ({"narrowing"} if scenario_id == "mrr-waterfall" else set())
     | ({"query"} if scenario_id in {
         "parent-child-grain-trap",
         "application-reconciliation",
         "locale-timezone",
+        "mrr-waterfall",
     } else set())
     for scenario_id in EXPECTED_TIERS
 }
-GATES_WITHOUT_A_STAGING_SCENARIO = {"narrowing"}
+GATES_WITHOUT_A_STAGING_SCENARIO: set[str] = set()
 
 
 def _packages_on_disk() -> set[str]:
@@ -165,7 +168,10 @@ def test_public_scenarios_declare_the_expected_required_gate_set() -> None:
         if not scenario.has_scoreable_answer_gold:
             declared.remove("query")
         assert declared == expected
-        assert scenario.stages_definition_change is False
+    staged_definition_change = {
+        scenario.id for scenario in scenarios if scenario.stages_definition_change
+    }
+    assert staged_definition_change == {"mrr-waterfall"}
 
     staged_capability = {
         scenario.id for scenario in scenarios if scenario.stages_capability_shortfall
@@ -187,8 +193,8 @@ def test_every_gate_has_a_public_staging_scenario_or_an_explicit_follow_up_allow
         if scenario.has_scoreable_answer_gold:
             required_by_public_scenario.add("query")
     missing = set(GATE_PHASES) - required_by_public_scenario
-    # No public scenario declares a mid-run definition change yet. Keep this
-    # named until the future narrowing-staging follow-up adds one.
+    # B7 supplies the first public mid-run definition change. Keeping this
+    # expectation explicit ensures a future removal reopens the staging gap.
     assert missing == GATES_WITHOUT_A_STAGING_SCENARIO
 
 
@@ -498,6 +504,53 @@ def test_discovery_does_not_need_a_python_registry() -> None:
     assert [item.id for item in discovered] == [item.id for item in direct]
 
 
+def test_mrr_revised_decision_stays_staged_if_publication_waits_past_turn_23() -> None:
+    scenario = load_scenario(SCENARIO_ROOT / "mrr-waterfall")
+    script_turns = scenario.script.turns
+    approval_turns = [turn for turn in script_turns if turn.approval]
+    assert len(approval_turns) == 1
+    first_approval = approval_turns[0].text
+    assert "same-month classification" in first_approval
+    assert "event-deduplication" in first_approval
+    assert all(term not in first_approval for term in ("gross", "event_id", "net out"))
+
+    delayed_ids = {
+        "B7-same-month",
+        "B7-spreadsheet-challenge",
+        "B7-billing-contact-request",
+    }
+    delayed_events = {
+        "B7-billing-contact-request": 20,
+    }
+    empty_runs = {"schema": "dp-scenario-run-records-v1", "runs": []}
+    empty_history = {
+        "schema": "dp-scenario-publication-history-v1",
+        "releases": [],
+    }
+    revised_question = (
+        "How should decreased and increased movements within the same month be classified?"
+    )
+    visible_before_revision = ("same month", "decreased and increased", "prior-month close")
+
+    for turn_number in (21, 22, 23):
+        injections = scenario.events.fire(
+            turn_number,
+            run_records=empty_runs,
+            publication_history=empty_history,
+            delivered_event_turns=delayed_events,
+            used_event_ids=delayed_ids,
+        )
+        assert all(injection.card_id != "B7-E8" for injection in injections)
+        scripted_text = script_turns[turn_number - 1].text
+        assert all(value not in scripted_text for value in visible_before_revision)
+        answer = scenario.answer_sheet.answer_for_decision(
+            revised_question,
+            excluded=frozenset({"same_month_classification"}),
+            available_event_ids=tuple(delayed_ids),
+        )
+        assert answer is None
+
+
 def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> None:
     sheet_path = (package / reference).resolve()
     sheet = yaml.safe_load(sheet_path.read_text(encoding="utf-8"))
@@ -521,6 +574,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "application-reconciliation")
     shutil.rmtree(root / "locale-timezone")
     shutil.rmtree(root / "marketing-attribution")
+    shutil.rmtree(root / "mrr-waterfall")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -551,6 +605,7 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     shutil.rmtree(root / "inventory-position")
     shutil.rmtree(root / "application-reconciliation")
     shutil.rmtree(root / "locale-timezone")
+    shutil.rmtree(root / "mrr-waterfall")
     for name in ("one", "two"):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -750,7 +805,11 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             3
             if scenario.id == "crm-pipeline"
             else 2
-            if scenario.id in {"inventory-position", "marketing-attribution", "headcount-attrition"}
+            if scenario.id in {
+                "inventory-position",
+                "marketing-attribution",
+                "headcount-attrition",
+            }
             else 1
         )
         assert len(approval_turns) == expected_count, scenario.id
@@ -788,4 +847,5 @@ def test_only_scenarios_declaring_answer_gold_have_scoreable_query_gates() -> No
         "parent-child-grain-trap",
         "application-reconciliation",
         "locale-timezone",
+        "mrr-waterfall",
     }

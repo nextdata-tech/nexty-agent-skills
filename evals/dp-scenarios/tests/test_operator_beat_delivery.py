@@ -405,7 +405,45 @@ def test_every_shipped_event_card_that_declares_text_actually_transmits_it() -> 
             [TurnResult(agent_message="Which source should I use?") for _ in scenario.operator_script.turns]
         )
 
-        OperatorEngine(scenario.operator_script, transport).run()
+        publication_history_reader = None
+        if scenario.id == "mrr-waterfall":
+            # B7's later cards are gated on runner-owned publication history.
+            # Give this transmission test two observed releases; agent text
+            # cannot satisfy the prerequisite.
+            runs = [
+                {
+                    "workflow_id": "workflow-b7",
+                    "run_id": run_id,
+                    "definition_id": definition_id,
+                    "status_history": [{"turn": published_turn, "status": "Published"}],
+                }
+                for run_id, definition_id, published_turn in (
+                    ("initial-run", "initial-definition", 18),
+                    ("revised-run", "revised-definition", 30),
+                )
+            ]
+            def publication_history_reader():
+                return {
+                    "run_records": {"schema": "dp-scenario-run-records-v1", "runs": runs},
+                    "publication_history": {
+                        "schema": "dp-scenario-publication-history-v1",
+                        "releases": [
+                            {
+                                "workflow_id": row["workflow_id"],
+                                "run_id": row["run_id"],
+                                "definition_id": row["definition_id"],
+                                "turn": 1,
+                            }
+                            for row in runs
+                        ],
+                    },
+                }
+
+        OperatorEngine(
+            scenario.operator_script,
+            transport,
+            publication_history_reader=publication_history_reader,
+        ).run()
         sent = "\n".join(transport.message_texts)
 
         for card_id, card in declared.items():

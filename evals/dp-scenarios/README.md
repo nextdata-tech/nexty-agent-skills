@@ -191,6 +191,9 @@ the routine core suite:
 - **headcount-attrition** — B6's monthly workforce snapshot comparison, an
   explicit low-count suppression decision, a raw-row refusal, and a PII sentinel
   scan across landed files, artifacts, and query output.
+- **mrr-waterfall** — B7's effective-dated subscription bridge, staged
+  same-month classification and deduplication decisions, post-publication
+  challenges, and revised-release query checks.
 
 **Live** is the only tier whose runs cannot be replayed:
 
@@ -228,6 +231,7 @@ scenario.
 | [locale-timezone](scenarios/locale-timezone/README.md) | core | 11 | UTF-8 categories and source-local versus UTC boundary evidence |
 | [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign matching, unmatched-CPA policy, and out-of-scope export sentinel scan |
 | [headcount-attrition](scenarios/headcount-attrition/README.md) | full | 13 | monthly headcount and attrition with PII exclusion and small-cell suppression |
+| [mrr-waterfall](scenarios/mrr-waterfall/README.md) | full | 14 | effective-dated MRR waterfall with staged decisions and revised-publication evidence |
 
 ## Running
 

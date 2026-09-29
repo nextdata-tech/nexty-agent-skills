@@ -99,5 +99,7 @@ register_dataset(
         ),
         builder=_build_mrr_waterfall,
         description="Customer subscription records span four monthly reporting periods.",
+        plant="B7-same-month",
+        requires_explicit_plant=True,
     )
 )
