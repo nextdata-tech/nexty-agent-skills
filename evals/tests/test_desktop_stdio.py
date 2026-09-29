@@ -2566,10 +2566,7 @@ def test_session_cleanup_kills_proxy_server_child(tmp_path):
     "payload",
     [
         {"password": "hunter2", "nested": {"access_token": "abc"}},
-        {
-            "text": "Bearer abcdef1234567890wxyz",
-            "url": "https://u:p@example.test/?token=xyz",
-        },
+        {"text": "Bearer abc.def", "url": "https://u:p@example.test/?token=xyz"},
         {"dsn": "postgres://svc:S3cr3tPw@db.internal:5432/prod"},
         {"text": "PGPASSWORD=hunter2 psql --host db"},
         {"text": "aws_secret_access_key is AKIAIOSFODNN7EXAMPLE"},
@@ -2580,23 +2577,6 @@ def test_redaction_is_recursive_and_fail_closed(payload):
     assert all(secret not in value for secret in ("hunter2", "abc", "xyz", "u:p"))
     assert all(secret not in value for secret in ("S3cr3tPw", "AKIAIOSFODNN7EXAMPLE"))
     assert ds.REDACTED in value
-
-
-def test_bearer_redaction_spares_ordinary_prose_but_still_catches_tokens():
-    """The scheme word "bearer" followed by a short common word (as in the
-    generic phrase "a bearer token") must survive untouched -- only a
-    long, opaque value shaped like a real credential is a candidate.
-    """
-
-    prose = ds.redact_json_rpc("the proposal notes using a bearer token for auth")
-    assert prose == "the proposal notes using a bearer token for auth"
-    assert ds.REDACTED not in prose
-
-    real_token = ds.redact_json_rpc(
-        "Authorization header carries Bearer abcdEFGH123456789012.jwtlike"
-    )
-    assert ds.REDACTED in real_token
-    assert "abcdEFGH123456789012" not in real_token
 
 
 def test_nex_agent_facing_payload_redacts_source_credential(tmp_path):

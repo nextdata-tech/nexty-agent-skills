@@ -46,11 +46,7 @@ _SECRET_KEY = re.compile(
     r"authorization|cookie|credential|bearer|private[_-]?key|grant)",
     re.IGNORECASE,
 )
-#  Same shape as ``_BEARER_TOKEN_RE`` in ``runner/supervisor_history.py``: a
-#  real bearer credential is a long opaque string, so the minimum length
-#  keeps this from swallowing ordinary prose like "bearer token" (the scheme
-#  name itself, used generically) while still catching genuine tokens.
-_BEARER = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{20,}")
+_BEARER = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
 _URL_AUTH = re.compile(
     r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@", re.IGNORECASE
 )
