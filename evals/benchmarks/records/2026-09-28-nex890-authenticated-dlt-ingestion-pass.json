@@ -1,0 +1,165 @@
+{
+  "id": "2026-09-28-nex890-authenticated-dlt-ingestion-pass",
+  "date": "2026-09-28",
+  "label": "nxd-review-closure: pre-validation gaps are advisory; NEX-890 checker parses supervisor next actions",
+  "notes": "Single-arm entry: no comparable before arm exists. This PR changes the NEX-890 checker and rubric together with the skill wording, so every earlier live Opus run (pre-PR skills, prior checker) failed under a different grader: reviews blocked on unverifiable pre-validation gaps, and the checker misread supervisor response shapes and required evidence the runtime, prompt and skill template do not provide; a before run under this PR's checker would measure the checker, not the skill. The after run used this branch's skills while still stamped 0.54.3, before the 0.54.4 release bump: it includes the new nxd-review-closure wording (reviewer grades pre-validation gaps LOW), the closure's own paid-answer reconciliation, and a checker and rubric that match the supervisor, the prompt and the transform template.",
+  "plugin_version": "0.54.3",
+  "report_tags": {
+    "after-v0.54.3": "after-v0.54.3"
+  },
+  "reports": {
+    "after-v0.54.3": {
+      "elapsed_s": 1694.7,
+      "agent_backend": "claude",
+      "judge_backend": "codex",
+      "agent_model": "opus",
+      "scenario_agent_models": {
+        "terminal-authenticated-dlt-api-ingestion": "opus"
+      },
+      "scenario_agent_efforts": {
+        "terminal-authenticated-dlt-api-ingestion": "medium"
+      },
+      "judge_model": "gpt-6-sol",
+      "agent_effort": "medium",
+      "judge_effort": "medium",
+      "scenario_judges": {
+        "terminal-authenticated-dlt-api-ingestion": {
+          "backend": "codex",
+          "model": "gpt-6-sol",
+          "effort": "medium"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "nexty_desktop",
+          "scenario": "terminal-authenticated-dlt-api-ingestion",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 163,
+            "duration_ms": 1604670,
+            "total_cost_usd": 10.523902800000009,
+            "input_tokens": 148,
+            "output_tokens": 123033,
+            "is_error": false,
+            "tool_calls": 219,
+            "setup_result": {
+              "status": "passed",
+              "error": null,
+              "exit_code": null,
+              "trace_path": null
+            },
+            "agent_result": {
+              "status": "passed",
+              "error": null,
+              "exit_code": null,
+              "trace_path": null
+            },
+            "server_result": {
+              "status": "started",
+              "error": null,
+              "exit_code": null,
+              "trace_path": "/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-nexty_desktop-terminal-authenticated-dlt-api-ingestion-9l6uq678/stdio-session/mcp-trace.jsonl"
+            },
+            "nex_bridge_secret_leak": false,
+            "mcp_config": "/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-nexty_desktop-terminal-authenticated-dlt-api-ingestion-9l6uq678/stdio-session/mcp-config.json",
+            "mcp_trace": "/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-nexty_desktop-terminal-authenticated-dlt-api-ingestion-9l6uq678/stdio-session/mcp-trace.jsonl",
+            "nex_review_children": {
+              "nex890-positive": {
+                "count": 1,
+                "returned": true
+              },
+              "nex890-401": {
+                "count": 1,
+                "returned": true
+              },
+              "nex890-403": {
+                "count": 1,
+                "returned": true
+              },
+              "nex890-404": {
+                "count": 1,
+                "returned": true
+              }
+            },
+            "nex_bridge_diagnostics": {
+              "after_drain": {
+                "accept_thread_stopped": true,
+                "live_handlers": 0,
+                "oldest_pending_age_s": null,
+                "pending_count": 0,
+                "pending_methods": {},
+                "quiesced": true,
+                "supervisor_stdout_eof": true
+              },
+              "agent_exit": {
+                "oldest_pending_age_s": null,
+                "pending_count": 0,
+                "pending_methods": {},
+                "supervisor_stdout_eof": true
+              },
+              "forwarded_requests": 43,
+              "matched_responses": 43,
+              "non_json_response_lines": 0,
+              "supervisor_exit_code": 0,
+              "supervisor_shutdown_requested_at_eof": false,
+              "supervisor_shutdown_requested_at_exit": false,
+              "supervisor_stdout_eof": true,
+              "unmatched_responses": 0
+            },
+            "nex_stream_errors": [],
+            "nex_agent_stream_secret_leak": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "stdio_mcp_trace_source": "runner-memory",
+            "stdio_mcp_trace_events": 189,
+            "agent_model": "opus",
+            "agent_effort": "medium",
+            "deterministic_check": "passed",
+            "judge_backend": "codex",
+            "judge_model": "gpt-6-sol",
+            "judge_effort": "medium"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "runner-bridge-review-proof",
+                "pass": true,
+                "why": "The trace shows one successful foreground child per captured workflow, each with review-reader tool calls and results before its single successful review report; the runner verifies their ordering."
+              },
+              {
+                "id": "dlt-profile-architecture",
+                "pass": true,
+                "why": "The runner verifies the DLT profile and credential contract, byte-identical workflow transforms, and the required public-profile variants."
+              },
+              {
+                "id": "positive-pagination-and-query",
+                "pass": true,
+                "why": "The runner verifies unfiltered pagination totaling 23 rows, separate paid-filter pagination, and a trace-bound paid query returning 16."
+              },
+              {
+                "id": "negative-matrix",
+                "pass": true,
+                "why": "The runner verifies matched validation failures and status-bound wire intervals for 401, 403, and 404, plus all three static-case contracts."
+              },
+              {
+                "id": "materialization-publication-redaction",
+                "pass": true,
+                "why": "The trace shows start_run, authoritative inspect_run, resume, paid query, and export in order, and the runner verifies the lifecycle and absence of credential markers in frozen outputs."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All five checks pass on the trace and authoritative runner facts."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"checks\": [{\"id\": \"cycle/nex890-positive/consent-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-positive/capture-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-positive/report_requirement-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-positive/validate-unique\", \"passed\": true}, {\"id\": \"review/nex890-positive/validation-action-returned\", \"passed\": true}, {\"id\": \"cycle/nex890-positive/action-order\", \"passed\": true}, {\"id\": \"cycle/nex890-positive/action-types\", \"passed\": true}, {\"id\": \"capture/nex890-positive/successful\", \"passed\": true}, {\"id\": \"capture/nex890-positive/generation-bound\", \"passed\": true}, {\"id\": \"review/nex890-positive/reader-before-report\", \"passed\": true}, {\"id\": \"review/nex890-positive/report-success\", \"passed\": true}, {\"id\": \"validation/nex890-positive/after-review\", \"passed\": true}, {\"id\": \"validation/nex890-positive/response\", \"passed\": true}, {\"id\": \"publication/nex890-positive/start-run-policy\", \"passed\": true}, {\"id\": \"publication/positive/start-run-after-validation\", \"passed\": true}, {\"id\": \"query/paid-call-after-publication\", \"passed\": true}, {\"id\": \"snapshot/nex890-positive/capture-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-positive/capture-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-positive/validation-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-positive/validation-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-positive/reviewed-files-unchanged\", \"passed\": true}, {\"id\": \"cycle/nex890-401/consent-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-401/capture-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-401/report_requirement-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-401/validate-unique\", \"passed\": true}, {\"id\": \"review/nex890-401/validation-action-returned\", \"passed\": true}, {\"id\": \"cycle/nex890-401/action-order\", \"passed\": true}, {\"id\": \"cycle/nex890-401/action-types\", \"passed\": true}, {\"id\": \"capture/nex890-401/successful\", \"passed\": true}, {\"id\": \"capture/nex890-401/generation-bound\", \"passed\": true}, {\"id\": \"review/nex890-401/reader-before-report\", \"passed\": true}, {\"id\": \"review/nex890-401/report-success\", \"passed\": true}, {\"id\": \"validation/nex890-401/after-review\", \"passed\": true}, {\"id\": \"validation/nex890-401/response\", \"passed\": true}, {\"id\": \"publication/nex890-401/start-run-policy\", \"passed\": true}, {\"id\": \"snapshot/nex890-401/capture-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-401/capture-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-401/validation-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-401/validation-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-401/reviewed-files-unchanged\", \"passed\": true}, {\"id\": \"cycle/nex890-403/consent-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-403/capture-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-403/report_requirement-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-403/validate-unique\", \"passed\": true}, {\"id\": \"review/nex890-403/validation-action-returned\", \"passed\": true}, {\"id\": \"cycle/nex890-403/action-order\", \"passed\": true}, {\"id\": \"cycle/nex890-403/action-types\", \"passed\": true}, {\"id\": \"capture/nex890-403/successful\", \"passed\": true}, {\"id\": \"capture/nex890-403/generation-bound\", \"passed\": true}, {\"id\": \"review/nex890-403/reader-before-report\", \"passed\": true}, {\"id\": \"review/nex890-403/report-success\", \"passed\": true}, {\"id\": \"validation/nex890-403/after-review\", \"passed\": true}, {\"id\": \"validation/nex890-403/response\", \"passed\": true}, {\"id\": \"publication/nex890-403/start-run-policy\", \"passed\": true}, {\"id\": \"snapshot/nex890-403/capture-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-403/capture-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-403/validation-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-403/validation-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-403/reviewed-files-unchanged\", \"passed\": true}, {\"id\": \"cycle/nex890-404/consent-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-404/capture-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-404/report_requirement-unique\", \"passed\": true}, {\"id\": \"cycle/nex890-404/validate-unique\", \"passed\": true}, {\"id\": \"review/nex890-404/validation-action-returned\", \"passed\": true}, {\"id\": \"cycle/nex890-404/action-order\", \"passed\": true}, {\"id\": \"cycle/nex890-404/action-types\", \"passed\": true}, {\"id\": \"capture/nex890-404/successful\", \"passed\": true}, {\"id\": \"capture/nex890-404/generation-bound\", \"passed\": true}, {\"id\": \"review/nex890-404/reader-before-report\", \"passed\": true}, {\"id\": \"review/nex890-404/report-success\", \"passed\": true}, {\"id\": \"validation/nex890-404/after-review\", \"passed\": true}, {\"id\": \"validation/nex890-404/response\", \"passed\": true}, {\"id\": \"publication/nex890-404/start-run-policy\", \"passed\": true}, {\"id\": \"snapshot/nex890-404/capture-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-404/capture-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-404/validation-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-404/validation-hash-bound\", \"passed\": true}, {\"id\": \"snapshot/nex890-404/reviewed-files-unchanged\", \"passed\": true}, {\"id\": \"cycle/exact-four-workflows\", \"passed\": true}, {\"id\": \"review/no-reader-outside-capture\", \"passed\": true}, {\"id\": \"cycle/distinct-authoring-roots\", \"passed\": true}, {\"id\": \"cycle/no-overlap\", \"passed\": true}, {\"id\": \"redaction/no-marker-in-captured-files\", \"passed\": true}, {\"id\": \"profile/positive-contract\", \"passed\": true}, {\"id\": \"profile/nex890-401/single-public-variant\", \"passed\": true}, {\"id\": \"profile/nex890-403/single-public-variant\", \"passed\": true}, {\"id\": \"profile/nex890-404/single-public-variant\", \"passed\": true}, {\"id\": \"transform/byte-identical-across-workflows\", \"passed\": true}, {\"id\": \"transform/dlt-profile-credential-contract\", \"passed\": true}, {\"id\": \"static/malformed-endpoint-profile\", \"passed\": true}, {\"id\": \"static/omitted-endpoint-profile\", \"passed\": true}, {\"id\": \"static/hard-coded-endpoint-runner-ast-rejection\", \"passed\": true}, {\"id\": \"diagnostic/nex890-401/matched-validation-object\", \"passed\": true}, {\"id\": \"diagnostic/nex890-403/matched-validation-object\", \"passed\": true}, {\"id\": \"diagnostic/nex890-404/matched-validation-object\", \"passed\": true}, {\"id\": \"wire/nex890-positive/status-interval-bound\", \"passed\": true}, {\"id\": \"wire/nex890-401/status-interval-bound\", \"passed\": true}, {\"id\": \"wire/nex890-403/status-interval-bound\", \"passed\": true}, {\"id\": \"wire/nex890-404/status-interval-bound\", \"passed\": true}, {\"id\": \"landed/unfiltered-pagination\", \"passed\": true}, {\"id\": \"landed/paid-filter-pagination\", \"passed\": true}, {\"id\": \"publication/inspect_run-unique-success\", \"passed\": true}, {\"id\": \"publication/resume_data_product-unique-success\", \"passed\": true}, {\"id\": \"publication/run_semantic_query-unique-success\", \"passed\": true}, {\"id\": \"publication/export_data_product-unique-success\", \"passed\": true}, {\"id\": \"publication/start-run-action-unique-success\", \"passed\": true}, {\"id\": \"publication/positive-lifecycle-order\", \"passed\": true}, {\"id\": \"publication/inspect-authoritative-run\", \"passed\": true}, {\"id\": \"query/paid-filter-trace-bound\", \"passed\": true}, {\"id\": \"query/paid-result-16\", \"passed\": true}, {\"id\": \"export/frozen-output-redaction\", \"passed\": true}, {\"id\": \"redaction/no-marker-in-frozen-outputs\", \"passed\": true}], \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}

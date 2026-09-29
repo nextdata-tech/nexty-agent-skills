@@ -593,7 +593,7 @@ Twenty-one scenarios are currently skipped:
 | `incremental-transform-state` | scripts a follow-up turn and a three-run stateful checker; the PR gate runs `codex`, which cannot drive multi-turn |
 | `desktop-custom-contracts` | requires the manually operated default-deny source-isolation wrapper and operator-resolved protected roots; the automatic PR runner does not provision either |
 | `terminal-self-check-provenance` | needs an authenticated Claude CLI and a provisioned `nxd-desktop-supervisor` runtime; run explicitly with `EVAL_DESKTOP_SUPERVISOR_DIR`, `EVAL_DESKTOP_PYTHON`, and `EVAL_NXD_REPO_ROOT` |
-| `terminal-authenticated-dlt-api-ingestion` | needs an authenticated Claude CLI, a provisioned `nxd-desktop-supervisor` runtime, and the runner-owned loopback fixture |
+| `terminal-authenticated-dlt-api-ingestion` | needs an authenticated Claude CLI, a provisioned `nxd-desktop-supervisor` runtime built with the `synthetic-evaluation` feature, and the runner-owned loopback fixture. The runner mints the fixture credential as `NXD_EVAL_SOURCE_TOKEN` for the trusted supervisor child only, and sets `NXD_EVAL_TERMINAL_WORKFLOW_ROUTE` for the checker; neither is operator-set |
 | `terminal-timeout-lifecycle` | needs an authenticated Claude CLI, a provisioned `nxd-desktop-supervisor` runtime, and the runner-owned loopback fixture |
 | `optional-empty-output-aggregate-desktop` | needs a compatible live `nxd-desktop-supervisor` runtime; native compiler execution is a separate follow-up |
 

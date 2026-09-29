@@ -38,6 +38,12 @@ from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios import followups
 from dp_scenarios.scenario import Scenario
 from dp_scenarios.synthgen import get_dataset
+from dp_scenarios.credential_contract import (
+    API_SOURCE_CREDENTIAL_MAPPING,
+    SOURCE_CREDENTIAL_ENV,
+    SOURCE_SERVICE_NAME,
+    TRUSTED_CREDENTIAL_ENVS_ENV,
+)
 from dp_scenarios.runner.review_guard import RETAINED_REVIEW_ROOT_NAMES
 
 
@@ -52,16 +58,12 @@ DEFAULT_WORKFLOW_ACTIVATION_BUNDLE = Path(__file__).with_name(
     "workflow-execution-activation.json"
 )
 WORKFLOW_ACTIVATION_DIGEST_ENV = "NXD_EVAL_WORKFLOW_ACTIVATION_SHA256"
-SOURCE_SERVICE_NAME = "api-source"
-SOURCE_CREDENTIAL_ENV = "NXD_EVAL_SOURCE_TOKEN"
-TRUSTED_CREDENTIAL_ENVS_ENV = "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"
 NATIVE_SOURCE_CONTRACT_FILENAME = "native-source-contract.json"
 NATIVE_SOURCE_STATE_FILENAME = "native-source-state.json"
 NATIVE_SOURCE_CONTRACT_SCHEMA = 1
 NATIVE_SOURCE_STATE_SCHEMA = 1
 NATIVE_SOURCE_STATE_MODEL = "runtime-v1"
 NATIVE_SESSION_DIGEST_VERSION = 2
-API_SOURCE_CREDENTIAL_MAPPING = f"{SOURCE_SERVICE_NAME}={SOURCE_CREDENTIAL_ENV}"
 _MAX_TRUSTED_CREDENTIAL_MAPPING_ENTRIES = 16
 _MAX_TRUSTED_CREDENTIAL_MAPPING_LENGTH = 4096
 _CREDENTIAL_MAPPING_ENTRY = re.compile(

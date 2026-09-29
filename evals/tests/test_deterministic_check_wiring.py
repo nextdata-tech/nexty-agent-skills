@@ -132,3 +132,84 @@ def test_scenario_without_the_opt_in_is_untouched(harness, tmp_path, monkeypatch
     assert res.ok is True, res.error
     assert "deterministic_check" not in res.metrics
     assert res.verdict["overall_pass"] is True
+
+
+def test_run_one_preserves_judge_overrides_without_cli_explicit_flags(
+    harness, tmp_path, monkeypatch
+):
+    harness(net_refunds=True)
+    seen = {}
+
+    def capture_judge(*args, **kwargs):
+        seen["model"] = args[5]
+        seen["effort"] = kwargs["effort"]
+        return {"overall_pass": True, "summary": "captured"}
+
+    monkeypatch.setattr(run, "run_judge", capture_judge)
+    res = run.run_one(
+        _skill_set(),
+        SCENARIO,
+        _args(tmp_path, judge_model="caller-model", judge_effort="low"),
+    )
+
+    assert res.ok is True, res.error
+    assert seen == {"model": "caller-model", "effort": "low"}
+
+
+def _nex_export_fixture(tmp_path: Path, content: bytes):
+    import hashlib
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    archive = str(workspace.resolve() / "export.zip")
+    Path(archive).write_bytes(content)
+    payload = json.dumps({"archive_path": archive})
+    trace = [
+        {
+            "direction": "request", "operation": "export_data_product", "jsonrpc_id": 7,
+            "message": {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {
+                "name": "export_data_product", "arguments": {"destination": archive},
+            }},
+        },
+        {
+            "direction": "response", "operation": "export_data_product", "jsonrpc_id": 7,
+            "message": {"jsonrpc": "2.0", "id": 7, "result": {
+                "content": [{"type": "text", "text": payload}],
+            }},
+        },
+    ]
+    frozen = {
+        run._desktop_rpc_id_key(7): {
+            "archive_path": archive, "content": content,
+            "sha256": hashlib.sha256(content).hexdigest(), "size": len(content),
+        }
+    }
+    return workspace, archive, trace, frozen
+
+
+def test_nex890_untouched_export_grades_frozen_bytes(tmp_path):
+    workspace, archive, trace, frozen = _nex_export_fixture(tmp_path, b"archive")
+    assert run._nex890_frozen_exports(trace, workspace, frozen_exports=frozen) == {
+        archive: b"archive"
+    }
+
+
+def test_nex890_export_tampered_after_response_fails_closed(tmp_path):
+    workspace, archive, trace, frozen = _nex_export_fixture(tmp_path, b"archive")
+    Path(archive).write_bytes(b"rewritten by the agent")
+    assert run._nex890_frozen_exports(trace, workspace, frozen_exports=frozen) == {}
+
+
+@pytest.mark.parametrize("variant", ["missing", "error", "none", "other-path"])
+def test_nex890_export_without_a_valid_freeze_fails_closed(tmp_path, variant):
+    workspace, archive, trace, frozen = _nex_export_fixture(tmp_path, b"archive")
+    key = run._desktop_rpc_id_key(7)
+    if variant == "missing":
+        frozen = {}
+    elif variant == "error":
+        frozen = {key: {"archive_path": archive, "error": "archive could not be read"}}
+    elif variant == "none":
+        frozen = None
+    else:
+        frozen[key] = {**frozen[key], "archive_path": archive + ".other"}
+    assert run._nex890_frozen_exports(trace, workspace, frozen_exports=frozen) == {}
