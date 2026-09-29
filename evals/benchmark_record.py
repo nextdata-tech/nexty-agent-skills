@@ -198,6 +198,9 @@ DP_SCORE_FIELDS = frozenset({
     "gates", "total", "scoreable_max", "threshold", "waived_gates",
     "hard_gate_flags", "state", "findings",
 })
+# Optional in raw reports produced after the honesty findings were surfaced;
+# compact records keep the original score shape.
+DP_OPTIONAL_SCORE_FIELDS = frozenset({"honesty_findings"})
 DP_RAW_GATE_FIELDS = frozenset({
     "passed", "points", "codes", "examined", "ungraded", "required", "diagnostics",
 })
@@ -979,8 +982,27 @@ def _validate_issue(value: Any, path: str) -> None:
         _integer(issue["line"], f"{path}.line", minimum=1)
 
 
+def _validate_honesty_findings(value: Any, path: str) -> None:
+    if not isinstance(value, list):
+        raise BenchmarkError(f"{path} must be a list")
+    for index, finding in enumerate(value):
+        item_path = f"{path}[{index}]"
+        raw = _exact_keys(finding, {"code", "line", "value", "field"}, item_path,
+                          required={"code"})
+        _code(raw["code"], f"{item_path}.code")
+        if raw.get("line") is not None:
+            _integer(raw["line"], f"{item_path}.line", minimum=1)
+
+
 def _validate_score(value: Any, path: str, *, compact: bool) -> None:
-    raw = _exact_keys(value, DP_SCORE_FIELDS, path, required=DP_SCORE_FIELDS)
+    raw = _exact_keys(
+        value,
+        DP_SCORE_FIELDS if compact else DP_SCORE_FIELDS | DP_OPTIONAL_SCORE_FIELDS,
+        path,
+        required=DP_SCORE_FIELDS,
+    )
+    if "honesty_findings" in raw:
+        _validate_honesty_findings(raw["honesty_findings"], f"{path}.honesty_findings")
     gates = raw["gates"]
     if not isinstance(gates, dict):
         raise BenchmarkError(f"{path}.gates must be an object")

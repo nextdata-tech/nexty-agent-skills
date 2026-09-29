@@ -189,6 +189,16 @@ def human_summary(result: TierResult) -> str:
                 "  hard gates: "
                 + ", ".join(f"{name}={value}" for name, value in run.score.hard_gate_flags.items())
             )
+            if run.score.hard_gate_flags.get("honesty") is False and run.score.honesty_findings:
+                # A hard-gate failure must always carry a visible reason: the
+                # ledger lint findings that made honesty=False, not just the
+                # bare flag.
+                lines.append("  honesty findings:")
+                for finding in run.score.honesty_findings:
+                    lines.append(
+                        f"    {finding.code} line={finding.line_number} "
+                        f"field={finding.field} value={finding.value!r}"
+                    )
             lines.append(
                 f"  route fidelity: {run.route_fidelity_status} ({run.route_fidelity_reason})"
             )
