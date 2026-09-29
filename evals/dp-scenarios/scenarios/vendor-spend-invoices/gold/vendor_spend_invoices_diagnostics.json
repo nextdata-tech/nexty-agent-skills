@@ -1,0 +1,22 @@
+{
+  "category_count": 3,
+  "grand_total_cents": 3834000,
+  "invoice_count": 12,
+  "priced_invoice_count": 11,
+  "unpriced_invoice_count": 1,
+  "unpriced_invoice_ids": [
+    "I08"
+  ],
+  "vendor_ap_totals_cents": {
+    "V01": 1770000,
+    "V02": 611500,
+    "V03": 815000,
+    "V04": 207500,
+    "V05": 430000
+  },
+  "vendor_count": 5,
+  "word_phrase_invoice_ids": [
+    "I02",
+    "I05"
+  ]
+}

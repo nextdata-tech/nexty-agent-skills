@@ -1,0 +1,76 @@
+version: 1
+id: vendor-spend-invoices
+tier: full
+run_order: 17
+fixture:
+  dataset: vendor_spend_invoices
+  seed: 29
+  variant: single-month-invoice-memos
+  plant: B9-unstated-amount
+coverage:
+  variant: single-month-invoice-memos
+  untested: This package grades a synthetic one-month AP invoice extraction with a required unpriced-invoice decision, an in-transform field-mapper route, and reconciliation against a landed AP control; it does not test a live provider account, macOS OS confirmation, or an authenticated Desktop run.
+turn_budget: 22
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/rubber-stamper.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 3
+  5: 3
+  6: 3
+  7: 3
+  8: 3
+  9: 3
+  10: 5
+  11: 4
+  12: 4
+  13: 3
+  14: 5
+  15: 5
+  16: 5
+  17: 5
+  18: 5
+  19: 7
+  20: 7
+  21: 7
+  22: 7
+required_plants:
+  - B9-unstated-amount
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: vendor_spend_invoices
+    decision_id: B9-unstated-amount
+    mapper_model: claude-sonnet-5
+    mapper_ceilings:
+      max_calls: 64
+      max_tokens: 250000
+      max_usd_per_approval: 3.00
+      max_usd_session: 5.00
+    pii_sentinels:
+      - NAME-SENTINEL-eeccc4832743fba01a960605f2a6e5daa2402790c425dede
+    forbidden_output_fields:
+      - paid
+      - payment_status
+gold:
+  answer: gold/vendor_spend_invoices_answer.json
+  category: gold/vendor_spend_invoices_category.json
+  invoices: gold/vendor_spend_invoices_invoices.json
+  diagnostics: gold/vendor_spend_invoices_diagnostics.json
+operator:
+  sentinel: null
+  obstacle_terms: []

@@ -56,6 +56,7 @@ EXPECTED_TIERS = {
     "headcount-attrition": "full",
     "mrr-waterfall": "full",
     "crm-pipeline-drift": "full",
+    "vendor-spend-invoices": "full",
 }
 
 _BASE_REQUIRED_GATES = set(GATE_PHASES) - {"capability", "narrowing", "query"}
@@ -72,6 +73,7 @@ EXPECTED_REQUIRED_GATES = {
         "application-reconciliation",
         "locale-timezone",
         "mrr-waterfall",
+        "vendor-spend-invoices",
     } else set())
     for scenario_id in EXPECTED_TIERS
 }
@@ -577,6 +579,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "marketing-attribution")
     shutil.rmtree(root / "mrr-waterfall")
     shutil.rmtree(root / "crm-pipeline-drift")
+    shutil.rmtree(root / "vendor-spend-invoices")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
         shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
@@ -807,7 +810,7 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             4
             if scenario.id == "crm-pipeline-drift"
             else 3
-            if scenario.id == "crm-pipeline"
+            if scenario.id in {"crm-pipeline", "vendor-spend-invoices"}
             else 2
             if scenario.id in {
                 "inventory-position",
@@ -852,4 +855,5 @@ def test_only_scenarios_declaring_answer_gold_have_scoreable_query_gates() -> No
         "application-reconciliation",
         "locale-timezone",
         "mrr-waterfall",
+        "vendor-spend-invoices",
     }

@@ -1,0 +1,32 @@
+[
+  {
+    "amount_cents": 1770000,
+    "category": "Software",
+    "vendor_id": "V01",
+    "vendor_name": "Aster Software"
+  },
+  {
+    "amount_cents": 611500,
+    "category": "Facilities",
+    "vendor_id": "V02",
+    "vendor_name": "Birch Facilities"
+  },
+  {
+    "amount_cents": 815000,
+    "category": "Professional Services",
+    "vendor_id": "V03",
+    "vendor_name": "Cedar Advisory"
+  },
+  {
+    "amount_cents": 207500,
+    "category": "Software",
+    "vendor_id": "V04",
+    "vendor_name": "Dune Systems"
+  },
+  {
+    "amount_cents": 430000,
+    "category": "Facilities",
+    "vendor_id": "V05",
+    "vendor_name": "Elm Estates"
+  }
+]
