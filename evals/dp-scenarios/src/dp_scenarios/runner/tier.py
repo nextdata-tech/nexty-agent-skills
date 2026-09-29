@@ -67,6 +67,7 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
+from .chain import CHAIN_SCHEMA, ChainController
 from .evidence_context import load_supervisor_history_view
 from .supervisor_history import PUBLICATION_SCHEMA, RUN_RECORDS_SCHEMA
 from .checkpoint import (
@@ -694,6 +695,21 @@ def _recorded_publication_schedule_snapshot(
     )
 
 
+def _recorded_publication_at_turn(
+    recording: ReplayRecording, completed_turns: int
+) -> Mapping[str, object] | None:
+    """Use only the supervisor snapshot available before the next replay turn."""
+
+    snapshots = recording.metadata.get("publication_schedule_by_turn")
+    if not isinstance(snapshots, list):
+        return None
+    for item in reversed(snapshots):
+        if isinstance(item, Mapping) and item.get("turn") == completed_turns:
+            value = item.get("snapshot")
+            return value if isinstance(value, Mapping) else None
+    return None
+
+
 def _first_json(root: Path, names: Sequence[str]) -> object | None:
     for name in names:
         value = _load_json(root / name)
@@ -716,13 +732,42 @@ def _replay_verification(
         return "not-attempted", "driver operator output is not assumed deterministic"
     if generated_operator:
         return "not-attempted", "generated operator output is not assumed deterministic"
+    chain = getattr(scenario, "chain", None)
     try:
-        transport = ReplaySession(recording)
+        replay_engine: OperatorEngine | None = None
+        transition = recording.metadata.get("chain_state") if chain is not None else None
+        if chain is not None and (
+            not isinstance(transition, Mapping) or transition.get("schema") != CHAIN_SCHEMA
+        ):
+            return "mismatch", "chained replay has no validated boundary record"
+
+        def on_replayed_turn(turn: int) -> None:
+            if (
+                chain is not None
+                and isinstance(transition, Mapping)
+                and transition.get("status") == "switched"
+                and transition.get("turn") == turn
+            ):
+                assert replay_engine is not None
+                replay_engine.activate_decision_overlay(chain.decision_overlay)
+                replay_engine.skip_to_suffix(chain.prefix_turns)
+
+        transport = ReplaySession(
+            recording,
+            on_turn_complete=on_replayed_turn if chain is not None else None,
+        )
         replay = OperatorEngine(
             scenario.script,
             transport,
-            publication_history_reader=lambda: _recorded_publication_schedule_snapshot(recording),
-        ).run()
+            publication_history_reader=(
+                (lambda: _recorded_publication_at_turn(recording, transport._index))
+                if chain is not None
+                else (lambda: _recorded_publication_schedule_snapshot(recording))
+            ),
+            chain_prefix_turns=chain.prefix_turns if chain is not None else None,
+        )
+        replay_engine = replay
+        replay = replay.run()
         if transport.remaining_turns:
             return "mismatch", f"replay left {transport.remaining_turns} turn(s) unconsumed"
     except Exception as exc:
@@ -1124,6 +1169,7 @@ def _source_turn_callback(
     environment: RunEnvironment,
     artifact_root: Path,
     checkpoint_callback: Callable[[ReplayRecording, int], None] | None,
+    after_snapshot: Callable[[int], None] | None = None,
 ) -> Callable[[ReplayRecording, int], None]:
     """Persist source evidence at each complete turn before its checkpoint."""
 
@@ -1141,6 +1187,8 @@ def _source_turn_callback(
             turn_number=turn_number,
             turn_snapshots=turn_snapshots,
         )
+        if after_snapshot is not None:
+            after_snapshot(turn_number)
         if checkpoint_callback is not None:
             checkpoint_callback(snapshot, turn_number)
 
@@ -2633,6 +2681,9 @@ class TierRunner:
 
     def _run_scenario_epochs(self, scenario: Scenario, *, pins: PinnedVersions) -> tuple[ScenarioRun, ...]:
         runs: list[ScenarioRun] = []
+        chain = getattr(scenario, "chain", None)
+        if chain is not None and self.native_resume_checkpoint is not None:
+            raise TierError("native resume of a chained scenario requires persisted controller state and is not supported")
         for epoch in range(1, scenario.epochs + 1):
             recording = _recorded_for(self.replay_recordings, scenario, epoch)
             if recording is None and self.session_factory is None:
@@ -2728,8 +2779,25 @@ class TierRunner:
                     )
                 else:
                     resume_source_snapshot = None
+                chain_controller: ChainController | None = None
+                publication_snapshots: list[dict[str, object]] = []
+
+                def on_chain_turn(turn_number: int) -> None:
+                    publication_snapshots.append(
+                        {"turn": turn_number, "snapshot": _publication_schedule_snapshot(artifact_root)}
+                    )
+                    assert chain_controller is not None
+                    chain_controller.observe(turn_number)
+
                 if recording is not None:
-                    transport: Transport = ReplaySession(recording, artifact_root=artifact_root)
+                    transport: Transport = ReplaySession(
+                        recording,
+                        artifact_root=artifact_root,
+                        on_turn_complete=(
+                            (lambda turn: chain_controller.observe(turn))
+                            if chain is not None else None
+                        ),
+                    )
                 else:
                     assert self.session_factory is not None
                     base_transport = _session_factory(self.session_factory, scenario, environment, epoch)
@@ -2768,7 +2836,12 @@ class TierRunner:
                             turn=turn,
                         ),
                         on_turn_complete=(
-                            _source_turn_callback(environment, artifact_root, checkpoint_callback)
+                            _source_turn_callback(
+                                environment,
+                                artifact_root,
+                                checkpoint_callback,
+                                after_snapshot=on_chain_turn if chain is not None else None,
+                            )
                             if environment.mock_source is not None
                             else checkpoint_callback
                         ),
@@ -2802,12 +2875,46 @@ class TierRunner:
                             | declared_sentinels(scenario)
                         ),
                         publication_history_reader=(
-                            (lambda: _recorded_publication_schedule_snapshot(recording))
+                            (
+                                (lambda: _recorded_publication_at_turn(recording, transport._index))
+                                if chain is not None
+                                else (lambda: _recorded_publication_schedule_snapshot(recording))
+                            )
                             if recording is not None
                             else (lambda: _publication_schedule_snapshot(artifact_root))
                         ),
+                        chain_prefix_turns=(
+                            chain.prefix_turns if chain is not None else None
+                        ),
                     )
+                    if chain is not None:
+                        if environment.mock_source is None:
+                            raise TierError("chained scenario requires a mock source")
+                        replay_transition = (
+                            recording.metadata.get("chain_state") if recording is not None else None
+                        )
+                        if recording is not None and (
+                            not isinstance(replay_transition, Mapping)
+                            or replay_transition.get("schema") != CHAIN_SCHEMA
+                            or not isinstance(recording.metadata.get("publication_schedule_by_turn"), list)
+                        ):
+                            raise TierError("chained replay has no boundary or turn-attributed publication record")
+                        chain_controller = ChainController(
+                            chain,
+                            artifact_root,
+                            environment.mock_source,
+                            engine.activate_decision_overlay,
+                            engine.skip_to_suffix,
+                            replay_transition=replay_transition if isinstance(replay_transition, Mapping) else None,
+                        )
                     run_result = engine.run()
+                    if chain_controller is not None:
+                        chain_controller.finalize(
+                            interrupted=run_result.terminal_state in {
+                                EngineTerminalState.ENVIRONMENT_WEDGE,
+                                EngineTerminalState.TURN_TIMEOUT,
+                            }
+                        )
                     if isinstance(transport, ReplaySession) and transport.remaining_turns:
                         raise TierError(
                             f"replay recording for {scenario.id} has {transport.remaining_turns} unconsumed turn(s)"
@@ -2818,6 +2925,9 @@ class TierRunner:
                             schedule_snapshot = _publication_schedule_snapshot(artifact_root)
                             if schedule_snapshot is not None:
                                 metadata["publication_schedule"] = schedule_snapshot
+                        if chain_controller is not None:
+                            metadata["chain_state"] = dict(chain_controller.state)
+                            metadata["publication_schedule_by_turn"] = publication_snapshots
                         replay = transport.recording(
                             manifest=environment.manifest.to_dict(),
                             metadata=metadata,
@@ -3126,6 +3236,8 @@ class TierRunner:
         history_kwargs: dict[str, object] = {}
         if "supervisor_history" in follow_up_parameters:
             history_kwargs["supervisor_history"] = load_supervisor_history_view(artifact_root)
+        if "artifact_root" in follow_up_parameters:
+            history_kwargs["artifact_root"] = artifact_root
         if "fired_plants" in follow_up_parameters:
             fired_plants = observations.get("fired_plant_ids", ())
             if not isinstance(fired_plants, Sequence) or isinstance(fired_plants, (str, bytes)):
@@ -3153,6 +3265,23 @@ class TierRunner:
             )
         else:
             follow_up = follow_up_method(follow_up_target, **history_kwargs)
+        if getattr(scenario, "chain", None) is not None:
+            chain_state = _load_json(artifact_root / "chain-state.json")
+            if not isinstance(chain_state, Mapping) or chain_state.get("schema") != CHAIN_SCHEMA:
+                chain_status, chain_reason = "ungraded", "drift_chain_history_unavailable"
+            else:
+                chain_status = chain_state.get("status")
+                chain_reason = chain_state.get("reason")
+            if chain_status != "switched":
+                reason = chain_reason if isinstance(chain_reason, str) and chain_reason else "drift_chain_history_unavailable"
+                follow_up = GateResult(
+                    "follow-up",
+                    False,
+                    0,
+                    follow_up.findings + (Finding(reason, "chained publication boundary did not complete"),),
+                    examined=chain_status == "failed",
+                    ungraded=chain_status != "failed",
+                )
         ungraded = observations.get("ungraded_criteria", ())
         if not isinstance(ungraded, Sequence) or isinstance(ungraded, (str, bytes)):
             ungraded = ()
@@ -3270,6 +3399,17 @@ class TierRunner:
             # rule. Keep sentinel and invalid classifications intact; only
             # ordinary pass/fail scoring becomes ungraded.
             score = replace(score, state=ScoreTerminalState.UNGRADED)
+        if (
+            getattr(scenario, "chain", None) is not None
+            and isinstance(chain_state, Mapping)
+            and chain_state.get("status") == "failed"
+            and score.state not in {ScoreTerminalState.INVALID, ScoreTerminalState.AUTOMATIC_ZERO}
+        ):
+            # An exhausted prefix without publication (or without its
+            # executable constraint) is an observed agent failure. The
+            # generic incomplete-terminal rule above would otherwise turn it
+            # into UNGRADED merely because the suffix was correctly withheld.
+            score = replace(score, state=ScoreTerminalState.FAILED)
         return score, facts, calls, route_status, route_reason
 
 

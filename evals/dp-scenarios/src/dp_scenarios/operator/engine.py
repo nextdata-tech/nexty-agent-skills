@@ -184,6 +184,7 @@ class TerminalState(str, Enum):
     COMPLETED = "completed"
     TURN_BUDGET_EXHAUSTED_PENDING_ANSWER = "turn_budget_exhausted_pending_answer"
     SCRIPT_EXHAUSTED = "script_exhausted"
+    CHAIN_PREFIX_FAILED = "chain_prefix_failed"
     SENTINEL_TRIP = "sentinel_trip"
     ENVIRONMENT_WEDGE = "environment_wedge"
     TURN_TIMEOUT = "turn_timeout"
@@ -872,6 +873,7 @@ class OperatorEngine:
         driver: DriverOperator | None = None,
         extra_sentinels: Sequence[bytes | str] = (),
         publication_history_reader: Callable[[], Mapping[str, object] | None] | None = None,
+        chain_prefix_turns: int | None = None,
     ) -> None:
         if generated_operator is not None and driver is not None:
             raise ValueError("an engine takes a generated operator or a driver, never both")
@@ -886,6 +888,13 @@ class OperatorEngine:
         self.script = script
         self.transport = transport
         self.publication_history_reader = publication_history_reader
+        if chain_prefix_turns is not None and (
+            isinstance(chain_prefix_turns, bool)
+            or not 0 < chain_prefix_turns < len(script.turns)
+        ):
+            raise ValueError("chain_prefix_turns must leave a suffix")
+        self.chain_prefix_turns = chain_prefix_turns
+        self._chain_switched = False
         self.driver = driver
         self.ledger_writer = ledger_writer
         self.supervisor_reader = supervisor_reader
@@ -937,6 +946,17 @@ class OperatorEngine:
         self.ledger_rows: list[Mapping[str, object]] = []
         self._current_turn_active = False
         self._pending_decision_overlays: list[str] = []
+        self._pending_suffix_start: int | None = None
+
+    def skip_to_suffix(self, prefix_turns: int) -> None:
+        """Discard unused prefix slots after the runner's publication switch."""
+
+        if isinstance(prefix_turns, bool) or not 0 < prefix_turns < len(self.script.turns):
+            raise ValueError("prefix_turns must leave a suffix")
+        if self._pending_suffix_start is not None and self._pending_suffix_start != prefix_turns:
+            raise ValueError("chain suffix boundary changed")
+        self._pending_suffix_start = prefix_turns
+        self._chain_switched = True
 
     @property
     def active_decision_overlays(self) -> tuple[str, ...]:
@@ -1381,6 +1401,8 @@ class OperatorEngine:
         self.transport.start_fresh_session()
         self._current_turn_active = False
         self._pending_decision_overlays.clear()
+        self._pending_suffix_start = None
+        self._chain_switched = False
         records: list[TurnRecord] = []
         fired_events: list[str] = []
         delivered_event_turns: dict[str, int] = {}
@@ -1462,7 +1484,28 @@ class OperatorEngine:
                 return False
             return True
 
-        for index, scheduled_turn in enumerate(self.script.turns, start=1):
+        script_cursor = 0
+        index = 0
+        chain_prefix_failed = False
+        boundary_just_crossed = False
+        while script_cursor < len(self.script.turns):
+            if self.chain_prefix_turns is not None and script_cursor >= self.chain_prefix_turns and not self._chain_switched:
+                chain_prefix_failed = True
+                break
+            if boundary_just_crossed:
+                # Prefix debt cannot displace the suffix's neutral opening.
+                owed_fixed_beats.clear()
+                owed_approval_text = None
+                early_approval_text = None
+                reconfirm_available = False
+                next_reply = None
+                next_match = None
+                pending_sheet_key = None
+                boundary_just_crossed = False
+            index += 1
+            scheduled_index = script_cursor + 1
+            scheduled_turn = self.script.turns[script_cursor]
+            script_cursor += 1
             self.turn_pointer = index - 1
             self._current_turn_active = True
             if (
@@ -1499,7 +1542,7 @@ class OperatorEngine:
                 else None
             )
             injections = self.script.events.fire(
-                index,
+                scheduled_index,
                 run_records=(
                     snapshot_run_records
                     if isinstance(snapshot_run_records, Mapping)
@@ -2234,12 +2277,16 @@ class OperatorEngine:
                 sheet_key is not None and sheet_key in served_reply_keys
             )
 
+            if self._pending_suffix_start is not None:
+                script_cursor = max(script_cursor, self._pending_suffix_start)
+                self._pending_suffix_start = None
+                boundary_just_crossed = True
             next_scripted_turn = (
-                self.script.turns[index]
-                if index < len(self.script.turns)
+                self.script.turns[script_cursor]
+                if script_cursor < len(self.script.turns)
                 else None
             )
-            next_turn_number = index + 1
+            next_turn_number = script_cursor + 1
             next_turn_has_event = any(
                 card.trigger_turn == next_turn_number
                 for card in self.script.events.cards
@@ -2343,7 +2390,7 @@ class OperatorEngine:
                 self.failure_modes.append("turn_budget_exceeded")
 
             snapshots = tuple(_snapshot(reader) for reader in self.counter_readers)
-            phase = self._turn_phase(index)
+            phase = self._turn_phase(scheduled_index)
             approval_artifact = result.approval_artifact
             artifact_text = _artifact_text(approval_artifact)
             approval_marker = match.approval_requested and self.script.answer_sheet.contains_open_decision_marker(artifact_text)
@@ -2579,8 +2626,11 @@ class OperatorEngine:
                 if failure_reason == REVIEWER_DEADLINE_EXCEEDED
                 else "turn_timeout"
             )
+        elif chain_prefix_failed:
+            terminal_state = TerminalState.CHAIN_PREFIX_FAILED
+            reason = "chain_prefix_failed"
         elif (
-            len(records) == len(self.script.turns)
+            script_cursor == len(self.script.turns)
             and bool(records)
             and "turn_budget_exceeded" not in self.failure_modes
             and all(

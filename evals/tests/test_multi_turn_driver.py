@@ -167,6 +167,178 @@ def test_codex_still_runs_single_turn(monkeypatch):
     assert ok and calls and metrics["final_answer"] == "done"
 
 
+def test_claude_agent_nonzero_exit_uses_completed_process_output(monkeypatch):
+    monkeypatch.setattr(
+        eb.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["claude"], returncode=1, stdout="expired OAuth", stderr=""
+        ),
+    )
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        Path("/tmp"), "prompt", "model", 30
+    )
+    assert not ok
+    assert "expired OAuth" in metrics["error"]
+
+
+def test_claude_judge_nonzero_exit_uses_completed_process_output(monkeypatch):
+    monkeypatch.setattr(
+        eb.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["claude"], returncode=1, stdout="judge auth failed", stderr=""
+        ),
+    )
+    result = eb.ClaudeBackend().run_judge("prompt", "system", "model", 30)
+    assert result["overall_pass"] is False
+    assert "judge auth failed" in result["error"]
+
+
+def test_claude_stdio_nonzero_exit_uses_communicated_output(tmp_path, monkeypatch):
+    mcp_config = tmp_path / "mcp.json"
+    mcp_config.write_text("{}\n", encoding="utf-8")
+
+    class FakePopen:
+        returncode = 1
+
+        def communicate(self, *, timeout):
+            return "stdio OAuth expired", ""
+
+    monkeypatch.setattr(eb.subprocess, "Popen", lambda *_args, **_kwargs: FakePopen())
+    ok, _trace, metrics = eb.ClaudeBackend()._run_agent_stdio(
+        tmp_path,
+        "prompt",
+        "model",
+        30,
+        executable="claude",
+        extra_dirs=None,
+        effort="",
+        env_overrides=None,
+        path_prepend=None,
+        skill_pack_dir=None,
+        allowed_tools=None,
+        mcp_config=mcp_config,
+        strict_mcp_config=True,
+        stdio_session=None,
+        source_audit_markers=None,
+    )
+    assert not ok
+    assert "stdio OAuth expired" in metrics["error"]
+
+
+def test_codex_exec_non_stdio_start_error_still_propagates(monkeypatch):
+    def fail_to_start(*_args, **_kwargs):
+        raise FileNotFoundError("codex executable missing")
+
+    monkeypatch.setattr(eb.subprocess, "run", fail_to_start)
+    with pytest.raises(FileNotFoundError, match="codex executable missing"):
+        eb.CodexBackend().run_agent(Path("/tmp"), "prompt", "model", 30)
+
+
+def test_codex_stdio_agent_uses_isolated_mcp_proxy_and_drops_credentials(tmp_path, monkeypatch):
+    class _Session:
+        server_name = "nxd-desktop"
+        root = tmp_path / "stdio-session"
+
+        def ensure_started(self):
+            self.root.mkdir()
+
+        def attach_process(self, proc):
+            self.proc = proc
+
+        def record_agent(self, *, status, error=None):
+            self.agent_status = (status, error)
+
+        def result_metrics(self):
+            return {"stdio_agent": self.agent_status}
+
+    class _Process:
+        returncode = 0
+
+        def communicate(self, *, input, timeout):
+            self.input = input
+            self.timeout = timeout
+            return (
+                json.dumps({
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "done"},
+                }) + "\n",
+                "",
+            )
+
+        def poll(self):
+            return self.returncode
+
+    calls = []
+    process = _Process()
+
+    def _fake_popen(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return process
+
+    monkeypatch.setattr(eb.subprocess, "Popen", _fake_popen)
+    session = _Session()
+    ok, trace, metrics = eb.CodexBackend().run_agent(
+        tmp_path,
+        "use the MCP server",
+        "gpt-5.6-luna",
+        60,
+        env_overrides={"NXD_EVAL_SOURCE_TOKEN": "runner-secret"},
+        stdio_session=session,
+    )
+    assert ok and trace and metrics["final_answer"] == "done"
+    cmd, kwargs = calls[0]
+    assert "--ignore-user-config" in cmd
+    assert any("mcp_servers.nxd-desktop.command" in item for item in cmd)
+    assert any("mcp_servers.nxd-desktop.required=true" in item for item in cmd)
+    assert kwargs["env"].get("NXD_EVAL_SOURCE_TOKEN") is None
+    assert session.agent_status == ("passed", None)
+
+
+def test_codex_trace_renders_mcp_tool_calls_and_results():
+    stdout = "\n".join([
+        json.dumps({
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "server": "nxd-desktop",
+                "tool": "get_workflow_capabilities",
+                "arguments": {"workflow": "orders"},
+                "result": {
+                    "content": [{"type": "text", "text": '{"execution_enabled":true}'}],
+                    "structured_content": None,
+                },
+                "error": None,
+            },
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "server": "nxd-desktop",
+                "tool": "prepare_workflow",
+                "arguments": {"workflow": "orders"},
+                "result": None,
+                "error": {"message": "invalid proposal"},
+            },
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "done"},
+        }),
+    ])
+
+    trace, metrics = eb.CodexBackend._trace_from_stream(stdout)
+
+    assert "[tool_use:mcp__nxd-desktop__get_workflow_capabilities]" in trace
+    assert '{"execution_enabled":true}' in trace
+    assert "[tool_use:mcp__nxd-desktop__prepare_workflow]" in trace
+    assert '"invalid proposal"' in trace
+    assert metrics["tool_calls"] == 2
+    assert metrics["final_answer"] == "done"
+
+
 def test_backends_declare_the_capability():
     assert eb.ClaudeBackend.supports_multi_turn is True
     assert eb.CodexBackend.supports_multi_turn is False
@@ -268,6 +440,37 @@ def test_shared_flags_match_between_paths():
                  "--setting-sources", "--output-format"):
         assert flag in shared
     assert shared[shared.index("--allowedTools") + 1] == "Read,Bash"
+
+
+def test_multi_turn_nex_session_is_rejected_before_starting_claude(tmp_path, monkeypatch):
+    class FakeNexSession:
+        nex_mode = True
+
+        @property
+        def config_path(self):
+            raise AssertionError("unsupported NEX-890 turns must fail before session startup")
+
+        @property
+        def server_name(self):
+            raise AssertionError("unsupported NEX-890 turns must fail before session startup")
+
+    def fail_launch(*_args, **_kwargs):
+        raise AssertionError("unsupported NEX-890 turns must not start Claude")
+
+    monkeypatch.setattr(eb.subprocess, "Popen", fail_launch)
+    result = eb.ClaudeBackend().run_agent(
+        tmp_path,
+        "prompt",
+        "opus",
+        10,
+        followup_turns=[eb.FollowupTurn(text="second")],
+        stdio_session=FakeNexSession(),
+    )
+
+    assert result[0] is False
+    assert result[1] == ""
+    assert result[2]["status"] == "UNSUPPORTED"
+    assert "one turn only" in result[2]["error"]
 
 
 # --------------------------------------------------------------------------- #
@@ -426,6 +629,8 @@ def test_multi_turn_stdio_path_requests_credential_isolation(
     class StdioSession:
         config_path = tmp_path / "mcp.json"
         server_name = "nxd-desktop"
+        nex_mode = False
+        nex_settings_path = None
 
         def ensure_started(self):
             return self
@@ -958,6 +1163,8 @@ def test_run_one_refuses_multi_turn_on_a_backend_that_cannot(tmp_path, monkeypat
         "agent_backend": "codex", "judge_backend": "codex",
         "agent_model": "m", "judge_model": "m", "agent_effort": "",
         "judge_effort": "", "agent_timeout": 60, "judge_timeout": 60,
+        "_agent_effort_explicit": False, "_judge_effort_explicit": False,
+        "_judge_backend_explicit": False, "_judge_model_explicit": False,
         "cache_dir": None, "docs_base": "https://example.invalid",
     })()
     res = run.run_one(run.SkillSet(name="s", description="d", skills=[]), scenario, args)
@@ -980,6 +1187,8 @@ def test_run_one_reports_a_malformed_turn_declaration(tmp_path):
         "agent_backend": "claude", "judge_backend": "claude",
         "agent_model": "m", "judge_model": "m", "agent_effort": "",
         "judge_effort": "", "agent_timeout": 60, "judge_timeout": 60,
+        "_agent_effort_explicit": False, "_judge_effort_explicit": False,
+        "_judge_backend_explicit": False, "_judge_model_explicit": False,
         "cache_dir": None, "docs_base": "https://example.invalid",
     })()
     res = run.run_one(run.SkillSet(name="s", description="d", skills=[]), scenario, args)

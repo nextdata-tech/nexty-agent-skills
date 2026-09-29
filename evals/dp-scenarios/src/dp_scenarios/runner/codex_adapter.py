@@ -15,8 +15,8 @@ import contextlib
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 import select
 import signal
 import stat
@@ -64,6 +64,21 @@ from dp_scenarios.runner.review_guard import (
     validate_review_timeout_seconds,
 )
 
+# Terminal-route scrub: drop any variable whose *name* carries a single
+# credential word (GITHUB_TOKEN, PGPASSWORD, AWS_SESSION_TOKEN, ...), not only
+# names that combine two of them. The app-server authenticates through the
+# ``auth.json`` handle staged into its isolated ``CODEX_HOME``, and the
+# nxd-desktop MCP server receives its environment from the runner-owned MCP
+# config, so no credential-named host variable is needed by the child.
+_APP_SERVER_CREDENTIAL_ENV_KEY = re.compile(
+    r"(?i)TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_KEY|AUTH"
+)
+# Names the pattern above would match but the app-server legitimately needs.
+# Deliberately empty today: ``CODEX_HOME`` does not match, and Codex's own
+# ``CODEX_API_KEY`` is intentionally withheld on the terminal route. Add a name
+# here, with a reason, only when the child provably requires it.
+_APP_SERVER_ENV_ALLOWLIST: frozenset[str] = frozenset()
+
 
 class CodexAdapterError(RuntimeError):
     """The Codex bridge could not satisfy one turn."""
@@ -88,6 +103,30 @@ CODEX_FILE_CHANGE_FAILURE = "codex_file_change_failed"
 _CODEX_PROVIDER_FAILURE_REASONS = frozenset(
     {CODEX_PROVIDER_ERROR, CODEX_PROVIDER_RETRY_PENDING, PROVIDER_SESSION_LIMIT}
 )
+TERMINAL_WORKFLOW_ROUTE = "terminal_workflow_review_v1"
+TERMINAL_ROUTE_MAX_TURNS = 7
+TERMINAL_ROUTE_MAX_WALL_SECONDS = 1800.0
+TERMINAL_ROUTE_IDLE_TIMEOUT_S = 180.0
+TERMINAL_ROUTE_AUDIT_SNAPSHOT_INTERVAL = 16
+TERMINAL_ROUTE_REQUIRED_TOOLS = frozenset({
+    "get_workflow_capabilities", "check_data_product", "prepare_workflow",
+    "advance_workflow", "inspect_workflow", "inspect_run", "list_data_products",
+    "resume_data_product", "describe_models", "run_semantic_query",
+    "export_data_product",
+})
+TERMINAL_ROUTE_COMPLETION_TOOLS = frozenset({
+    "advance_workflow", "inspect_workflow", "inspect_run", "list_data_products",
+    "resume_data_product", "describe_models", "run_semantic_query",
+    "export_data_product",
+})
+_ROUTE_PASSIVE_ITEM_TYPES = frozenset({
+    "agent_message", "user_message", "error", "reasoning", "plan",
+    "entered_review_mode", "exited_review_mode",
+})
+_ROUTE_ACTION_ITEM_TYPES = frozenset({
+    "mcp_tool_call", "command_execution", "collab_agent_tool_call",
+    "file_change", "patch", "apply_patch",
+})
 _FILE_CHANGE_FAILURE_STATUSES = frozenset(
     {"failed", "error", "rejected", "cancelled", "canceled"}
 )
@@ -358,6 +397,17 @@ admission evidence. If no legal current action remains, report an incomplete
 result rather than inventing a recovery path.
 """
 
+TERMINAL_WORKFLOW_SYSTEM_PROMPT = """You are the agent under test in the terminal authenticated API workflow.
+Work only in the current workspace. Use the runner-owned nxd-desktop MCP server
+and the staged operator instruction for this turn. Never inspect environment
+variables, print credentials, read fixture source files, or make direct HTTP
+requests. The api-source credential is pre-provisioned for the trusted
+supervisor; refer to it by service name only. Do not activate or reset the
+workflow unless the staged runner instruction explicitly authorizes it. A
+successful capture ends the writable execution turn; wait for the runner's
+read-only review turn. Treat every supervisor response as authoritative and
+never claim a gate passed without its structured result."""
+
 
 def _toml_string(value: str) -> str:
     """Encode one string as a TOML basic string for ``codex -c``."""
@@ -367,6 +417,29 @@ def _toml_string(value: str) -> str:
 
 def _toml_array(values: Sequence[str]) -> str:
     return "[" + ", ".join(_toml_string(value) for value in values) + "]"
+
+
+def _app_server_environment(
+    environment: Mapping[str, str], *, terminal_route: bool
+) -> dict[str, str]:
+    """Remove credentials using the route-specific isolation contract."""
+    result = dict(environment)
+    if terminal_route:
+        for key in tuple(result):
+            if (
+                key in {"NXD_EVAL_SOURCE_TOKEN", "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"}
+                or _APP_SERVER_CREDENTIAL_ENV_KEY.search(key)
+            ) and key not in _APP_SERVER_ENV_ALLOWLIST:
+                result.pop(key, None)
+    else:
+        for key in (
+            "OPENAI_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "NXD_EVAL_SOURCE_TOKEN",
+            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
+        ):
+            result.pop(key, None)
+    return result
 
 
 def _toml_table(values: Mapping[str, str]) -> str:
@@ -482,8 +555,33 @@ def _response_requires_review(value: object) -> bool:
     return False
 
 
+def _is_review_clear(item: Mapping[str, object]) -> bool:
+    """Accept both supervisor spellings of a satisfied review requirement.
+
+    ``workflow/review_satisfied`` is review-specific; the generic
+    ``workflow/requirement_satisfied`` must name the review requirement.
+    """
+
+    code = item.get("code")
+    if code == "workflow/review_satisfied":
+        return item.get("requirement_id") in {None, "review"}
+    return code == "workflow/requirement_satisfied" and item.get("requirement_id") == "review"
+
+
+def _response_satisfies_review(value: object) -> bool:
+    """Mirror the stdio proxy's completed report-relay predicate."""
+    for item in _walk_json_values(value):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("code") == "workflow/review_findings":
+            return True
+        if _is_review_clear(item):
+            return True
+    return False
+
+
 def _review_pending_after_observations(
-    observations: Sequence[Mapping[str, object]], previous: bool
+    observations: Sequence[Mapping[str, object]], previous: bool, *, strict: bool = False
 ) -> bool:
     """Track the supervisor review state across operator turns."""
 
@@ -502,7 +600,8 @@ def _review_pending_after_observations(
         if action == "capture":
             pending = _response_requires_review(result)
         elif action == "report_requirement" and _codex_review_requirement_id(arguments) == "review":
-            pending = False
+            if not strict or _response_satisfies_review(observation.get("result")):
+                pending = False
     return pending
 
 
@@ -592,7 +691,15 @@ def _turn_sandbox_policy(
 
     if review_pending:
         return {"type": "readOnly"}
-    return {"type": "workspaceWrite", "writableRoots": list(writable_roots)}
+    # Mirror the ``sandbox_workspace_write.exclude_*=true`` config this route
+    # already passes: the v2 per-turn policy defaults both flags to false and
+    # would otherwise re-open /tmp and $TMPDIR for writes.
+    return {
+        "type": "workspaceWrite",
+        "writableRoots": list(writable_roots),
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
+    }
 
 
 def _read_regular_file_beneath(root: Path, parts: Sequence[str]) -> bytes | None:
@@ -797,6 +904,22 @@ def _attach_checker_skew_markers(
                     call = replace(call, observation=marker)
         result.append(call)
     return tuple(result)
+def _terminal_turn_sandbox_policy(stage: str, workspace: str) -> dict[str, object]:
+    """Return the narrow workspace-only policy for terminal route stages."""
+
+    if stage == "review":
+        return {"type": "readOnly", "networkAccess": False}
+    if stage not in {"execution", "repair", "completion"}:
+        raise ValueError(f"unsupported terminal route stage: {stage}")
+    return {
+        "type": "workspaceWrite",
+        "writableRoots": [workspace],
+        "networkAccess": False,
+        # The v2 schema defaults both to false; without them the per-turn policy
+        # overrides the exclude_* config and leaves /tmp and $TMPDIR writable.
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
+    }
 
 
 def _codex_mcp_name(item: Mapping[str, object]) -> str | None:
@@ -822,6 +945,27 @@ def _item_result(item: Mapping[str, object]) -> object:
     if "output" in item:
         return item.get("output")
     return item.get("content")
+
+
+def _mcp_item_failed(item: Mapping[str, object]) -> bool:
+    """Detect both app-server failures and MCP-level error envelopes."""
+    if (
+        item.get("is_error") is True
+        or item.get("error")
+        or item.get("status") == "failed"
+    ):
+        return True
+    raw_result = _item_result(item)
+    if any(
+        isinstance(value, Mapping) and value.get("isError") is True
+        for value in _walk_json_values(raw_result)
+    ):
+        return True
+    result = _decode_mcp_value(raw_result)
+    return any(
+        isinstance(value, Mapping) and value.get("isError") is True
+        for value in _walk_json_values(result)
+    )
 
 
 def _codex_mcp_is_error(item: Mapping[str, object], result: object) -> bool:
@@ -1575,17 +1719,28 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
     params = event.get("params")
     if not isinstance(method, str) or not isinstance(params, Mapping):
         return event
+    thread_context = params.get("threadId", params.get("thread_id"))
+    turn_context = params.get("turnId", params.get("turn_id"))
+    identity = {
+        "thread_id": thread_context if isinstance(thread_context, str) else None,
+        "turn_id": turn_context if isinstance(turn_context, str) else None,
+    }
     if method == "error":
         # Never pass provider messages, details, identifiers or misalignment
         # payloads into transcript/report parsing.
-        return {"type": "provider_error"}
+        return {"type": "provider_error", **identity}
     if method == "thread/started":
         thread = params.get("thread")
-        thread_id = thread.get("id") if isinstance(thread, Mapping) else None
-        return {"type": "thread.started", "thread_id": thread_id}
+        started_thread_id = thread.get("id") if isinstance(thread, Mapping) else None
+        return {
+            "type": "thread.started",
+            **identity,
+            "started_thread_id": started_thread_id,
+        }
     if method == "turn/completed":
         turn = params.get("turn")
-        turn_id = turn.get("id") if isinstance(turn, Mapping) else None
+        payload_turn_id = turn.get("id") if isinstance(turn, Mapping) else None
+        turn_id = identity["turn_id"] or payload_turn_id
         status = turn.get("status") if isinstance(turn, Mapping) else None
         usage = turn.get("usage") if isinstance(turn, Mapping) else params.get("usage")
         raw_error = turn.get("error") if isinstance(turn, Mapping) else None
@@ -1603,43 +1758,56 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
         }.get(status, "turn.failed")
         return {
             "type": event_type,
+            **identity,
             "turn_id": turn_id,
+            "turn_payload_id": payload_turn_id,
             "is_error": status != "completed",
             "error": safe_error,
             "usage": usage,
         }
     if method == "turn/started":
-        return {"type": "turn.started"}
+        return {"type": "turn.started", **identity}
     if method == "item/agentMessage/delta":
-        return {"type": "agent_message_delta", "delta": params.get("delta", "")}
+        return {"type": "agent_message_delta", **identity, "delta": params.get("delta", "")}
     if method == "mcpServer/startupStatus/updated":
         if params.get("status") != "failed":
             return {"type": "mcp_server_status"}
         return {
             "type": "mcp_server_failed",
+            **identity,
             "error": "MCP server startup failed",
         }
     if method in {"item/started", "item/completed"}:
         item = params.get("item")
         if not isinstance(item, Mapping):
-            return {"type": method}
+            return {"type": method.replace("/", "."), **identity}
         item_type = item.get("type")
+        passive_item_types = {
+            "userMessage": "user_message",
+            "enteredReviewMode": "entered_review_mode",
+            "exitedReviewMode": "exited_review_mode",
+        }
+        if item_type in passive_item_types:
+            normalized = dict(item)
+            normalized["type"] = passive_item_types[item_type]
+            return {"type": method.replace("/", "."), **identity, "item": normalized}
         if item_type == "agentMessage":
             return {
                 "type": method.replace("/", "."),
+                **identity,
                 "item": {"type": "agent_message", "text": item.get("text", "")},
             }
         if item_type == "mcpToolCall":
             normalized = dict(item)
             normalized["type"] = "mcp_tool_call"
             normalized["is_error"] = item.get("status") == "failed"
-            return {"type": method.replace("/", "."), "item": normalized}
+            return {"type": method.replace("/", "."), **identity, "item": normalized}
         if item_type == "commandExecution":
             normalized = dict(item)
             normalized["type"] = "command_execution"
             if "aggregatedOutput" in normalized and "aggregated_output" not in normalized:
                 normalized["aggregated_output"] = normalized["aggregatedOutput"]
-            return {"type": method.replace("/", "."), "item": normalized}
+            return {"type": method.replace("/", "."), **identity, "item": normalized}
         if item_type == "fileChange":
             normalized = dict(item)
             normalized["type"] = "file_change"
@@ -1648,10 +1816,11 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
                 or item.get("error")
                 or item.get("status") in _FILE_CHANGE_FAILURE_STATUSES
             )
-            return {"type": method.replace("/", "."), "item": normalized}
+            return {"type": method.replace("/", "."), **identity, "item": normalized}
         if item_type in {"subAgentActivity", "SubAgentActivity", "sub_agent_activity"}:
             return {
                 "type": method.replace("/", "."),
+                **identity,
                 "item": {
                     "type": _SUBAGENT_ACTIVITY_TYPE,
                     "id": item.get("id"),
@@ -1673,8 +1842,8 @@ def _normalise_app_server_event(event: Mapping[str, object]) -> Mapping[str, obj
             status = normalized.get("status")
             if status == "in_progress":
                 normalized["status"] = "inProgress"
-            return {"type": method.replace("/", "."), "item": normalized}
-        return {"type": method.replace("/", "."), "item": dict(item)}
+            return {"type": method.replace("/", "."), **identity, "item": normalized}
+        return {"type": method.replace("/", "."), **identity, "item": dict(item)}
     return event
 
 
@@ -1731,6 +1900,7 @@ def parse_codex_events(
     redact_text: Any,
     session_id: str | None,
     root_turn_id: str | None = None,
+    strict_attribution: bool = False,
 ) -> tuple[TurnResult, list[dict[str, object]]]:
     """Convert one Codex JSONL turn into structured harness observations."""
 
@@ -1834,10 +2004,27 @@ def parse_codex_events(
                 record_subagent_result(child, event)
             continue
         if event_type == "thread.started":
-            value = event.get("thread_id")
-            if isinstance(value, str) and value and not thread_id:
+            value = event.get("started_thread_id", event.get("thread_id"))
+            # Child thread.started events are not root identity updates.
+            if (
+                isinstance(value, str) and value
+                and (session_id is None or value == session_id)
+                and thread_id is None
+            ):
                 thread_id = value
             continue
+        if strict_attribution and event_type in {
+            "turn.started", "turn.completed", "turn.interrupted", "turn.failed",
+            "item.started", "item.completed", "agent_message_delta", "mcp_server_failed",
+        }:
+            # Raw v2 notifications are required to carry both identities.
+            # Child/foreign events are retained by the independent audit, but
+            # never affect root observations or the root final answer.
+            if (
+                event.get("thread_id") != session_id
+                or event.get("turn_id") != root_turn_id
+            ):
+                continue
         if event_type == "turn.failed":
             if root_turn_id is not None and event.get("turn_id") != root_turn_id:
                 continue
@@ -1996,7 +2183,11 @@ def parse_codex_events(
             continue
         pending.pop(key, None)
         raw_result = _item_result(item)
-        is_error = _codex_mcp_is_error(item, raw_result)
+        is_error = (
+            _mcp_item_failed(item)
+            if strict_attribution
+            else _codex_mcp_is_error(item, raw_result)
+        )
         if raw_result is None and is_error:
             # A completed MCP error is still an answered call.  Leaving it as
             # ``None`` makes the shared checkpoint transport classify the call
@@ -2159,6 +2350,10 @@ class CodexAdapter:
     """One Codex thread resumed across the scripted operator turns."""
 
     MCP_STARTUP_TIMEOUT_S = 30.0
+    # Instance defaults for adapters built without __init__ (tests, helpers).
+    terminal_route = False
+    idle_timeout_seconds = TERMINAL_ROUTE_IDLE_TIMEOUT_S
+    fixture_handoff = True
 
     def __init__(
         self,
@@ -2181,6 +2376,10 @@ class CodexAdapter:
         multi_agent_v2: bool = False,
         force_multi_agent_v1: bool = False,
         review_timeout_seconds: float | None = None,
+        terminal_route: bool = False,
+        idle_timeout_seconds: float = TERMINAL_ROUTE_IDLE_TIMEOUT_S,
+        codex_version: str | None = None,
+        fixture_handoff: bool = True,
         native_continuation: bool = False,
         resume_session_id: str | None = None,
         native_state_dir: Path | None = None,
@@ -2213,6 +2412,37 @@ class CodexAdapter:
             else review_timeout_seconds
         )
         self._review_deadline_ms = self.review_timeout_seconds * 1000.0
+        self.terminal_route = bool(terminal_route)
+        self.idle_timeout_seconds = max(1.0, float(idle_timeout_seconds))
+        self.codex_version = codex_version
+        self.fixture_handoff = bool(fixture_handoff)
+        self._route_turn_count = 0
+        self._route_deadline: float | None = None
+        self._route_stage = "execution"
+        self._route_capture_seen = False
+        self._route_review_input: Mapping[str, object] | None = None
+        self._route_spawned_receivers: set[str] = set()
+        self._route_stage_spawn_count = 0
+        self._route_stage_spawn_items: set[str] = set()
+        self._route_report_count = 0
+        self._route_review_receiver_ids: set[str] = set()
+        self._route_child_reader_receivers: set[str] = set()
+        self._route_child_success_receivers: set[str] = set()
+        self._route_child_message_receivers: set[str] = set()
+        self._route_child_reader_paths: list[str] = []
+        self._route_child_violations: list[str] = []
+        self._route_unattributed_events = 0
+        self._route_audit_events: list[dict[str, object]] = []
+        self._route_audit_persisted_event_count = 0
+        self._route_active_items: dict[tuple[str, str], tuple[object, ...]] = {}
+        self._route_pending_child_events: list[Mapping[str, object]] = []
+        self._route_review_verified = False
+        self._route_successful_root_tools: set[str] = set()
+        self._route_completion_tools: set[str] = set()
+        self._route_completion_verified = False
+        self._route_input_tokens = 0
+        self._route_output_tokens = 0
+        self._last_observations: list[dict[str, object]] = []
         self.native_continuation = bool(native_continuation)
         self.native_state_dir = native_state_dir
         self._thread_id = resume_session_id
@@ -2272,21 +2502,14 @@ class CodexAdapter:
         if self.supervisor_data_dir is None or not self.supervisor_data_dir.is_dir():
             raise CodexAdapterError("Codex adapter requires an existing --supervisor-data-dir")
         self._before = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
-        environment = dict(os.environ)
-        for key in (
-            "OPENAI_API_KEY",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "NXD_EVAL_SOURCE_TOKEN",
-            "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
-        ):
-            environment.pop(key, None)
+        environment = _app_server_environment(
+            os.environ, terminal_route=self.terminal_route
+        )
         host_codex_home = environment.get("CODEX_HOME")
         if self.native_continuation:
             assert self.native_state_dir is not None
             codex_home = self._persistent_native_codex_home(
-                self.native_state_dir,
-                environment,
-                resuming=self._thread_id is not None,
+                self.native_state_dir, environment, resuming=self._thread_id is not None
             )
             environment["CODEX_HOME"] = str(codex_home)
         else:
@@ -2337,9 +2560,14 @@ class CodexAdapter:
         )
         source_value = environment.get("CODEX_HOME")
         if isinstance(source_value, str) and source_value:
-            auth = Path(source_value).expanduser() / "auth.json"
-            if auth.is_file():
-                os.symlink(auth, home / "auth.json")
+            source_home = Path(source_value).expanduser()
+        elif getattr(self, "terminal_route", False):
+            source_home = Path.home() / ".codex"
+        else:
+            return temporary
+        auth = source_home / "auth.json"
+        if auth.is_file():
+            os.symlink(auth, home / "auth.json")
         return temporary
 
     def _persistent_native_codex_home(
@@ -2486,8 +2714,14 @@ class CodexAdapter:
         }
 
     def _base_instructions(self) -> str:
+        system_prompt = (
+            TERMINAL_WORKFLOW_SYSTEM_PROMPT
+            if self.terminal_route else self.append_system_prompt
+        )
+        if self.terminal_route:
+            return system_prompt + "\n\nRead skill guidance only from the .skills/ directory staged inside the current workspace."
         return (
-            self.append_system_prompt
+            system_prompt
             + "\n\nThe skill pack is available at: "
             + str(self.skill_pack_root)
             + "\nRead the relevant SKILL.md and reference files from that path."
@@ -2497,25 +2731,31 @@ class CodexAdapter:
         )
 
     def _thread_params(self) -> dict[str, object]:
+        roots = [str(Path.cwd())]
+        if not self.terminal_route:
+            roots.append(str(self.skill_pack_root))
         return {
             "model": self.model,
             "cwd": str(Path.cwd()),
             "sandbox": "workspace-write",
             "approvalPolicy": "never",
-            "runtimeWorkspaceRoots": [str(Path.cwd()), str(self.skill_pack_root)],
+            "runtimeWorkspaceRoots": roots,
             "config": self._thread_config(),
             "baseInstructions": self._base_instructions(),
         }
 
     def _resume_params(self) -> dict[str, object]:
         assert self._thread_id is not None
+        roots = [str(Path.cwd())]
+        if not self.terminal_route:
+            roots.append(str(self.skill_pack_root))
         return {
             "threadId": self._thread_id,
             "model": self.model,
             "cwd": str(Path.cwd()),
             "sandbox": "workspace-write",
             "approvalPolicy": "never",
-            "runtimeWorkspaceRoots": [str(Path.cwd()), str(self.skill_pack_root)],
+            "runtimeWorkspaceRoots": roots,
             "config": self._thread_config(),
             "baseInstructions": self._base_instructions(),
             "excludeTurns": True,
@@ -2700,6 +2940,15 @@ class CodexAdapter:
             runtime_status = server.get("runtimeStatus") if server is not None else None
             tool_count = len(tools) if isinstance(tools, Mapping) else 0
             if runtime_status == "connected" and tool_count > 0:
+                if self.terminal_route:
+                    missing = (
+                        TERMINAL_ROUTE_REQUIRED_TOOLS | {"read_review_input"}
+                    ) - set(tools)
+                    if missing:
+                        raise CodexAdapterError(
+                            "Codex app-server required workflow/review tools are unavailable: "
+                            + ", ".join(sorted(missing))
+                        )
                 return
             last_status = (
                 f"runtime_status={runtime_status!r}, tools={tool_count}"
@@ -2710,15 +2959,517 @@ class CodexAdapter:
                 )
             time.sleep(min(0.1, max(0.0, status_deadline - time.monotonic())))
 
+    def _route_audit_event(self, raw: Mapping[str, object]) -> None:
+        """Keep a redacted identity/action projection of app-server events."""
+        if not self.terminal_route:
+            return
+        normalized = _normalise_app_server_event(raw)
+        event_type = normalized.get("type")
+        thread_id = normalized.get("thread_id")
+        turn_id = normalized.get("turn_id")
+        raw_params = raw.get("params")
+        thread_context = (
+            raw_params.get("threadId", raw_params.get("thread_id"))
+            if isinstance(raw_params, Mapping) else None
+        )
+        context_ids_present = (
+            isinstance(thread_context, str)
+            and bool(thread_context)
+            and isinstance(turn_id, str)
+            and bool(turn_id)
+        )
+        if event_type in {"item.started", "item.completed"}:
+            # v2 item notifications carry both explicit identities. Turn
+            # notifications instead carry threadId plus the nested turn.id.
+            context_ids_present = (
+                context_ids_present
+                and isinstance(raw_params, Mapping)
+                and isinstance(
+                raw_params.get("turnId", raw_params.get("turn_id")), str
+                )
+            )
+        if event_type == "mcp_server_failed":
+            if not context_ids_present:
+                self._route_unattributed_events += 1
+                self._route_audit_events.append({
+                    "event": event_type,
+                    "attribution": "missing_protocol_identity",
+                    "stage": self._route_stage,
+                })
+            elif thread_id == self._thread_id and turn_id == self._active_turn_id:
+                self._route_audit_events.append({
+                    "event": event_type,
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                    "attribution": "root",
+                    "stage": self._route_stage,
+                })
+            elif thread_id in self._route_review_receiver_ids:
+                self._route_child_violations.append(
+                    "review child observed an MCP server failure"
+                )
+                self._route_audit_events.append({
+                    "event": event_type,
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                    "attribution": "spawned_receiver",
+                    "stage": self._route_stage,
+                })
+            elif self._route_has_spawn_in_flight():
+                self._queue_pending_child_event(raw, event_type, thread_id, turn_id)
+            else:
+                self._route_unattributed_events += 1
+                self._route_audit_events.append({
+                    "event": event_type,
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                    "attribution": "unmatched",
+                    "stage": self._route_stage,
+                })
+            self._persist_route_audit()
+            return
+        if event_type in {"turn.completed", "turn.interrupted", "turn.failed"}:
+            if not context_ids_present:
+                self._route_unattributed_events += 1
+                self._route_audit_events.append({
+                    "event": event_type,
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                    "attribution": "missing_protocol_identity",
+                    "stage": self._route_stage,
+                })
+                self._persist_route_audit()
+                return
+            payload_turn_id = normalized.get("turn_payload_id")
+            if isinstance(payload_turn_id, str) and payload_turn_id != turn_id:
+                self._route_child_violations.append(
+                    "turn completion identity did not match its notification context"
+                )
+                self._persist_route_audit()
+                return
+            if thread_id == self._thread_id and turn_id == self._active_turn_id:
+                return
+            if (
+                thread_id not in self._route_review_receiver_ids
+                or not isinstance(turn_id, str)
+                or not turn_id
+            ):
+                if self._route_has_spawn_in_flight():
+                    self._queue_pending_child_event(raw, event_type, thread_id, turn_id)
+                    return
+                self._route_unattributed_events += 1
+                self._persist_route_audit()
+                return
+            record = {
+                "event": event_type,
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "attribution": "spawned_receiver",
+                "stage": self._route_stage,
+            }
+            self._route_audit_events.append(record)
+            if event_type == "turn.completed" and normalized.get("is_error") is False:
+                self._route_child_success_receivers.add(thread_id)
+            else:
+                self._route_child_violations.append("review child did not complete successfully")
+            self._persist_route_audit()
+            return
+        if event_type not in {"item.started", "item.completed"}:
+            return
+        item = normalized.get("item")
+        if not isinstance(item, Mapping):
+            self._route_unattributed_events += 1
+            self._route_audit_events.append({
+                "event": event_type,
+                "thread_id": normalized.get("thread_id"),
+                "turn_id": normalized.get("turn_id"),
+                "attribution": "missing_item",
+                "stage": self._route_stage,
+            })
+            self._persist_route_audit()
+            return
+        item_type = item.get("type")
+        record: dict[str, object] = {
+            "event": event_type,
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "item_type": item_type,
+            "item_id": item.get("id"),
+            "stage": self._route_stage,
+        }
+        raw_item_id = item.get("id")
+        action_item = item_type in _ROUTE_ACTION_ITEM_TYPES
+        if action_item and not (
+            isinstance(raw_item_id, (str, int))
+            and not isinstance(raw_item_id, bool)
+            and str(raw_item_id)
+        ):
+            self._route_child_violations.append("action event has no stable item identity")
+        if thread_id is None or turn_id is None:
+            self._route_unattributed_events += 1
+            record["attribution"] = "missing"
+            self._route_audit_events.append(record)
+            self._persist_route_audit()
+            return
+        is_root = thread_id == self._thread_id and turn_id == self._active_turn_id
+        is_child = thread_id in self._route_review_receiver_ids
+        if not is_root and not is_child:
+            if self._route_has_spawn_in_flight():
+                self._queue_pending_child_event(raw, event_type, thread_id, turn_id, item)
+                return
+            self._route_unattributed_events += 1
+            record["attribution"] = "unmatched"
+            self._route_audit_events.append(record)
+            self._persist_route_audit()
+            return
+        record["attribution"] = "root" if is_root else "spawned_receiver"
+        action_signature: tuple[object, ...] = (item_type,)
+        if item_type == "mcp_tool_call":
+            arguments = _item_arguments(item)
+            if not isinstance(arguments, Mapping):
+                arguments = {}
+            action_signature = (
+                item_type,
+                _codex_mcp_name(item),
+                arguments.get("path"),
+                arguments.get("operation"),
+                tuple(sorted(str(key) for key in arguments)),
+            )
+        elif item_type == "collab_agent_tool_call":
+            # Receiver IDs can first appear on item.completed. The stable
+            # identity pair below ties this action to its start event.
+            action_signature = (item_type, item.get("tool"))
+        elif item_type == "command_execution":
+            action_signature = (item_type, item.get("command"))
+        if action_item:
+            item_key = (str(thread_id), str(raw_item_id))
+            if event_type == "item.started":
+                if item_key in self._route_active_items:
+                    self._route_child_violations.append("action item was started twice")
+                else:
+                    self._route_active_items[item_key] = action_signature
+            else:
+                started_signature = self._route_active_items.pop(item_key, None)
+                if started_signature is None or started_signature != action_signature:
+                    self._route_child_violations.append(
+                        "action completion did not match its started item"
+                    )
+        if (
+            is_root
+            and self._route_stage in {"execution", "repair"}
+            and self._route_capture_seen
+            and item_type not in _ROUTE_PASSIVE_ITEM_TYPES
+        ):
+            self._route_child_violations.append("writer performed an action after capture")
+        if item_type == "collab_agent_tool_call":
+            tool = item.get("tool")
+            record["tool"] = tool if isinstance(tool, str) else None
+            if is_root:
+                if tool == "spawnAgent":
+                    if event_type == "item.started":
+                        spawn_id = str(raw_item_id)
+                        if spawn_id not in self._route_stage_spawn_items:
+                            self._route_stage_spawn_items.add(spawn_id)
+                            self._route_stage_spawn_count += 1
+                    self._route_spawned_receivers.update(_collab_receiver_ids(item))
+                    self._route_review_receiver_ids.update(_collab_receiver_ids(item))
+                    self._replay_pending_child_events()
+                    if self._route_stage != "review":
+                        self._route_child_violations.append("writer spawned before review stage")
+                    prompt = item.get("prompt")
+                    if not isinstance(prompt, str) or not prompt.startswith("CODEX_REVIEW_CHILD"):
+                        self._route_child_violations.append("review child prompt has wrong role")
+                elif tool == "wait":
+                    target_ids = _collab_receiver_ids(item)
+                    if (
+                        self._route_stage != "review"
+                        or not target_ids
+                        or not target_ids.issubset(self._route_spawned_receivers)
+                    ):
+                        self._route_child_violations.append("root waited on an unknown receiver")
+                elif tool == "closeAgent":
+                    targets = _collab_receiver_ids(item)
+                    if self._route_stage != "review" or not targets or not targets.issubset(self._route_spawned_receivers):
+                        self._route_child_violations.append("root closed an unknown reviewer receiver")
+                else:
+                    self._route_child_violations.append("root used unapproved collaboration action")
+            else:
+                self._route_child_violations.append("review child attempted nested collaboration")
+        elif item_type == "mcp_tool_call":
+            tool_name = _codex_mcp_name(item)
+            arguments = _item_arguments(item)
+            record["tool"] = tool_name
+            if isinstance(arguments, Mapping):
+                action_type = _advance_action_type(arguments)
+                requirement_id = _advance_requirement_id(arguments)
+                if action_type:
+                    record["action"] = action_type
+                if requirement_id:
+                    record["requirement_id"] = requirement_id
+            if is_root:
+                tool_key = (
+                    tool_name.removeprefix("mcp__nxd-desktop__")
+                    if isinstance(tool_name, str) else ""
+                )
+                if (
+                    event_type == "item.completed"
+                    and tool_key in TERMINAL_ROUTE_REQUIRED_TOOLS
+                    and not _mcp_item_failed(item)
+                ):
+                    self._route_successful_root_tools.add(tool_key)
+                    if self._route_stage == "completion":
+                        self._route_completion_tools.add(tool_key)
+                if self._route_stage == "review":
+                    action = _advance_action_type(arguments)
+                    req_id = _advance_requirement_id(arguments)
+                    if tool_name != "mcp__nxd-desktop__advance_workflow" or action != "report_requirement" or req_id != "review":
+                        self._route_child_violations.append("root made a non-report MCP call during review")
+                    elif event_type == "item.started":
+                        self._route_report_count += 1
+                        if (
+                            self._route_report_count != 1
+                            or self._route_stage_spawn_count != 1
+                            or not self._route_child_reader_paths
+                            or not self._route_child_success_receivers
+                            or not self._route_child_message_receivers
+                        ):
+                            self._route_child_violations.append("root reported review before exactly one child read the retained input")
+                elif self._route_stage == "completion":
+                    if not self._route_review_verified:
+                        self._route_child_violations.append(
+                            "completion began before a verified review"
+                        )
+                    if tool_key not in TERMINAL_ROUTE_REQUIRED_TOOLS:
+                        self._route_child_violations.append(
+                            "completion used an unapproved MCP tool"
+                        )
+                    if event_type == "item.started":
+                        action = _advance_action_type(arguments)
+                        requirement_id = _advance_requirement_id(arguments)
+                        if tool_key == "prepare_workflow":
+                            self._route_child_violations.append(
+                                "completion attempted to prepare another workflow"
+                            )
+                        elif tool_key == "advance_workflow" and (
+                            action == "capture"
+                            or (
+                                action == "report_requirement"
+                                and requirement_id == "review"
+                            )
+                        ):
+                            self._route_child_violations.append(
+                                "completion repeated capture or review reporting"
+                            )
+                else:
+                    if tool_name == "mcp__nxd-desktop__read_review_input":
+                        self._route_child_violations.append("root read retained inputs instead of the child")
+            else:
+                if tool_name != "mcp__nxd-desktop__read_review_input":
+                    self._route_child_violations.append("review child called another MCP tool")
+                elif isinstance(arguments, Mapping):
+                    path = arguments.get("path")
+                    operation = arguments.get("operation")
+                    if (
+                        self._route_review_path_allowed(path)
+                        and operation in {"read", "list"}
+                        and set(arguments).issubset({"path", "operation", "max_lines", "max_bytes"})
+                    ):
+                        if event_type == "item.completed":
+                            if not _mcp_item_failed(item):
+                                self._route_child_reader_paths.append(path)
+                                self._route_child_reader_receivers.add(str(thread_id))
+                                record["review_path"] = path
+                            else:
+                                self._route_child_violations.append(
+                                    "review child reader call failed"
+                                )
+                    else:
+                        self._route_child_violations.append("review child reader path was not exact/allowed")
+        elif item_type == "command_execution":
+            if is_root and self._route_stage == "review":
+                self._route_child_violations.append("root executed a command during review")
+            elif is_child:
+                self._route_child_violations.append("review child used command execution; reader MCP is required")
+        elif item_type in {"file_change", "patch", "apply_patch"}:
+            if is_child or (is_root and self._route_stage == "review"):
+                self._route_child_violations.append("write event occurred during read-only review")
+        elif is_child and item_type == "agent_message" and event_type == "item.completed":
+            self._route_child_message_receivers.add(str(thread_id))
+        elif (
+            is_root
+            and self._route_stage == "review"
+            and item_type not in _ROUTE_PASSIVE_ITEM_TYPES
+        ):
+            self._route_child_violations.append("root emitted an unapproved review action")
+        elif is_child and item_type not in _ROUTE_PASSIVE_ITEM_TYPES:
+            self._route_child_violations.append("review child emitted an unapproved event type")
+        self._route_audit_events.append(record)
+        self._persist_route_audit()
+
+    def _persist_route_audit(self, *, force_snapshot: bool = False) -> None:
+        """Append redacted events and atomically checkpoint compact route state."""
+        if not self.terminal_route:
+            return
+        event_count = len(self._route_audit_events)
+        if event_count > self._route_audit_persisted_event_count:
+            self.artifact_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            event_path = self.artifact_dir / "codex-app-server-events.jsonl"
+            fd = os.open(event_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                for event in self._route_audit_events[self._route_audit_persisted_event_count:]:
+                    line = json.dumps(
+                        self._redact_json_rpc(event), sort_keys=True
+                    ) + "\n"
+                    os.write(fd, line.encode("utf-8"))
+            finally:
+                os.close(fd)
+            self._route_audit_persisted_event_count = event_count
+        if (
+            not force_snapshot
+            and event_count
+            and event_count % TERMINAL_ROUTE_AUDIT_SNAPSHOT_INTERVAL != 0
+        ):
+            return
+        payload = self._route_audit_payload()
+        payload.pop("events", None)
+        path = self.artifact_dir / "codex-app-server-audit.json"
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, temporary_name = tempfile.mkstemp(prefix=".codex-audit.", dir=path.parent)
+        temporary_path = Path(temporary_name)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(json.dumps(self._redact_json_rpc(payload), sort_keys=True))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if fd != -1:
+                os.close(fd)
+            with contextlib.suppress(FileNotFoundError):
+                temporary_path.unlink()
+
+    def _route_has_spawn_in_flight(self) -> bool:
+        return any(
+            thread_id == self._thread_id
+            and len(signature) >= 2
+            and signature[0] == "collab_agent_tool_call"
+            and signature[1] == "spawnAgent"
+            for (thread_id, _item_id), signature in self._route_active_items.items()
+        )
+
+    def _queue_pending_child_event(
+        self,
+        raw: Mapping[str, object],
+        event_type: object,
+        thread_id: object,
+        turn_id: object,
+        item: Mapping[str, object] | None = None,
+    ) -> None:
+        """Hold candidate child events until a spawn event supplies its ID."""
+        self._route_pending_child_events.append(dict(raw))
+        record: dict[str, object] = {
+            "event": event_type,
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "attribution": "pending_spawn_receiver",
+            "stage": self._route_stage,
+        }
+        if isinstance(item, Mapping):
+            record["item_type"] = item.get("type")
+            record["item_id"] = item.get("id")
+        self._route_audit_events.append(record)
+        self._persist_route_audit()
+
+    def _replay_pending_child_events(self) -> None:
+        if not self._route_pending_child_events or not self._route_review_receiver_ids:
+            return
+        pending = self._route_pending_child_events
+        self._route_pending_child_events = []
+        for raw in pending:
+            normalized = _normalise_app_server_event(raw)
+            if normalized.get("thread_id") in self._route_review_receiver_ids:
+                self._route_audit_event(raw)
+            else:
+                self._route_pending_child_events.append(raw)
+        self._persist_route_audit()
+
+    def _finalize_pending_child_events(self) -> None:
+        if self._route_pending_child_events:
+            self._route_unattributed_events += len(self._route_pending_child_events)
+            self._route_pending_child_events.clear()
+            self._persist_route_audit()
+
+    def _route_review_path_allowed(self, value: object) -> bool:
+        """Allow the exact blueprint or a safe existing path under capture root."""
+        review_input = self._route_review_input
+        if not isinstance(review_input, Mapping):
+            return False
+        if not isinstance(value, str) or not value.strip():
+            return False
+        requested = Path(value)
+        if not requested.is_absolute() or ".." in requested.parts:
+            return False
+        try:
+            resolved = requested.resolve(strict=True)
+            capture_value = review_input.get("retained_capture_root")
+            blueprint_value = review_input.get("retained_blueprint_path")
+            capture = (
+                Path(capture_value).resolve(strict=True)
+                if isinstance(capture_value, str) else None
+            )
+            blueprint = (
+                Path(blueprint_value).resolve(strict=True)
+                if isinstance(blueprint_value, str) else None
+            )
+        except (OSError, RuntimeError, ValueError):
+            return False
+        if blueprint is not None and resolved == blueprint:
+            return True
+        return bool(
+            capture is not None
+            and capture.is_dir()
+            and (resolved == capture or resolved.is_relative_to(capture))
+        )
+
+    def _last_review_report(self) -> Mapping[str, object] | None:
+        for observation in reversed(self._last_observations):
+            if observation.get("tool") != "mcp__nxd-desktop__advance_workflow":
+                continue
+            arguments = observation.get("arguments")
+            if (
+                observation.get("is_error") is True
+                or _advance_action_type(arguments) != "report_requirement"
+                or _advance_requirement_id(arguments) != "review"
+            ):
+                continue
+            result = observation.get("result")
+            for value in _walk_json_values(result):
+                if not isinstance(value, Mapping):
+                    continue
+                if _is_review_clear(value):
+                    return {"completed": True, "clear": True}
+                if value.get("code") == "workflow/review_findings":
+                    return {"completed": True, "clear": False, "report": value}
+            # A tool error or an unrecognized supervisor envelope is not a
+            # review finding and cannot authorize another writable turn.
+            return None
+        return None
+
     def _collect_turn(
         self,
         request_id: int,
         prompt: str,
         events: list[Mapping[str, object]],
     ) -> list[Mapping[str, object]]:
+        start_deadline = time.monotonic() + self.timeout_s
+        if self.terminal_route and self._route_deadline is not None:
+            start_deadline = min(start_deadline, self._route_deadline)
         response, before_turn = self._read_until_response(
             request_id,
-            time.monotonic() + self.timeout_s,
+            start_deadline,
         )
         if "error" in response:
             raise CodexAdapterError("Codex app-server turn/start request failed")
@@ -2732,15 +3483,18 @@ class CodexAdapter:
         root_thread_id = getattr(self, "_thread_id", None)
 
         def is_root_event(event: Mapping[str, object]) -> bool:
-            # A successfully initialized production adapter always has a
-            # thread id. Keeping synthetic object.__new__ tests usable does
-            # not weaken the real app-server path.
+            # Synthetic adapter tests without a root id retain their legacy path.
             return not isinstance(root_thread_id, str) or _codex_event_matches_root_turn(
                 event, thread_id=root_thread_id, turn_id=turn_id
             )
 
         turn_started_at = time.monotonic()
         deadline = turn_started_at + self.timeout_s
+        if self.terminal_route and self._route_deadline is not None:
+            deadline = min(deadline, self._route_deadline)
+        startup_events = tuple(events)
+        idle_deadline = turn_started_at + self.idle_timeout_seconds
+        active_calls: set[str] = set()
         review_deadline_ms = getattr(self, "_review_deadline_ms", float(REVIEW_DEADLINE_MS))
         review_timeout_seconds = getattr(
             self, "review_timeout_seconds", review_deadline_ms / 1000.0
@@ -2981,6 +3735,12 @@ class CodexAdapter:
                 return observed
             return classified or observed or CODEX_PROVIDER_ERROR
 
+        if self.terminal_route:
+            for route_event in (*startup_events, *before_turn):
+                self._route_audit_event(route_event)
+                if is_root_event(route_event):
+                    self._observe_route_event(route_event, active_calls, audit=False)
+                    idle_deadline = time.monotonic() + self.idle_timeout_seconds
         if before_turn:
             for buffered_event in before_turn:
                 if not is_root_event(buffered_event):
@@ -3051,6 +3811,8 @@ class CodexAdapter:
                 read_deadline = min(read_deadline, reviewer_deadline_at)
             if provider_error_grace_deadline is not None:
                 read_deadline = min(read_deadline, provider_error_grace_deadline)
+            if self.terminal_route and not active_calls:
+                read_deadline = min(read_deadline, idle_deadline)
             try:
                 event = self._read_streams(read_deadline)
             except TimeoutError as exc:
@@ -3091,6 +3853,16 @@ class CodexAdapter:
                         "Codex reviewer child did not complete before the "
                         f"{review_timeout_seconds:.1f}-second reviewer deadline; {progress}"
                     ) from exc
+                if (
+                    self.terminal_route
+                    and not active_calls
+                    and now >= idle_deadline
+                    and now < deadline
+                ):
+                    raise TimeoutError(
+                        "Codex app-server idle deadline expired after "
+                        f"{self.idle_timeout_seconds:.1f}s; {progress}"
+                    ) from exc
                 raise TimeoutError(f"{exc}; {progress}") from exc
             except CodexAdapterError as exc:
                 if terminal_provider_error is not None:
@@ -3111,10 +3883,21 @@ class CodexAdapter:
                         reason=CHILD_EXITED_EARLY,
                         safe_diagnostic=True,
                     ) from exc
+                if (
+                    self.terminal_route
+                    and not active_calls
+                    and time.monotonic() >= idle_deadline
+                    and time.monotonic() < deadline
+                ):
+                    raise TimeoutError(
+                        f"Codex app-server idle deadline expired after {self.idle_timeout_seconds:.1f}s"
+                    ) from exc
                 raise
             if self._is_server_request(event):
                 self._reject_server_request(event)
                 continue
+            if self.terminal_route:
+                self._route_audit_event(event)
             if not is_root_event(event):
                 continue
             validate_reviewer_spawn(event, events)
@@ -3126,20 +3909,14 @@ class CodexAdapter:
                 and normalized.get("turn_id") == turn_id
             ):
                 terminal_error = normalized.get("error")
-                safe_terminal_error = (
-                    terminal_error if isinstance(terminal_error, str) else ""
-                )
+                safe_terminal_error = terminal_error if isinstance(terminal_error, str) else ""
                 self._turn_failure_reason = failed_turn_reason(safe_terminal_error)
                 observed_detail = observed_provider_detail()
                 if observed_detail is not None and (
                     not safe_terminal_error
-                    or classify_failure_reason(safe_terminal_error)
-                    == CODEX_PROVIDER_ERROR
+                    or classify_failure_reason(safe_terminal_error) == CODEX_PROVIDER_ERROR
                 ):
-                    normalized = {
-                        **normalized,
-                        "error": observed_detail,
-                    }
+                    normalized = {**normalized, "error": observed_detail}
             elif (
                 normalized.get("type") == "turn.interrupted"
                 and normalized.get("turn_id") == turn_id
@@ -3148,11 +3925,17 @@ class CodexAdapter:
                 observed_detail = observed_provider_detail()
                 if observed_detail is not None:
                     normalized = {**normalized, "error": observed_detail}
+            if self.terminal_route:
+                idle_deadline = time.monotonic() + self.idle_timeout_seconds
+                # Called for its audit/capture side effects only: it re-normalises
+                # the raw event, which would drop the provider error detail
+                # attached above to a root turn.failed / turn.interrupted.
+                self._observe_route_event(event, active_calls, audit=False)
             events.append(
                 normalized
-                if normalized.get("type")
-                in {"provider_error", "turn.completed", "turn.interrupted", "turn.failed"}
-                else event
+                if normalized.get("type") in {
+                    "provider_error", "turn.completed", "turn.interrupted", "turn.failed"
+                } else event
             )
             last_event_at = event_received_at
             last_event_label = _event_debug_tail([event], limit=1) or "unclassified_event"
@@ -3369,38 +4152,134 @@ class CodexAdapter:
                 )
         return results
 
+    def _observe_route_event(
+        self, event: Mapping[str, object], active_calls: set[str], *, audit: bool = True
+    ) -> Mapping[str, object]:
+        """Audit one notification after the root turn identity is known."""
+        normalized = _normalise_app_server_event(event)
+        if not self.terminal_route:
+            return normalized
+        if audit:
+            self._route_audit_event(event)
+        if normalized.get("type") in {"item.started", "item.completed"}:
+            item = normalized.get("item")
+            if isinstance(item, Mapping):
+                item_id = item.get("id")
+                if item.get("type") in _ROUTE_ACTION_ITEM_TYPES:
+                    if not (
+                        isinstance(item_id, (str, int))
+                        and not isinstance(item_id, bool)
+                        and str(item_id)
+                    ):
+                        raise CodexAdapterError(
+                            "Codex app-server action event has no stable item identity"
+                        )
+                    thread_id = normalized.get("thread_id")
+                    turn_id = normalized.get("turn_id")
+                    item_key = (
+                        f"{thread_id}:{turn_id}:{type(item_id).__name__}:{item_id}"
+                        if isinstance(thread_id, str) and isinstance(turn_id, str)
+                        else ""
+                    )
+                    if normalized.get("type") == "item.started":
+                        if item_key:
+                            active_calls.add(item_key)
+                    elif item_key:
+                        if item_key not in active_calls:
+                            self._route_child_violations.append(
+                                "action completion has no matching start event"
+                            )
+                        active_calls.discard(item_key)
+        if self._route_child_violations:
+            raise CodexAdapterError(
+                "Codex app-server action audit failed closed",
+                reason=CHILD_NO_TERMINAL_RESULT,
+            )
+        if (
+            self._route_stage in {"execution", "repair"}
+            and self._successful_capture_event(normalized)
+        ):
+            self._route_capture_seen = True
+            self._route_review_input = self._review_input_from_event(normalized)
+        return normalized
+
+    def _successful_capture_event(self, event: Mapping[str, object]) -> bool:
+        if (
+            event.get("thread_id") != self._thread_id
+            or event.get("turn_id") != self._active_turn_id
+        ):
+            return False
+        if event.get("type") != "item.completed":
+            return False
+        item = event.get("item")
+        if not isinstance(item, Mapping) or item.get("type") != "mcp_tool_call":
+            return False
+        if _codex_mcp_name(item) != "mcp__nxd-desktop__advance_workflow":
+            return False
+        arguments = _item_arguments(item)
+        if _advance_action_type(arguments) != "capture" or item.get("is_error") is True:
+            return False
+        return (
+            not _mcp_item_failed(item)
+            and _response_requires_review(_decode_mcp_value(_item_result(item)))
+        )
+
+    def _review_input_from_event(
+        self, event: Mapping[str, object]
+    ) -> Mapping[str, object] | None:
+        item = event.get("item")
+        if not isinstance(item, Mapping):
+            return None
+        result = _decode_mcp_value(_item_result(item))
+        for value in _walk_json_values(result):
+            if not isinstance(value, Mapping):
+                continue
+            review_input = value.get("review_input")
+            if isinstance(review_input, Mapping):
+                return dict(review_input)
+            requirements = value.get("requirements")
+            if isinstance(requirements, Mapping):
+                review = requirements.get("review")
+                if isinstance(review, Mapping) and isinstance(review.get("review_input"), Mapping):
+                    return dict(review["review_input"])
+        return None
+
     def _prompt(self, text: str, attachment_paths: Sequence[str]) -> str:
-        session_ref = getattr(self, "_thread_id", None)
-        session_line = (
-            f"- Current owning-session reference for workflow actions: {session_ref}\n"
-            if isinstance(session_ref, str) and session_ref
-            else ""
-        )
-        prompt = (
-            "Operator message (the JSON string below encodes the exact text):\n"
-            "<operator-message-json>\n"
-            f"{json.dumps(text, ensure_ascii=False)}\n"
-            "</operator-message-json>\n\n"
-            "Run-local source handoff (harness instructions, not operator words):\n"
-            "- If relaying session_decision, parameters.quote must equal the "
-            "decoded operator message text exactly, byte for byte. Exclude "
-            "the JSON quoting, boundaries, attachments, and all run-local "
-            "instructions. Check the quote against that decoded text before "
-            "sending the action.\n"
-            f"- NXD_EVAL_FIXTURE_DIR={self.fixture_dir}\n"
-            f"{session_line}"
-            "- For a file-backed source, read only the supplied input files under "
-            "that directory and wire them into the closure; do not use oracle or "
-            "gold files as source data.\n"
-            "- For an API-backed source, use the workspace infra-profile.yaml and "
-            "the generated connector runtime.\n"
-            "- For a review child, include exactly one line each for the supervisor's "
-            "retained_capture_root and retained_blueprint_path, one nonempty "
-            "'Sanitized original request:' line, 'Load and follow nxd-review-closure.', "
-            "the canonical NXD_REVIEW_DISPATCH marker, and these exact budget lines:\n"
-            f"{review_budget_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
-            f"{review_inspection_cutoff_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
-        )
+        if not self.fixture_handoff:
+            # No run-local handoff: the prompt is the operator's words alone.
+            prompt = text
+        else:
+            session_ref = getattr(self, "_thread_id", None)
+            session_line = (
+                f"- Current owning-session reference for workflow actions: {session_ref}\n"
+                if isinstance(session_ref, str) and session_ref
+                else ""
+            )
+            prompt = (
+                "Operator message (the JSON string below encodes the exact text):\n"
+                "<operator-message-json>\n"
+                f"{json.dumps(text, ensure_ascii=False)}\n"
+                "</operator-message-json>\n\n"
+                "Run-local source handoff (harness instructions, not operator words):\n"
+                "- If relaying session_decision, parameters.quote must equal the "
+                "decoded operator message text exactly, byte for byte. Exclude "
+                "the JSON quoting, boundaries, attachments, and all run-local "
+                "instructions. Check the quote against that decoded text before "
+                "sending the action.\n"
+                f"- NXD_EVAL_FIXTURE_DIR={self.fixture_dir}\n"
+                f"{session_line}"
+                "- For a file-backed source, read only the supplied input files under "
+                "that directory and wire them into the closure; do not use oracle or "
+                "gold files as source data.\n"
+                "- For an API-backed source, use the workspace infra-profile.yaml and "
+                "the generated connector runtime.\n"
+                "- For a review child, include exactly one line each for the supervisor's "
+                "retained_capture_root and retained_blueprint_path, one nonempty "
+                "'Sanitized original request:' line, 'Load and follow nxd-review-closure.', "
+                "the canonical NXD_REVIEW_DISPATCH marker, and these exact budget lines:\n"
+                f"{review_budget_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
+                f"{review_inspection_cutoff_line(getattr(self, 'review_timeout_seconds', REVIEW_DEADLINE_MS / 1000.0))}\n"
+            )
         if attachment_paths:
             prompt += "\n\nAttached files are available at:\n" + "\n".join(f"- {path}" for path in attachment_paths)
         prompt += (
@@ -3442,7 +4321,12 @@ class CodexAdapter:
             redact_text=self._redact_text,
             session_id=self._thread_id,
             root_turn_id=self._active_turn_id,
+            strict_attribution=self.terminal_route,
         )
+        self._last_observations = observations
+        if self.terminal_route:
+            self._route_input_tokens += parsed.input_tokens or 0
+            self._route_output_tokens += parsed.output_tokens or 0
         if parsed.session_id:
             self._thread_id = parsed.session_id
         if parsed.last_mcp_call:
@@ -3451,7 +4335,7 @@ class CodexAdapter:
             events, getattr(self, "_review_capture", None)
         )
         self._review_pending = _review_pending_after_observations(
-            observations, self._review_pending
+            observations, self._review_pending, strict=self.terminal_route
         )
         after = _snapshot_workspace(Path.cwd(), artifact_dir=self.artifact_dir)
         changed = _changed_files(self._before, after)
@@ -3484,11 +4368,10 @@ class CodexAdapter:
         details = [value for value in (parsed.environment_detail, environment_detail) if value]
         safe_detail = self._redact_text(" | ".join(dict.fromkeys(details))) if details else None
         tool_calls = _attach_checker_skew_markers(
-            parsed.tool_calls,
-            observations,
-            skill_pack_root=self.skill_pack_root,
+            parsed.tool_calls, observations, skill_pack_root=self.skill_pack_root,
             supervisor_data_dir=self.supervisor_data_dir,
         )
+        self._persist_route_audit()
         return TurnResult(
             transcript_delta=parsed.transcript_delta,
             agent_message=parsed.agent_message,
@@ -3507,9 +4390,294 @@ class CodexAdapter:
             terminal_result_count=parsed.terminal_result_count,
             terminal_result_subtype=parsed.terminal_result_subtype,
             terminal_result_is_error=parsed.terminal_result_is_error,
+            provider_model_calls=parsed.provider_model_calls,
+            input_tokens=parsed.input_tokens,
+            output_tokens=parsed.output_tokens,
         )
 
     def send(self, request: Mapping[str, object]) -> TurnResult:
+        if not self.terminal_route:
+            return self._send_turn(request, stage="execution")
+        self._route_deadline = time.monotonic() + min(
+            self.timeout_s, TERMINAL_ROUTE_MAX_WALL_SECONDS
+        )
+        self._route_turn_count = 0
+        self._route_capture_seen = False
+        self._route_review_input = None
+        self._route_spawned_receivers.clear()
+        self._route_stage_spawn_items.clear()
+        self._route_stage_spawn_count = 0
+        self._route_report_count = 0
+        self._route_review_receiver_ids.clear()
+        self._route_child_reader_receivers.clear()
+        self._route_child_success_receivers.clear()
+        self._route_child_message_receivers.clear()
+        self._route_child_reader_paths.clear()
+        self._route_child_violations.clear()
+        self._route_unattributed_events = 0
+        self._route_audit_events.clear()
+        self._route_audit_persisted_event_count = 0
+        with contextlib.suppress(FileNotFoundError):
+            (self.artifact_dir / "codex-app-server-events.jsonl").unlink()
+        self._route_active_items.clear()
+        self._route_pending_child_events.clear()
+        self._route_review_verified = False
+        self._route_successful_root_tools.clear()
+        self._route_completion_tools.clear()
+        self._route_completion_verified = False
+        self._route_input_tokens = 0
+        self._route_output_tokens = 0
+        self._persist_route_audit(force_snapshot=True)
+
+        original_message = request.get("message")
+        if not isinstance(original_message, Mapping):
+            raise CodexAdapterError("turn request has no message object")
+        task = str(original_message.get("text", ""))
+        staged_turns: list[TurnResult] = []
+        repair_instruction = ""
+        for cycle in range(3):
+            self._route_capture_seen = False
+            self._route_review_input = None
+            stage_text = (
+                "RUNNER STAGE: writable workflow execution. Author the closure and "
+                "follow the active workflow through one successful capture. Do not "
+                "spawn a reviewer or report the review in this turn. Stop immediately "
+                "after capture; the runner will start the read-only review turn."
+                if cycle == 0 else
+                "RUNNER-AUTHORIZED REPAIR STAGE: the preceding read-only review "
+                "returned findings. Repair only the cited closure issues, then follow "
+                "the supervisor's currently returned actions to capture again. Do "
+                "not reactivate the workflow. Do not spawn a reviewer or report review "
+                "in this writable turn; stop immediately after successful capture.\n\n"
+                + repair_instruction
+            )
+            writer_request = {
+                "message": {
+                    "text": task + "\n\n" + stage_text,
+                    "attachments": original_message.get("attachments", []),
+                }
+            }
+            writer = self._send_turn(writer_request, stage="repair" if cycle else "execution")
+            staged_turns.append(writer)
+            if (
+                writer.environment_wedged
+                or writer.turn_timed_out
+                or self._route_child_violations
+                or self._route_unattributed_events
+                or not self._route_capture_seen
+                or self._route_review_input is None
+                or writer.terminal_result_subtype != "success"
+                or writer.terminal_result_is_error is not False
+            ):
+                return self._route_result(
+                    staged_turns,
+                    "writable turn did not stop after a successful capture",
+                )
+
+            review_fields = dict(self._route_review_input)
+            self._route_stage_spawn_count = 0
+            self._route_stage_spawn_items.clear()
+            self._route_report_count = 0
+            self._route_review_receiver_ids.clear()
+            self._route_child_reader_receivers.clear()
+            self._route_child_success_receivers.clear()
+            self._route_child_message_receivers.clear()
+            self._route_child_reader_paths.clear()
+            reviewer_prompt = (
+                "RUNNER STAGE: read-only retained-capture review. The prior writable "
+                "turn completed a successful capture and the runner stopped it. "
+                "Use exactly one provider-native reviewer child. The child prompt must "
+                "begin with CODEX_REVIEW_CHILD and include this exact review_input JSON: "
+                + json.dumps(review_fields, sort_keys=True)
+                + ". The child may inspect the exact retained_blueprint_path or "
+                "existing paths under retained_capture_root with "
+                "mcp__nxd-desktop__read_review_input; do not use parent traversal, "
+                "shell, direct file "
+                "tools, other MCP tools, network, writes, or nested collaboration. "
+                "Wait for the child, close that receiver, then call only "
+                "advance_workflow with action.type=report_requirement and "
+                "requirement_id=review, carrying the exact review_input binding and "
+                "the child's structured report. Do not perform validation or admission."
+            )
+            reviewer = self._send_turn(
+                {"message": {"text": reviewer_prompt, "attachments": []}},
+                stage="review",
+            )
+            staged_turns.append(reviewer)
+            self._finalize_pending_child_events()
+            report = self._last_review_report()
+            if (
+                reviewer.environment_wedged
+                or reviewer.turn_timed_out
+                or reviewer.terminal_result_subtype != "success"
+                or not self._route_child_reader_paths
+                or self._route_child_violations
+                or self._route_unattributed_events
+                or self._route_stage_spawn_count != 1
+                or self._route_report_count != 1
+                or len(self._route_review_receiver_ids) != 1
+                or not self._route_child_reader_receivers
+                or not self._route_child_success_receivers
+                or not self._route_child_message_receivers
+                or not self._route_child_reader_receivers.issubset(self._route_child_success_receivers)
+                or not self._route_child_reader_receivers.issubset(self._route_child_message_receivers)
+                or not report
+            ):
+                return self._route_result(
+                    staged_turns,
+                    "read-only reviewer evidence or review report is incomplete",
+                )
+            if report.get("clear") is True:
+                self._route_review_verified = True
+                completion_prompt = (
+                    "RUNNER-AUTHORIZED COMPLETION STAGE: the retained-capture review "
+                    "is verified clear. Continue the same prepared workflow and finish "
+                    "the original task using its returned state. Complete admission and "
+                    "publication, inspect the durable workflow and authoritative run, "
+                    "list and resume the product, describe models, run the requested "
+                    "governed paid query, export below the workspace, and create and "
+                    "trace-link all six independent negative cases with the exact "
+                    "structured phase/code returned by MCP. Do not activate or prepare "
+                    "another workflow, repeat capture, spawn a reviewer, call "
+                    "report_requirement for review, or make direct network requests. "
+                    "Use the runner-owned nxd-desktop MCP server and workspace file "
+                    "changes only. Stop when the original task is complete."
+                )
+                completion = self._send_turn(
+                    {"message": {"text": completion_prompt, "attachments": []}},
+                    stage="completion",
+                )
+                staged_turns.append(completion)
+                if (
+                    completion.environment_wedged
+                    or completion.turn_timed_out
+                    or completion.terminal_result_subtype != "success"
+                    or completion.terminal_result_is_error is not False
+                    or self._route_child_violations
+                    or self._route_unattributed_events
+                    or not TERMINAL_ROUTE_COMPLETION_TOOLS.issubset(
+                        self._route_completion_tools
+                    )
+                    or not TERMINAL_ROUTE_REQUIRED_TOOLS.issubset(
+                        self._route_successful_root_tools
+                    )
+                ):
+                    return self._route_result(
+                        staged_turns,
+                        "authorized completion stage did not produce the required lifecycle evidence",
+                    )
+                self._route_completion_verified = True
+                return self._route_result(staged_turns, None)
+            if cycle == 2 or not report.get("completed"):
+                return self._route_result(
+                    staged_turns,
+                    "review did not clear within the bounded repair cycles",
+                )
+            repair_instruction = json.dumps(report, sort_keys=True)
+        return self._route_result(staged_turns, "terminal route exhausted its repair cycle cap")
+
+    def _route_audit_payload(self) -> dict[str, object]:
+        return {
+            "codex_version": self.codex_version,
+            "root_thread_id": self._thread_id,
+            "root_turn_id": self._active_turn_id,
+            "turn_count": self._route_turn_count,
+            "input_tokens": self._route_input_tokens,
+            "output_tokens": self._route_output_tokens,
+            "events": self._route_audit_events,
+            "event_count": len(self._route_audit_events),
+            "event_log_path": str(self.artifact_dir / "codex-app-server-events.jsonl"),
+            "spawned_receiver_ids": sorted(self._route_spawned_receivers),
+            "child_reader_paths": self._route_child_reader_paths,
+            "violations": self._route_child_violations,
+            "unattributed_events": self._route_unattributed_events,
+            "review_verified": self._route_review_verified,
+            "successful_root_tools": sorted(self._route_successful_root_tools),
+            "completion_tools": sorted(self._route_completion_tools),
+            "completion_verified": self._route_completion_verified,
+            "review_report_count": self._route_report_count,
+            "review_receiver_ids": sorted(self._route_review_receiver_ids),
+            "child_reader_receivers": sorted(self._route_child_reader_receivers),
+            "child_success_receivers": sorted(self._route_child_success_receivers),
+            "child_message_receivers": sorted(self._route_child_message_receivers),
+            "pending_child_event_count": len(self._route_pending_child_events),
+        }
+
+    def _route_result(
+        self, turns: Sequence[TurnResult], error: str | None
+    ) -> TurnResult:
+        """Combine staged root-turn evidence without crediting child events."""
+        complete = bool(
+            error is None
+            and len(turns) >= 3
+            and turns[-1].terminal_result_subtype == "success"
+            and turns[-1].terminal_result_is_error is False
+            and self._route_stage_spawn_count == 1
+            and self._route_child_reader_paths
+            and self._route_report_count == 1
+            and len(self._route_review_receiver_ids) == 1
+            and self._route_child_reader_receivers
+            and self._route_child_success_receivers
+            and self._route_child_message_receivers
+            and self._route_child_reader_receivers.issubset(self._route_child_success_receivers)
+            and self._route_child_reader_receivers.issubset(self._route_child_message_receivers)
+            and self._route_review_verified
+            and self._route_completion_verified
+            and TERMINAL_ROUTE_REQUIRED_TOOLS.issubset(
+                self._route_successful_root_tools
+            )
+            and TERMINAL_ROUTE_COMPLETION_TOOLS.issubset(
+                self._route_completion_tools
+            )
+            and not self._route_child_violations
+            and not self._route_unattributed_events
+            and not self._route_pending_child_events
+        )
+        self._persist_route_audit(force_snapshot=True)
+        last = turns[-1] if turns else TurnResult()
+        agent_message = next(
+            (turn.agent_message for turn in reversed(turns) if turn.agent_message),
+            last.agent_message,
+        )
+        failures = [turn for turn in turns if turn.environment_wedged or turn.turn_timed_out]
+        transcript = "\n".join(
+            str(turn.transcript_delta) for turn in turns if turn.transcript_delta
+        )
+        details = [turn.environment_detail for turn in failures if turn.environment_detail]
+        if error:
+            details.append(error)
+        return TurnResult(
+            transcript_delta=self._redact_text(transcript),
+            agent_message=agent_message,
+            tool_calls=tuple(call for turn in turns for call in turn.tool_calls),
+            tool_results=tuple(result for turn in turns for result in turn.tool_results),
+            build_failed=any(turn.build_failed for turn in turns),
+            build_failure_count=sum(turn.build_failure_count for turn in turns),
+            environment_wedged=bool(failures) or not complete,
+            turn_timed_out=any(turn.turn_timed_out for turn in turns),
+            environment_detail=self._redact_text(" | ".join(details)) if details else None,
+            failure_reason=first_reason(turn.failure_reason for turn in turns),
+            last_mcp_call=last.last_mcp_call or self._last_mcp_call,
+            session_id=self._thread_id,
+            terminal_result_count=sum(turn.terminal_result_count for turn in turns),
+            terminal_result_subtype=last.terminal_result_subtype,
+            terminal_result_is_error=False if complete else last.terminal_result_is_error,
+            provider_model_calls=sum(turn.provider_model_calls for turn in turns),
+            input_tokens=sum(turn.input_tokens or 0 for turn in turns),
+            output_tokens=sum(turn.output_tokens or 0 for turn in turns),
+        )
+
+    def _send_turn(
+        self, request: Mapping[str, object], *, stage: str
+    ) -> TurnResult:
+        self._route_stage = stage
+        self._route_turn_count += 1
+        if self.terminal_route and self._route_turn_count > TERMINAL_ROUTE_MAX_TURNS:
+            return TurnResult(
+                environment_wedged=True,
+                environment_detail="Codex terminal route exceeded its hard turn cap",
+                session_id=self._thread_id,
+            )
         self.start()
         message = request.get("message")
         if not isinstance(message, Mapping):
@@ -3543,10 +4711,13 @@ class CodexAdapter:
         events: list[Mapping[str, object]] = list(self._startup_events)
         self._startup_events.clear()
         try:
-            sandbox_policy = _turn_sandbox_policy(
-                self._review_pending,
-                [str(Path.cwd()), str(self.skill_pack_root)],
-            )
+            if self.terminal_route:
+                sandbox_policy = _terminal_turn_sandbox_policy(stage, str(Path.cwd()))
+            else:
+                sandbox_policy = _turn_sandbox_policy(
+                    self._review_pending,
+                    [str(Path.cwd()), str(self.skill_pack_root)],
+                )
             self._write_rpc(
                 "turn/start",
                 {
@@ -3663,12 +4834,18 @@ class CodexAdapter:
         self._started = False
 
 
-def _write_result(value: TurnResult, *, backend: str | None = None) -> None:
+def _write_result(
+    value: TurnResult, *, backend: str | None = None,
+    audit: Mapping[str, object] | None = None,
+) -> None:
     from dp_scenarios.runner.session import turn_result_to_dict
 
     if backend is not None:
         value = replace(value, backend=backend)
-    sys.stdout.write(json.dumps({"result": turn_result_to_dict(value)}, ensure_ascii=False, sort_keys=True) + "\n")
+    payload: dict[str, object] = {"result": turn_result_to_dict(value)}
+    if audit is not None:
+        payload["route_audit"] = audit
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
     sys.stdout.flush()
 
 
@@ -3710,6 +4887,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allowedTools")
     parser.add_argument("--native-continuation", action="store_true")
     parser.add_argument("--native-state-dir", type=Path)
+    parser.add_argument("--terminal-route", action="store_true")
+    parser.add_argument("--idle-timeout", type=float, default=TERMINAL_ROUTE_IDLE_TIMEOUT_S)
+    parser.add_argument("--codex-version")
+    parser.add_argument("--no-fixture-handoff", action="store_true")
     parser.add_argument("--resume-session-id")
     parser.add_argument("--append-system-prompt", default=CODEX_SYSTEM_PROMPT)
     return parser
@@ -3759,9 +4940,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         resume_session_id=args.resume_session_id,
         native_state_dir=(
             args.native_state_dir.expanduser().resolve()
-            if args.native_state_dir is not None
-            else None
+            if args.native_state_dir is not None else None
         ),
+        terminal_route=args.terminal_route,
+        idle_timeout_seconds=args.idle_timeout,
+        codex_version=args.codex_version,
+        fixture_handoff=not args.no_fixture_handoff,
     )
 
     def terminate_on_signal(signum: int, _frame: Any) -> None:
@@ -3779,7 +4963,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 request = json.loads(line)
                 if not isinstance(request, Mapping):
                     raise CodexAdapterError("request must be a JSON object")
-                _write_result(adapter.send(request), backend="codex")
+                _write_result(
+                    adapter.send(request), backend="codex",
+                    audit=(
+                        adapter._redact_json_rpc(adapter._route_audit_payload())
+                        if adapter.terminal_route else None
+                    ),
+                )
             except (CodexAdapterError, OSError, ValueError) as exc:
                 _write_result(
                     TurnResult(
@@ -3795,6 +4985,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         session_id=adapter._thread_id,
                     ),
                     backend="codex",
+                    audit=(
+                        adapter._redact_json_rpc(adapter._route_audit_payload())
+                        if adapter.terminal_route else None
+                    ),
                 )
     finally:
         adapter.close()

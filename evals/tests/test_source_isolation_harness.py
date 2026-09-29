@@ -88,6 +88,8 @@ def _args(wrapper: Path | None, **over):
     base = dict(
         agent_backend="codex", judge_backend="codex", agent_model="m",
         judge_model="j", agent_effort="", judge_effort="", agent_timeout=60,
+        _agent_effort_explicit=False, _judge_effort_explicit=False,
+        _judge_backend_explicit=False, _judge_model_explicit=False,
         judge_timeout=60, docs_base="https://example.invalid", cache_dir=None,
         source_isolation_capability_id="capability:test",
         source_isolation_profile_fingerprint="a" * 64,
@@ -227,6 +229,17 @@ def test_protected_prompt_is_workspace_only_and_identical_for_baseline_and_head(
         "--- TASK ---",
         "do work",
     ])
+
+
+def test_codex_terminal_prompt_calls_out_workflow_v2_recovery():
+    run = _load_run()
+    prompt = run.build_agent_prompt(
+        "do work", "https://example.invalid/", False,
+        skills_in_workspace=True, workflow_v2_terminal=True,
+    )
+    assert "complete typed proposal object inline" in prompt
+    assert "Do not use check_data_product or build_data_product" in prompt
+    assert "returned reset/inspect/next actions" in prompt
 
 
 def test_cache_identity_is_part_of_the_key(tmp_path):
@@ -424,4 +437,3 @@ def test_resolved_roots_reach_the_wrapper(tmp_path, monkeypatch):
     )
     assert "no-roots-configured" not in (result.error or "")
     assert "source-isolation infrastructure invalid" not in (result.error or ""), result.error
-

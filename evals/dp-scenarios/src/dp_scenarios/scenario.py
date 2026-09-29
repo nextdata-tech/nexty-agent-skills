@@ -162,6 +162,29 @@ class QueryAssessment:
     actual_rows: tuple[dict[str, object], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ChainSpec:
+    """Harness-only publication boundary for a two-phase operator script."""
+
+    prefix_turns: int
+    source_family: str
+    from_state: str
+    to_state: str
+    decision_overlay: str
+    stage_values: tuple[str, ...]
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "trigger": "first_publication",
+            "prefix_turns": self.prefix_turns,
+            "source_family": self.source_family,
+            "from_state": self.from_state,
+            "to_state": self.to_state,
+            "decision_overlay": self.decision_overlay,
+            "stage_values": list(self.stage_values),
+        }
+
+
 class AgentEvidence(dict):
     """An agent-authored evidence artifact, tagged so the shim skips it.
 
@@ -211,6 +234,7 @@ class Scenario:
     # scenario-specific follow-up. It is always relative to the runner's
     # artifact root; hidden gold is never inferred from this path.
     follow_up_artifact: str | None = None
+    chain: ChainSpec | None = None
 
     @property
     def id(self) -> str:
@@ -270,7 +294,9 @@ class Scenario:
     def script_hash(self) -> str:
         """Compatibility spelling for the manifest-facing script hash."""
 
-        return self.operator_script_hash
+        if self.chain is None:
+            return self.operator_script_hash
+        return _canonical_hash({"operator_script_hash": self.operator_script_hash, "chain": self.chain.to_mapping()})
 
     @property
     def gold_paths(self) -> Mapping[str, Path]:
@@ -414,6 +440,7 @@ class Scenario:
         source_evidence: object = _MISSING,
         operator_observations: object = _MISSING,
         supervisor_history: SupervisorHistoryView | None = None,
+        artifact_root: Path | None = None,
     ) -> Mapping[str, object]:
         """Run follow-up against a closure, with gold resolved separately.
 
@@ -456,6 +483,7 @@ class Scenario:
             source_evidence=source_evidence,
             operator_observations=operator_observations,
             supervisor_history=supervisor_history,
+            artifact_root=artifact_root,
         )
         try:
             kind = followups.get(binding.kind)
@@ -510,6 +538,7 @@ class Scenario:
         source_evidence: object = _MISSING,
         operator_observations: object = _MISSING,
         supervisor_history: SupervisorHistoryView | None = None,
+        artifact_root: Path | None = None,
     ) -> GateResult:
         """Adapt the declared follow-up check to the settled follow-up gate type."""
 
@@ -542,6 +571,7 @@ class Scenario:
             source_evidence=source_evidence,
             operator_observations=operator_observations,
             supervisor_history=supervisor_history,
+            artifact_root=artifact_root,
         )
         base = gate_follow_up(result)
         raw_findings = result.get("findings", ())
@@ -725,7 +755,7 @@ _SCENARIO_KEYS = {
 # package, so they live outside ``_SCENARIO_KEYS`` rather than being added to
 # it, which would make every existing scenario.yaml fail the "missing key(s)"
 # check the moment this key exists at all.
-_OPTIONAL_SCENARIO_KEYS = {"route_table", "follow_up_artifact"}
+_OPTIONAL_SCENARIO_KEYS = {"route_table", "follow_up_artifact", "chain"}
 _FIXTURE_KEYS = {"dataset", "seed", "variant", "plant"}
 _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
@@ -763,6 +793,51 @@ def requires_live_session(tier: str) -> bool:
 def _canonical_hash(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _parse_chain(
+    value: object,
+    *,
+    answer_sheet: AnswerSheet,
+    route_table: MockRouteTable | None,
+    turn_count: int,
+) -> ChainSpec | None:
+    if value is _MISSING:
+        return None
+    raw = _mapping(value, "chain")
+    required = {
+        "trigger", "prefix_turns", "source_family", "from_state", "to_state",
+        "decision_overlay", "stage_values",
+    }
+    _unknown(raw, required, "chain")
+    if set(raw) != required:
+        raise ScenarioError("chain requires trigger, prefix_turns, source_family, from_state, to_state, decision_overlay, and stage_values")
+    if raw["trigger"] != "first_publication":
+        raise ScenarioError("chain.trigger must be first_publication")
+    prefix_turns = _positive_int(raw["prefix_turns"], "chain.prefix_turns")
+    if prefix_turns >= turn_count:
+        raise ScenarioError("chain.prefix_turns must leave at least one suffix turn")
+    family = _string(raw["source_family"], "chain.source_family")
+    from_state = _string(raw["from_state"], "chain.from_state")
+    to_state = _string(raw["to_state"], "chain.to_state")
+    if from_state == to_state:
+        raise ScenarioError("chain source states must differ")
+    overlay = _string(raw["decision_overlay"], "chain.decision_overlay")
+    if overlay not in answer_sheet.decision_overlay_ids:
+        raise ScenarioError("chain.decision_overlay is not declared by the answer sheet")
+    stages = _strings(raw["stage_values"], "chain.stage_values")
+    if len(stages) != len(set(stages)):
+        raise ScenarioError("chain.stage_values must be unique")
+    stateful_routes = (
+        [route for route in route_table.routes if route.state_family == family]
+        if route_table is not None else []
+    )
+    if not stateful_routes or any(
+        route.initial_state != from_state or to_state not in route.states
+        for route in stateful_routes
+    ):
+        raise ScenarioError("chain source family and states must match a stateful route")
+    return ChainSpec(prefix_turns, family, from_state, to_state, overlay, stages)
 
 
 def _is_row_sequence(value: object) -> bool:
@@ -1133,6 +1208,12 @@ def load_scenario(path: str | Path) -> Scenario:
         base_dir=root.resolve(),
         declared_source_tables=frozenset(getattr(get_dataset(dataset), "source_tables", ())),
     )
+    chain = _parse_chain(
+        raw.get("chain", _MISSING),
+        answer_sheet=answer_sheet,
+        route_table=route_table,
+        turn_count=len(answer_sheet.turns),
+    )
     script = OperatorScript.from_components(
         persona,
         answer_sheet,
@@ -1167,6 +1248,7 @@ def load_scenario(path: str | Path) -> Scenario:
         operator_script=script,
         route_table=route_table,
         follow_up_artifact=follow_up_artifact,
+        chain=chain,
     )
 
 
@@ -1298,6 +1380,7 @@ def _naive_rows(value: object) -> list[dict[str, object]] | None:
 
 
 __all__ = [
+    "ChainSpec",
     "FixtureSpec",
     "GoldArtifactError",
     "GateSpec",
