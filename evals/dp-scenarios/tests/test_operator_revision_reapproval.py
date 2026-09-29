@@ -306,6 +306,84 @@ def test_a_scripted_approval_slot_keeps_precedence_and_becomes_the_resent_line()
 
 
 # ---------------------------------------------------------------------------
+# Per-workflow scoping (r407 defect: a version bump must get its own budget).
+#
+# B7 mrr-waterfall run r407 (Sonnet): turns 9 and 11 burned both of the run's
+# two revision-reapproval uses on early v1 prepare/reset churn, before the
+# workflow was ever published. At turn 42 (B7-E8), the agent revised the plan
+# into a *new*, distinct workflow, `mrr-waterfall-v3`, and asked for fresh
+# approval at turns 43-50 -- every one of those asks got the stock persona
+# line instead, because the run-global counter was already exhausted, and
+# the run dead-ended with no v3 build. Real ``prepare_workflow``/
+# ``reset_workflow`` calls carry a ``workflow`` argument (the same field
+# ``gates.py`` keys publication evidence on); the fix scopes the budget and
+# the rebound flag to that identity so a version bump starts fresh.
+# ---------------------------------------------------------------------------
+
+
+def _call_wf(name: str, workflow: str, ok: bool = True) -> ToolCall:
+    result = (
+        {"workflow": workflow, "events": [{"code": "workflow/prepared"}]}
+        if ok
+        else {"error": {"message": "typed proposal failed trusted validation"}}
+    )
+    return ToolCall(name, {"workflow": workflow}, result)
+
+
+def test_r407_style_churn_on_v1_does_not_starve_the_v3_version_bump() -> None:
+    script = _script(10)
+    transport = InMemoryTransport(
+        [
+            # Turn 1: prepares "mrr-waterfall" before any approval exists.
+            TurnResult(agent_message=ASK, tool_calls=(_call_wf(PREPARE, "mrr-waterfall"),)),
+            # Turn 2: the scripted approval fires (index 1 in message_texts).
+            TurnResult(agent_message=ASK),
+            # Turns 9/11 in r407: two rebind+reapproval cycles on the same
+            # workflow identity, exhausting its budget.
+            TurnResult(agent_message=ASK, tool_calls=(_call_wf(RESET, "mrr-waterfall"),)),
+            TurnResult(agent_message=ASK),
+            TurnResult(agent_message=ASK, tool_calls=(_call_wf(RESET, "mrr-waterfall"),)),
+            TurnResult(agent_message=ASK),
+            # A third rebind on the same workflow: the budget for
+            # "mrr-waterfall" is spent, so this genuine ask gets the persona
+            # fallback, not a third resend.
+            TurnResult(agent_message=ASK, tool_calls=(_call_wf(RESET, "mrr-waterfall"),)),
+            TurnResult(agent_message=ASK),
+            # Turn 42 in r407: B7-E8 makes the agent prepare a *new*,
+            # distinct workflow, "mrr-waterfall-v3".
+            TurnResult(agent_message=ASK, tool_calls=(_call_wf(PREPARE, "mrr-waterfall-v3"),)),
+            # Turn 43 in r407: the agent's fresh-approval ask for v3. This is
+            # the turn that dead-ended in the live run.
+            TurnResult(agent_message=ASK),
+            # No further rebind: the next ask on the same v3 workflow keeps
+            # the persona line, same as any other spent-budget case.
+            TurnResult(agent_message=ASK),
+        ]
+    )
+
+    result = OperatorEngine(script, transport).run()
+    texts = transport.message_texts
+
+    # mrr-waterfall's budget spends out exactly as it does today (turns 4,
+    # 6 resend; turn 8 falls back once the budget is gone).
+    assert texts[3] == APPROVAL
+    assert texts[5] == APPROVAL
+    assert texts[7] == PERSONA_LINE
+    # The version bump to mrr-waterfall-v3 is a distinct workflow identity:
+    # its own budget is untouched by v1's churn, so turn 43's fresh-approval
+    # ask (index 9) is answered, not starved.
+    assert texts[9] == APPROVAL
+    # No further rebind on v3, so the next ask keeps the persona line.
+    assert texts[10] == PERSONA_LINE
+
+    rows = _approval_rows(result)
+    # Turn 2 (index 1) is the first approval; turns 4 and 6 (index 3, 5) are
+    # v1's two reapprovals; turn 10 (index 9) is v3's own first reapproval.
+    assert [row["turn"] for row in rows] == [2, 4, 6, 10]
+    assert all(row["artifact_ref"] == APPROVAL for row in rows)
+
+
+# ---------------------------------------------------------------------------
 # Grading stays truthful.
 # ---------------------------------------------------------------------------
 

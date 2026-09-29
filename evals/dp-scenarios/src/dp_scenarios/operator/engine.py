@@ -104,6 +104,28 @@ def _rebinds_workflow(call: ToolCall) -> bool:
     return isinstance(payload, Mapping) and bool(payload) and "error" not in payload
 
 
+def _workflow_identity(call: ToolCall) -> str | None:
+    """The workflow/blueprint identity a rebind call names, if any.
+
+    ``prepare_workflow``/``reset_workflow`` calls carry a ``workflow``
+    argument naming the product the plan binds to -- the same field
+    ``gates.py`` keys publication and approval evidence on. A version bump
+    (``mrr-waterfall`` -> ``mrr-waterfall-v3``) is a different string here,
+    which is exactly the signal the re-approval budget needs: churn on one
+    workflow must never consume the budget a later, distinct workflow needs
+    for its own first revision.
+    """
+
+    if not isinstance(call.name, str) or _WORKFLOW_REBIND_TOOL_PATTERN.search(call.name) is None:
+        return None
+    arguments = call.arguments
+    if isinstance(arguments, Mapping):
+        workflow = arguments.get("workflow")
+        if isinstance(workflow, str) and workflow:
+            return workflow
+    return None
+
+
 _ASK_BACK_ACCEPTANCE_RULE_ID = "stance.ask_back.accept_recommendation"
 _ASK_BACK_ACCEPTANCE_REPLY = "Yes, go with your recommendation."
 _ASK_BACK_HAND_BACK_PATTERN = re.compile(
@@ -1481,14 +1503,24 @@ class OperatorEngine:
         owed_approval_wait = 0
         # Re-approval of a revised plan. ``revision_approval_text`` is the
         # declared approval line last actually transmitted (scripted, owed or
-        # reconfirmed); ``plan_rebound_since_approval`` records that the agent
-        # successfully ran ``prepare_workflow``/``reset_workflow`` on or after
-        # the turn that approval (or a later re-approval) went out. Both must
-        # hold, together with a genuine approval ask, for the operator to
-        # approve the revision -- at most ``_REVISION_REAPPROVAL_LIMIT`` times.
+        # reconfirmed) -- shared across workflows, since it is simply the
+        # operator's one piece of consent language, not plan-specific text.
+        # ``plan_rebound_since_approval`` and ``revision_reapproval_uses`` are
+        # scoped per workflow/blueprint identity (see ``_workflow_identity``):
+        # each records, for the workflow currently in play
+        # (``current_revision_workflow``), whether the agent successfully ran
+        # ``prepare_workflow``/``reset_workflow`` for *that* workflow since its
+        # last approval, and how many times that workflow's revision has
+        # already been re-approved. Scoping per workflow keeps the protection
+        # this was built for -- no unbounded re-approval loop within one
+        # workflow -- without letting early churn on one workflow (e.g. a
+        # prepare/reset loop before its first approval) burn the budget a
+        # later, distinct workflow (a version bump the agent prepares after
+        # publishing) needs for its own re-approval.
         revision_approval_text: str | None = None
-        plan_rebound_since_approval = False
-        revision_reapproval_uses = 0
+        current_revision_workflow: str | None = None
+        plan_rebound_by_workflow: dict[str | None, bool] = {}
+        revision_reapproval_uses_by_workflow: dict[str | None, int] = {}
         previous_agent_message = ""
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
@@ -1843,8 +1875,9 @@ class OperatorEngine:
             # any other turn.
             revision_reapproval_turn = bool(
                 revision_approval_text is not None
-                and plan_rebound_since_approval
-                and revision_reapproval_uses < _REVISION_REAPPROVAL_LIMIT
+                and plan_rebound_by_workflow.get(current_revision_workflow, False)
+                and revision_reapproval_uses_by_workflow.get(current_revision_workflow, 0)
+                < _REVISION_REAPPROVAL_LIMIT
                 and index > 1
                 and scripted_turn.substitute_reply
                 and not yielding
@@ -2588,13 +2621,18 @@ class OperatorEngine:
             if dynamic_reapproval:
                 reapproval_uses += 1
             if revision_reapproval_turn:
-                revision_reapproval_uses += 1
+                revision_reapproval_uses_by_workflow[current_revision_workflow] = (
+                    revision_reapproval_uses_by_workflow.get(current_revision_workflow, 0) + 1
+                )
             # Any approval that actually went out this turn answers whatever
             # plan was current; only a re-bind the agent performs from here on
             # (this turn's own tool calls included -- they follow the
-            # operator's message) can make a later ask a new revision.
+            # operator's message) can make a later ask a new revision. This
+            # only clears the workflow the approval concerned
+            # (``current_revision_workflow`` as of before this turn's tool
+            # calls); a different workflow's own rebound flag is untouched.
             if approval_turn or reconfirm_applied:
-                plan_rebound_since_approval = False
+                plan_rebound_by_workflow[current_revision_workflow] = False
                 if scripted_approval_fired or owed_approval_turn or reconfirm_applied:
                     # The declared approval line this turn carried, before any
                     # due event was appended; a revision re-approval resends
@@ -2602,10 +2640,21 @@ class OperatorEngine:
                     # answer is scenario-specific text for its own moment and
                     # is never recycled here.
                     revision_approval_text = selected_base
-            if revision_approval_text is not None and any(
-                _rebinds_workflow(call) for call in result.tool_calls
-            ):
-                plan_rebound_since_approval = True
+            if revision_approval_text is not None:
+                for call in result.tool_calls:
+                    if not _rebinds_workflow(call):
+                        continue
+                    # A named identity switches which workflow's budget and
+                    # rebound flag are live from here on -- a version bump
+                    # (``mrr-waterfall`` -> ``mrr-waterfall-v3``) starts a
+                    # fresh, unburned budget. An unnamed rebind (no
+                    # ``workflow`` argument observed) cannot signal a switch,
+                    # so it stays scoped to whichever workflow was already
+                    # current.
+                    identity = _workflow_identity(call)
+                    if identity is not None:
+                        current_revision_workflow = identity
+                    plan_rebound_by_workflow[current_revision_workflow] = True
             if defer_scheduled_approval:
                 # The scripted approval for this turn was swallowed by a
                 # pending decision answer; keep its text owed rather than

@@ -206,6 +206,94 @@ def test_p3_source_challenge_does_not_answer_an_explicit_approval(question: str)
     assert match.rule_id != "persona.status_query"
 
 
+def test_e8_makes_the_revised_same_month_decision_deliverable_once_genuinely_asked() -> None:
+    """Defect 2 (r407): the declared ``same_month_classification_revised``
+    decision is delivered through the same solicited-exchange mechanism as
+    the initial decision, once B7-E8 has fired -- design-B7.md's "Answer
+    matching and disclosure" section stages the revised answer until E8
+    fires and requires a genuine later exchange, matching the same "within
+    the same month"/"both directions" vocabulary used for the initial ask.
+    In r407, this decision was never recorded as delivered (turns 42-50)
+    only because the run-global reapproval budget (see
+    test_operator_revision_reapproval.py) starved every v3 approval ask
+    before the agent ever reached a turn that could ask this; the mechanism
+    itself, once reachable, already answers it correctly and generically.
+    """
+
+    scenario = _b7()
+    sheet = scenario.answer_sheet
+    bank = MatcherBank(scenario.persona, sheet)
+    question = FIXTURE["r407_style_post_e8_same_month_ask"]
+
+    before = bank.reply_for(question, available_event_ids=("B7-same-month",))
+    assert before.decision_id == "same_month_classification"
+    assert before.reply == sheet.decision_answers["same_month_classification"].answer
+
+    after = bank.reply_for(question, available_event_ids=("B7-same-month", "B7-E8"))
+    assert after.decision_id == "same_month_classification_revised"
+    assert after.reply == sheet.decision_answers["same_month_classification_revised"].answer
+
+    # End to end: the engine actually delivers it on the next turn once B7-E8
+    # has fired, exactly like the initial decision does in
+    # ``test_b7_run1_first_card_unlocks_the_asked_decision_only_after_delivery``.
+    script = OperatorScript.from_components(
+        scenario.persona,
+        sheet,
+        events=scenario.events,
+        turns=sheet.turns[:32],
+        turn_budget=32,
+        phase_by_turn={turn: scenario.phase_map[turn] for turn in range(1, 33)},
+    )
+    agent_messages = ["I am continuing the work."] * 32
+    agent_messages[3] = FIXTURE["turn_4_same_month_choice"]
+    agent_messages[6] = FIXTURE["turn_7_empty_movement_choice"]
+    agent_messages[30] = question
+    transport = InMemoryTransport(
+        [TurnResult(agent_message=message) for message in agent_messages]
+    )
+
+    snapshot = _publications(revised=False)
+    result = OperatorEngine(
+        script, transport, publication_history_reader=lambda: snapshot
+    ).run()
+
+    assert "B7-E8" in result.fired_event_ids
+    e8_turn = next(
+        turn.turn for turn in result.turns if "B7-E8" in turn.event_ids
+    )
+    assert e8_turn <= 31
+    assert result.turns[30].match.decision_id == "same_month_classification_revised"
+    assert transport.message_texts[31] == sheet.decision_answers[
+        "same_month_classification_revised"
+    ].answer
+    assert result.turns[31].delivered_decision_id == "same_month_classification_revised"
+
+
+def test_r407_turn19_dedup_key_choice_is_a_distinct_undeclared_choice_not_event_deduplication() -> None:
+    """The "option 2/3" ask at r407 turns 19-21 is a live, improvised choice
+    about a structural-validation workaround (landing the raw events export
+    as its own model), not a restatement of the declared
+    ``event_deduplication`` ruling (which was already answered earlier, via
+    the B7-same-month beat). It correctly does not match
+    ``decision.answer.event_deduplication`` -- PR #409's undeclared-choice
+    handling answers it instead, so the operator still gives an unambiguous
+    reply rather than silently dropping it or misrouting it to caveat/source
+    vocabulary as it did before #409.
+    """
+
+    scenario = _b7()
+    bank = MatcherBank(scenario.persona, scenario.answer_sheet)
+
+    for key in ("r407_turn19_dedup_key_choice", "r407_turn21_dedup_key_choice"):
+        match = bank.reply_for(FIXTURE[key], available_event_ids=("B7-same-month",))
+        assert match.decision_id != "event_deduplication"
+        assert match.rule_id != "decision.answer.event_deduplication"
+        # It is still recognised as something the agent is asking the
+        # operator to resolve, and gets a real (non-empty) answer.
+        assert match.solicits_operator is True
+        assert match.reply
+
+
 @pytest.mark.parametrize("scenario_id", ["finance-close", "marketing-attribution", "inventory-position"])
 def test_other_scenarios_keep_persona_source_and_approval_routes(scenario_id: str) -> None:
     scenario = load_scenario(SCENARIOS / scenario_id)
