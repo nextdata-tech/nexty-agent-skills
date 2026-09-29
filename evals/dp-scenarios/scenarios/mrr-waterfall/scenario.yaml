@@ -10,7 +10,7 @@ fixture:
 coverage:
   variant: monthly-subscription-records
   untested: This package grades a synthetic monthly MRR bridge, staged operator decisions, effective-dated events, publication-bound evidence, and exclusion of an unrelated contact export; it does not test a live billing system or authenticated agent run.
-turn_budget: 34
+turn_budget: 50
 repeatability:
   tier: deterministic
   epochs: 5
@@ -35,18 +35,18 @@ phase_map:
   12: 4
   13: 4
   14: 4
-  15: 5
-  16: 5
-  17: 5
-  18: 6
-  19: 7
-  20: 7
-  21: 7
-  22: 7
-  23: 7
-  24: 7
-  25: 7
-  26: 7
+  15: 4
+  16: 4
+  17: 4
+  18: 4
+  19: 4
+  20: 5
+  21: 5
+  22: 5
+  23: 5
+  24: 5
+  25: 5
+  26: 6
   27: 7
   28: 7
   29: 7
@@ -55,6 +55,22 @@ phase_map:
   32: 7
   33: 7
   34: 7
+  35: 7
+  36: 7
+  37: 7
+  38: 7
+  39: 7
+  40: 7
+  41: 7
+  42: 7
+  43: 7
+  44: 7
+  45: 7
+  46: 7
+  47: 7
+  48: 7
+  49: 7
+  50: 7
 required_plants:
   - B7-same-month
 gates:
@@ -63,7 +79,7 @@ gates:
   narrowing:
     kind: narrowing
     definition_change:
-      trigger_turn: 21
+      trigger_turn: 30
       changed_metrics:
         - mrr_movement_amount_cents
   construction:
