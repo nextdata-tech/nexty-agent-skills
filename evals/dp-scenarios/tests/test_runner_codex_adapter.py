@@ -36,6 +36,7 @@ from dp_scenarios.runner.codex_adapter import (
     _codex_root_progress_event,
     _event_debug_tail,
     _normalise_app_server_event,
+    _response_satisfies_review,
     _review_pending_after_observations,
     _reviewer_wait_without_target,
     _terminal_turn_sandbox_policy,
@@ -868,6 +869,45 @@ def test_provider_cause_survives_interrupted_or_failed_root_turn(
     assert "PROVIDER_PRIVATE_" not in detail
 
 
+@pytest.mark.parametrize("terminal_status", ["interrupted", "failed"])
+def test_terminal_route_keeps_provider_detail_on_failed_or_interrupted_root_turn(
+    monkeypatch: pytest.MonkeyPatch, terminal_status: str
+) -> None:
+    provider_error = _codex_provider_error_event(
+        will_retry=True, codex_error_info="rateLimitExceeded"
+    )
+    terminal = {
+        "method": "turn/completed",
+        "params": {"turn": {"id": "root-turn", "status": terminal_status}},
+    }
+    adapter = _stub_turn_collector(iter((provider_error, terminal)))
+    adapter.terminal_route = True
+    adapter._route_stage = "execution"
+    adapter._route_child_violations = []
+    adapter._route_capture_seen = False
+    observed: list[str] = []
+    original = CodexAdapter._observe_route_event
+
+    def observe(self, event, active_calls, *, audit=True):
+        normalized = original(self, event, active_calls, audit=audit)
+        observed.append(str(normalized.get("type")))
+        return normalized
+
+    monkeypatch.setattr(CodexAdapter, "_observe_route_event", observe)
+    ticks = iter(float(index) * 0.01 for index in range(10_000))
+    monkeypatch.setattr(
+        "dp_scenarios.runner.codex_adapter.time.monotonic", lambda: next(ticks)
+    )
+
+    events = adapter._collect_turn(1, "", [])
+
+    assert f"turn.{terminal_status}" in observed
+    assert events[-1]["type"] == f"turn.{terminal_status}"
+    detail = events[-1].get("error")
+    assert isinstance(detail, str) and "variant=rateLimitExceeded" in detail
+    assert "PROVIDER_PRIVATE_" not in detail
+
+
 @pytest.mark.parametrize(
     ("codex_error_info", "http_status", "expected_reason"),
     [
@@ -1304,6 +1344,8 @@ def test_successful_review_report_restores_workspace_write_for_follow_up_turn() 
     assert _turn_sandbox_policy(False, ("/workspace", "/skills")) == {
         "type": "workspaceWrite",
         "writableRoots": ["/workspace", "/skills"],
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
     }
 
 
@@ -1312,11 +1354,15 @@ def test_terminal_route_turn_policies_are_workspace_only_and_network_disabled() 
         "type": "workspaceWrite",
         "writableRoots": ["/tmp/ws"],
         "networkAccess": False,
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
     }
     assert _terminal_turn_sandbox_policy("repair", "/tmp/ws") == {
         "type": "workspaceWrite",
         "writableRoots": ["/tmp/ws"],
         "networkAccess": False,
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
     }
     assert _terminal_turn_sandbox_policy("review", "/tmp/ws") == {
         "type": "readOnly",
@@ -1326,9 +1372,88 @@ def test_terminal_route_turn_policies_are_workspace_only_and_network_disabled() 
         "type": "workspaceWrite",
         "writableRoots": ["/tmp/ws"],
         "networkAccess": False,
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
     }
     with pytest.raises(ValueError):
         _terminal_turn_sandbox_policy("other", "/tmp/ws")
+
+
+def _advance_observation(action: dict[str, object], result: object) -> dict[str, object]:
+    return {
+        "tool": "mcp__nxd-desktop__advance_workflow",
+        "arguments": {"action": action},
+        "result": result,
+        "is_error": False,
+    }
+
+
+_REVIEW_REPORT_ACTION = {"type": "report_requirement", "requirement_id": "review"}
+
+
+def test_strict_review_tracking_sets_pending_on_capture_requiring_review() -> None:
+    capture = _advance_observation(
+        {"type": "capture"},
+        {"requirements": [{"id": "review", "status": "pending", "review_input": {}}]},
+    )
+    assert _review_pending_after_observations((capture,), False, strict=True) is True
+
+
+@pytest.mark.parametrize(
+    "clear",
+    [
+        {"code": "workflow/requirement_satisfied", "requirement_id": "review"},
+        {"code": "workflow/review_satisfied", "requirement_id": "review"},
+        {"code": "workflow/review_satisfied"},
+    ],
+)
+def test_strict_review_tracking_clears_on_each_satisfied_code(clear) -> None:
+    report = _advance_observation(_REVIEW_REPORT_ACTION, {"diagnostics": [clear]})
+    assert _review_pending_after_observations((report,), True, strict=True) is False
+    assert _response_satisfies_review({"diagnostics": [clear]}) is True
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "clear"},
+        {"code": "workflow/requirement_satisfied", "requirement_id": "capture"},
+        {"code": "workflow/review_satisfied", "requirement_id": "capture"},
+    ],
+)
+def test_strict_review_tracking_ignores_unrecognized_review_reports(result) -> None:
+    report = _advance_observation(_REVIEW_REPORT_ACTION, result)
+    assert _review_pending_after_observations((report,), True, strict=True) is True
+
+
+def test_strict_review_findings_report_does_not_leave_review_pending_as_clear() -> None:
+    findings = {"code": "workflow/review_findings", "findings": [{"id": "f1"}]}
+    report = _advance_observation(_REVIEW_REPORT_ACTION, findings)
+    # A completed findings report ends the read-only lock (the relay is done)
+    # but is never a clear review.
+    assert _review_pending_after_observations((report,), True, strict=True) is False
+    adapter = object.__new__(CodexAdapter)
+    adapter._last_observations = [report]
+    assert adapter._last_review_report() == {
+        "completed": True,
+        "clear": False,
+        "report": findings,
+    }
+
+
+@pytest.mark.parametrize(
+    "clear",
+    [
+        {"code": "workflow/requirement_satisfied", "requirement_id": "review"},
+        {"code": "workflow/review_satisfied"},
+    ],
+)
+def test_last_review_report_accepts_both_clear_codes(clear) -> None:
+    adapter = object.__new__(CodexAdapter)
+    adapter._last_observations = [
+        _advance_observation(_REVIEW_REPORT_ACTION, {"diagnostics": [clear]})
+    ]
+    assert adapter._last_review_report() == {"completed": True, "clear": True}
 
 
 def test_non_review_requirement_report_does_not_clear_review_lock() -> None:
@@ -3307,6 +3432,8 @@ def test_codex_adapter_runs_app_server_child_and_writes_thread_identity(
     assert turn_params["sandboxPolicy"] == {
         "type": "workspaceWrite",
         "writableRoots": [str(tmp_path), str(REPO_ROOT)],
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
     }
 
 
@@ -3509,6 +3636,47 @@ def test_ordinary_codex_adapter_does_not_add_default_auth_or_terminal_scrubbing(
     assert ordinary["UNRELATED"] == "kept"
     terminal = _app_server_environment(source, terminal_route=True)
     assert "CODEX_API_KEY" not in terminal
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "HF_TOKEN",
+        "NPM_TOKEN",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "SLACK_BOT_TOKEN",
+        "PGPASSWORD",
+        "MYSQL_PWD_PASSWD",
+        "SNOWFLAKE_PASSWORD",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "STRIPE_APIKEY",
+        "SOME_API_KEY",
+        "SSH_PRIVATE_KEY",
+        "OAUTH_CLIENT",
+        "openai_api_key",
+        "CODEX_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "NXD_EVAL_SOURCE_TOKEN",
+        "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
+    ],
+)
+def test_terminal_route_environment_drops_any_single_credential_word(name: str) -> None:
+    source = {
+        name: "secret-value",
+        "CODEX_HOME": "/codex-home",
+        "PATH": "/usr/bin",
+        "HOME": "/home/user",
+    }
+    terminal = _app_server_environment(source, terminal_route=True)
+    assert name not in terminal
+    assert terminal == {
+        "CODEX_HOME": "/codex-home",
+        "PATH": "/usr/bin",
+        "HOME": "/home/user",
+    }
 
 
 def test_codex_adapter_rejects_non_object_app_server_events() -> None:

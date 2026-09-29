@@ -64,11 +64,20 @@ from dp_scenarios.runner.review_guard import (
     validate_review_timeout_seconds,
 )
 
+# Terminal-route scrub: drop any variable whose *name* carries a single
+# credential word (GITHUB_TOKEN, PGPASSWORD, AWS_SESSION_TOKEN, ...), not only
+# names that combine two of them. The app-server authenticates through the
+# ``auth.json`` handle staged into its isolated ``CODEX_HOME``, and the
+# nxd-desktop MCP server receives its environment from the runner-owned MCP
+# config, so no credential-named host variable is needed by the child.
 _APP_SERVER_CREDENTIAL_ENV_KEY = re.compile(
-    r"(?i)(?:anthropic|openai|claude|api|access|secret|bearer|token|password|private).*"
-    r"(?:key|token|secret|credential|password)|(?:key|token|secret|credential|password).*"
-    r"(?:anthropic|openai|claude|api|access|secret|bearer|private)"
+    r"(?i)TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_KEY|AUTH"
 )
+# Names the pattern above would match but the app-server legitimately needs.
+# Deliberately empty today: ``CODEX_HOME`` does not match, and Codex's own
+# ``CODEX_API_KEY`` is intentionally withheld on the terminal route. Add a name
+# here, with a reason, only when the child provably requires it.
+_APP_SERVER_ENV_ALLOWLIST: frozenset[str] = frozenset()
 
 
 class CodexAdapterError(RuntimeError):
@@ -420,7 +429,7 @@ def _app_server_environment(
             if (
                 key in {"NXD_EVAL_SOURCE_TOKEN", "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS"}
                 or _APP_SERVER_CREDENTIAL_ENV_KEY.search(key)
-            ):
+            ) and key not in _APP_SERVER_ENV_ALLOWLIST:
                 result.pop(key, None)
     else:
         for key in (
@@ -546,6 +555,19 @@ def _response_requires_review(value: object) -> bool:
     return False
 
 
+def _is_review_clear(item: Mapping[str, object]) -> bool:
+    """Accept both supervisor spellings of a satisfied review requirement.
+
+    ``workflow/review_satisfied`` is review-specific; the generic
+    ``workflow/requirement_satisfied`` must name the review requirement.
+    """
+
+    code = item.get("code")
+    if code == "workflow/review_satisfied":
+        return item.get("requirement_id") in {None, "review"}
+    return code == "workflow/requirement_satisfied" and item.get("requirement_id") == "review"
+
+
 def _response_satisfies_review(value: object) -> bool:
     """Mirror the stdio proxy's completed report-relay predicate."""
     for item in _walk_json_values(value):
@@ -553,10 +575,7 @@ def _response_satisfies_review(value: object) -> bool:
             continue
         if item.get("code") == "workflow/review_findings":
             return True
-        if (
-            item.get("code") == "workflow/requirement_satisfied"
-            and item.get("requirement_id") == "review"
-        ):
+        if _is_review_clear(item):
             return True
     return False
 
@@ -672,7 +691,15 @@ def _turn_sandbox_policy(
 
     if review_pending:
         return {"type": "readOnly"}
-    return {"type": "workspaceWrite", "writableRoots": list(writable_roots)}
+    # Mirror the ``sandbox_workspace_write.exclude_*=true`` config this route
+    # already passes: the v2 per-turn policy defaults both flags to false and
+    # would otherwise re-open /tmp and $TMPDIR for writes.
+    return {
+        "type": "workspaceWrite",
+        "writableRoots": list(writable_roots),
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
+    }
 
 
 def _read_regular_file_beneath(root: Path, parts: Sequence[str]) -> bytes | None:
@@ -888,6 +915,10 @@ def _terminal_turn_sandbox_policy(stage: str, workspace: str) -> dict[str, objec
         "type": "workspaceWrite",
         "writableRoots": [workspace],
         "networkAccess": False,
+        # The v2 schema defaults both to false; without them the per-turn policy
+        # overrides the exclude_* config and leaves /tmp and $TMPDIR writable.
+        "excludeSlashTmp": True,
+        "excludeTmpdirEnvVar": True,
     }
 
 
@@ -2474,11 +2505,6 @@ class CodexAdapter:
         environment = _app_server_environment(
             os.environ, terminal_route=self.terminal_route
         )
-        for key in (
-            "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-            "NXD_EVAL_SOURCE_TOKEN", "NXD_DESKTOP_TRUSTED_CREDENTIAL_ENVS",
-        ):
-            environment.pop(key, None)
         host_codex_home = environment.get("CODEX_HOME")
         if self.native_continuation:
             assert self.native_state_dir is not None
@@ -2488,8 +2514,6 @@ class CodexAdapter:
             environment["CODEX_HOME"] = str(codex_home)
         else:
             self._codex_home_temp = self._isolated_codex_home(environment)
-            if self._codex_home_temp is not None:
-                environment["CODEX_HOME"] = self._codex_home_temp.name
             environment["CODEX_HOME"] = self._codex_home_temp.name
         try:
             if self.force_multi_agent_v1:
@@ -3425,10 +3449,7 @@ class CodexAdapter:
             for value in _walk_json_values(result):
                 if not isinstance(value, Mapping):
                     continue
-                if (
-                    value.get("code") == "workflow/requirement_satisfied"
-                    and value.get("requirement_id") == "review"
-                ):
+                if _is_review_clear(value):
                     return {"completed": True, "clear": True}
                 if value.get("code") == "workflow/review_findings":
                     return {"completed": True, "clear": False, "report": value}
@@ -3906,7 +3927,10 @@ class CodexAdapter:
                     normalized = {**normalized, "error": observed_detail}
             if self.terminal_route:
                 idle_deadline = time.monotonic() + self.idle_timeout_seconds
-                normalized = self._observe_route_event(event, active_calls, audit=False)
+                # Called for its audit/capture side effects only: it re-normalises
+                # the raw event, which would drop the provider error detail
+                # attached above to a root turn.failed / turn.interrupted.
+                self._observe_route_event(event, active_calls, audit=False)
             events.append(
                 normalized
                 if normalized.get("type") in {
