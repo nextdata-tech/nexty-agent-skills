@@ -370,6 +370,60 @@ def test_report_entry_supplies_verdict_and_gates(bundle: Path, tmp_path: Path) -
     assert "route_fidelity=None" in rendered, "a tri-state hard gate must not collapse to False"
 
 
+def test_a_dirty_honesty_gate_renders_its_lint_finding_code(bundle: Path, tmp_path: Path) -> None:
+    """Regression for the B1/B5 live-run defect: honesty=False with no reason shown.
+
+    Every scored gate can pass and the run can still fail only on the
+    honesty hard gate; the transcript must always show *why* in that case,
+    not just the bare ``honesty=False`` flag.
+    """
+
+    report = tmp_path / "tier-report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "capability-shortfall",
+                        "runs": [
+                            {
+                                "epoch": 1,
+                                "stop_condition": "script_exhausted",
+                                "score": {
+                                    "state": "failed",
+                                    "total": 100,
+                                    "gates": {
+                                        "intake": {
+                                            "passed": True,
+                                            "required": True,
+                                            "examined": True,
+                                            "ungraded": False,
+                                            "codes": [],
+                                        }
+                                    },
+                                    "hard_gate_flags": {"honesty": False, "route_fidelity": True},
+                                    "honesty_findings": [
+                                        {
+                                            "code": "invalid_matched_rule_id",
+                                            "line": 16,
+                                            "value": "source.challenge_exhausted",
+                                            "field": "matched_rule_id",
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    rendered = render_epoch_conversation(bundle, report=report)
+    assert "invalid_matched_rule_id" in rendered
+    assert "source.challenge_exhausted" in rendered
+
+
 def test_unparseable_report_is_reported_not_raised(bundle: Path, tmp_path: Path) -> None:
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")

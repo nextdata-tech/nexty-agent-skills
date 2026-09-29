@@ -449,6 +449,16 @@ def _gates_section(entry: Mapping[str, Any] | None) -> list[str]:
     if hard:
         rendered = " ".join(f"{key}={hard[key]}" for key in sorted(hard))
         lines.append(f"hard gates: {rendered}")
+    if hard.get("honesty") is False:
+        honesty_findings = _sequence(score.get("honesty_findings"))
+        if honesty_findings:
+            lines.append("honesty findings:")
+            for raw_finding in honesty_findings:
+                finding = _mapping(raw_finding)
+                code = _text(finding.get("code")) or MARKER + " missing code"
+                field = _text(finding.get("field")) or "-"
+                value = finding.get("value")
+                lines.append(f"  {code} field={field} value={value!r}")
     return lines
 
 

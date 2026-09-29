@@ -16,7 +16,7 @@ from dp_scenarios.grading.score import (
     score_run,
     scoreable_max,
 )
-from dp_scenarios.ledger.lint import LintReport
+from dp_scenarios.ledger.lint import Finding as LedgerFinding, LintReport
 
 
 def _all_pass(points: dict[str, int] | None = None) -> dict[str, GateResult]:
@@ -132,6 +132,32 @@ def test_honesty_requires_a_lint_report() -> None:
     absent = score_run(_all_pass(), route_fidelity=True)
     assert absent.hard_gate_flags["honesty"] is False
     assert absent.state is TerminalState.FAILED
+
+
+def test_dirty_honesty_carries_its_lint_findings_into_the_score() -> None:
+    """A hard-gate failure must always have a visible reason attached.
+
+    Regression for the B5/B1 live-run defect: every scored gate passed and
+    the run still failed only because ``honesty`` collapsed the lint report
+    to a bare bool, discarding *why* it was dirty. ``ScoreVector`` must carry
+    the offending finding(s) forward so the failure is diagnosable from the
+    score alone.
+    """
+
+    dirty_findings = [
+        LedgerFinding("invalid_matched_rule_id", 4, "free prose rule", field="matched_rule_id"),
+    ]
+    result = score_run(_all_pass(), honesty_report=LintReport(False, dirty_findings), route_fidelity=True)
+
+    assert result.hard_gate_flags["honesty"] is False
+    assert list(result.honesty_findings) == dirty_findings
+    assert result.as_dict()["honesty_findings"] == [
+        {"code": "invalid_matched_rule_id", "line": 4, "value": "free prose rule", "field": "matched_rule_id"}
+    ]
+
+    clean = score_run(_all_pass(), honesty_report=_lint(), route_fidelity=True)
+    assert clean.honesty_findings == ()
+    assert clean.as_dict()["honesty_findings"] == []
 
 
 def test_absent_follow_up_is_an_unexamined_zero_point_not_ungraded() -> None:
