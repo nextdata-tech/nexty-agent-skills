@@ -98,6 +98,18 @@ Because a model wrote the operator's words, a driven run cannot be replayed
 turn-for-turn and is **capped at QUALIFIED**. Use the driver to observe persona
 behaviour a scripted operator cannot produce, not to certify a result.
 
+Event cards normally fire on their declared `trigger_turn`. A card may instead
+declare `after_published: initial|revised` and/or `after_event: <id>`; its
+`trigger_turn` is then the earliest turn it may fire. Publication prerequisites
+use the runner-owned `run-records.status_history` observed before the current
+turn, cross-checked against an exact workflow/run/definition entry in
+`publication-history.json`. The release record's `turn` is the run start and is
+never used as the publish observation. An `after_event` prerequisite uses the
+turn when that card was actually delivered. Fixed cards due on a turn take
+precedence, and eligible publication cards are delivered one per turn in stable
+card order. Replays carry only the bounded runner-owned identities and status
+history needed to make the same scheduling decision.
+
 Two properties a free-authoring operator could destroy are checked mechanically
 before any authored message is sent:
 

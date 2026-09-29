@@ -67,6 +67,9 @@ _RESERVED_HARNESS_ARTIFACT_NAMES = frozenset(
         "route_fidelity.json",
         "ledger-extra.json",
         "ledger_rows.json",
+        # Publication cards read these runner-owned files between turns.
+        "run-records.json",
+        "publication-history.json",
     }
 )
 
