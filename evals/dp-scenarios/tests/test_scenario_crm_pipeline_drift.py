@@ -16,15 +16,15 @@ B11 = load_scenario(ROOT / "crm-pipeline-drift")
 
 
 def test_b11_inherits_b1_prefix_turn_texts_and_event_cards() -> None:
-    assert tuple(map(script_turn_text, B11.answer_sheet.turns[:22])) == tuple(
+    assert tuple(map(script_turn_text, B11.answer_sheet.turns[:24])) == tuple(
         map(script_turn_text, B1.answer_sheet.turns)
     )
     assert (ROOT / "crm-pipeline-drift/events.yaml").read_bytes() == (
         ROOT / "crm-pipeline/events.yaml"
     ).read_bytes()
-    assert B11.answer_sheet.turns[22] == "It’s a new week—can you refresh the pipeline numbers for me?"
-    assert B11.turn_budget == 40
-    assert B11.chain is not None and B11.chain.prefix_turns == 22
+    assert B11.answer_sheet.turns[24] == "It’s a new week—can you refresh the pipeline numbers for me?"
+    assert B11.turn_budget == 42
+    assert B11.chain is not None and B11.chain.prefix_turns == 24
     assert declared_sentinels(B11) == {
         _sentinel_for(field, seed=29, dataset="crm_pipeline_drift").encode()
         for field in ("owner.email", "champion.email")

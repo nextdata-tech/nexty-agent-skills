@@ -10,7 +10,7 @@ fixture:
 coverage:
   variant: crm-rest-pagination-auth-expiry-and-source-drift
   untested: Local chained mock-source evidence only; no live CRM credential or authenticated Desktop run is claimed.
-turn_budget: 40
+turn_budget: 42
 repeatability:
   tier: mock-source
   epochs: 3
@@ -44,24 +44,26 @@ phase_map:
   20: 7
   21: 7
   22: 7
-  23: 1
-  24: 2
-  25: 3
-  26: 3
+  23: 7
+  24: 7
+  25: 1
+  26: 2
   27: 3
   28: 3
   29: 3
   30: 3
   31: 3
-  32: 4
-  33: 4
-  34: 5
-  35: 5
-  36: 6
-  37: 6
-  38: 7
-  39: 7
+  32: 3
+  33: 3
+  34: 4
+  35: 4
+  36: 5
+  37: 5
+  38: 6
+  39: 6
   40: 7
+  41: 7
+  42: 7
 required_plants:
 - crm_pipeline_pagination
 gates:
@@ -92,7 +94,7 @@ operator:
 route_table: route-table.yaml
 chain:
   trigger: first_publication
-  prefix_turns: 22
+  prefix_turns: 24
   source_family: crm_deals
   from_state: v1
   to_state: v2
