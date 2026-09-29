@@ -1,0 +1,17 @@
+{
+  "expected_model_row_counts": {
+    "billing_events_dedup": 21,
+    "customer_month_mrr": 24,
+    "mrr_waterfall": 14
+  },
+  "source_row_counts": {
+    "customer_contacts": 6,
+    "subscription_event_ids": 21,
+    "subscription_events_physical": 23
+  },
+  "variant_row_counts": {
+    "gross": 14,
+    "no_dedup": 14,
+    "received_month": 13
+  }
+}
