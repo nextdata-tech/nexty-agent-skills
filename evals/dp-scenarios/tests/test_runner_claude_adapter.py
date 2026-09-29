@@ -671,13 +671,14 @@ import json
 import sys
 import time
 
+__READY__
 for line in sys.stdin:
     json.loads(line)
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "id": "build-1", "name": "mcp__nxd-desktop__build_data_product", "input": {}}
     ]}}), flush=True)
     time.sleep(60)
-        """.strip()
+        """.replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -702,18 +703,17 @@ for line in sys.stdin:
         desktop_supervisor=Path("/usr/bin/true"),
         desktop_python=Path(sys.executable),
         claude_config_dir=None,
-        # The budget is total wall time from the first read, so it has to
-        # cover the child interpreter's start-up as well as the turn. At 0.5s
-        # a loaded machine can expire the deadline before the child prints its
-        # first event, and the partial-retention assertion below then fails
-        # for a reason that has nothing to do with retention. The child sleeps
-        # far past this, so a wider budget still times the turn out.
+        # The budget is total wall time from the first read. The test waits
+        # for the child to be ready first, so interpreter start-up under load
+        # cannot expire the deadline before the child prints its first event;
+        # the child sleeps far past this, so the turn still times out.
         timeout_s=5.0,
         max_budget_usd=None,
         append_system_prompt="test",
     )
 
     try:
+        _start_when_ready(adapter)
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     finally:
         adapter.close()
@@ -1044,8 +1044,10 @@ for line in sys.stdin:
         "/usr/bin/true",
         "--desktop-python",
         sys.executable,
+        # The turn deadline must not race the test's SIGTERM, whatever the
+        # adapter's startup latency under load.
         "--timeout",
-        "5",
+        "600",
     ]
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(repo_root / "evals/dp-scenarios/src")
@@ -1063,13 +1065,25 @@ for line in sys.stdin:
         process.stdin.write(json.dumps({"type": "turn", "message": {"text": "hello"}}) + "\n")
         process.stdin.flush()
         child_pid_path = agent_dir / "child.pid"
-        deadline = time.monotonic() + 5
-        while not child_pid_path.exists() and time.monotonic() < deadline:
+
+        def written_pid() -> str:
+            # The child writes its pid non-atomically; wait for the digits.
+            try:
+                return child_pid_path.read_text().strip()
+            except FileNotFoundError:
+                return ""
+
+        # Upper bounds only: two interpreter startups (adapter, then its
+        # child) can take many seconds on a loaded machine.
+        deadline = time.monotonic() + 60
+        while not written_pid() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
             time.sleep(0.05)
-        assert child_pid_path.exists()
-        child_pid = int(child_pid_path.read_text())
+        assert written_pid(), process.stderr.read() if process.poll() is not None else ""
+        child_pid = int(written_pid())
         os.kill(process.pid, signal.SIGTERM)
-        assert process.wait(timeout=5) == 143
+        assert process.wait(timeout=30) == 143
         with pytest.raises(ProcessLookupError):
             os.kill(child_pid, 0)
     finally:
@@ -1531,6 +1545,33 @@ def _adapter_against(
     )
 
 
+# A fake child writes this marker once its interpreter has started (and any
+# setup the test depends on is done). Interpreter startup is not what these
+# tests measure, yet under CPU load it alone can exceed a sub-second turn
+# deadline, so the timed turn starts only after the marker. It goes in the
+# parent of the child's cwd so the adapter's workspace diff never sees it.
+FAKE_READY_MARKER = "fake-claude.ready"
+FAKE_READY_LINE = f'open("../" + {FAKE_READY_MARKER!r}, "w").close()'
+# Generous bound on startup; a healthy run waits well under a second.
+FAKE_READY_TIMEOUT_S = 60.0
+
+
+def _start_when_ready(adapter: ClaudeCodeAdapter) -> None:
+    """Start the adapter's child and wait for its readiness marker."""
+
+    adapter.start()
+    process = adapter._process
+    assert process is not None
+    marker = Path.cwd().parent / FAKE_READY_MARKER
+    deadline = time.monotonic() + FAKE_READY_TIMEOUT_S
+    while not marker.exists():
+        if process.poll() is not None:
+            pytest.fail(f"fake claude exited with {process.returncode} before it was ready")
+        if time.monotonic() >= deadline:
+            pytest.fail("fake claude did not become ready")
+        time.sleep(0.01)
+
+
 def _write_review_deadline_fake(path: Path, *, mode: str) -> None:
     """Create a child that changes only the runner-owned guard fixture."""
 
@@ -1566,6 +1607,7 @@ if MODE == "late_provider":
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, write_provider_limit_and_exit)
 
+__READY__
 for line in sys.stdin:
     json.loads(line)
     set_guard_state("review_dispatch_pending")
@@ -1593,7 +1635,7 @@ for line in sys.stdin:
         print(json.dumps({"type": "result", "result": "review finalized", "is_error": False}), flush=True)
     else:
         time.sleep(600)
-        """.replace("__MODE__", json.dumps(mode)).strip()
+        """.replace("__MODE__", json.dumps(mode)).replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -1607,7 +1649,9 @@ def _run_review_deadline_fake(
     stderr: str | None = None,
     timeout_s: float = 2.0,
     review_timeout_seconds: float | None = None,
-) -> tuple[ClaudeCodeAdapter, TurnResult]:
+) -> tuple[ClaudeCodeAdapter, TurnResult, float]:
+    """Run one turn against a ready fake; also return the turn's duration."""
+
     fake_claude = tmp_path / f"review-{mode}-fake-claude.py"
     _write_review_deadline_fake(fake_claude, mode=mode)
     if stderr is not None:
@@ -1630,8 +1674,10 @@ def _run_review_deadline_fake(
         timeout_s=timeout_s,
         review_timeout_seconds=review_timeout_seconds,
     )
+    _start_when_ready(adapter)
+    started = time.monotonic()
     result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
-    return adapter, result
+    return adapter, result, time.monotonic() - started
 
 
 def test_ordinary_quiet_stream_waits_past_a_polling_slice_and_returns_normally(
@@ -1645,11 +1691,12 @@ import json
 import sys
 import time
 
+__READY__
 for line in sys.stdin:
     json.loads(line)
     time.sleep(0.35)
     print(json.dumps({"type": "result", "result": "quiet complete", "is_error": False}), flush=True)
-        """.strip()
+        """.replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -1657,10 +1704,14 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+    # The quiet gap (0.35s) must outlast one 0.25s polling slice; the deadline
+    # only has to outlast the gap, so it is generous rather than tight. A
+    # returning turn still finishes as soon as the result arrives.
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=10.0)
 
-    started = time.monotonic()
     try:
+        _start_when_ready(adapter)
+        started = time.monotonic()
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     finally:
         adapter.close()
@@ -1674,10 +1725,9 @@ def test_accepted_review_dispatch_uses_a_silent_child_deadline_and_reaps_the_gro
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    started = time.monotonic()
-    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="silent")
+    adapter, result, elapsed = _run_review_deadline_fake(tmp_path, monkeypatch, mode="silent")
 
-    assert 0.15 <= time.monotonic() - started < 1.5
+    assert 0.15 <= elapsed < 1.5
     assert result.turn_timed_out is True
     assert result.environment_wedged is False
     assert result.failure_reason == REVIEWER_DEADLINE_EXCEEDED
@@ -1689,7 +1739,7 @@ def test_accepted_review_dispatch_uses_a_silent_child_deadline_and_reaps_the_gro
 def test_configured_review_timeout_is_propagated_and_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter, result = _run_review_deadline_fake(
+    adapter, result, _ = _run_review_deadline_fake(
         tmp_path,
         monkeypatch,
         mode="silent",
@@ -1709,15 +1759,14 @@ def test_outer_deadline_beats_a_still_pending_reviewer_deadline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 1_000)
-    started = time.monotonic()
-    adapter, result = _run_review_deadline_fake(
+    adapter, result, elapsed = _run_review_deadline_fake(
         tmp_path,
         monkeypatch,
         mode="silent",
         timeout_s=0.3,
     )
 
-    assert time.monotonic() - started >= 0.25
+    assert elapsed >= 0.25
     assert result.turn_timed_out is True
     assert result.failure_reason == CHILD_NO_TERMINAL_RESULT
     assert "Claude did not complete the turn within 0.3s" in (result.environment_detail or "")
@@ -1729,10 +1778,9 @@ def test_review_inspection_activity_does_not_extend_the_accepted_deadline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    started = time.monotonic()
-    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="active")
+    adapter, result, elapsed = _run_review_deadline_fake(tmp_path, monkeypatch, mode="active")
 
-    assert 0.15 <= time.monotonic() - started < 1.5
+    assert 0.15 <= elapsed < 1.5
     assert result.turn_timed_out is True
     assert result.environment_wedged is False
     assert result.failure_reason == REVIEWER_DEADLINE_EXCEEDED
@@ -1745,7 +1793,7 @@ def test_review_completion_disarms_the_deadline_and_returns_normally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="complete")
+    adapter, result, _ = _run_review_deadline_fake(tmp_path, monkeypatch, mode="complete")
     try:
         assert result.turn_timed_out is False
         assert result.environment_wedged is False
@@ -1769,7 +1817,7 @@ def test_valid_post_dispatch_guard_states_disarm_before_a_terminal_result(
     message: str,
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode=mode)
+    adapter, result, _ = _run_review_deadline_fake(tmp_path, monkeypatch, mode=mode)
     try:
         assert result.turn_timed_out is False
         assert result.agent_message == message
@@ -1782,7 +1830,7 @@ def test_provider_reason_wins_when_the_accepted_review_deadline_expires(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    adapter, result = _run_review_deadline_fake(
+    adapter, result, _ = _run_review_deadline_fake(
         tmp_path,
         monkeypatch,
         mode="silent",
@@ -1800,7 +1848,7 @@ def test_late_provider_stderr_during_reap_beats_generic_review_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    adapter, result = _run_review_deadline_fake(
+    adapter, result, _ = _run_review_deadline_fake(
         tmp_path,
         monkeypatch,
         mode="late_provider",
@@ -1834,7 +1882,9 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+    # EOF must win over the deadline; the deadline is far off so that child
+    # startup under load cannot reach it first. EOF returns immediately.
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=30.0)
 
     try:
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
@@ -1865,7 +1915,9 @@ raise SystemExit(3)
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+    # EOF must win over the deadline; the deadline is far off so that child
+    # startup under load cannot reach it first. EOF returns immediately.
+    adapter = _adapter_against(fake_claude, tmp_path, timeout_s=30.0)
 
     result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
 
@@ -2064,17 +2116,25 @@ def exit_leader(_signum, _frame):
     raise SystemExit(0)
 
 signal.signal(signal.SIGTERM, exit_leader)
+# The descendant reports only after it ignores SIGTERM, and the leader reports
+# ready only after that, so teardown always meets a TERM-ignoring descendant.
+child = subprocess.Popen([
+    sys.executable,
+    "-c",
+    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "open('child.ignoring', 'w').close(); time.sleep(600)",
+])
+Path("child.pid").write_text(str(child.pid), encoding="utf-8")
+while not Path("child.ignoring").exists():
+    if child.poll() is not None:
+        raise SystemExit("descendant exited before ignoring SIGTERM")
+    time.sleep(0.01)
+__READY__
 for line in sys.stdin:
     json.loads(line)
-    child = subprocess.Popen([
-        sys.executable,
-        "-c",
-        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)",
-    ])
-    Path("child.pid").write_text(str(child.pid), encoding="utf-8")
     print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "child launched"}]}}), flush=True)
     time.sleep(600)
-        """.strip()
+        """.replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -2082,15 +2142,18 @@ for line in sys.stdin:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     monkeypatch.chdir(agent_dir)
-    # Allow interpreter startup plus child creation before exercising group
-    # teardown; the assertion concerns post-SIGTERM cleanup, not startup.
     adapter = _adapter_against(fake_claude, tmp_path, timeout_s=0.8)
+    # Startup, including the descendant's, happens before the timed turn; the
+    # assertion concerns post-SIGTERM group cleanup, not startup latency.
+    _start_when_ready(adapter)
 
     result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     child_pid = int((agent_dir / "child.pid").read_text(encoding="utf-8"))
 
     assert result.turn_timed_out is True
-    deadline = time.monotonic() + 2
+    # An upper bound for the reparented descendant to disappear; polling
+    # returns as soon as it does.
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
             os.kill(child_pid, 0)
@@ -2106,7 +2169,7 @@ def test_review_timeout_keeps_partial_events_without_forging_review_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adapter_module, "REVIEW_DEADLINE_MS", 200)
-    adapter, result = _run_review_deadline_fake(tmp_path, monkeypatch, mode="silent")
+    adapter, result, _ = _run_review_deadline_fake(tmp_path, monkeypatch, mode="silent")
     try:
         assert result.turn_timed_out is True
         assert result.reported is False
@@ -2135,13 +2198,14 @@ import json
 import sys
 import time
 
+__READY__
 for line in sys.stdin:
     json.loads(line)
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": "thinking"}
     ]}}), flush=True)
     time.sleep(600)
-        """.strip()
+        """.replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -2152,6 +2216,7 @@ for line in sys.stdin:
     adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
 
     try:
+        _start_when_ready(adapter)
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     finally:
         adapter.close()
@@ -2174,12 +2239,13 @@ import json
 import sys
 import time
 
+__READY__
 for line in sys.stdin:
     json.loads(line)
     sys.stderr.write("Claude usage limit reached. Your limit will reset at 4pm.\\n")
     sys.stderr.flush()
     time.sleep(600)
-        """.strip()
+        """.replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -2190,6 +2256,7 @@ for line in sys.stdin:
     adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
 
     try:
+        _start_when_ready(adapter)
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     finally:
         adapter.close()
@@ -2211,6 +2278,7 @@ import json
 import sys
 import time
 
+__READY__
 for line in sys.stdin:
     json.loads(line)
     print(json.dumps({"type": "assistant", "message": {"content": [
@@ -2220,7 +2288,7 @@ for line in sys.stdin:
         {"type": "tool_result", "tool_use_id": "b1", "is_error": True, "content": "boom"}
     ]}}), flush=True)
     time.sleep(600)
-        """.strip()
+        """.replace("__READY__", FAKE_READY_LINE).strip()
         + "\n",
         encoding="utf-8",
     )
@@ -2231,6 +2299,7 @@ for line in sys.stdin:
     adapter = _adapter_against(fake_claude, tmp_path, timeout_s=2.0)
 
     try:
+        _start_when_ready(adapter)
         result = adapter.send({"type": "turn", "message": {"text": "hello", "attachments": []}})
     finally:
         adapter.close()
