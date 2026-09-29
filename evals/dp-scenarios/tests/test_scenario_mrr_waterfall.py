@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.synthgen import generate_dataset
+from dp_scenarios.synthgen.datasets import get_dataset
 from dp_scenarios.synthgen.defects import _sentinel_for
 from dp_scenarios.synthgen.reference import reference_gold
 
@@ -94,6 +95,9 @@ def _csv_rows(path: Path) -> list[dict[str, str]]:
 
 
 def test_fixture_is_deterministic_and_has_the_declared_source_counts(tmp_path: Path) -> None:
+    dataset = get_dataset("mrr_waterfall")
+    assert dataset.plant == "B7-same-month"
+    assert dataset.requires_explicit_plant is True
     first = generate_dataset("mrr_waterfall", 29, tmp_path / "first")
     second = generate_dataset("mrr_waterfall", 29, tmp_path / "second")
 
