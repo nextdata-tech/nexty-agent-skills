@@ -8,11 +8,15 @@ and query rows are never recovered from an operator's prose.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import re
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from dp_scenarios.ledger import lint as ledger_lint
 from dp_scenarios.ledger import read_ledger
@@ -242,6 +246,47 @@ def _same_observed_path(
     return expected_resolved == observed_resolved
 
 
+def _load_redact_json_rpc() -> Any:
+    """Load the runner's canonical argument-capture redaction function.
+
+    The inline ``typed_proposal`` tool-call argument compared here was
+    captured through ``claude_adapter._load_desktop_stdio``'s
+    ``redact_json_rpc`` before it was persisted, so it may already have
+    credential-shaped substrings replaced with ``<redacted>``.  The on-disk
+    ``dp-blueprint.proposal.json`` is captured raw via ``files_touched`` and
+    never passes through that redaction.  Comparing the two directly is an
+    apples-to-oranges exact match that fails whenever the agent's own text
+    happens to look credential-shaped (e.g. the literal phrase "bearer
+    token") even though the file was copied verbatim.  Importing the same
+    module the runner uses -- rather than reimplementing its regexes here --
+    keeps the two sides of the comparison identical by construction instead
+    of by maintenance discipline.
+    """
+
+    module_path = Path(__file__).resolve().parents[4] / "desktop_stdio.py"
+    if not module_path.is_file():
+        raise RuntimeError(
+            f"shared Desktop stdio module does not exist: {module_path}"
+        )
+    spec = importlib.util.spec_from_file_location(
+        "dp_scenarios_gates_desktop_stdio", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load shared Desktop stdio module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    # Desktop stdio's dataclasses resolve string annotations via
+    # ``sys.modules[cls.__module__]``, so the module must be registered
+    # before it executes (matching claude_adapter._load_desktop_stdio).
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.redact_json_rpc
+
+
+@lru_cache(maxsize=1)
+def _redact_json_rpc() -> Any:
+    return _load_redact_json_rpc()
+
+
 def _proposal_file_matches(
     file: Mapping[str, object],
     *,
@@ -265,7 +310,16 @@ def _proposal_file_matches(
             content = json.loads(content)
         except json.JSONDecodeError:
             return False
-    return isinstance(content, Mapping) and dict(content) == dict(typed_proposal)
+    if not isinstance(content, Mapping):
+        return False
+    # Symmetric redaction: the captured argument already passed through the
+    # runner's redaction once; running the on-disk content through the same
+    # function makes both sides comparable without weakening the exact-match
+    # contract -- a genuine content difference still differs after identical
+    # redaction, and redaction is idempotent so re-applying it to the
+    # already-redacted argument is a no-op.
+    redact = _redact_json_rpc()
+    return dict(redact(content)) == dict(redact(typed_proposal))
 
 
 def _proposal_file_was_observed_by_prepare(

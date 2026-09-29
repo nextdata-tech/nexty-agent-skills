@@ -14,6 +14,7 @@ import pytest
 from dp_scenarios.grading.gates import (
     _ledger_contract_breaches,
     _mapping_artifact,
+    _redact_json_rpc,
     _review_round_outcome,
     gate_capability_from_decisions,
     G1,
@@ -605,6 +606,101 @@ def test_intake_binds_the_observed_proposal_to_the_prepared_blueprint() -> None:
     assert "intake_workflow_typed_proposal_file_missing" in gate_intake(
         absolute, agent_root=Path("/workspace")
     ).codes
+
+
+def test_intake_matches_proposal_file_against_an_already_redacted_argument() -> None:
+    """A file/argument pair that differs only by the runner's own redaction
+    must still match.
+
+    The on-disk ``dp-blueprint.proposal.json`` is captured raw via
+    ``files_touched``; the inline ``typed_proposal`` tool-call argument was
+    already passed through the runner's ``redact_json_rpc`` before it was
+    persisted.  A field whose key looks credential-shaped (here
+    ``access_token``, which the runner replaces outright regardless of the
+    value's content or length) is exactly this case: the agent copied the
+    file verbatim, but only the argument channel shows ``<redacted>``.
+    """
+
+    seed = _workflow_v2_intake()
+    real_value = "s3cr3t-fixture-only-value-not-a-real-credential"
+
+    file_proposal = json.loads(
+        seed["observations"]["turns"][0]["files_touched"][0]["content"]
+    )
+    file_proposal["proposal"]["terms"] = [{"access_token": real_value}]
+    seed["observations"]["turns"][0]["files_touched"][0]["content"] = json.dumps(
+        file_proposal
+    )
+
+    argument_proposal = seed["observations"]["turns"][1]["tool_calls"][0][
+        "arguments"
+    ]["typed_proposal"]
+    # Simulate exactly what the runner's capture-time redaction produces:
+    # dict(redact(...)) mirrors what claude_adapter persists as the safe
+    # tool-call argument.
+    redacted_terms = dict(_redact_json_rpc()({"access_token": real_value}))
+    assert redacted_terms["access_token"] == "<redacted>"
+    argument_proposal["proposal"]["terms"] = [redacted_terms]
+
+    result = gate_intake(seed)
+    assert result.passed, result.codes
+    assert "intake_workflow_typed_proposal_file_missing" not in result.codes
+
+
+def test_intake_still_flags_a_genuine_content_mismatch_after_redaction() -> None:
+    """Symmetric redaction must not paper over a real difference."""
+
+    seed = _workflow_v2_intake()
+    file_proposal = json.loads(
+        seed["observations"]["turns"][0]["files_touched"][0]["content"]
+    )
+    file_proposal["proposal"]["intent"] = "an entirely different intent"
+    seed["observations"]["turns"][0]["files_touched"][0]["content"] = json.dumps(
+        file_proposal
+    )
+
+    result = gate_intake(seed)
+    assert "intake_workflow_typed_proposal_file_missing" in result.codes
+
+
+def test_intake_matches_the_r409_turn0_bearer_token_prose_collision() -> None:
+    """Regression fixture shaped like the B1 r409 live run's turn 0.
+
+    The agent's proposal described the CRM API's auth scheme in ordinary
+    prose ("uses a bearer token for authentication") inside
+    ``dp-blueprint.proposal.json`` and, on the very next turn, passed the
+    identical inline ``typed_proposal`` to ``prepare_workflow``. All values
+    here are synthetic fixture text, not real credentials. The capture-time
+    redaction in ``evals/desktop_stdio.py`` is fail-closed and sweeps any
+    word after "bearer" into ``<redacted>``, so the argument channel reads
+    "...a bearer <redacted> for authentication..." while the on-disk file
+    keeps the agent's literal prose. Before the fix an exact-match gate
+    flagged that verbatim copy as missing; the gate now redacts both sides
+    the same way before comparing.
+    """
+
+    seed = _workflow_v2_intake()
+    prose = "the crm-pipeline source uses a bearer token for authentication"
+
+    file_proposal = json.loads(
+        seed["observations"]["turns"][0]["files_touched"][0]["content"]
+    )
+    file_proposal["proposal"]["scope"] = prose
+    seed["observations"]["turns"][0]["files_touched"][0]["content"] = json.dumps(
+        file_proposal
+    )
+
+    argument_proposal = seed["observations"]["turns"][1]["tool_calls"][0][
+        "arguments"
+    ]["typed_proposal"]
+    argument_proposal["proposal"]["scope"] = dict(
+        _redact_json_rpc()({"scope": prose})
+    )["scope"]
+    # The argument channel really is redacted, so the two raw captures differ.
+    assert argument_proposal["proposal"]["scope"] != prose
+
+    result = gate_intake(seed)
+    assert result.passed, result.codes
 
 
 def test_intake_uses_the_configured_desktop_server_name() -> None:
