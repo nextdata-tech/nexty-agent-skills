@@ -705,6 +705,17 @@ sequence, and cumulative safe counters. Each successful page observation in
 objects are excluded. The older `source-evidence.json` page and transport trace
 shapes remain available to existing follow-ups.
 
+An operator decision can declare `stages` instead of one `answer`; each
+solicitation receives the next declared answer after the previous answer was
+delivered. `available_after_overlay` and `retired_after_overlay` let a chain
+controller activate a new ruling and retire an old one at the same boundary.
+The runner records
+`operator_selected_decision_id/stage/final` for the answer chosen from the
+agent's current message and `operator_delivered_decision_id/stage/final` for
+the answer actually sent at the start of a turn. Follow-ups that grade an
+authorization use the delivered fields; the last selected answer may never
+have reached the agent.
+
 ## Adding a scenario
 
 A scenario package is additive: it needs no edit to a shared file, so two

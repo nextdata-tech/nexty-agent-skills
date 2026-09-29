@@ -168,22 +168,55 @@ def _decision_term_present(term: str, lowered: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class DecisionAnswer:
-    """One fixed answer keyed by a declared business decision id."""
+    """One fixed or staged answer keyed by a declared business decision id."""
 
     decision_id: str
     terms: tuple[str, ...]
     answer: str
     synonyms: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
     available_after_event: str | None = None
+    stages: tuple[str, ...] = ()
+    retired_after_event: str | None = None
+    available_after_overlay: str | None = None
+    retired_after_overlay: str | None = None
+
+    @property
+    def is_staged(self) -> bool:
+        """Whether this decision advances through multiple solicited answers."""
+
+        return bool(self.stages)
+
+    def response_for_solicitation(self, solicitation_number: int) -> tuple[str, int | None, bool | None]:
+        """Return a response and 1-based stage metadata for a solicitation.
+
+        Legacy single-answer decisions intentionally have no stage metadata.
+        Staged decisions clamp to their final answer, so a repeated ask after
+        the final ruling remains stable.
+        """
+
+        if not self.stages:
+            return self.answer, None, None
+        index = min(max(solicitation_number, 1), len(self.stages)) - 1
+        return self.stages[index], index + 1, index == len(self.stages) - 1
 
     def to_mapping(self) -> dict[str, object]:
         """Return the canonical answer entry."""
 
-        entry: dict[str, object] = {"terms": list(self.terms), "answer": self.answer}
+        entry: dict[str, object] = {"terms": list(self.terms)}
+        if self.stages:
+            entry["stages"] = list(self.stages)
+        else:
+            entry["answer"] = self.answer
         if self.synonyms:
             entry["synonyms"] = {term: list(values) for term, values in self.synonyms.items()}
         if self.available_after_event is not None:
             entry["available_after_event"] = self.available_after_event
+        if self.retired_after_event is not None:
+            entry["retired_after_event"] = self.retired_after_event
+        if self.available_after_overlay is not None:
+            entry["available_after_overlay"] = self.available_after_overlay
+        if self.retired_after_overlay is not None:
+            entry["retired_after_overlay"] = self.retired_after_overlay
         return entry
 
 
@@ -279,6 +312,7 @@ class AnswerSheet:
         *,
         excluded: frozenset[str] = frozenset(),
         available_event_ids: Sequence[str] = (),
+        active_overlay_ids: Sequence[str] = (),
     ) -> DecisionAnswer | None:
         """Return the declared decision answer whose terms match the question.
 
@@ -299,11 +333,18 @@ class AnswerSheet:
 
         lowered = question.casefold()
         event_order = {event_id: index for index, event_id in enumerate(available_event_ids)}
+        active_overlays = set(active_overlay_ids)
         eligible = [
             decision
             for decision in self.decision_answers.values()
             if decision.available_after_event is None
             or decision.available_after_event in event_order
+            if decision.retired_after_event is None
+            or decision.retired_after_event not in event_order
+            if decision.available_after_overlay is None
+            or decision.available_after_overlay in active_overlays
+            if decision.retired_after_overlay is None
+            or decision.retired_after_overlay not in active_overlays
         ]
         # Keep the established lexical order for all legacy answers. Staged
         # answers sort ahead of older answers only after their gate event was
@@ -326,6 +367,17 @@ class AnswerSheet:
             ):
                 return decision
         return None
+
+    @property
+    def decision_overlay_ids(self) -> frozenset[str]:
+        """Declared overlay ids that a chain controller may activate."""
+
+        return frozenset(
+            overlay_id
+            for decision in self.decision_answers.values()
+            for overlay_id in (decision.available_after_overlay, decision.retired_after_overlay)
+            if overlay_id is not None
+        )
 
     def answer_for_status(self, question: str) -> tuple[str, str] | None:
         """Return a fixed status answer when its declared key is mentioned."""
@@ -407,6 +459,10 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
     for decision_id, entry in raw.items():
         identifier = _string(decision_id, "answer_sheet.decision_answers key")
         available_after_event = None
+        retired_after_event = None
+        available_after_overlay = None
+        retired_after_overlay = None
+        stages: tuple[str, ...] = ()
         if isinstance(entry, str):
             terms = (identifier.replace("_", " "),)
             answer = entry
@@ -415,15 +471,34 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
             data = _mapping(entry, f"answer_sheet.decision_answers.{identifier}")
             _unknown(
                 data,
-                {"terms", "answer", "synonyms", "available_after_event"},
+                {
+                    "terms",
+                    "answer",
+                    "stages",
+                    "synonyms",
+                    "available_after_event",
+                    "retired_after_event",
+                    "available_after_overlay",
+                    "retired_after_overlay",
+                },
                 f"answer_sheet.decision_answers.{identifier}",
             )
-            if not {"terms", "answer"}.issubset(data):
+            has_answer = "answer" in data
+            has_stages = "stages" in data
+            if not {"terms"}.issubset(data) or has_answer == has_stages:
                 raise AnswerSheetError(
-                    f"answer_sheet.decision_answers.{identifier} requires terms and answer"
+                    f"answer_sheet.decision_answers.{identifier} requires terms and exactly one of answer or stages"
                 )
             terms = _strings(data["terms"], f"answer_sheet.decision_answers.{identifier}.terms")
-            answer = _string(data["answer"], f"answer_sheet.decision_answers.{identifier}.answer")
+            if has_stages:
+                stages = _strings(data["stages"], f"answer_sheet.decision_answers.{identifier}.stages")
+                if len(stages) < 2:
+                    raise AnswerSheetError(
+                        f"answer_sheet.decision_answers.{identifier}.stages must contain at least two answers"
+                    )
+                answer = stages[0]
+            else:
+                answer = _string(data["answer"], f"answer_sheet.decision_answers.{identifier}.answer")
             synonyms = {}
             if "synonyms" in data:
                 raw_synonyms = _mapping(
@@ -445,12 +520,51 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
                 if "available_after_event" in data
                 else None
             )
+            retired_after_event = (
+                _string(
+                    data["retired_after_event"],
+                    f"answer_sheet.decision_answers.{identifier}.retired_after_event",
+                )
+                if "retired_after_event" in data
+                else None
+            )
+            if available_after_event is not None and available_after_event == retired_after_event:
+                raise AnswerSheetError(
+                    f"answer_sheet.decision_answers.{identifier} cannot be available and retired after the same event"
+                )
+            available_after_overlay = (
+                _string(
+                    data["available_after_overlay"],
+                    f"answer_sheet.decision_answers.{identifier}.available_after_overlay",
+                )
+                if "available_after_overlay" in data
+                else None
+            )
+            retired_after_overlay = (
+                _string(
+                    data["retired_after_overlay"],
+                    f"answer_sheet.decision_answers.{identifier}.retired_after_overlay",
+                )
+                if "retired_after_overlay" in data
+                else None
+            )
+            if (
+                available_after_overlay is not None
+                and available_after_overlay == retired_after_overlay
+            ):
+                raise AnswerSheetError(
+                    f"answer_sheet.decision_answers.{identifier} cannot be available and retired after the same overlay"
+                )
         result[identifier] = DecisionAnswer(
             identifier,
             terms,
             _string(answer, f"decision {identifier}.answer"),
             MappingProxyType(synonyms),
             available_after_event,
+            stages,
+            retired_after_event,
+            available_after_overlay,
+            retired_after_overlay,
         )
     return result
 

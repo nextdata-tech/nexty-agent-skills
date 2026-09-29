@@ -16,12 +16,12 @@ generation.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Pattern
 
-from .answer_sheet import AnswerSheet, script_turn_text
+from .answer_sheet import AnswerSheet, DecisionAnswer, script_turn_text
 from .persona import PersonaCard
 from .text_match import contains_any_term
 
@@ -79,6 +79,12 @@ class MatchResult:
 
     matched_request_clause: str | None = None
     """Exact request clause selecting the answer, when a clause applies."""
+
+    decision_stage: int | None = None
+    """1-based stage selected for an explicitly staged decision."""
+
+    decision_final: bool | None = None
+    """Whether the selected staged answer is the final ruling."""
 
     @property
     def matched_rule_id(self) -> str:
@@ -693,7 +699,11 @@ def _reachable_reply_material(persona: PersonaCard, answer_sheet: AnswerSheet) -
     ]
     values.extend(reply for category in sorted(persona.reply_bank) for reply in persona.reply_bank[category])
     values.extend(answer_sheet.source_answers.values())
-    values.extend(answer.answer for answer in answer_sheet.decision_answers.values())
+    values.extend(
+        text
+        for answer in answer_sheet.decision_answers.values()
+        for text in (answer.stages or (answer.answer,))
+    )
     values.extend(answer_sheet.status_answers.values())
     values.extend(fact.fact for fact in answer_sheet.ground_truth.values())
     return tuple(values)
@@ -714,6 +724,64 @@ def validate_reachable_material(
             raise MatcherError("a fixed operator reply contains a planted obstacle term")
 
 
+def validate_decision_reachability(
+    answer_sheet: AnswerSheet,
+    *,
+    exhaustive: bool = False,
+    probes_by_decision: Mapping[str, Iterable[str]] | None = None,
+) -> None:
+    """Check opt-in staged/overlay decisions against their eligible peers.
+
+    Legacy sheets intentionally retain their historical overlap behavior in
+    the default mode. New staged or overlay declarations opt into linting so
+    a decision cannot be shadowed by an earlier sorted id after its gate is
+    active. Package acceptance tests can set ``exhaustive=True`` and provide
+    natural ``probes_by_decision`` to check every declared id without making
+    the stricter contract a runtime change for older packages.
+    """
+
+    probes_by_decision = probes_by_decision or {}
+    unknown_probe_ids = sorted(set(probes_by_decision) - set(answer_sheet.decision_answers))
+    if unknown_probe_ids:
+        raise MatcherError(
+            "reachability probes name undeclared decision id(s): " + ", ".join(unknown_probe_ids)
+        )
+    for decision in answer_sheet.decision_answers.values():
+        if not exhaustive and not (
+            decision.is_staged
+            or decision.available_after_overlay is not None
+            or decision.retired_after_overlay is not None
+        ):
+            continue
+        active_events = (
+            (decision.available_after_event,)
+            if decision.available_after_event is not None
+            else ()
+        )
+        active_overlays = (
+            (decision.available_after_overlay,)
+            if decision.available_after_overlay is not None
+            else ()
+        )
+        probes = tuple(probes_by_decision.get(decision.decision_id, ())) or (
+            "Can you decide " + " and ".join(decision.terms) + "?",
+        )
+        if not probes or any(not isinstance(probe, str) or not probe.strip() for probe in probes):
+            raise MatcherError(
+                f"reachability probes for {decision.decision_id!r} must be non-empty strings"
+            )
+        for probe in probes:
+            matched = answer_sheet.answer_for_decision(
+                probe,
+                available_event_ids=active_events,
+                active_overlay_ids=active_overlays,
+            )
+            if matched is None or matched.decision_id != decision.decision_id:
+                raise MatcherError(
+                    f"decision {decision.decision_id!r} is unreachable after its declared gate for probe {probe!r}"
+                )
+
+
 class MatcherBank:
     """Classify messages and select only predeclared reply strings."""
 
@@ -732,11 +800,88 @@ class MatcherBank:
         question_terms = tuple(dict.fromkeys((*DEFAULT_OBSTACLE_TERMS, *declared)))
         # A matching decision returned above is the only per-question exemption.
         self.question_obstacle_terms = question_terms
+        self._known_decision_overlays = answer_sheet.decision_overlay_ids
+        self._active_decision_overlays: list[str] = []
+        validate_decision_reachability(answer_sheet)
         validate_reachable_material(
             persona,
             answer_sheet,
             extra_material=extra_material,
             obstacle_terms=obstacle_terms,
+        )
+
+    @property
+    def active_decision_overlays(self) -> tuple[str, ...]:
+        """Return active decision overlays in activation order."""
+
+        return tuple(self._active_decision_overlays)
+
+    def validate_decision_overlay(self, overlay_id: str) -> None:
+        """Reject an unknown overlay without changing matcher state."""
+
+        if not isinstance(overlay_id, str) or not overlay_id:
+            raise MatcherError("decision overlay id must be a non-empty string")
+        if overlay_id not in self._known_decision_overlays:
+            raise MatcherError(f"undeclared decision overlay id: {overlay_id}")
+
+    def activate_decision_overlay(self, overlay_id: str) -> None:
+        """Activate one declared answer-sheet overlay idempotently.
+
+        Chain controllers call this at the source-switch boundary. An overlay
+        can expose revised answers and retire prefix decisions atomically from
+        the matcher's point of view, without relying on a driver-facing event
+        card or a hard-coded turn number.
+        """
+
+        self.validate_decision_overlay(overlay_id)
+        if overlay_id not in self._active_decision_overlays:
+            self._active_decision_overlays.append(overlay_id)
+
+    def decision_is_available(
+        self,
+        decision_id: str,
+        *,
+        available_event_ids: tuple[str, ...] = (),
+    ) -> bool:
+        """Whether an already-selected answer remains live under current gates."""
+
+        decision = self.answer_sheet.decision_answers.get(decision_id)
+        if decision is None:
+            return False
+        return (
+            (decision.available_after_event is None or decision.available_after_event in available_event_ids)
+            and (decision.retired_after_event is None or decision.retired_after_event not in available_event_ids)
+            and (
+                decision.available_after_overlay is None
+                or decision.available_after_overlay in self._active_decision_overlays
+            )
+            and (
+                decision.retired_after_overlay is None
+                or decision.retired_after_overlay not in self._active_decision_overlays
+            )
+        )
+
+    def _decision_result(
+        self,
+        decision: DecisionAnswer,
+        *,
+        decision_stage_counts: Mapping[str, int],
+        matched_request_clause: str | None = None,
+    ) -> MatchResult:
+        """Build a result using the next answer stage not already delivered."""
+
+        decision_id = decision.decision_id
+        reply, stage, final = decision.response_for_solicitation(
+            decision_stage_counts.get(decision_id, 0) + 1
+        )
+        return MatchResult(
+            Category.DECISION_REQUEST,
+            f"decision.answer.{decision_id}",
+            reply,
+            decision_id=decision_id,
+            matched_request_clause=matched_request_clause,
+            decision_stage=stage,
+            decision_final=final,
         )
 
     def _validate_replies(self) -> None:
@@ -800,6 +945,7 @@ class MatcherBank:
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
         available_event_ids: tuple[str, ...] = (),
+        decision_stage_counts: Mapping[str, int] | None = None,
     ) -> MatchResult:
         """Return a stable category and rule id without selecting a reply."""
 
@@ -813,6 +959,7 @@ class MatcherBank:
                 context=context,
                 excluded_decision_ids=excluded_decision_ids,
                 available_event_ids=available_event_ids,
+                decision_stage_counts=decision_stage_counts or {},
             ),
             message,
         )
@@ -824,7 +971,10 @@ class MatcherBank:
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
         available_event_ids: tuple[str, ...] = (),
+        decision_stage_counts: Mapping[str, int] | None = None,
     ) -> MatchResult:
+        stage_counts = decision_stage_counts or {}
+        active_overlays = tuple(self._active_decision_overlays)
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         prose = _NON_PROSE.sub(" ", message)
         request_clauses = _operator_request_clauses(message)
@@ -854,8 +1004,10 @@ class MatcherBank:
         review_fix = self.answer_sheet.decision_answers.get("review_fix_authorization")
         if (
             review_fix is not None
-            and review_fix.available_after_event is not None
-            and review_fix.available_after_event not in available_event_ids
+            and not self.decision_is_available(
+                review_fix.decision_id,
+                available_event_ids=available_event_ids,
+            )
         ):
             review_fix = None
         review_fix_request = _review_fix_request(message, context)
@@ -877,6 +1029,7 @@ class MatcherBank:
                 repair_text,
                 excluded=excluded_decision_ids,
                 available_event_ids=available_event_ids,
+                active_overlay_ids=active_overlays,
             )
             if (
                 specific is None
@@ -887,25 +1040,21 @@ class MatcherBank:
                     message,
                     excluded=excluded_decision_ids,
                     available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
                 )
             if (
                 specific is not None
                 and specific.decision_id != "review_fix_authorization"
                 and not direct_finding_question
             ):
-                return MatchResult(
-                    Category.DECISION_REQUEST,
-                    f"decision.answer.{specific.decision_id}",
-                    specific.answer,
-                    decision_id=specific.decision_id,
+                return self._decision_result(
+                    specific,
+                    decision_stage_counts=stage_counts,
                     matched_request_clause=review_fix_request,
                 )
-            return MatchResult(
-                Category.DECISION_REQUEST,
-                "decision.answer.review_fix_authorization",
-                review_fix.answer,
-                decision_id="review_fix_authorization",
-                matched=True,
+            return self._decision_result(
+                review_fix,
+                decision_stage_counts=stage_counts,
                 matched_request_clause=review_fix_request,
             )
 
@@ -918,12 +1067,9 @@ class MatcherBank:
         review_disposition_request = _review_disposition_request(message, context)
         if review_disposition_request is not None and review_fix_request is None:
             if review_fix is not None:
-                return MatchResult(
-                    Category.DECISION_REQUEST,
-                    "decision.answer.review_fix_authorization",
-                    review_fix.answer,
-                    decision_id="review_fix_authorization",
-                    matched=True,
+                return self._decision_result(
+                    review_fix,
+                    decision_stage_counts=stage_counts,
                     matched_request_clause=review_disposition_request,
                 )
             return MatchResult(
@@ -946,6 +1092,7 @@ class MatcherBank:
                 clause,
                 excluded=excluded_decision_ids,
                 available_event_ids=available_event_ids,
+                active_overlay_ids=active_overlays,
             )
             if request_decision is not None:
                 request_decision_clause = clause
@@ -955,11 +1102,9 @@ class MatcherBank:
             and request_decision.decision_id != "review_fix_authorization"
             and solicits_operator(message)
         ):
-            return MatchResult(
-                Category.DECISION_REQUEST,
-                f"decision.answer.{request_decision.decision_id}",
-                request_decision.answer,
-                decision_id=request_decision.decision_id,
+            return self._decision_result(
+                request_decision,
+                decision_stage_counts=stage_counts,
                 matched_request_clause=request_decision_clause,
             )
 
@@ -972,13 +1117,12 @@ class MatcherBank:
                     prose,
                     excluded=excluded_decision_ids,
                     available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
                 )
                 if correction_decision is not None:
-                    return MatchResult(
-                        Category.DECISION_REQUEST,
-                        f"decision.answer.{correction_decision.decision_id}",
-                        correction_decision.answer,
-                        decision_id=correction_decision.decision_id,
+                    return self._decision_result(
+                        correction_decision,
+                        decision_stage_counts=stage_counts,
                         matched_request_clause=next(
                             (
                                 clause
@@ -1012,6 +1156,7 @@ class MatcherBank:
                 message,
                 excluded=excluded_decision_ids,
                 available_event_ids=available_event_ids,
+                active_overlay_ids=active_overlays,
             )
         # A decision answer is an operator response, not a keyword-triggered
         # status line. Require an actual solicitation so a report such as
@@ -1021,11 +1166,9 @@ class MatcherBank:
             and decision.decision_id != "review_fix_authorization"
             and solicits_operator(message)
         ):
-            return MatchResult(
-                Category.DECISION_REQUEST,
-                f"decision.answer.{decision.decision_id}",
-                decision.answer,
-                decision_id=decision.decision_id,
+            return self._decision_result(
+                decision,
+                decision_stage_counts=stage_counts,
                 matched_request_clause=(
                     request_decision_clause
                     or next(
@@ -1071,6 +1214,7 @@ class MatcherBank:
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
         available_event_ids: tuple[str, ...] = (),
+        decision_stage_counts: Mapping[str, int] | None = None,
     ) -> MatchResult:
         """Classify one message and choose its fixed reply."""
 
@@ -1082,6 +1226,7 @@ class MatcherBank:
                 context=context,
                 excluded_decision_ids=excluded_decision_ids,
                 available_event_ids=available_event_ids,
+                decision_stage_counts=decision_stage_counts,
             ),
             message,
         )
@@ -1093,12 +1238,14 @@ class MatcherBank:
         context: str = "",
         excluded_decision_ids: frozenset[str] = frozenset(),
         available_event_ids: tuple[str, ...] = (),
+        decision_stage_counts: Mapping[str, int] | None = None,
     ) -> MatchResult:
         classified = self.classify(
             message,
             context=context,
             excluded_decision_ids=excluded_decision_ids,
             available_event_ids=available_event_ids,
+            decision_stage_counts=decision_stage_counts,
         )
         if classified.category is Category.OTHER:
             return classified
@@ -1243,4 +1390,5 @@ __all__ = [
     "is_review_disposition_ask",
     "review_finding_ids",
     "solicits_operator",
+    "validate_decision_reachability",
 ]

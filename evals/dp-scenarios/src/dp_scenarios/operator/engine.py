@@ -329,10 +329,10 @@ class OperatorScript:
         event_ids = {card.card_id for card in self.events.cards}
         missing_answer_events = sorted(
             {
-                answer.available_after_event
+                event_id
                 for answer in self.answer_sheet.decision_answers.values()
-                if answer.available_after_event is not None
-                and answer.available_after_event not in event_ids
+                for event_id in (answer.available_after_event, answer.retired_after_event)
+                if event_id is not None and event_id not in event_ids
             }
         )
         if missing_answer_events:
@@ -532,6 +532,20 @@ class TurnRecord:
     input_tokens: int | None = None
     output_tokens: int | None = None
     delivered_decision_id: str | None = None
+    delivered_decision_stage: int | None = None
+    delivered_decision_final: bool | None = None
+
+    @property
+    def selected_decision_stage(self) -> int | None:
+        """1-based stage selected from this turn's agent message, if staged."""
+
+        return self.match.decision_stage
+
+    @property
+    def selected_decision_final(self) -> bool | None:
+        """Whether this turn selected the final stage, if staged."""
+
+        return self.match.decision_final
 
 
 @dataclass(frozen=True, slots=True)
@@ -921,6 +935,31 @@ class OperatorEngine:
         self.turn_pointer = 0
         self.failure_modes: list[str] = []
         self.ledger_rows: list[Mapping[str, object]] = []
+        self._current_turn_active = False
+        self._pending_decision_overlays: list[str] = []
+
+    @property
+    def active_decision_overlays(self) -> tuple[str, ...]:
+        """Decision overlays active for the current chained operator session."""
+
+        return self.matcher.active_decision_overlays
+
+    def activate_decision_overlay(self, overlay_id: str) -> None:
+        """Atomically expose a declared decision phase to subsequent turns.
+
+        A chain controller calls this at its source-switch boundary. Any
+        answer selected under a decision retired by the overlay is discarded
+        before the next operator message is composed.
+        """
+
+        self.matcher.validate_decision_overlay(overlay_id)
+        if overlay_id in self.matcher.active_decision_overlays:
+            return
+        if self._current_turn_active:
+            if overlay_id not in self._pending_decision_overlays:
+                self._pending_decision_overlays.append(overlay_id)
+            return
+        self.matcher.activate_decision_overlay(overlay_id)
 
     def _provider_view(
         self,
@@ -1340,6 +1379,8 @@ class OperatorEngine:
 
         script_hash = operator_script_hash(self.script)
         self.transport.start_fresh_session()
+        self._current_turn_active = False
+        self._pending_decision_overlays.clear()
         records: list[TurnRecord] = []
         fired_events: list[str] = []
         delivered_event_turns: dict[str, int] = {}
@@ -1357,6 +1398,7 @@ class OperatorEngine:
         pending_sheet_key: str | None = None
         served_reply_keys: set[str] = set()
         delivered_decision_clauses: dict[str, set[str]] = {}
+        delivered_decision_stage_counts: dict[str, int] = {}
         pending_ask_back_decision = False
         review_fix_authorized = False
         reapproval_uses = 0
@@ -1422,6 +1464,21 @@ class OperatorEngine:
 
         for index, scheduled_turn in enumerate(self.script.turns, start=1):
             self.turn_pointer = index - 1
+            self._current_turn_active = True
+            if (
+                next_match is not None
+                and next_match.decision_id is not None
+                and not self.matcher.decision_is_available(
+                    next_match.decision_id,
+                    available_event_ids=tuple(fired_events),
+                )
+            ):
+                # A chain may activate an overlay between completed agent
+                # turns. The prior-phase answer was selected before the
+                # transition and must not leak as the next operator message.
+                next_reply = None
+                next_match = None
+                pending_sheet_key = None
             publication_snapshot: Mapping[str, object] | None = None
             if self.script.events.publication_card_ids and self.publication_history_reader is not None:
                 try:
@@ -2048,6 +2105,11 @@ class OperatorEngine:
                 else None
             )
             if decision_answer_delivered and next_match is not None:
+                if next_match.decision_stage is not None:
+                    decision_id = next_match.decision_id or ""
+                    delivered_decision_stage_counts[decision_id] = (
+                        delivered_decision_stage_counts.get(decision_id, 0) + 1
+                    )
                 if next_match.decision_id == "review_fix_authorization":
                     # The generic review authorization marks the boundary
                     # between review generations for this bounded memory.
@@ -2119,6 +2181,7 @@ class OperatorEngine:
                 agent_message,
                 context=pending_review_context,
                 available_event_ids=tuple(fired_events),
+                decision_stage_counts=delivered_decision_stage_counts,
             )
             if (
                 match.decision_id is not None
@@ -2144,7 +2207,17 @@ class OperatorEngine:
                         context=pending_review_context,
                         excluded_decision_ids=frozenset({match.decision_id}),
                         available_event_ids=tuple(fired_events),
+                        decision_stage_counts=delivered_decision_stage_counts,
                     )
+
+            # A chain transition can be reported by a transport completion
+            # callback while this turn is being returned. Keep the current
+            # agent message under the pre-transition answer sheet; activate
+            # the overlay only after its decision match is fixed.
+            self._current_turn_active = False
+            for overlay_id in self._pending_decision_overlays:
+                self.matcher.activate_decision_overlay(overlay_id)
+            self._pending_decision_overlays.clear()
 
             sheet_key = _served_reply_key(match.rule_id)
             repeated_review_authorization = bool(
@@ -2348,6 +2421,16 @@ class OperatorEngine:
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
                 delivered_decision_id=delivered_decision_id,
+                delivered_decision_stage=(
+                    next_match.decision_stage
+                    if decision_answer_delivered and next_match is not None
+                    else None
+                ),
+                delivered_decision_final=(
+                    next_match.decision_final
+                    if decision_answer_delivered and next_match is not None
+                    else None
+                ),
             )
             records.append(turn_record)
             self._append_row(
