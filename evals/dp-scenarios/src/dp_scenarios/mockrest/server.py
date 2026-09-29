@@ -178,6 +178,7 @@ class MockRestServer:
                     raise ConfigError(
                         f"routes for state family {route.state_family} have incompatible initial states"
                     )
+        self._state_generations = dict.fromkeys(self._current_states, 0)
         if not self.capability.endpoints:
             self.capability = self._manifest_from_routes()
         self._remaining_requests = (
@@ -389,18 +390,23 @@ class MockRestServer:
                 "schema": 1,
                 "remaining_requests": self._remaining_requests,
                 "current_states": dict(self._current_states),
+                "state_generations": dict(self._state_generations),
                 "counters": self.counters.snapshot(),
             }
 
     async def restore_runtime_state(self, state: Mapping[str, Any]) -> None:
         """Restore a validated source snapshot after the readiness probe."""
 
-        if not isinstance(state, Mapping) or set(state) != {
+        legacy_shape = {
             "schema",
             "remaining_requests",
             "current_states",
             "counters",
-        }:
+        }
+        if not isinstance(state, Mapping) or set(state) not in (
+            legacy_shape,
+            legacy_shape | {"state_generations"},
+        ):
             raise ValueError("mock source runtime state has an invalid shape")
         if state["schema"] != 1:
             raise ValueError("mock source runtime state has an unsupported schema")
@@ -435,6 +441,16 @@ class MockRestServer:
             ]
             if not family_routes or any(selected not in route.states for route in family_routes):
                 raise ValueError("mock source runtime state has an unknown route state")
+        generations = state.get("state_generations", dict.fromkeys(expected_families, 0))
+        if (
+            not isinstance(generations, Mapping)
+            or set(generations) != expected_families
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in generations.values()
+            )
+        ):
+            raise ValueError("mock source runtime state has invalid state generations")
 
         counters = state["counters"]
         if not isinstance(counters, Mapping):
@@ -442,6 +458,7 @@ class MockRestServer:
         async with self._state_lock:
             self._remaining_requests = remaining
             self._current_states = dict(current_states)
+            self._state_generations = dict(generations)
             self._cursor_maps.clear()
             self.counters.restore_snapshot(counters)
 
@@ -482,16 +499,19 @@ class MockRestServer:
         )
 
         def finish(response: web.StreamResponse, *, page: Any = None) -> web.StreamResponse:
-            self.counters.record_response(route.path, request_number, response.status)
+            sequence = self.counters.record_response(route.path, request_number, response.status)
             if page is not None:
                 self.counters.record_page_observation(
                     rows=page.records,
                     next_cursor=page.next_cursor,
                     status=response.status,
+                    sequence=sequence,
+                    state=_state_key(route, state_snapshot),
                 )
             return response
 
         state_snapshot = dict(self._current_states)
+        generation_snapshot = dict(self._state_generations)
         if route.latency_ms:
             await asyncio.sleep(route.latency_ms / 1000.0)
         if not 200 <= route.status < 300:
@@ -527,6 +547,9 @@ class MockRestServer:
                     return finish(_error(500, "configured pagination response is not a collection"))
                 cursor = request.query.get(route.pagination.cursor_param)
                 state_key = _state_key(route, state_snapshot)
+                generation = generation_snapshot.get(route.state_family or "", 0)
+                if generation:
+                    state_key = f"{state_key}:{generation}"
                 map_key = (route.path, state_key)
                 valid = self._cursor_maps.setdefault(
                     map_key,
@@ -634,7 +657,8 @@ class MockRestServer:
 
     async def _state_control(self, request: web.Request) -> web.Response:
         if request.method == "GET":
-            return web.json_response({"states": dict(self._current_states)})
+            async with self._state_lock:
+                return web.json_response({"states": dict(self._current_states)})
         if request.method != "POST":
             return _error(405, "method not allowed")
         try:
@@ -645,18 +669,33 @@ class MockRestServer:
             return _error(400, "state control requires family and state")
         family = body["family"]
         state = body["state"]
-        if not isinstance(family, str) or not isinstance(state, str):
+        try:
+            await self.set_dataset_state(family, state)
+        except TypeError:
             return _error(400, "state control requires string values")
+        except LookupError:
+            return _error(404, "unknown dataset family")
+        except ValueError:
+            return _error(400, "unknown dataset state")
+        return web.json_response({"family": family, "state": state})
+
+    async def set_dataset_state(self, family: str, state: str) -> None:
+        """Switch a dataset family through the same validation as the control port."""
+
+        if not isinstance(family, str) or not isinstance(state, str):
+            raise TypeError("state control requires string values")
         state_routes = [route for route in self.config.routes if route.state_family == family]
         if not state_routes:
-            return _error(404, "unknown dataset family")
+            raise LookupError("unknown dataset family")
         if any(state not in route.states for route in state_routes):
-            return _error(400, "unknown dataset state")
-        self._current_states[family] = state
-        for key in list(self._cursor_maps):
-            if key[0] in {route.path for route in state_routes}:
-                del self._cursor_maps[key]
-        return web.json_response({"family": family, "state": state})
+            raise ValueError("unknown dataset state")
+        async with self._state_lock:
+            self._current_states[family] = state
+            self._state_generations[family] += 1
+            paths = {route.path for route in state_routes}
+            for key in list(self._cursor_maps):
+                if key[0] in paths:
+                    del self._cursor_maps[key]
 
 
 def _site_port(site: web.TCPSite) -> int:

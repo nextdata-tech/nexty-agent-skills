@@ -695,6 +695,16 @@ Only parameter-free `GET` routes that serve a successful body are advertised.
 Error-only routes, forbidden writes, and templated paths stay out, so a scenario
 that grades honest probing does not find its answer in the handover.
 
+For a stateful mock source, the runner can call
+`MockSourceHandle.set_dataset_state(family, state)` after the required observed
+event. This uses the same validation as the control port and invalidates cursors
+from earlier states. Harness artifacts retain `source-turns.json`, with one
+snapshot per completed live turn: selected source states, the last request
+sequence, and cumulative safe counters. Each successful page observation in
+`server-counters.json` carries its source state and request sequence. Contact
+objects are excluded. The older `source-evidence.json` page and transport trace
+shapes remain available to existing follow-ups.
+
 ## Adding a scenario
 
 A scenario package is additive: it needs no edit to a shared file, so two

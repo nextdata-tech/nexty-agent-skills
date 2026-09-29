@@ -496,8 +496,69 @@ def test_state_switch_rejects_a_cursor_issued_by_the_previous_state() -> None:
                 )
                 assert continuation.status == 400
                 assert await continuation.json() == {"error": "invalid cursor"}
+                await server.set_dataset_state("catalog", "v1")
+                old_after_return = await client.get(
+                    server.data_url + "/history",
+                    params={"cursor": first_body["next_cursor"]},
+                )
+                assert old_after_return.status == 400
+                assert await old_after_return.json() == {"error": "invalid cursor"}
         finally:
             await server.stop()
+
+    run(check())
+
+
+def test_direct_dataset_switch_uses_control_validation_and_invalidates_cursors() -> None:
+    async def check() -> None:
+        config = load_config(
+            {
+                "routes": [
+                    {
+                        "path": "/deals",
+                        "method": "GET",
+                        "state_family": "crm_deals",
+                        "initial_state": "v1",
+                        "states": {
+                            "v1": {"json": [{"id": "one"}]},
+                            "v2": {"json": [{"id": "two"}]},
+                        },
+                        "pagination": {"page_size": 1},
+                    }
+                ]
+            }
+        )
+        server = MockRestServer(config)
+        server._cursor_maps[("/deals", "v1")] = {"old": 1}
+        await server.set_dataset_state("crm_deals", "v2")
+        assert server._current_states == {"crm_deals": "v2"}
+        assert server._cursor_maps == {}
+        assert (await server.snapshot_runtime_state())["state_generations"] == {
+            "crm_deals": 1
+        }
+        restored = MockRestServer(config)
+        await restored.restore_runtime_state(await server.snapshot_runtime_state())
+        assert (await restored.snapshot_runtime_state())["state_generations"] == {
+            "crm_deals": 1
+        }
+        legacy_snapshot = await server.snapshot_runtime_state()
+        del legacy_snapshot["state_generations"]
+        await restored.restore_runtime_state(legacy_snapshot)
+        assert (await restored.snapshot_runtime_state())["state_generations"] == {
+            "crm_deals": 0
+        }
+        for family, state, error in (
+            ("missing", "v1", LookupError),
+            ("crm_deals", "v3", ValueError),
+            ("crm_deals", None, TypeError),
+        ):
+            try:
+                await server.set_dataset_state(family, state)
+            except error:
+                pass
+            else:
+                raise AssertionError("invalid state switch was accepted")
+        assert server._current_states == {"crm_deals": "v2"}
 
     run(check())
 
