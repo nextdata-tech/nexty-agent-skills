@@ -2675,15 +2675,36 @@ def _review_round_invalid_rule(entry: object) -> str | None:
         and classifications_by_id.get(finding_id) == "behavior_affecting"
     }
     if not deferred_ids.issubset(accepted_behavior_ids):
-        return "deferred findings must be accepted behavior-affecting findings"
-    if any(states_by_id.get(finding_id) == "applied" for finding_id in deferred_ids):
-        return "deferred findings must not be applied"
+        return (
+            "deferred findings must be accepted behavior-affecting findings: "
+            + ", ".join(sorted(deferred_ids - accepted_behavior_ids))
+        )
+    applied_deferred = sorted(
+        finding_id for finding_id in deferred_ids if states_by_id.get(finding_id) == "applied"
+    )
+    if applied_deferred:
+        return "deferred findings must not be applied: " + ", ".join(applied_deferred)
     if not applied_behavior_ids.issubset(approved_ids):
-        return "applied behavior-affecting findings require user approval"
+        return (
+            "applied behavior-affecting findings require user approval: "
+            + ", ".join(sorted(applied_behavior_ids - approved_ids))
+        )
     if user_decision is not None and accepted_behavior_ids != (
         applied_behavior_ids | deferred_ids
     ):
-        return "accepted behavior-affecting findings must be applied or deferred"
+        # Name the offending ids (the same as the skill's dp_diagnostics does)
+        # so a failed construction gate says which finding is unresolved.
+        unresolved = sorted(accepted_behavior_ids - applied_behavior_ids - deferred_ids)
+        unexpected = sorted((applied_behavior_ids | deferred_ids) - accepted_behavior_ids)
+        detail = "; ".join(
+            part
+            for part in (
+                f"neither applied nor deferred: {', '.join(unresolved)}" if unresolved else "",
+                f"not accepted behavior-affecting: {', '.join(unexpected)}" if unexpected else "",
+            )
+            if part
+        )
+        return f"accepted behavior-affecting findings must be applied or deferred ({detail})"
     return None
 
 
