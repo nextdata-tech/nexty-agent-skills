@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -73,6 +74,7 @@ EVENT_KEYS = frozenset(
         "metadata",
         "plant",
         "required_terms",
+        "delivers_decision",
     }
 )
 
@@ -160,6 +162,11 @@ class EventCard:
     # their original constructor order and hash representation.
     after_published: str | None = None
     after_event: str | None = None
+    # A card whose own text *is* the operator's ruling on a declared decision
+    # (for example a reversal that states the revised rule) delivers that
+    # decision when it is transmitted. The agent has no reason to ask for a
+    # ruling it was just given, so grading must not require a second delivery.
+    delivers_decision: str | None = None
 
     @property
     def id(self) -> str:
@@ -199,6 +206,8 @@ class EventCard:
             result["after_published"] = self.after_published
         if self.after_event is not None:
             result["after_event"] = self.after_event
+        if self.delivers_decision is not None:
+            result["delivers_decision"] = self.delivers_decision
         return result
 
     @property
@@ -233,6 +242,7 @@ class EventInjection:
     plant: bool
     replace_message: bool
     required_terms: tuple[str, ...] = ()
+    delivers_decision: str | None = None
 
 
 def event_from_mapping(value: Mapping[str, object]) -> EventCard:
@@ -297,6 +307,9 @@ def event_from_mapping(value: Mapping[str, object]) -> EventCard:
     if isinstance(required_raw, (str, bytes)) or not isinstance(required_raw, Sequence):
         raise EventError("event.required_terms must be a list of non-empty strings")
     required_terms = tuple(_string(item, "event.required_terms[]") for item in required_raw)
+    delivers_decision = raw.get("delivers_decision")
+    if delivers_decision is not None:
+        delivers_decision = _string(delivers_decision, "event.delivers_decision")
     return EventCard(
         version=version,
         card_id=_string(raw["id"], "event.id"),
@@ -317,6 +330,7 @@ def event_from_mapping(value: Mapping[str, object]) -> EventCard:
         metadata=MappingProxyType(metadata),
         plant=_bool(plant, "event.plant"),
         required_terms=required_terms,
+        delivers_decision=delivers_decision,
     )
 
 
@@ -346,6 +360,7 @@ def inject_event(card: EventCard) -> EventInjection:
         plant=card.plant,
         replace_message=card.replace_message,
         required_terms=card.required_terms,
+        delivers_decision=card.delivers_decision,
     )
 
 
@@ -396,6 +411,7 @@ class EventSchedule:
         delivered_event_turns: Mapping[str, int] | None = None,
         used_event_ids: Sequence[str] = (),
         fixed_beats_pending: bool = False,
+        turn_texts: Sequence[tuple[int, str, str]] | None = None,
     ) -> tuple[EventInjection, ...]:
         """Resolve fixed events and at most one eligible publication card.
 
@@ -403,6 +419,9 @@ class EventSchedule:
         ``dp-scenario-run-records-v1``. A status observation only counts when
         its status-history turn is strictly before ``turn``. ``delivered_event_turns``
         contains actual operator delivery turns, never declared trigger turns.
+        ``turn_texts`` holds ``(turn, agent_message, operator_message)`` rows and
+        is only consulted to recognise an operator-authorized successor release
+        (see :func:`is_revised_release`).
         """
 
         used = set(used_event_ids)
@@ -447,11 +466,19 @@ class EventSchedule:
                 if not publications:
                     continue
                 if not any(
-                    revised.workflow_id == initial.workflow_id
-                    and revised.run_id != initial.run_id
-                    and revised.definition_id != initial.definition_id
-                    and revised.published_turn > initial.published_turn
-                    and (event_turn is None or revised.published_turn > event_turn)
+                    is_revised_release(
+                        initial_workflow_id=initial.workflow_id,
+                        initial_run_id=initial.run_id,
+                        initial_definition_id=initial.definition_id,
+                        initial_published_turn=initial.published_turn,
+                        workflow_id=revised.workflow_id,
+                        run_id=revised.run_id,
+                        definition_id=revised.definition_id,
+                        published_turn=revised.published_turn,
+                        floor_turn=event_turn,
+                        turn_texts=turn_texts,
+                        authorization_deadline=revised.published_turn,
+                    )
                     for initial in publications
                     for revised in publications
                 ):
@@ -474,6 +501,91 @@ class EventSchedule:
         """Return cards in their stable schedule order."""
 
         return [card.to_mapping() for card in self.cards]
+
+
+# The agent putting a new, separately versioned product to the operator. The
+# shipped run-job-loop skill forbids revising a published workflow in place and
+# requires exactly this shape: a new product under a new workflow id, after
+# asking the user.
+_SUCCESSOR_PRODUCT_ASK = re.compile(
+    r"\b(?:new|separate|second)\s+(?:versioned\s+)?(?:product|workflow)\b"
+    r"|\bnew\s+workflow\s+id\b|\bversioned\s+product\b",
+    re.IGNORECASE,
+)
+
+
+def successor_authorization_turn(
+    turn_texts: Sequence[tuple[int, str, str]] | None,
+    *,
+    after_turn: int,
+    deadline_turn: int | None,
+) -> int | None:
+    """Return the operator turn that authorized a successor workflow, if any.
+
+    Authorization is an agent turn ``A >= after_turn`` that puts a new or
+    separately versioned product to the operator, followed by an operator
+    message delivered on a later turn ``N`` with ``A < N <= deadline_turn``.
+    Runner-owned turn records are the only source; the run's own claims are
+    never consulted. A missing or unreadable transcript authorizes nothing.
+    """
+
+    if not turn_texts or deadline_turn is None:
+        return None
+    rows = sorted(
+        (row for row in turn_texts if isinstance(row[0], int) and not isinstance(row[0], bool)),
+        key=lambda row: row[0],
+    )
+    ask_turns = [
+        turn for turn, agent, _ in rows
+        if turn >= after_turn and isinstance(agent, str) and _SUCCESSOR_PRODUCT_ASK.search(agent)
+    ]
+    if not ask_turns:
+        return None
+    first_ask = min(ask_turns)
+    for turn, _, operator in rows:
+        if first_ask < turn <= deadline_turn and isinstance(operator, str) and operator.strip():
+            return turn
+    return None
+
+
+def is_revised_release(
+    *,
+    initial_workflow_id: str,
+    initial_run_id: str,
+    initial_definition_id: str,
+    initial_published_turn: int,
+    workflow_id: str,
+    run_id: str,
+    definition_id: str,
+    published_turn: int,
+    floor_turn: int | None,
+    turn_texts: Sequence[tuple[int, str, str]] | None,
+    authorization_deadline: int | None,
+) -> bool:
+    """Whether a later Published run is the revised release of an initial one.
+
+    A revised release is a later Published run with a different definition that
+    is either the same workflow, or a successor workflow the operator
+    authorized after the agent asked (the shipped skill forbids revising a
+    published workflow in place). ``floor_turn`` is the delivered reversal
+    event, when the card is gated on one; the revised publication must follow
+    it. The authorization window starts at that event (or, when there is none,
+    at the initial publication).
+    """
+
+    if (
+        run_id == initial_run_id
+        or definition_id == initial_definition_id
+        or published_turn <= initial_published_turn
+        or (floor_turn is not None and published_turn <= floor_turn)
+    ):
+        return False
+    if workflow_id == initial_workflow_id:
+        return True
+    after = floor_turn if floor_turn is not None else initial_published_turn
+    return successor_authorization_turn(
+        turn_texts, after_turn=after, deadline_turn=authorization_deadline
+    ) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,6 +697,8 @@ __all__ = [
     "EventType",
     "event_from_mapping",
     "inject_event",
+    "is_revised_release",
     "load_event_cards",
     "load_event_schedule",
+    "successor_authorization_turn",
 ]
