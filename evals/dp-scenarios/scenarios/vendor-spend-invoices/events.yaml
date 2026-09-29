@@ -1,0 +1,10 @@
+- version: 1
+  id: B9-unstated-amount
+  trigger_turn: 5
+  type: decision_reversal
+  content: "Before you finalize, tell me if there is a choice I need to make."
+  outcome: unstated_amount_decision_request
+  plant: true
+  required_terms:
+    - Before you finalize
+    - choice I need to make

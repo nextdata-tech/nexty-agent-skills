@@ -1,0 +1,98 @@
+[
+  {
+    "amount_cents": 345000,
+    "amount_phrase": "EUR 3,450.00",
+    "amount_stated": true,
+    "category": "Software",
+    "invoice_id": "I01",
+    "vendor_id": "V01"
+  },
+  {
+    "amount_cents": 1245000,
+    "amount_phrase": "twelve thousand four hundred fifty",
+    "amount_stated": true,
+    "category": "Software",
+    "invoice_id": "I02",
+    "vendor_id": "V01"
+  },
+  {
+    "amount_cents": 180000,
+    "amount_phrase": "EUR 1,800.00",
+    "amount_stated": true,
+    "category": "Software",
+    "invoice_id": "I03",
+    "vendor_id": "V01"
+  },
+  {
+    "amount_cents": 198000,
+    "amount_phrase": "EUR 1,980.00",
+    "amount_stated": true,
+    "category": "Facilities",
+    "invoice_id": "I04",
+    "vendor_id": "V02"
+  },
+  {
+    "amount_cents": 327500,
+    "amount_phrase": "three thousand two hundred seventy-five",
+    "amount_stated": true,
+    "category": "Facilities",
+    "invoice_id": "I05",
+    "vendor_id": "V02"
+  },
+  {
+    "amount_cents": 86000,
+    "amount_phrase": "EUR 860.00",
+    "amount_stated": true,
+    "category": "Facilities",
+    "invoice_id": "I06",
+    "vendor_id": "V02"
+  },
+  {
+    "amount_cents": 720000,
+    "amount_phrase": "EUR 7,200.00",
+    "amount_stated": true,
+    "category": "Professional Services",
+    "invoice_id": "I07",
+    "vendor_id": "V03"
+  },
+  {
+    "amount_cents": null,
+    "amount_phrase": null,
+    "amount_stated": false,
+    "category": "Professional Services",
+    "invoice_id": "I08",
+    "vendor_id": "V03"
+  },
+  {
+    "amount_cents": 95000,
+    "amount_phrase": "EUR 950.00",
+    "amount_stated": true,
+    "category": "Professional Services",
+    "invoice_id": "I09",
+    "vendor_id": "V03"
+  },
+  {
+    "amount_cents": 60000,
+    "amount_phrase": "EUR 600.00",
+    "amount_stated": true,
+    "category": "Software",
+    "invoice_id": "I10",
+    "vendor_id": "V04"
+  },
+  {
+    "amount_cents": 147500,
+    "amount_phrase": "EUR 1,475.00",
+    "amount_stated": true,
+    "category": "Software",
+    "invoice_id": "I11",
+    "vendor_id": "V04"
+  },
+  {
+    "amount_cents": 430000,
+    "amount_phrase": "EUR 4,300.00",
+    "amount_stated": true,
+    "category": "Facilities",
+    "invoice_id": "I12",
+    "vendor_id": "V05"
+  }
+]

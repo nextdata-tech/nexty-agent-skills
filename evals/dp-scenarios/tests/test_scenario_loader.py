@@ -57,6 +57,7 @@ EXPECTED_TIERS = {
     "headcount-attrition": "full",
     "mrr-waterfall": "full",
     "crm-pipeline-drift": "full",
+    "vendor-spend-invoices": "full",
     "product-usage": "full",
 }
 
@@ -74,6 +75,7 @@ EXPECTED_REQUIRED_GATES = {
         "application-reconciliation",
         "locale-timezone",
         "mrr-waterfall",
+        "vendor-spend-invoices",
         "product-usage",
     } else set())
     for scenario_id in EXPECTED_TIERS
@@ -580,6 +582,7 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
     shutil.rmtree(root / "marketing-attribution")
     shutil.rmtree(root / "mrr-waterfall")
     shutil.rmtree(root / "crm-pipeline-drift")
+    shutil.rmtree(root / "vendor-spend-invoices")
     shutil.rmtree(root / "product-usage")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
@@ -811,7 +814,7 @@ def test_every_shipped_scenario_declares_workflow_approval_turns() -> None:
             4
             if scenario.id == "crm-pipeline-drift"
             else 3
-            if scenario.id == "crm-pipeline"
+            if scenario.id in {"crm-pipeline", "vendor-spend-invoices"}
             else 2
             if scenario.id in {
                 "inventory-position",
@@ -856,6 +859,7 @@ def test_only_scenarios_declaring_answer_gold_have_scoreable_query_gates() -> No
         "application-reconciliation",
         "locale-timezone",
         "mrr-waterfall",
+        "vendor-spend-invoices",
         "product-usage",
     }
 
@@ -896,7 +900,7 @@ def test_live_blocked_reason_must_be_non_empty_text(tmp_path: Path) -> None:
 def test_live_blocked_finds_only_the_scenarios_that_declare_a_reason() -> None:
     scenarios = load_scenarios(SCENARIO_ROOT)
     blocked = live_blocked(scenarios)
-    assert {scenario.id for scenario in blocked} == {"product-usage"}
+    assert {scenario.id for scenario in blocked} == {"product-usage", "vendor-spend-invoices"}
 
 
 def test_full_tier_selection_at_the_loader_layer_still_includes_the_blocked_package() -> None:
