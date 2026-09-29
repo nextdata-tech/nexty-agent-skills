@@ -656,6 +656,22 @@ class MockSourceHandle:
             raise EnvironmentError("mock source runtime state is not a mapping")
         return state
 
+    def set_dataset_state(self, family: str, state: str) -> None:
+        """Switch the harness-owned source on its private event loop."""
+
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            raise EnvironmentError("mock source event loop is not running")
+        future = asyncio.run_coroutine_threadsafe(
+            self.server.set_dataset_state(family, state), loop
+        )
+        try:
+            future.result(timeout=30)
+        except (TypeError, LookupError, ValueError):
+            raise
+        except BaseException as exc:
+            raise EnvironmentError("mock source dataset state could not be changed") from exc
+
     def stop(self) -> None:
         """Stop the source and join its private event-loop thread."""
 
@@ -1143,12 +1159,16 @@ def _read_native_source_state(path: Path) -> dict[str, object]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise EnvironmentError("native source runtime state is missing or malformed") from exc
-    if not isinstance(raw, Mapping) or set(raw) != {
+    legacy_shape = {
         "schema",
         "remaining_requests",
         "current_states",
         "counters",
-    }:
+    }
+    if not isinstance(raw, Mapping) or set(raw) not in (
+        legacy_shape,
+        legacy_shape | {"state_generations"},
+    ):
         raise EnvironmentError("native source runtime state is malformed")
     if raw.get("schema") != NATIVE_SOURCE_STATE_SCHEMA:
         raise EnvironmentError("native source runtime state has an unsupported schema")

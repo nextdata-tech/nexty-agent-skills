@@ -86,8 +86,8 @@ class RequestCounters:
         with self._lock:
             self._pages += 1
 
-    def record_response(self, route: str, request_number: int, status: int) -> None:
-        """Attach the observed HTTP status to one previously recorded request."""
+    def record_response(self, route: str, request_number: int, status: int) -> int:
+        """Attach the HTTP status and return the request's global sequence."""
 
         if not route or request_number < 1 or status < 100 or status > 599:
             raise ValueError("route, request number, and HTTP status are required")
@@ -99,7 +99,9 @@ class RequestCounters:
             ]
             if request_number > len(matching):
                 raise ValueError("request number is not present for route")
-            self._response_statuses[matching[request_number - 1]] = int(status)
+            sequence = matching[request_number - 1]
+            self._response_statuses[sequence] = int(status)
+            return sequence
 
     def record_page_observation(
         self,
@@ -107,30 +109,43 @@ class RequestCounters:
         rows: Any = None,
         next_cursor: str | None = None,
         status: int = 200,
+        sequence: int | None = None,
+        state: str | None = None,
     ) -> None:
         """Record one safe, successful page returned by a paginated route."""
 
         with self._lock:
-            self._pages += 1
             safe_rows: list[dict[str, Any]] = []
             if isinstance(rows, list):
                 for row in rows:
                     if not isinstance(row, Mapping):
                         continue
-                    safe_rows.append(
-                        {
-                            field: row[field]
-                            for field in ("id", "stage", "amount", "status", "updatedAt")
-                            if field in row
-                        }
-                    )
-            self._page_observations.append(
-                {
-                    "status": int(status),
-                    "rows": safe_rows,
-                    "next_cursor": "present" if next_cursor is not None else None,
-                }
-            )
+                    safe_row = {
+                        field: row[field]
+                        for field in ("id", "stage", "amount", "status", "updatedAt")
+                        if field in row
+                    }
+                    value = row.get("deal_value")
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        safe_row["deal_value"] = value
+                    safe_rows.append(safe_row)
+            observation: dict[str, Any] = {
+                "status": int(status),
+                "rows": safe_rows,
+                "next_cursor": "present" if next_cursor is not None else None,
+            }
+            if sequence is not None or state is not None:
+                if (
+                    isinstance(sequence, bool)
+                    or not isinstance(sequence, int)
+                    or self._response_statuses.get(sequence) != status
+                    or not isinstance(state, str)
+                    or not state
+                ):
+                    raise ValueError("page observation requires a recorded request and state")
+                observation.update(sequence=sequence, state=state)
+            self._page_observations.append(observation)
+            self._pages += 1
 
     def reset(self) -> None:
         """Clear all events; only the control port calls this between runs."""
@@ -273,16 +288,32 @@ class RequestCounters:
             decoded_statuses[raw_status["sequence"]] = raw_status["status"]
         if len(page_observations) != pages:
             raise ValueError("counter snapshot pages do not match observations")
+        observed_sequences: set[int] = set()
         for page in page_observations:
             if (
                 not isinstance(page, Mapping)
-                or set(page) != {"status", "rows", "next_cursor"}
+                or set(page) not in (
+                    {"status", "rows", "next_cursor"},
+                    {"status", "rows", "next_cursor", "sequence", "state"},
+                )
                 or page["status"] != 200
                 or not isinstance(page["rows"], list)
                 or page["next_cursor"] is not None
                 and not isinstance(page["next_cursor"], str)
             ):
                 raise ValueError("counter snapshot has malformed page observation")
+            if "sequence" in page:
+                sequence = page["sequence"]
+                if (
+                    isinstance(sequence, bool)
+                    or not isinstance(sequence, int)
+                    or sequence in observed_sequences
+                    or decoded_statuses.get(sequence) != page["status"]
+                    or not isinstance(page["state"], str)
+                    or not page["state"]
+                ):
+                    raise ValueError("counter snapshot has malformed page attribution")
+                observed_sequences.add(sequence)
         return events, route_counts, method_counts, buckets, pages, decoded_statuses, page_observations
 
     @classmethod

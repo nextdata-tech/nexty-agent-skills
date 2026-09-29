@@ -247,6 +247,60 @@ def test_response_observations_are_status_bound_and_pii_projected() -> None:
     assert restored.snapshot() == snapshot
 
 
+def test_stateful_page_observation_retains_request_sequence_without_contact_pii() -> None:
+    counters = RequestCounters()
+    first_number = counters.record("/deals", "GET")
+    counters.record_response("/deals", first_number, 429)
+    second_number = counters.record("/deals", "GET")
+    sequence = counters.record_response("/deals", second_number, 200)
+    counters.record_page_observation(
+        rows=[
+            {
+                "id": "DEAL-2007",
+                "stage": "verbal_commit",
+                "deal_value": 31850,
+                "status": "active",
+                "updatedAt": "2024-01-08T12:00:00+00:00",
+                "owner": {"email": "owner-marker"},
+                "champion": {"email": "champion-marker"},
+            },
+            {"id": "DEAL-unsafe", "deal_value": {"email": "nested-marker"}},
+        ],
+        sequence=sequence,
+        state="v2",
+    )
+
+    snapshot = counters.snapshot()
+    assert snapshot["page_observations"] == [
+        {
+            "status": 200,
+            "rows": [
+                {
+                    "id": "DEAL-2007",
+                    "stage": "verbal_commit",
+                    "deal_value": 31850,
+                    "status": "active",
+                    "updatedAt": "2024-01-08T12:00:00+00:00",
+                },
+                {"id": "DEAL-unsafe"},
+            ],
+            "next_cursor": None,
+            "sequence": 2,
+            "state": "v2",
+        }
+    ]
+    assert "owner-marker" not in str(snapshot)
+    assert "champion-marker" not in str(snapshot)
+    assert "nested-marker" not in str(snapshot)
+    restored = RequestCounters()
+    restored.restore_snapshot(snapshot)
+    assert restored.snapshot() == snapshot
+
+    snapshot["page_observations"][0]["sequence"] = 1
+    with pytest.raises(ValueError, match="page attribution"):
+        RequestCounters.validate_snapshot(snapshot)
+
+
 def test_caller_identity_ignores_whitespace_and_matches_header_names_case_insensitively() -> None:
     assert caller_identity({"X-Caller-Id": "   \t"}) is None
     assert caller_identity({"x-cAlLeR-iD": "worker-a"}) == "worker-a"

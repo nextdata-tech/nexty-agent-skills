@@ -182,6 +182,93 @@ def test_source_evidence_uses_the_final_complete_pagination_attempt() -> None:
     assert tier_module._latest_paginated_pages(pages) == pages[2:]
 
 
+def test_source_turn_snapshots_attribute_safe_pages_without_changing_legacy_evidence(
+    tmp_path: Path,
+) -> None:
+    from dp_scenarios.mockrest.config import load_config
+    from dp_scenarios.mockrest.counters import RequestCounters
+
+    config = load_config(
+        {
+            "routes": [
+                {
+                    "path": "/deals",
+                    "method": "GET",
+                    "state_family": "crm_deals",
+                    "initial_state": "v1",
+                    "states": {
+                        "v1": {"json": [{"id": "DEAL-1"}]},
+                        "v2": {"json": [{"id": "DEAL-2"}]},
+                    },
+                    "pagination": {"page_size": 2},
+                }
+            ]
+        }
+    )
+    counters = RequestCounters()
+    source_state = {"crm_deals": "v1"}
+
+    class Source:
+        server = SimpleNamespace(
+            capability=SimpleNamespace(as_dict=lambda: {}), config=config
+        )
+
+        def snapshot_runtime_state(self) -> dict[str, object]:
+            return {"current_states": dict(source_state), "counters": counters.snapshot()}
+
+    environment = SimpleNamespace(mock_source=Source())
+    checkpoint_turns: list[int] = []
+
+    def checkpoint(_snapshot: object, turn: int) -> None:
+        checkpoint_turns.append(turn)
+
+    callback = tier_module._source_turn_callback(environment, tmp_path, checkpoint)
+    completed = SimpleNamespace(
+        turns=[SimpleNamespace(result=SimpleNamespace(turn_timed_out=False, environment_wedged=False))]
+    )
+    first = counters.record("/deals", "GET")
+    first_sequence = counters.record_response("/deals", first, 200)
+    counters.record_page_observation(
+        rows=[{"id": "DEAL-1", "amount": 10, "owner": {"email": "owner-marker"}}],
+        sequence=first_sequence,
+        state="v1",
+    )
+    callback(completed, 1)
+
+    source_state["crm_deals"] = "v2"
+    second = counters.record("/deals", "GET")
+    second_sequence = counters.record_response("/deals", second, 200)
+    counters.record_page_observation(
+        rows=[{"id": "DEAL-2", "deal_value": 20, "champion": {"email": "champion-marker"}}],
+        sequence=second_sequence,
+        state="v2",
+    )
+    callback(completed, 2)
+
+    turns = json.loads((tmp_path / "source-turns.json").read_text())
+    assert turns["schema"] == "dp-scenario-source-turns-v1"
+    assert [turn["states"] for turn in turns["turns"]] == [
+        {"crm_deals": "v1"},
+        {"crm_deals": "v2"},
+    ]
+    assert [turn["request_sequence_end"] for turn in turns["turns"]] == [1, 2]
+    assert turns["turns"][1]["counters"]["page_observations"][1]["sequence"] == 2
+    assert turns["turns"][1]["counters"]["page_observations"][1]["state"] == "v2"
+    assert checkpoint_turns == [1, 2]
+
+    legacy = json.loads((tmp_path / "source-evidence.json").read_text())
+    assert legacy["schema"] == "dp-scenario-source-evidence-v1"
+    assert legacy["pages"] == [
+        {"status": 200, "rows": [{"id": "DEAL-2", "deal_value": 20}], "next_cursor": None}
+    ]
+    assert legacy["transport_trace"] == [
+        {"sequence": 1, "route": "/deals", "method": "GET", "status": 200},
+        {"sequence": 2, "route": "/deals", "method": "GET", "status": 200},
+    ]
+    assert "owner-marker" not in str(turns)
+    assert "champion-marker" not in str(turns)
+
+
 def clean_canary() -> CanaryResult:
     return CanaryResult(Verdict("clean", (), ()), claims_hash="claims-1")
 

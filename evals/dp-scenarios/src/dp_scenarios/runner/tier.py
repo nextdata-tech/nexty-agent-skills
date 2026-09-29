@@ -911,12 +911,36 @@ def _latest_paginated_pages(pages: Sequence[object]) -> list[object]:
     return list(pages[start : terminal_positions[-1] + 1])
 
 
-def _snapshot_source_artifacts(environment: RunEnvironment, artifact_root: Path) -> None:
+def _snapshot_source_artifacts(
+    environment: RunEnvironment,
+    artifact_root: Path,
+    *,
+    turn_number: int | None = None,
+    turn_snapshots: list[dict[str, object]] | None = None,
+) -> None:
     source = environment.mock_source
     if source is None:
         return
     _write_json(artifact_root / "capability.json", source.server.capability.as_dict())
-    counters = source.server.counters.snapshot()
+    runtime_state = source.snapshot_runtime_state()
+    counters = runtime_state["counters"]
+    if turn_number is not None:
+        if turn_snapshots is None or (
+            turn_snapshots and turn_snapshots[-1]["turn"] >= turn_number
+        ):
+            raise TierError("source turn snapshots are not appendable")
+        turn_snapshots.append(
+            {
+                "turn": turn_number,
+                "states": runtime_state["current_states"],
+                "request_sequence_end": counters["total"],
+                "counters": counters,
+            }
+        )
+        _write_json(
+            artifact_root / "source-turns.json",
+            {"schema": "dp-scenario-source-turns-v1", "turns": turn_snapshots},
+        )
     _write_json(artifact_root / "server-counters.json", counters)
     events = counters.get("events")
     statuses = counters.get("response_statuses")
@@ -954,10 +978,42 @@ def _snapshot_source_artifacts(environment: RunEnvironment, artifact_root: Path)
         artifact_root / "source-evidence.json",
         {
             "schema": "dp-scenario-source-evidence-v1",
-            "pages": _latest_paginated_pages(pages),
+            # Preserve the B1 page shape while the counter oracle keeps the
+            # state and request sequence needed for B11 attribution.
+            "pages": [
+                {key: page[key] for key in ("status", "rows", "next_cursor")}
+                for page in _latest_paginated_pages(pages)
+            ],
             "transport_trace": transport_trace,
         },
     )
+
+
+def _source_turn_callback(
+    environment: RunEnvironment,
+    artifact_root: Path,
+    checkpoint_callback: Callable[[ReplayRecording, int], None] | None,
+) -> Callable[[ReplayRecording, int], None]:
+    """Persist source evidence at each complete turn before its checkpoint."""
+
+    turn_snapshots: list[dict[str, object]] = []
+
+    def persist(snapshot: ReplayRecording, turn_number: int) -> None:
+        if snapshot.turns and (
+            snapshot.turns[-1].result.turn_timed_out
+            or snapshot.turns[-1].result.environment_wedged
+        ):
+            return
+        _snapshot_source_artifacts(
+            environment,
+            artifact_root,
+            turn_number=turn_number,
+            turn_snapshots=turn_snapshots,
+        )
+        if checkpoint_callback is not None:
+            checkpoint_callback(snapshot, turn_number)
+
+    return persist
 
 
 def _append_artifact_rows(artifact_root: Path) -> None:
@@ -2555,6 +2611,20 @@ class TierRunner:
                             source_root=environment.workspace_dir,
                             source_snapshot=resume_source_snapshot,
                         )
+                    checkpoint_callback = (
+                        self._checkpoint_callback(
+                            checkpoint_store,
+                            scenario,
+                            native_continuation=self.native_continuation,
+                            source_state_writer=(
+                                environment.persist_native_source_state
+                                if self.native_continuation and environment.mock_source is not None
+                                else None
+                            ),
+                        )
+                        if checkpoint_store is not None
+                        else None
+                    )
                     transport = RecordingSession(
                         base_transport,
                         artifact_root=artifact_root,
@@ -2567,18 +2637,9 @@ class TierRunner:
                             turn=turn,
                         ),
                         on_turn_complete=(
-                            self._checkpoint_callback(
-                                checkpoint_store,
-                                scenario,
-                                native_continuation=self.native_continuation,
-                                source_state_writer=(
-                                    environment.persist_native_source_state
-                                    if self.native_continuation and environment.mock_source is not None
-                                    else None
-                                ),
-                            )
-                            if checkpoint_store is not None
-                            else None
+                            _source_turn_callback(environment, artifact_root, checkpoint_callback)
+                            if environment.mock_source is not None
+                            else checkpoint_callback
                         ),
                         initial_recording=resume_prefix,
                     )
