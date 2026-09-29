@@ -204,7 +204,12 @@ runs:
         if [ -n "$EXPECT_SOURCE_SHA" ]; then
           runs_query="branch=main&head_sha=$EXPECT_SOURCE_SHA&per_page=20"
         else
-          runs_query="branch=main&status=success&per_page=20"
+          # Do not filter with status=success server-side: that filtered view
+          # of nxd.ci.yml intermittently serves a stale list (nightly canary
+          # run 36526678390 saw nothing newer than 2026-09-14 while the
+          # unfiltered list was current). Success is enforced client-side by
+          # the jq filter below, so widen the window to absorb failed runs.
+          runs_query="branch=main&per_page=100"
         fi
         # Resolve through recent NXD main workflow runs instead of paginating
         # the entire artifact catalog, which contains hundreds of thousands
