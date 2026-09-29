@@ -828,10 +828,16 @@ _NEX_TOPOLOGY_RE = re.compile("|".join(f"(?:{pattern})" for _kind, pattern in _N
 # Hand-written HTTP: any client other than the DLT REST connector. The DLT
 # ``rest_client`` paginator/auth submodules configure the connector and stay
 # allowed; its ``RESTClient``/``paginate`` fetch loop does not.
-_NEX_HTTP_MODULES = {"requests", "urllib", "urllib3", "httpx", "aiohttp", "socket", "pycurl"}
+# ``urllib.parse`` (URL joining) is not a client; ``urllib.request`` is.
+_NEX_HTTP_MODULES = {"urllib3", "httpx", "aiohttp", "socket", "pycurl"}
+# ``requests`` is allowed as a library: the skill's refresh recipe subclasses
+# ``requests.Session`` and hands it to dlt's client. Only fetching with it
+# (a verb call on the module or on a plain Session) is a hand-written loop.
+_NEX_REQUESTS_MODULES = {"requests", "dlt.sources.helpers.requests"}
+_NEX_REQUESTS_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
 _NEX_HTTP_DOTTED_MODULES = {
     "http.client",
-    "dlt.sources.helpers.requests",
+    "urllib.request",
     "dlt.sources.helpers.rest_client",
     "dlt.sources.helpers.rest_client.client",
 }
@@ -1305,8 +1311,78 @@ def _nex_live_rest_connector(tree: ast.AST) -> bool:
     return False
 
 
+def _nex_requests_fetch(tree: ast.AST) -> bool:
+    """Whether a transform fetches with ``requests`` rather than handing it to dlt.
+
+    Module aliases, verb imports and names bound to a plain ``Session()`` are
+    tracked; a ``requests.Session`` subclass passed to dlt is not a fetch.
+    """
+    modules: set[str] = set()
+    sessions: set[str] = set()
+    session_ctors: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _NEX_REQUESTS_MODULES:
+                    modules.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            module = node.module or ""
+            for alias in node.names:
+                if f"{module}.{alias.name}" in _NEX_REQUESTS_MODULES:
+                    modules.add(alias.asname or alias.name)
+                elif module in _NEX_REQUESTS_MODULES:
+                    if alias.name in _NEX_REQUESTS_VERBS:
+                        return True
+                    if alias.name == "Session":
+                        session_ctors.add(alias.asname or alias.name)
+
+    def is_session_ctor(call: ast.AST) -> bool:
+        if not isinstance(call, ast.Call):
+            return False
+        fn = call.func
+        if isinstance(fn, ast.Name):
+            return fn.id in session_ctors
+        return (
+            isinstance(fn, ast.Attribute) and fn.attr in {"Session", "session"}
+            and isinstance(fn.value, ast.Name) and fn.value.id in modules
+        )
+
+    for node in ast.walk(tree):
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign) and is_session_ctor(node.value):
+            targets = list(node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and is_session_ctor(node.value):
+            targets = [node.target]
+        elif isinstance(node, ast.withitem) and is_session_ctor(node.context_expr) and node.optional_vars is not None:
+            targets = [node.optional_vars]
+        sessions.update(t.id for t in targets if isinstance(t, ast.Name))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in _NEX_REQUESTS_VERBS:
+            continue
+        owner = node.func.value
+        if isinstance(owner, ast.Name) and (owner.id in modules or owner.id in sessions):
+            return True
+        if is_session_ctor(owner):
+            return True
+    return False
+
+
+def _nex_endpoint_key(node: ast.AST) -> bool:
+    """Whether an expression names the profile's endpoint attribute."""
+    if isinstance(node, ast.Constant):
+        return node.value == "endpoint_orders"
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return isinstance(node.left, ast.Constant) and node.left.value == "endpoint_"
+    return _nex_fstring_prefix(node, "endpoint_")
+
+
 def _nex_hand_written_http(tree: ast.AST) -> bool:
     """Whether a transform imports or calls an HTTP client other than DLT REST."""
+
+    if _nex_requests_fetch(tree):
+        return True
 
     def forbidden_module(module: str) -> bool:
         if module.split(".", 1)[0] in _NEX_HTTP_MODULES:
@@ -1341,6 +1417,8 @@ def _nex_hand_written_http(tree: ast.AST) -> bool:
         elif isinstance(node, ast.Call):
             name = _nex_call_name(node)
             fn = node.func
+            if name in {"urlopen", "urlretrieve"}:
+                return True
             if name in {"get", "post", "urlopen", "urlretrieve", "request", "Session", "Client", "AsyncClient", "ClientSession", "PoolManager", "HTTPConnection", "HTTPSConnection", "create_connection", "Curl"} and isinstance(fn, ast.Attribute):
                 owner = fn.value
                 if isinstance(owner, ast.Name) and owner.id in _NEX_HTTP_MODULES | {"http"}:
@@ -1452,14 +1530,20 @@ def _nex_transform_contract_gaps(files: Mapping[str, bytes]) -> list[str]:
                     and isinstance(sl, ast.Constant) and sl.value == "header_user_agent"
                 ):
                     found_profile_header = True
-                if (
-                    isinstance(outer, ast.Name) and outer.id == "secrets"
-                    and (
-                        isinstance(sl, ast.Constant) and sl.value == "endpoint_orders"
-                        or _nex_fstring_prefix(sl, "endpoint_")
-                    )
-                ):
+                if _nex_endpoint_key(sl):
                     found_endpoint_attribute = True
+            # ``profile.get("endpoint_orders")`` and a loop over every
+            # ``endpoint_*`` attribute read the same profile slot.
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and (
+                    node.func.attr == "get" and node.args and _nex_endpoint_key(node.args[0])
+                    or node.func.attr == "startswith"
+                    and any(isinstance(arg, ast.Constant) and arg.value == "endpoint_" for arg in node.args)
+                )
+            ):
+                found_endpoint_attribute = True
             # The skill's template builds headers by looping over every
             # ``header_*`` profile attribute instead of naming each one.
             if (
