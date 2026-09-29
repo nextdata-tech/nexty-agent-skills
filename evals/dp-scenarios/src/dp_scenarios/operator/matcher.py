@@ -21,7 +21,12 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Pattern
 
-from .answer_sheet import AnswerSheet, DecisionAnswer, _decision_term_present, script_turn_text
+from .answer_sheet import (
+    AnswerSheet,
+    DecisionAnswer,
+    _decision_term_present,
+    script_turn_text,
+)
 from .persona import PersonaCard
 from .text_match import contains_any_term
 
@@ -440,6 +445,82 @@ def _active_request_clauses(message: str) -> list[str]:
     return [active_clause] if active_clause is not None else []
 
 
+_DECLARED_CONFIRMATION_PATTERN = re.compile(
+    r"\bdecisions?\b[^\n]{0,180}\b(?:worth|need(?:s)?|require(?:s)?)\s+confirming\b",
+    re.IGNORECASE,
+)
+_PROPOSED_CORRECTION_PATTERN = re.compile(
+    r"\b(?:proposed|suggested)\s+(?:defaults|decisions|choices)\b"
+    r".{0,120}\bopen\s+to\s+your\s+correction\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_REFERENCED_OPTIONS_PATTERN = re.compile(
+    r"\bwhich\s+of\s+the\s+(?P<count>\d+|two|three|four)\s+"
+    r"(?P<topic>[\w-]+(?:\s+[\w-]+){0,3}\s+)?(?:options|choices|alternatives)\b",
+    re.IGNORECASE,
+)
+_CHOICE_RECAP_PATTERN = re.compile(
+    r"\b(?:choice|choose|pick)\b[^\n]{0,120}\b(?:the\s+)?"
+    r"(?P<count>\d+|two|three|four)\s+(?:options|choices|alternatives)\b"
+    r"[^\n]{0,100}\((?P<alternatives>[^)\n]{10,240})\)",
+    re.IGNORECASE,
+)
+
+
+def _declared_confirmation_text(message: str) -> str | None:
+    """Find a decision list expressly offered for confirmation before approval."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    heading = _DECLARED_CONFIRMATION_PATTERN.search(prose)
+    if heading is None:
+        return None
+    correction = _PROPOSED_CORRECTION_PATTERN.search(prose, heading.end())
+    if correction is None:
+        return None
+    decision_text = prose[heading.start() : correction.end()]
+    if re.search(
+        r"\b(?:non[- ]?blocking|neither\s+blocking|no\s+decisions?)\b",
+        decision_text,
+        re.I,
+    ):
+        return None
+    return decision_text
+
+
+def _referenced_options_text(message: str, ask_clause: str) -> str | None:
+    """Resolve an addressed options reference against its own earlier recap."""
+
+    reference = _REFERENCED_OPTIONS_PATTERN.search(ask_clause)
+    if reference is None:
+        return None
+    prose = _NON_PROSE.sub(" ", message)
+    ask_offset = prose.rfind(ask_clause)
+    if ask_offset < 0:
+        return None
+    topic = reference.group("topic") or ""
+    topic_terms = {
+        word for word in re.findall(r"[a-z0-9]+", topic.casefold())
+        if len(word) > 2 and word not in {"handling", "decision", "finding", "issue"}
+    }
+    for recap in reversed(list(_CHOICE_RECAP_PATTERN.finditer(prose[:ask_offset]))):
+        if recap.group("count").casefold() != reference.group("count").casefold():
+            continue
+        paragraph_start = prose.rfind("\n\n", 0, recap.start()) + 2
+        paragraph_end = prose.find("\n\n", recap.end())
+        if paragraph_end < 0:
+            paragraph_end = ask_offset
+        paragraph = prose[paragraph_start:paragraph_end]
+        if topic_terms and not topic_terms.intersection(
+            re.findall(r"[a-z0-9]+", paragraph.casefold())
+        ):
+            continue
+        alternatives = recap.group("alternatives")
+        if alternatives.count("/") < 2:
+            continue
+        return alternatives
+    return None
+
+
 def _numbered_list_item_text(message: str, ask_clause: str) -> str | None:
     """Return the list item containing a current ask, if it is in a list."""
 
@@ -653,7 +734,8 @@ _AUTHORIZATION_ALTERNATIVE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CONDITIONAL_REVISION_PATTERN = re.compile(
-    r"^\s*if\s+you\s+(?:want|would\s+(?:(?:like|prefer)|rather))\b.{0,160}"
+    r"^\s*(?:if|(?:let\s+me\s+know|tell\s+me)\s+if)\s+you\s+"
+    r"(?:want|would\s+(?:(?:like|prefer)|rather))\b.{0,160}"
     r"\b(?:chang(?:e|ed)|revis(?:e|ed))\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -693,9 +775,10 @@ _REVIEW_FIX_ACTION_PATTERN = re.compile(
     r"|\b(?:authorize|approve)\b[^?\n]{0,160}\b(?:findings?|repairs?)\b"
     r"|\brepair(?:s|ing)?\b[^?\n]{0,140}\b(?:findings?|issues?|blockers?)\b"
     r"|\bmay\s+i\s+repair\b"
-    # A correction-only ask can name the review finding directly without
-    # using "fix", "repair", or "apply". The review-context gate remains in
-    # _review_fix_request.
+    # A correction-only question can name the finding as its object without
+    # using "fix", "repair", or "apply": "May I correct the review finding?"
+    # The review-context and actual-ask gates in _review_fix_request keep this
+    # from turning ordinary correction questions into review authorization.
     r"|\bcorrect(?:ing)?\b[^?\n]{0,140}\b(?:findings?|issues?|corrections?)\b"
     r"|\b(?:fix|correction|change)\b[^?\n]{0,140}\b"
     r"(?:applied|apply|applies|applying|leave|left|keep|skip|defer)\b"
@@ -774,7 +857,8 @@ _REVIEW_REPLY_TEMPLATE_PATTERN = re.compile(
 )
 _REVIEW_FINDING_SELECTION_PATTERN = re.compile(
     r"\b(?:name|list|select|reply\s+with)\s+(?:the\s+)?(?:findings|issues|blockers)\s+"
-    r"(?:you\s+)?(?:approve|authorize|would\s+(?:approve|authorize))\b",
+    r"(?:you\s+)?(?:approve|authorize|would\s+(?:approve|authorize))\b"
+    r"|\bwhich\s+(?:finding|issue|blocker)\s+ids?\s+should\s+i\s+(?:fix|repair|address)\b",
     re.IGNORECASE,
 )
 _PROPOSED_FIX_LIST_PATTERN = re.compile(r"\bfix(?:es)?\b", re.IGNORECASE)
@@ -818,7 +902,7 @@ _REVIEW_CHOICE_PROMPT_PATTERN = re.compile(
     r"\b(?:what\s+(?:do|would|should)\s+you\s+want|"
     r"what\s+should\s+i\s+do|needs?\s+your\s+choice|"
     r"reply\s+with\s+(?:a\s+)?(?:single|one)\s+(?:letter|number)|"
-    r"choose\s+one)\b",
+    r"choose\s+one|reply\s+[\"']?\d+[\"']?\s+(?:or|/)\s+[\"']?\d+[\"']?)\b",
     re.IGNORECASE,
 )
 _CORRECTION_INVITATION_PATTERN = re.compile(
@@ -1190,11 +1274,16 @@ class MatcherBank:
         available_event_ids: tuple[str, ...],
         active_overlay_ids: tuple[str, ...],
     ) -> DecisionAnswer | None:
-        """Prefer explicit decision terms within one addressed request.
+        """Select the best declared decision for one actual request clause.
 
-        Keep the answer sheet's event and lexical order as the tie-breaker.
-        This is the pending B11 selection rule, applied to the current ask
-        rather than to unrelated recap text.
+        The answer sheet's default lookup retains its established lexical
+        order. For matcher routing only, a decision supported by more of its
+        explicit terms outranks one that needs synonyms to capture incidental
+        vocabulary in the same clause. Ties keep the answer sheet's existing
+        event and lexical order. This lets "make a new workflow to handle the
+        stage" resolve to the directly named workflow choice while leaving a
+        later, distinct stage question eligible for its ruling. The caller
+        limits this lookup to the current ask and its local option context.
         """
 
         matches: list[DecisionAnswer] = []
@@ -1343,6 +1432,25 @@ class MatcherBank:
             for clause in request_clauses
         )
         approval_context = bool(_APPROVAL_CONTEXT_PATTERN.search(request_text))
+        if (
+            not approval_context
+            and request_clauses
+            and re.search(r"\b(?:reply|confirm|respond)\b", request_clauses[-1], re.I)
+        ):
+            # "I cannot build without approval. Could you reply plainly?"
+            # is one approval ask, even though the final sentence is
+            # anaphoric. Keep the borrowed context inside that paragraph so
+            # an earlier plan recap cannot supply an unrelated answer.
+            prose = _NON_PROSE.sub(" ", message)
+            ask_offset = prose.rfind(request_clauses[-1])
+            if ask_offset >= 0:
+                paragraph_start = prose.rfind("\n\n", 0, ask_offset) + 2
+                paragraph_end = prose.find("\n\n", ask_offset)
+                if paragraph_end < 0:
+                    paragraph_end = len(prose)
+                approval_context = bool(
+                    _APPROVAL_CONTEXT_PATTERN.search(prose[paragraph_start:paragraph_end])
+                )
         explicit_approval_ask = bool(approval_clauses) or (
             approval_context and not other_substantive_asks
         )
@@ -1465,6 +1573,55 @@ class MatcherBank:
             if request_decision is not None:
                 request_decision_clause = clause
                 break
+        if request_decision is None:
+            confirmation_text = _declared_confirmation_text(message)
+            if confirmation_text is not None:
+                request_decision = self._request_decision(
+                    confirmation_text,
+                    excluded_decision_ids=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if request_decision is not None:
+                    request_decision_clause = confirmation_text
+        if request_decision is None and request_clauses:
+            alternatives = _referenced_options_text(message, request_clauses[-1])
+            if alternatives is not None:
+                request_decision = self._request_decision(
+                    alternatives,
+                    excluded_decision_ids=excluded_decision_ids,
+                    available_event_ids=available_event_ids,
+                    active_overlay_ids=active_overlays,
+                )
+                if request_decision is None:
+                    # The recap can abbreviate a previously enumerated choice.
+                    # A single explicit term may identify it, but ambiguity
+                    # must leave the operator asking for the decision instead.
+                    partial = [
+                        decision
+                        for decision in self.answer_sheet.decision_answers.values()
+                        if decision.decision_id not in excluded_decision_ids
+                        and self.decision_is_available(
+                            decision.decision_id,
+                            available_event_ids=available_event_ids,
+                        )
+                        and (
+                            decision.available_after_overlay is None
+                            or decision.available_after_overlay in active_overlays
+                        )
+                        and (
+                            decision.retired_after_overlay is None
+                            or decision.retired_after_overlay not in active_overlays
+                        )
+                        and any(
+                            _decision_term_present(term, alternatives.casefold())
+                            for term in decision.terms
+                        )
+                    ]
+                    if len(partial) == 1:
+                        request_decision = partial[0]
+                if request_decision is not None:
+                    request_decision_clause = request_clauses[-1]
         if (
             request_decision is not None
             and request_decision.decision_id != "review_fix_authorization"

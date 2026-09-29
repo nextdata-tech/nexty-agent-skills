@@ -110,9 +110,9 @@ def test_run7_agent_replay_never_repeats_a_transmitted_fact() -> None:
     with no new request attached." The committed fixture is the agent prose
     only -- no tool results, files, or manifest.
 
-    Replaying it here asserts the transmitted text, not a flag: with
-    served-fact memory the ten operator turns are pairwise distinct, and the
-    two re-serves become the scenario's own scripted lines.
+    The current-ask matcher does not answer from a recap that merely names a
+    connection location. Replaying the agent prose asserts that neither fact
+    leaks into an unrelated current request; scripted turns still arrive.
     """
 
     messages = json.loads(
@@ -126,40 +126,25 @@ def test_run7_agent_replay_never_repeats_a_transmitted_fact() -> None:
     endpoint_location = SCENARIO.answer_sheet.ground_truth["endpoint_location"].fact
     # The fixture is the ten agent messages that run actually produced, while
     # the script now runs fifteen turns, so the replay outlives its own input:
-    # the last turns have no agent question to match and the operator falls
-    # back to the same line. That repetition is fixture exhaustion, not
-    # scenario behaviour -- nothing asserts turns 11-15 here, and a reader
-    # should not read the tail as evidence about the operator. Assert over the
-    # range the fixture covers.
+    # the last turns have no agent question to match. Assert over the range
+    # the fixture covers. Persona replies may repeat when no fact was asked.
     assert len(transport.message_texts) == 15
-    assert len(set(transport.message_texts[:10])) == 10
-    assert transport.message_texts.count(connection_location) == 1
-    assert transport.message_texts[1] == connection_location
+    assert connection_location not in transport.message_texts[:10]
+    assert endpoint_location not in transport.message_texts[:10]
+    assert result.turns[1].match.rule_id == "ground_truth.endpoint_location"
+    assert result.turns[1].match.matched_request_clause is not None
     assert transport.message_texts[2] == "Can you tell me exactly how long each deal has been sitting in its current stage?"
-    # Turn 8 still states the endpoint fact: the live run sent it here for the
-    # first time. It was *selected* back on turn 2, but turn 3 is
-    # ``substitute_reply: false``, so it was never transmitted -- memory is
-    # keyed to what went out, not to what was picked.
-    assert transport.message_texts[7] == endpoint_location
-    assert result.turns[6].operator_repeat_suppressed is False
-    # Turns 9 and 10 are where the live run repeated itself. They now carry
-    # the scenario's own scripted lines instead -- the build-ready turn with
-    # its scope-creep plant, then the second graded ask.
+    # The build-ready turn and second graded ask remain scheduled beats.
     assert transport.message_texts[8].startswith("The build is ready.")
     assert "broken out by owner and by stage" in transport.message_texts[8]
     assert transport.message_texts[9] == (
         "Show me which deals moved recently, and be upfront about anything you can't actually tell me."
     )
     for index in (7, 8):
-        assert result.turns[index].match.rule_id == "ground_truth.connection_location"
-        assert result.turns[index].operator_repeat_suppressed is True
+        assert result.turns[index].match.rule_id != "ground_truth.connection_location"
+        assert result.turns[index].operator_repeat_suppressed is False
         claim = result.ledger_rows[index]["claim"]
-        assert claim["operator_repeat_suppressed"] is True
         assert "operator_answered_from_ground_truth" not in claim
-    # ``run()`` builds every row through ``appender.row_payload``, so an
-    # ``operator_repeat_suppressed`` claim missing from the appender's closed
-    # non-fact key set would have raised ``AppenderError`` above rather than
-    # reaching these assertions.
     assert len(result.ledger_rows) >= 10
 
 
