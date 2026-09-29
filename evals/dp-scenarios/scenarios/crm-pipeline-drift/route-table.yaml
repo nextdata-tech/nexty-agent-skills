@@ -1,0 +1,48 @@
+# Harness-only route fixture for package A. Package E will attach this table
+# to its scenario declaration; no scenario.yaml is installed in this package.
+version: 1
+auth:
+  token: crm-run-token
+  initial_requests: 2
+  refresh_path: /auth/refresh
+routes:
+  - path: /deals
+    publish_contract: true
+    method: GET
+    auth_required: true
+    rate_limit_every: 3
+    pagination:
+      page_size: 2
+      cursor_param: cursor
+      items_field: data
+      cursor_field: next_cursor
+    state_family: crm_deals
+    initial_state: v1
+    states:
+      v1:
+        fixture_source: deals_v1
+      v2:
+        fixture_source: deals_v2
+  - path: /deals/history
+    method: GET
+    status: 404
+  - path: /deals/{id}/stage
+    method: PATCH
+    status: 403
+    write_forbidden: true
+capability:
+  metrics:
+    current_stage_counts: supported
+    stage_entry_time: impossible
+    time_in_stage_days: impossible
+  endpoints:
+    /deals:
+      GET: [200, 401, 429]
+    /deals/history:
+      GET: [404]
+    /deals/{id}/stage:
+      PATCH: [403]
+  known_absent_dimensions: []
+  metric_terms:
+    stage_entry_time: [stage_entry, entered_stage, entry_time]
+    time_in_stage_days: [stage_age_days, stage_age_hours, time_in_stage, days_in_stage]
