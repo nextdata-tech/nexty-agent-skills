@@ -1,0 +1,194 @@
+[
+  {
+    "closing_mrr_cents": 10000,
+    "customer_id": "C001",
+    "had_positive_before_month": false,
+    "month": "2024-01",
+    "net_change_cents": 10000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 20000,
+    "customer_id": "C002",
+    "had_positive_before_month": false,
+    "month": "2024-01",
+    "net_change_cents": 20000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 15000,
+    "customer_id": "C003",
+    "had_positive_before_month": false,
+    "month": "2024-01",
+    "net_change_cents": 15000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 0,
+    "customer_id": "C004",
+    "had_positive_before_month": false,
+    "month": "2024-01",
+    "net_change_cents": 0,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 0,
+    "customer_id": "C005",
+    "had_positive_before_month": false,
+    "month": "2024-01",
+    "net_change_cents": 0,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 7000,
+    "customer_id": "C006",
+    "had_positive_before_month": false,
+    "month": "2024-01",
+    "net_change_cents": 7000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 12000,
+    "customer_id": "C001",
+    "had_positive_before_month": true,
+    "month": "2024-02",
+    "net_change_cents": 2000,
+    "opening_mrr_cents": 10000
+  },
+  {
+    "closing_mrr_cents": 15000,
+    "customer_id": "C002",
+    "had_positive_before_month": true,
+    "month": "2024-02",
+    "net_change_cents": -5000,
+    "opening_mrr_cents": 20000
+  },
+  {
+    "closing_mrr_cents": 17000,
+    "customer_id": "C003",
+    "had_positive_before_month": true,
+    "month": "2024-02",
+    "net_change_cents": 2000,
+    "opening_mrr_cents": 15000
+  },
+  {
+    "closing_mrr_cents": 8000,
+    "customer_id": "C004",
+    "had_positive_before_month": false,
+    "month": "2024-02",
+    "net_change_cents": 8000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 0,
+    "customer_id": "C005",
+    "had_positive_before_month": false,
+    "month": "2024-02",
+    "net_change_cents": 0,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 0,
+    "customer_id": "C006",
+    "had_positive_before_month": true,
+    "month": "2024-02",
+    "net_change_cents": -7000,
+    "opening_mrr_cents": 7000
+  },
+  {
+    "closing_mrr_cents": 0,
+    "customer_id": "C001",
+    "had_positive_before_month": true,
+    "month": "2024-03",
+    "net_change_cents": -12000,
+    "opening_mrr_cents": 12000
+  },
+  {
+    "closing_mrr_cents": 18000,
+    "customer_id": "C002",
+    "had_positive_before_month": true,
+    "month": "2024-03",
+    "net_change_cents": 3000,
+    "opening_mrr_cents": 15000
+  },
+  {
+    "closing_mrr_cents": 18000,
+    "customer_id": "C003",
+    "had_positive_before_month": true,
+    "month": "2024-03",
+    "net_change_cents": 1000,
+    "opening_mrr_cents": 17000
+  },
+  {
+    "closing_mrr_cents": 6000,
+    "customer_id": "C004",
+    "had_positive_before_month": true,
+    "month": "2024-03",
+    "net_change_cents": -2000,
+    "opening_mrr_cents": 8000
+  },
+  {
+    "closing_mrr_cents": 5000,
+    "customer_id": "C005",
+    "had_positive_before_month": false,
+    "month": "2024-03",
+    "net_change_cents": 5000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 9000,
+    "customer_id": "C006",
+    "had_positive_before_month": true,
+    "month": "2024-03",
+    "net_change_cents": 9000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 12000,
+    "customer_id": "C001",
+    "had_positive_before_month": true,
+    "month": "2024-04",
+    "net_change_cents": 12000,
+    "opening_mrr_cents": 0
+  },
+  {
+    "closing_mrr_cents": 0,
+    "customer_id": "C002",
+    "had_positive_before_month": true,
+    "month": "2024-04",
+    "net_change_cents": -18000,
+    "opening_mrr_cents": 18000
+  },
+  {
+    "closing_mrr_cents": 15000,
+    "customer_id": "C003",
+    "had_positive_before_month": true,
+    "month": "2024-04",
+    "net_change_cents": -3000,
+    "opening_mrr_cents": 18000
+  },
+  {
+    "closing_mrr_cents": 8000,
+    "customer_id": "C004",
+    "had_positive_before_month": true,
+    "month": "2024-04",
+    "net_change_cents": 2000,
+    "opening_mrr_cents": 6000
+  },
+  {
+    "closing_mrr_cents": 10000,
+    "customer_id": "C005",
+    "had_positive_before_month": true,
+    "month": "2024-04",
+    "net_change_cents": 5000,
+    "opening_mrr_cents": 5000
+  },
+  {
+    "closing_mrr_cents": 9000,
+    "customer_id": "C006",
+    "had_positive_before_month": true,
+    "month": "2024-04",
+    "net_change_cents": 0,
+    "opening_mrr_cents": 9000
+  }
+]

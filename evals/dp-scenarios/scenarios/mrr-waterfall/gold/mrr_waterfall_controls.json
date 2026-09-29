@@ -1,0 +1,42 @@
+[
+  {
+    "churn_cents": 0,
+    "closing_mrr_cents": 52000,
+    "contraction_cents": 0,
+    "expansion_cents": 0,
+    "month": "2024-01",
+    "new_cents": 52000,
+    "opening_mrr_cents": 0,
+    "reactivation_cents": 0
+  },
+  {
+    "churn_cents": 7000,
+    "closing_mrr_cents": 52000,
+    "contraction_cents": 5000,
+    "expansion_cents": 4000,
+    "month": "2024-02",
+    "new_cents": 8000,
+    "opening_mrr_cents": 52000,
+    "reactivation_cents": 0
+  },
+  {
+    "churn_cents": 12000,
+    "closing_mrr_cents": 56000,
+    "contraction_cents": 2000,
+    "expansion_cents": 4000,
+    "month": "2024-03",
+    "new_cents": 5000,
+    "opening_mrr_cents": 52000,
+    "reactivation_cents": 9000
+  },
+  {
+    "churn_cents": 18000,
+    "closing_mrr_cents": 54000,
+    "contraction_cents": 3000,
+    "expansion_cents": 7000,
+    "month": "2024-04",
+    "new_cents": 0,
+    "opening_mrr_cents": 56000,
+    "reactivation_cents": 12000
+  }
+]
