@@ -1046,6 +1046,7 @@ def test_conduct_rules_reach_only_the_scenarios_that_declare_an_evidence_artifac
 
     assert with_conduct == {
         "crm-pipeline",
+        "crm-pipeline-drift",
         "finance-close",
         "inventory-position",
         "application-reconciliation",
@@ -1138,6 +1139,21 @@ def test_evidence_contracts_do_not_predeclare_follow_up_decisions() -> None:
             continue
 
         contract_text = json.dumps(contract, sort_keys=True)
+        if scenario.id == "crm-pipeline-drift":
+            for hidden in (
+                "new_stage_consequence",
+                "workflow_revision",
+                "review_fix_authorization",
+                "stage_enum",
+                "verbal_commit",
+                "deal_value",
+                "WARNING",
+                "203450",
+                "DEAL-2007",
+            ):
+                assert hidden not in contract_text, (
+                    f"B11 evidence contract disclosed future decision or source value {hidden!r}"
+                )
         if scenario.id == "mrr-waterfall":
             required_fields = contract["required_fields"]
             assert set(required_fields) == {

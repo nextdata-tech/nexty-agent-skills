@@ -167,6 +167,9 @@ never pulled into a smoke run:
   rate limiting, nested owner PII, tombstone-safe current records, and a closed
   stage enum. The package has local mock-source E2E coverage; it does not claim
   a real CRM credential or authenticated agent run.
+- **crm-pipeline-drift** — B11's chained refresh of B1's CRM source. The first
+  publication switches the local route to a drifted source; the agent must
+  obtain a new business ruling and publish a separate reviewed workflow.
 - **finance-close** — B2's deterministic close reconciliation with hostile
   decimal formats, parenthesized negatives, missing weekend FX, and a later
   decision supersession. It exposes a local mock close source and reconciles
@@ -232,6 +235,7 @@ scenario.
 | [marketing-attribution](scenarios/marketing-attribution/README.md) | full | 12 | safe campaign matching, unmatched-CPA policy, and out-of-scope export sentinel scan |
 | [headcount-attrition](scenarios/headcount-attrition/README.md) | full | 13 | monthly headcount and attrition with PII exclusion and small-cell suppression |
 | [mrr-waterfall](scenarios/mrr-waterfall/README.md) | full | 14 | effective-dated MRR waterfall with staged decisions and revised-publication evidence |
+| [crm-pipeline-drift](scenarios/crm-pipeline-drift/README.md) | full | 20 | chained CRM source drift, staged ruling, separate publication, and structural warning evidence |
 
 ## Running
 

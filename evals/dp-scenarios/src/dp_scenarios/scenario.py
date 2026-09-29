@@ -908,6 +908,11 @@ def _plant_vocabulary(dataset: str, explicit_plant: str | None = None) -> frozen
             f"fixture.plant must be {declared_plant!r} for dataset {dataset!r}"
         )
     result.add(declared_plant)
+    # B11 inherits B1's event cards verbatim. Its source-state drift is a
+    # separate harness plant, while the inherited pagination card retains
+    # B1's planted identifier for prefix byte equality.
+    if dataset == "crm_pipeline_drift":
+        result.add("crm_pipeline_pagination")
     return frozenset(result)
 
 
@@ -1351,7 +1356,8 @@ def _parse_route_table(
     if value is None:
         return None
     try:
-        config = load_route_table(value, base_dir=base_dir)
+        source = _relative_reference(base_dir, value, "route_table") if isinstance(value, str) else value
+        config = load_route_table(source, base_dir=base_dir)
         for table in sorted(fixture_source_tables(config)):
             if table not in declared_source_tables:
                 raise ScenarioError(

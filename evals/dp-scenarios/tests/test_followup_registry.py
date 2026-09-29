@@ -42,6 +42,7 @@ EXPECTED_CROSS_CHECKS = {
     "marketing_attribution": (False, False),
     "headcount_attrition": (True, True),
     "mrr_waterfall": (True, True),
+    "crm_pipeline_drift": (False, False),
 }
 
 # Whether each kind's gold is byte-reproducible by regenerating the CSV
@@ -62,6 +63,7 @@ EXPECTED_GOLD_REPRODUCIBLE = {
     "marketing_attribution": True,
     "headcount_attrition": True,
     "mrr_waterfall": True,
+    "crm_pipeline_drift": True,
 }
 
 

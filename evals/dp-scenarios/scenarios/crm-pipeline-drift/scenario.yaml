@@ -1,0 +1,105 @@
+version: 1
+id: crm-pipeline-drift
+tier: full
+run_order: 20
+fixture:
+  dataset: crm_pipeline_drift
+  seed: 29
+  variant: crm-rest-pagination-auth-expiry-and-source-drift
+  plant: crm_pipeline_drift
+coverage:
+  variant: crm-rest-pagination-auth-expiry-and-source-drift
+  untested: Local chained mock-source evidence only; no live CRM credential or authenticated Desktop run is claimed.
+turn_budget: 40
+repeatability:
+  tier: mock-source
+  epochs: 3
+  certification:
+    rule: observed_epochs
+    gates:
+    - build
+persona: ../_personas/anxious-non-decider.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 3
+  5: 3
+  6: 5
+  7: 6
+  8: 7
+  9: 3
+  10: 3
+  11: 3
+  12: 7
+  13: 7
+  14: 7
+  15: 7
+  16: 7
+  17: 7
+  18: 7
+  19: 7
+  20: 7
+  21: 7
+  22: 7
+  23: 1
+  24: 2
+  25: 3
+  26: 3
+  27: 3
+  28: 3
+  29: 3
+  30: 3
+  31: 3
+  32: 4
+  33: 4
+  34: 5
+  35: 5
+  36: 6
+  37: 6
+  38: 7
+  39: 7
+  40: 7
+required_plants:
+- crm_pipeline_pagination
+gates:
+  intake: null
+  capability: null
+  narrowing: null
+  construction: null
+  build: null
+  query: null
+  follow-up:
+    kind: crm_pipeline_drift
+    stage_enum:
+    - prospecting
+    - qualification
+    - negotiation
+    - closed_won
+    - closed_lost
+    pii_sentinels:
+    - sentinel-f17104d8341c68657721aa9f06847f55e08f71056a348fc1@invalid.example
+    - sentinel-4e2c2e8adc3c3ffa937ab56e2e49eedbbc26aa0e8762c6e1@invalid.example
+gold:
+  pipeline_v1: gold/crm_pipeline_drift_v1.json
+  pipeline_v2: gold/crm_pipeline_drift_v2.json
+follow_up_artifact: evidence/crm_pipeline_drift.json
+operator:
+  sentinel: null
+  obstacle_terms: []
+route_table: route-table.yaml
+chain:
+  trigger: first_publication
+  prefix_turns: 22
+  source_family: crm_deals
+  from_state: v1
+  to_state: v2
+  decision_overlay: crm_deals_v2
+  stage_values:
+  - prospecting
+  - qualification
+  - negotiation
+  - closed_won
+  - closed_lost
