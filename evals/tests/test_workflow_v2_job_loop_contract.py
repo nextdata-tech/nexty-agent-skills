@@ -906,3 +906,47 @@ def test_database_source_runtime_and_optional_data_layout_are_explicit():
     ):
         assert marker in database, f"database-source runtime/layout contract lost: {marker}"
     assert "The Desktop runtime does not install that file" in generator
+
+
+def test_prepare_classifies_user_questions_and_runtime_failures_before_recovery():
+    reference = " ".join(WORKFLOW_V2.read_text(encoding="utf-8").split())
+    classification = reference.split("### Classify admission failures before recovery", 1)[1].split(
+        "### Recovering a rejected proposal", 1
+    )[0]
+    question = classification.index("`v3.open_question.blocking_unresolved`")
+    runtime = classification.index("`workflow/proposal_validator_unavailable`")
+    generic = classification.index("A proposal rejection without a `prepare_recovery_id`")
+    assert question < runtime < generic
+    question_branch = classification[question:runtime]
+    runtime_branch = classification[runtime:classification.index("A bounded `prepare_recovery_id`", runtime)]
+    for marker in (
+        "return to the user", "Record their answer in the blueprint as a Decision",
+        "reparse the final blueprint", "regenerate every proposal field and span",
+        "strictly validate the complete proposal", "fresh `request_id`",
+        "Never set `blocking: false` yourself", "faithfully reflect the user's answer",
+    ):
+        assert marker in question_branch
+    for marker in (
+        "stop and report the runtime failure", "Do not regenerate the proposal",
+        "Only if `retryable: true`", "identical request is permitted later",
+        "do not automatically retry", "regeneration loop",
+    ):
+        assert marker in runtime_branch
+    assert "In every branch" not in classification
+    assert "branch stops without regeneration" in classification
+
+    skill = " ".join(JOB_SKILL.read_text(encoding="utf-8").split())
+    question = skill.index("`v3.open_question.blocking_unresolved`")
+    runtime = skill.index("`workflow/proposal_validator_unavailable`")
+    recovery = skill.index("For provenance recovery", runtime)
+    assert question < runtime < recovery < skill.index("regenerate the entire proposal", recovery)
+    for marker in (
+        "return to the user", "record their answer in the blueprint as a Decision",
+        "regenerate every proposal field and span", "fresh `request_id`",
+        "Never set `blocking: false` yourself", "stop and report the runtime failure",
+        "do not regenerate", "Only if `retryable: true`",
+        "identical request is permitted later", "do not automatically retry",
+    ):
+        assert marker in skill[question:recovery]
+    assert "supervisor.proposal_validator." not in skill + reference
+    assert len(JOB_SKILL.read_text(encoding="utf-8").splitlines()) < 500
