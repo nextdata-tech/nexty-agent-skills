@@ -87,6 +87,15 @@ class MatchResult:
     decision_final: bool | None = None
     """Whether the selected staged answer is the final ruling."""
 
+    routed_by: str | None = None
+    """``"llm"`` when the optional model router chose this response; ``None`` otherwise."""
+
+    router_fallback: bool = False
+    """Whether the model router was enabled but failed, so the regex matcher decided."""
+
+    router_failure_reason: str | None = None
+    """Bounded reason the router was not used; never carries provider text."""
+
     @property
     def matched_rule_id(self) -> str:
         """Return the stable rule identifier used by evidence rows."""
@@ -2204,6 +2213,124 @@ class MatcherBank:
             ),
             message,
         )
+
+    def route_result(
+        self,
+        option_id: str,
+        kind: str,
+        *,
+        message: str,
+        approval_requested: bool,
+        solicits_operator: bool,
+        recommended_option_label: str | None = None,
+        decision_stage_counts: Mapping[str, int] | None = None,
+    ) -> MatchResult:
+        """Build the fixed response for one validated model-router choice.
+
+        The router only picks *which* declared response applies; every reply
+        string still comes from the answer sheet or persona, and the result
+        reuses the rule-id shapes the regex path emits so the ledger lint and
+        every engine consumer see nothing new.  The two orthogonal flags come
+        from the router rather than from vocabulary in ``message``.
+        """
+
+        stage_counts = decision_stage_counts or {}
+        request_clauses = _active_request_clauses(message)
+        clause = request_clauses[-1] if request_clauses else None
+        common = {
+            "approval_requested": approval_requested,
+            "solicits_operator": solicits_operator,
+            "routed_by": "llm",
+        }
+
+        if kind == "none":
+            return MatchResult(
+                Category.OTHER,
+                "fallback.no-leading",
+                self.persona.no_leading_fallback,
+                matched=False,
+                **common,
+            )
+        if kind == "approval":
+            # Whether to approve is a persona behaviour, not a declared fact.
+            return MatchResult(
+                Category.APPROVAL_REQUEST,
+                "persona.approval_request",
+                self.persona.replies_for("approval_request")[0],
+                matched_request_clause=clause,
+                **common,
+            )
+        if kind == "review_choice":
+            return MatchResult(
+                Category.DECISION_REQUEST,
+                "review.choice_undeclared",
+                self.persona.review_choice_reply(recommended_option_label),
+                matched=False,
+                matched_request_clause=clause,
+                **common,
+            )
+        if kind == "decision":
+            decision_id = option_id.split(":", 1)[1]
+            result = self._decision_result(
+                self.answer_sheet.decision_answers[decision_id],
+                decision_stage_counts=stage_counts,
+                matched_request_clause=clause,
+            )
+            return replace(result, **common)
+        if kind == "fact":
+            key = option_id.split(":", 1)[1]
+            return MatchResult(
+                Category.SOURCE_QUESTION,
+                f"ground_truth.{key}",
+                self.answer_sheet.ground_truth[key].fact,
+                answer_key=key,
+                ground_truth=True,
+                matched_request_clause=clause,
+                **common,
+            )
+        if kind == "source":
+            key = option_id.split(":", 1)[1]
+            return MatchResult(
+                Category.SOURCE_QUESTION,
+                f"source.answer.{key}",
+                self.answer_sheet.source_answers[key],
+                answer_key=key,
+                matched_request_clause=clause,
+                **common,
+            )
+        if kind == "status":
+            key = option_id.split(":", 1)[1]
+            return MatchResult(
+                Category.STATUS_QUERY,
+                f"status.answer.{key}",
+                self.answer_sheet.status_answers[key],
+                answer_key=key,
+                matched_request_clause=clause,
+                **common,
+            )
+        if kind == "deflect":
+            # The regex path's own stock lines for a question nothing declared
+            # covers: a persona line, or the never-leading fallback once a
+            # ground-truth brief is declared.
+            briefed = bool(self.answer_sheet.ground_truth)
+            if option_id == "deflect:source_question":
+                category = Category.SOURCE_QUESTION
+                rule_id = "unmatched.source_question" if briefed else "persona.source_question"
+            elif option_id == "deflect:decision":
+                category = Category.DECISION_REQUEST
+                rule_id = "unmatched.decision_request" if briefed else "persona.decision_request"
+            else:
+                category = Category.STATUS_QUERY
+                rule_id = "unmatched.status_query" if briefed else "persona.status_query"
+            return MatchResult(
+                category,
+                rule_id,
+                self.persona.no_leading_fallback if briefed else self.persona.replies_for(category.value)[0],
+                matched=False,
+                matched_request_clause=clause,
+                **common,
+            )
+        raise MatcherError(f"unknown router option kind: {kind}")
 
     def _reply_for(
         self,

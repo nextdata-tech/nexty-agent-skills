@@ -171,6 +171,15 @@ class CodexDriverProvider:
     def __call__(self, view: "DriverView") -> str:
         """Ask Codex to author a message and return only its final response."""
 
+        return self.invoke(_prompt(view))
+
+    def invoke(self, prompt: str) -> str:
+        """Run one isolated, tool-free ``codex exec`` on ``prompt``.
+
+        Shared by the driver and the operator router so both inherit the same
+        sandbox, environment scrub and bounded errors.
+        """
+
         with tempfile.TemporaryDirectory(prefix="dp-scenario-codex-driver-") as temp_dir:
             working_directory = Path(temp_dir)
             response_path = working_directory / "last-message.txt"
@@ -211,7 +220,7 @@ class CodexDriverProvider:
                 ) from None
 
             try:
-                process.communicate(input=_prompt(view), timeout=self.timeout_seconds)
+                process.communicate(input=prompt, timeout=self.timeout_seconds)
             except subprocess.TimeoutExpired:
                 _terminate_process_group(process)
                 raise DriverProviderError(

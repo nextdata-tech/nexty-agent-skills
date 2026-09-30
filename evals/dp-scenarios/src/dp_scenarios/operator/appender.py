@@ -114,6 +114,8 @@ _NON_FACT_CLAIM_KEYS = frozenset(
         "driver_obstacle_rejected",
         "driver_repeat_rejected",
         "driver_beat_substituted",
+        "routed_by",
+        "router_fallback",
     }
 )
 
@@ -179,6 +181,10 @@ def _validate_non_fact_claim(value: object) -> None:
     ):
         if key in value and not isinstance(value[key], bool):
             raise AppenderError(f"{key} must be a boolean")
+    if "routed_by" in value and value["routed_by"] != "llm":
+        raise AppenderError("routed_by must be 'llm'")
+    if "router_fallback" in value and value["router_fallback"] is not True:
+        raise AppenderError("router_fallback must be true")
     if "operator_mode" in value and not isinstance(value["operator_mode"], str):
         raise AppenderError("operator_mode must be a string")
     if "operator_beat_id" in value and not isinstance(value["operator_beat_id"], str):

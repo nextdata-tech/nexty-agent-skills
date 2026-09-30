@@ -63,6 +63,7 @@ from dp_scenarios.operator import (
     TerminalState as EngineTerminalState,
 )
 from dp_scenarios.operator.appender import SupervisorRecordReader, append_supervisor_facts
+from dp_scenarios.operator.router import OperatorRouter
 from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import AgentEvidence, Scenario, declared_sentinels, load_scenarios
 
@@ -734,9 +735,12 @@ def _replay_verification(
     *,
     generated_operator: bool,
     driver: bool = False,
+    router: bool = False,
 ) -> tuple[str, str]:
     """Replay scripted turns and compare the two canonical evidence surfaces."""
 
+    if router:
+        return "not-attempted", "model-routed operator decisions are not assumed deterministic"
     if driver:
         return "not-attempted", "driver operator output is not assumed deterministic"
     if generated_operator:
@@ -812,7 +816,8 @@ def _promote_certified_run(run: ScenarioRun) -> ScenarioRun:
     qualification = qualify_run(
         run.score,
         replay_status=run.replay_verification_status,
-        generated_operator=run.qualification.operator_mode in {"generated_surface", "driver"},
+        generated_operator=run.qualification.operator_mode
+        in {"generated_surface", "driver", "llm_router"},
         driver=run.qualification.operator_mode == "driver",
         repeatability_certified=True,
         validation_mode=run.manifest.validation_mode,
@@ -2114,6 +2119,7 @@ class TierRunner:
         workflow_restart_factory: WorkflowRestartFactory | None = None,
         workflow_observer: WorkflowObserver | None = None,
         operator_factory: GeneratedOperator | DriverOperator | OperatorFactory | None = None,
+        operator_router: OperatorRouter | None = None,
         allow_host_home: bool = False,
         review_timeout_seconds: float | None = None,
         staged_job_helper_dir: str | Path | None = None,
@@ -2182,6 +2188,7 @@ class TierRunner:
         self.workflow_restart_factory = workflow_restart_factory
         self.workflow_observer = workflow_observer
         self.operator_factory = operator_factory
+        self.operator_router = operator_router
         self.allow_host_home = allow_host_home
         self.review_timeout_seconds = review_timeout_seconds
         self.staged_job_helper_dir = (
@@ -2879,6 +2886,7 @@ class TierRunner:
                         transport,
                         generated_operator=generated_operator,
                         driver=driver_operator,
+                        router=self.operator_router,
                         extra_sentinels=sorted(
                             marker_values(environment.generated_fixture_manifest)
                             | declared_sentinels(scenario)
@@ -3011,11 +3019,14 @@ class TierRunner:
                     run_result,
                     generated_operator=generated_operator is not None,
                     driver=driver_operator is not None,
+                    router=self.operator_router is not None,
                 )
                 qualification = qualify_run(
                     score,
                     replay_status=replay_status,
-                    generated_operator=generated_operator is not None,
+                    generated_operator=(
+                        generated_operator is not None or self.operator_router is not None
+                    ),
                     driver=driver_operator is not None,
                     validation_mode=environment.manifest.validation_mode,
                     operator_mode=getattr(run_result, "operator_mode", "scripted"),
