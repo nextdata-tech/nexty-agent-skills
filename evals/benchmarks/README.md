@@ -7,6 +7,8 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-09-30 | dp-scenarios operator: LLM router (#424, #430), B5 live Sonnet pass | PASS | inventory-position | [`2026-09-30-b5-llm-router-sonnet-pass`](entries/2026-09-30-b5-llm-router-sonnet-pass.md) |
+| 2026-09-30 | dp-scenarios operator: clarify-once approval and router rules (#430), B1 live Sonnet pass | MIXED | crm-pipeline | [`2026-09-30-b1-router-approval-fixes-sonnet-pass`](entries/2026-09-30-b1-router-approval-fixes-sonnet-pass.md) |
 | 2026-09-29 | dp-scenarios operator: route replies from the current ask (#400), B5 live Sonnet pass | PASS | inventory-position | [`2026-09-29-b5-current-ask-routing-sonnet-pass`](entries/2026-09-29-b5-current-ask-routing-sonnet-pass.md) |
 | 2026-09-28 | nxd-review-closure: pre-validation gaps are advisory; NEX-890 checker parses supervisor next actions | PASS | terminal-authenticated-dlt-api-ingestion | [`2026-09-28-nex890-authenticated-dlt-ingestion-pass`](entries/2026-09-28-nex890-authenticated-dlt-ingestion-pass.md) |
 | 2026-09-28 | dp-scenarios operator: answer review-disposition asks (#379), B5 live Sonnet pass | MIXED | inventory-position | [`2026-09-28-b5-review-disposition-sonnet-pass`](entries/2026-09-28-b5-review-disposition-sonnet-pass.md) |

@@ -1870,7 +1870,23 @@ def _dp_pair_pins(scenario_id: str, run: dict[str, Any]) -> tuple[tuple[str, int
         raise BenchmarkError(
             f"dp-scenarios {scenario_id!r} epoch {epoch} manifest scenario_id does not match"
         )
-    return (scenario_id, epoch), {field: manifest[field] for field in DP_COMPARABILITY_FIELDS}
+    pins = {field: manifest[field] for field in DP_COMPARABILITY_FIELDS}
+    return (scenario_id, epoch), _without_router_prompt_hash(pins)
+
+
+def _without_router_prompt_hash(pins: dict[str, Any]) -> dict[str, Any]:
+    """Drop the llm operator router's prompt hash from pair comparability.
+
+    The router prompt is operator harness code, like the unpinned matcher and
+    engine, so an operator fix between arms is the change being measured. The
+    router's backend, model, effort, mode and timeout must still match.
+    """
+
+    sampling = pins.get("agent_sampling_params")
+    if not isinstance(sampling, dict) or not isinstance(sampling.get("operator_router"), dict):
+        return pins
+    router = {k: v for k, v in sampling["operator_router"].items() if k != "prompt_hash"}
+    return {**pins, "agent_sampling_params": {**sampling, "operator_router": router}}
 
 
 def validate_dp_comparability(reports: dict[str, Any], report_tags: dict[str, str]) -> None:

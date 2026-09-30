@@ -1,0 +1,366 @@
+{
+  "id": "2026-09-30-b1-router-approval-fixes-sonnet-pass",
+  "date": "2026-09-30",
+  "label": "dp-scenarios operator: clarify-once approval and router rules (#430), B1 live Sonnet pass",
+  "notes": "Same pinned supervisor, Claude Sonnet high, --operator-router llm (codex gpt-6.1-sol, medium). Before: router1 at 7fc95f9c, UNGRADED 70 (all gates passed but the turn budget ran out while approval asks got persona replies). After: router2 at 1c0b5571 (#430, plus #427-#429) clean PASS 70; 24 replies routed by the model, 0 fallbacks. Only the router prompt hash differs between arms. One run per arm; no repeatability rate.",
+  "plugin_version": "0.54.8",
+  "report_tags": {
+    "before": "before",
+    "after": "after"
+  },
+  "reports": {
+    "before": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "crm-pipeline",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "crm-pipeline",
+              "result": "ERROR",
+              "epoch": 1,
+              "terminal_state": "turn_budget_exhausted_pending_answer",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 10,
+                    "required": true
+                  },
+                  "capability": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 15,
+                    "required": true
+                  },
+                  "narrowing": {
+                    "ungraded": false,
+                    "examined": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "passed": false,
+                    "points": 0,
+                    "required": false
+                  },
+                  "construction": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 10,
+                    "required": true
+                  },
+                  "build": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 20,
+                    "required": true
+                  },
+                  "query": {
+                    "ungraded": false,
+                    "examined": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "passed": false,
+                    "points": 0,
+                    "required": false
+                  },
+                  "follow-up": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 15,
+                    "required": true
+                  }
+                },
+                "total": 70,
+                "scoreable_max": 70,
+                "threshold": 56,
+                "waived_gates": {
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": true,
+                  "sentinel": false
+                },
+                "state": "ungraded",
+                "findings": [
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 24,
+                "observed_calls": 437
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "operator_router": {
+                    "backend": "codex",
+                    "effort": "medium",
+                    "mode": "llm",
+                    "model_id": "gpt-6.1-sol",
+                    "prompt_hash": "f4d7e58fe6355c0850ad586763785079e3529694d502ca378fe41eaae61fe5f7",
+                    "timeout_seconds": 120.0
+                  },
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.54.7",
+                "supervisor_version": "sha256:88e68a1633ef02508de7edf39ba855093684b0ecb5af69bdcb641ecd0f53033b",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "0afdbcf9055192cc824338b05c7fd390f63dc96fcca36b48daf7ba13cfa03ad5",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "80960592665a9e248ce44bdbe3c5b5ddaa457c2be1ba92b0415d94cb1def7782",
+                "turn_budget": 24,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "crm-pipeline",
+                "tier": "core",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "crm-pipeline-trial-0",
+                "session_config_sha256": "sha256:be5e4d02d5e3232a3595231d2cc64d20b0bc2da55163c85376dd479333994ec7",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "OBSERVED",
+                "operator_mode": "llm_router",
+                "reasons": [
+                  "turn_budget_exhausted_pending_answer",
+                  "run_ungraded",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "not-attempted"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "reset_workflow"
+              },
+              "route_fidelity": {
+                "status": "examined"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "after": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "crm-pipeline",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "crm-pipeline",
+              "result": "PASS",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 10,
+                    "required": true
+                  },
+                  "capability": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 15,
+                    "required": true
+                  },
+                  "narrowing": {
+                    "ungraded": false,
+                    "examined": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "passed": false,
+                    "points": 0,
+                    "required": false
+                  },
+                  "construction": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 10,
+                    "required": true
+                  },
+                  "build": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 20,
+                    "required": true
+                  },
+                  "query": {
+                    "ungraded": false,
+                    "examined": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "passed": false,
+                    "points": 0,
+                    "required": false
+                  },
+                  "follow-up": {
+                    "ungraded": false,
+                    "examined": true,
+                    "codes": [],
+                    "passed": true,
+                    "points": 15,
+                    "required": true
+                  }
+                },
+                "total": 70,
+                "scoreable_max": 70,
+                "threshold": 56,
+                "waived_gates": {
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": true,
+                  "sentinel": false
+                },
+                "state": "passed",
+                "findings": [
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 24,
+                "observed_calls": 475
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "operator_router": {
+                    "backend": "codex",
+                    "effort": "medium",
+                    "mode": "llm",
+                    "model_id": "gpt-6.1-sol",
+                    "prompt_hash": "96a2042d99642d8d0f55a85a8eb47ae7272b218b9fa42c853ceb0049f29e99c5",
+                    "timeout_seconds": 120.0
+                  },
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.54.8",
+                "supervisor_version": "sha256:88e68a1633ef02508de7edf39ba855093684b0ecb5af69bdcb641ecd0f53033b",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "0afdbcf9055192cc824338b05c7fd390f63dc96fcca36b48daf7ba13cfa03ad5",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "80960592665a9e248ce44bdbe3c5b5ddaa457c2be1ba92b0415d94cb1def7782",
+                "turn_budget": 24,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "crm-pipeline",
+                "tier": "core",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "crm-pipeline-trial-0",
+                "session_config_sha256": "sha256:be5e4d02d5e3232a3595231d2cc64d20b0bc2da55163c85376dd479333994ec7",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "QUALIFIED",
+                "operator_mode": "llm_router",
+                "reasons": [
+                  "generated_operator_is_capped_below_certified",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "not-attempted"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "list_data_products"
+              },
+              "route_fidelity": {
+                "status": "examined"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
