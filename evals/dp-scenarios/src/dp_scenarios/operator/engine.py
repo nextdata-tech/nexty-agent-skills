@@ -1600,6 +1600,9 @@ class OperatorEngine:
         current_revision_workflow: str | None = None
         plan_rebound_by_workflow: dict[str | None, bool] = {}
         revision_reapproval_uses_by_workflow: dict[str | None, int] = {}
+        # A clarification belongs to consent identity, never wording or phase.
+        consent_generation_by_workflow: dict[str | None, int] = {}
+        clarification_sent: set[tuple[str | None, int]] = set()
         previous_agent_message = ""
         prior_agent_messages: list[str] = []
         prior_base_texts: list[str] = []
@@ -1654,6 +1657,7 @@ class OperatorEngine:
                 return False
             return True
 
+        consumed_approval_slots: set[int] = set()
         script_cursor = 0
         index = 0
         chain_prefix_failed = False
@@ -1676,6 +1680,9 @@ class OperatorEngine:
             scheduled_index = script_cursor + 1
             scheduled_turn = self.script.turns[script_cursor]
             script_cursor += 1
+            moved_approval_phase: int | None = None
+            if scheduled_index in consumed_approval_slots:
+                scheduled_turn = ScriptTurn("Please continue.")
             self.turn_pointer = index - 1
             self._current_turn_active = True
             if (
@@ -1759,6 +1766,51 @@ class OperatorEngine:
                     or next_match.decision_id is None
                 )
             )
+            genuine_approval_ask = bool(
+                next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+            )
+            pending_approval_key = (
+                current_revision_workflow,
+                consent_generation_by_workflow.get(current_revision_workflow, 0),
+            )
+            clarified_approval_ask = (
+                genuine_approval_ask and pending_approval_key in clarification_sent
+            )
+            # Only after one transmitted clarification may an unconsumed
+            # initial approval move forward. Scripted/owed timing keeps priority;
+            # later scripted amendments carry scope that is not yet applicable.
+            initial_approval_slot = next((
+                slot for slot in range(
+                    script_cursor,
+                    self.chain_prefix_turns if self.chain_prefix_turns is not None
+                    and not self._chain_switched else len(self.script.turns),
+                )
+                if self.script.turns[slot].approval
+                and slot + 1 not in consumed_approval_slots
+            ), None) if revision_approval_text is None and owed_approval_text is None else None
+            declared_approval_pending = bool(
+                clarified_approval_ask and not decision_answer_pending and (
+                    scheduled_turn.approval
+                    or owed_approval_text is not None
+                    or reconfirm_available
+                    or initial_approval_slot is not None
+                    or any(beat[0].approval for beat in owed_fixed_beats)
+                    or (
+                        revision_approval_text is not None
+                        and plan_rebound_by_workflow.get(current_revision_workflow, False)
+                        and revision_reapproval_uses_by_workflow.get(current_revision_workflow, 0)
+                        < _REVISION_REAPPROVAL_LIMIT
+                    )
+                    or (
+                        self.script.answer_sheet.reapproval is not None
+                        and review_fix_authorized
+                        and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
+                    )
+                )
+            )
             scheduled_fixed = not scheduled_turn.substitute_reply or scheduled_turn.approval
             defer_fixed = bool(
                 index > 1
@@ -1767,6 +1819,7 @@ class OperatorEngine:
                     owed_fixed_beats
                     or not fixed_beat_ready(scheduled_turn, next_match)
                     or (decision_answer_pending and not scheduled_turn.approval)
+                    or (clarified_approval_ask and not scheduled_turn.approval)
                     or (unanswered_review_disposition and not scheduled_turn.approval)
                 )
             )
@@ -1786,12 +1839,6 @@ class OperatorEngine:
             else:
                 scripted_turn = scheduled_turn
             queued_turn = owed_fixed_beats[0][0] if owed_fixed_beats else None
-            genuine_approval_ask = bool(
-                next_match is not None
-                and next_match.category is Category.APPROVAL_REQUEST
-                and next_match.approval_requested
-                and next_match.solicits_operator
-            )
             reapproval = self.script.answer_sheet.reapproval
             dynamic_approval_due = bool(
                 queued_turn is not None
@@ -1839,9 +1886,28 @@ class OperatorEngine:
                 or dynamic_approval_due
                 or owed_approval_due
                 or reserve_driver_slot
+                or clarified_approval_ask
             ):
                 scripted_turn, bound = owed_fixed_beats.popleft()
                 injections = (*injections, *bound)
+            queued_approval = next((
+                beat for beat in owed_fixed_beats if beat[0].approval
+            ), None)
+            if (
+                declared_approval_pending and not scripted_turn.approval
+                and queued_approval is not None
+                and owed_approval_text is None and not reconfirm_available
+            ):
+                owed_fixed_beats.remove(queued_approval)
+                scripted_turn, bound = queued_approval
+                injections = (*injections, *bound)
+            elif (
+                declared_approval_pending and initial_approval_slot is not None
+                and not scripted_turn.approval
+            ):
+                scripted_turn = self.script.turns[initial_approval_slot]
+                consumed_approval_slots.add(initial_approval_slot + 1)
+                moved_approval_phase = self.script.phase_by_turn[initial_approval_slot + 1]
             # A card's sentinel arms the trip scan only once its material is
             # transmitted. Keep queued beat-only cards out of this turn's
             # redaction view and scan; content-bearing cards remain due now.
@@ -2635,6 +2701,12 @@ class OperatorEngine:
 
             snapshots = tuple(_snapshot(reader) for reader in self.counter_readers)
             phase = self._turn_phase(scheduled_index)
+            if moved_approval_phase is not None:
+                # The declared approval carries its authored phase with it.
+                # Moving consent ahead of an intake slot must not drop its
+                # spec_approved evidence as an out-of-phase persona answer.
+                phase = max(phase, moved_approval_phase)
+                self.phase = phase
             approval_artifact = result.approval_artifact
             artifact_text = _artifact_text(approval_artifact)
             approval_marker = match.approval_requested and self.script.answer_sheet.contains_open_decision_marker(artifact_text)
@@ -2764,7 +2836,19 @@ class OperatorEngine:
             # only clears the workflow the approval concerned
             # (``current_revision_workflow`` as of before this turn's tool
             # calls); a different workflow's own rebound flag is untouched.
+            if (
+                genuine_approval_ask
+                and not approval_turn
+                and not reconfirm_applied
+                and next_reply is not None
+                and selected_base == next_reply
+                and next_match is not None
+                and next_match.rule_id == "persona.approval_request"
+                and next_reply in message.text
+            ):
+                clarification_sent.add(pending_approval_key)
             if approval_turn or reconfirm_applied:
+                clarification_sent.discard(pending_approval_key)
                 plan_rebound_by_workflow[current_revision_workflow] = False
                 if scripted_approval_fired or owed_approval_turn or reconfirm_applied:
                     # The declared approval line this turn carried, before any
@@ -2773,20 +2857,16 @@ class OperatorEngine:
                     # answer is scenario-specific text for its own moment and
                     # is never recycled here.
                     revision_approval_text = selected_base
-            if revision_approval_text is not None:
-                for call in result.tool_calls:
-                    if not _rebinds_workflow(call):
-                        continue
-                    # A named identity switches which workflow's budget and
-                    # rebound flag are live from here on -- a version bump
-                    # (``mrr-waterfall`` -> ``mrr-waterfall-v3``) starts a
-                    # fresh, unburned budget. An unnamed rebind (no
-                    # ``workflow`` argument observed) cannot signal a switch,
-                    # so it stays scoped to whichever workflow was already
-                    # current.
-                    identity = _workflow_identity(call)
-                    if identity is not None:
-                        current_revision_workflow = identity
+            for call in result.tool_calls:
+                if not _rebinds_workflow(call):
+                    continue
+                identity = _workflow_identity(call)
+                if identity is not None:
+                    current_revision_workflow = identity
+                consent_generation_by_workflow[current_revision_workflow] = (
+                    consent_generation_by_workflow.get(current_revision_workflow, 0) + 1
+                )
+                if revision_approval_text is not None:
                     plan_rebound_by_workflow[current_revision_workflow] = True
             if defer_scheduled_approval:
                 # The scripted approval for this turn was swallowed by a
