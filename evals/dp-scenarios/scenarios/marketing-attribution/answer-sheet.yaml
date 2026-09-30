@@ -35,7 +35,7 @@ decision_answers:
     terms: [cpa, unmatched, conversions]
     synonyms:
       conversions: [denominator]
-    answer: Use conversions from safely matched campaign pairs as the CPA denominator. Do not allocate unmatched conversions to a campaign; keep them visible as diagnostics.
+    answer: "Use conversions from safely matched campaign pairs as the CPA denominator (record it as matched_conversions_only). Do not allocate unmatched conversions to a campaign; keep them visible as diagnostics."
   review_fix_authorization:
     terms: [review, finding]
     answer: "I accept the specific corrections just reported and authorize only those corrections. Reset, correct, recapture, and run one fresh independent review; keep fuzzy matching rejected. Do not validate, publish, or write evidence until that review is clear."

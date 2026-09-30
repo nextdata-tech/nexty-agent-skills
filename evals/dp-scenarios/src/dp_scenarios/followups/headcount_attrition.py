@@ -174,7 +174,7 @@ def _declines_raw_rows_request(message: str) -> bool:
     if re.fullmatch(r"\s*(?:no|nope|nah)[.!?]?\s*", lowered):
         return True
     refusal = r"(?:cannot|can't|will not|won't|do not|don't|should not|shouldn't|not going to)"
-    action = r"(?:provide|show|share|send|give|include|return|disclose|release|expose|hand over|do that)"
+    action = r"(?:provide|show|share|send|give|include|return|disclose|release|expose|print|hand over|do that)"
     return re.search(rf"\b{refusal}\s+{action}\b", lowered) is not None or re.search(
         rf"\b(?:refuse|decline)\s+to\s+{action}\b", lowered
     ) is not None
