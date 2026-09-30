@@ -449,3 +449,32 @@ def test_claude_backend_is_constructible_without_credentials(tmp_path, monkeypat
     assert router is not None
     assert pinned.agent_sampling_params["operator_router"]["backend"] == "claude"
     assert "sonnet" in repr(router.provider) and "token" not in repr(router.provider).lower()
+
+
+@pytest.mark.parametrize("rebinds", [1, 3])
+def test_router_revision_approval_budget_stops_without_a_persona_reply(rebinds: int) -> None:
+    from dp_scenarios.operator.engine import TerminalState
+    from test_operator_revision_reapproval import APPROVAL, ASK, RESET, _call, _script
+
+    transport = InMemoryTransport([
+        TurnResult(agent_message=ASK),
+        *(TurnResult(agent_message=ASK, tool_calls=(_call(RESET),)) for _ in range(rebinds)),
+        TurnResult(agent_message="Done.", reported=True),
+    ])
+    router = _router(lambda view: (
+        _pick("approval", "approval_request", approval=True)
+        if view["agent_message"] != "Done."
+        else _pick("none", "other", solicits=False)
+    ))
+    result = OperatorEngine(_script(rebinds + 2), transport, router=router).run()
+
+    if rebinds == 3:
+        # A persona loop after an exhausted budget only burns the turn budget.
+        assert result.terminal_state is TerminalState.APPROVAL_BUDGET_EXHAUSTED
+        assert result.stop_reason == "approval_budget_exhausted"
+        assert transport.message_texts == ("Improve weekly visibility.", APPROVAL, APPROVAL, APPROVAL)
+        assert len(result.turns) == 4
+    else:
+        assert result.terminal_state is not TerminalState.APPROVAL_BUDGET_EXHAUSTED
+        assert transport.message_texts[1:3] == (APPROVAL, APPROVAL)
+    assert all(turn.match.routed_by == "llm" for turn in result.turns[:rebinds + 1])

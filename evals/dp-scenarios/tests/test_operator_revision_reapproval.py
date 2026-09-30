@@ -29,10 +29,13 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
+
+import pytest
 from pathlib import Path
 
 from dp_scenarios.grading.gates import gate_intake
-from dp_scenarios.operator.engine import OperatorEngine
+from dp_scenarios.operator.engine import OperatorEngine, TerminalState
 from dp_scenarios.operator.transport import InMemoryTransport, ToolCall, TurnResult
 from dp_scenarios.scenario import load_scenario
 
@@ -119,7 +122,10 @@ def test_b5_luna_revised_plan_is_reapproved_after_each_rebind_up_to_the_bound() 
     assert texts[8] == approval
     # Turn 11: turn 10's prepare_workflow would be a third; the bound holds.
     assert texts[9] == "Just increase the timeout."
-    assert texts[10] == "Just increase the timeout."
+    # A persona loop after an exhausted budget only burns the turn budget.
+    assert len(texts) == 10
+    assert result.terminal_state is TerminalState.APPROVAL_BUDGET_EXHAUSTED
+    assert result.stop_reason == "approval_budget_exhausted"
 
     rows = _approval_rows(result)
     assert [row["turn"] for row in rows] == [4, 7, 9]
@@ -205,17 +211,13 @@ def test_reapproval_is_bounded_to_two_per_run() -> None:
 
     result = OperatorEngine(script, transport).run()
 
-    assert transport.message_texts[1:6] == (
-        APPROVAL,
-        APPROVAL,
-        APPROVAL,
-        PERSONA_LINE,
-        PERSONA_LINE,
-    )
+    # A persona loop after an exhausted budget only burns the turn budget.
+    assert transport.message_texts == ("Improve weekly visibility.", APPROVAL, APPROVAL, APPROVAL)
+    assert result.terminal_state is TerminalState.APPROVAL_BUDGET_EXHAUSTED
+    assert result.stop_reason == "approval_budget_exhausted"
+    assert len(result.turns) == 4
     assert [row["turn"] for row in _approval_rows(result)] == [2, 3, 4]
-    assert [
-        _claim(result, turn).get("approval_reapproved_revision") for turn in (2, 3, 4, 5)
-    ] == [None, True, True, None]
+    assert [_claim(result, turn).get("approval_reapproved_revision") for turn in (2, 3, 4)] == [None, True, True]
 
 
 def test_reapproval_takes_precedence_over_the_persona_line() -> None:
@@ -344,11 +346,10 @@ def test_r407_style_churn_on_v1_does_not_starve_the_v3_version_bump() -> None:
             TurnResult(agent_message=ASK),
             TurnResult(agent_message=ASK, tool_calls=(_call_wf(RESET, "mrr-waterfall"),)),
             TurnResult(agent_message=ASK),
-            # A third rebind on the same workflow: the budget for
-            # "mrr-waterfall" is spent, so this genuine ask gets the persona
-            # fallback, not a third resend.
-            TurnResult(agent_message=ASK, tool_calls=(_call_wf(RESET, "mrr-waterfall"),)),
-            TurnResult(agent_message=ASK),
+            # A third rebind does not stop narration: only a genuine approval
+            # ask for this exhausted workflow would end the conversation.
+            TurnResult(agent_message="I am revising the workflow.", tool_calls=(_call_wf(RESET, "mrr-waterfall"),)),
+            TurnResult(agent_message="I am continuing the revision."),
             # Turn 42 in r407: B7-E8 makes the agent prepare a *new*,
             # distinct workflow, "mrr-waterfall-v3".
             TurnResult(agent_message=ASK, tool_calls=(_call_wf(PREPARE, "mrr-waterfall-v3"),)),
@@ -364,11 +365,11 @@ def test_r407_style_churn_on_v1_does_not_starve_the_v3_version_bump() -> None:
     result = OperatorEngine(script, transport).run()
     texts = transport.message_texts
 
-    # mrr-waterfall's budget spends out exactly as it does today (turns 4,
-    # 6 resend; turn 8 falls back once the budget is gone).
+    # mrr-waterfall's two reapprovals are spent at turns 4 and 6.
+    # Narration after the third rebind does not ask for approval.
     assert texts[3] == APPROVAL
     assert texts[5] == APPROVAL
-    assert texts[7] == PERSONA_LINE
+    assert texts[7] != APPROVAL
     # The version bump to mrr-waterfall-v3 is a distinct workflow identity:
     # its own budget is untouched by v1's churn, so turn 43's fresh-approval
     # ask (index 9) is answered, not starved.
@@ -424,3 +425,47 @@ def test_relaying_the_exact_reapproval_text_satisfies_the_relay_check() -> None:
         _workflow_v2_intake(quote="Approved, ship it."), turn=3, text=relayed
     )
     assert "intake_workflow_approval_not_relayed" in gate_intake(invented).codes
+
+
+@pytest.mark.parametrize("priority", ["decision", "fixed", "event"])
+def test_exhausted_budget_preserves_higher_priority_reply(priority: str) -> None:
+    from dp_scenarios.operator.events import EventSchedule, event_from_mapping
+
+    script = _script(5, **({"t5": {"text": "Hold that thought.", "substitute_reply": False}} if priority == "fixed" else {}))
+    if priority == "event":
+        event = event_from_mapping({
+            "version": 1, "id": "deadline", "trigger_turn": 5,
+            "type": "deadline_pressure", "content": "The deadline is tomorrow.",
+            "outcome": "deadline_reported",
+        })
+        script = replace(script, events=EventSchedule((event,)))
+    transport = InMemoryTransport([
+        TurnResult(agent_message=ASK),
+        TurnResult(agent_message=ASK, tool_calls=(_call(RESET),)),
+        TurnResult(agent_message=ASK, tool_calls=(_call(RESET),)),
+        TurnResult(agent_message="Which option should I pick, and do you approve?" if priority == "decision" else ASK,
+                   tool_calls=(_call(RESET),)),
+        TurnResult(agent_message=ASK),
+    ])
+    result = OperatorEngine(script, transport).run()
+    assert len(transport.message_texts) == 5
+    if priority == "decision":
+        assert transport.message_texts[4] == "Yes."
+    elif priority == "fixed":
+        assert transport.message_texts[4] == "Hold that thought."
+    else:
+        assert "The deadline is tomorrow." in transport.message_texts[4]
+        assert result.fired_event_ids == ("deadline",)
+    assert result.terminal_state is TerminalState.APPROVAL_BUDGET_EXHAUSTED
+    assert len(_approval_rows(result)) == 3
+
+
+def test_exhausted_budget_on_final_agent_turn_has_explicit_terminal_state() -> None:
+    transport = InMemoryTransport([
+        TurnResult(agent_message=ASK),
+        *(TurnResult(agent_message=ASK, tool_calls=(_call(RESET),)) for _ in range(3)),
+    ])
+    result = OperatorEngine(_script(2), transport).run()
+    assert result.terminal_state is TerminalState.APPROVAL_BUDGET_EXHAUSTED
+    assert result.stop_reason == "approval_budget_exhausted"
+    assert transport.message_texts == ("Improve weekly visibility.", APPROVAL, APPROVAL, APPROVAL)

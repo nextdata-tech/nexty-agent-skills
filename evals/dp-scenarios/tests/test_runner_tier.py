@@ -2366,6 +2366,48 @@ def test_distinct_stop_conditions_remain_distinct(
     assert reported["score"]["state"] == expected_state.value
 
 
+def test_approval_budget_exhaustion_is_ungraded_and_visible_in_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
+    scenario = replace(
+        scenario,
+        repeatability=replace(scenario.repeatability, epochs=1),
+    )
+    original_run = OperatorEngine.run
+
+    def exhaust_approval_budget(engine: OperatorEngine):
+        result = original_run(engine)
+        return replace(
+            result,
+            terminal_state=EngineTerminalState.APPROVAL_BUDGET_EXHAUSTED,
+            stop_reason="approval_budget_exhausted",
+        )
+
+    monkeypatch.setattr(OperatorEngine, "run", exhaust_approval_budget)
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings[:1]},
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert run.terminal_state is EngineTerminalState.APPROVAL_BUDGET_EXHAUSTED
+    assert run.score.state is ScoreTerminalState.UNGRADED
+    assert run.score.total == 65
+    assert all(gate.passed for gate in run.score.gates.values() if gate.required)
+    assert run.qualification.disposition is QualificationDisposition.OBSERVED
+    assert run.qualification.reasons[0] == "approval_budget_exhausted"
+    assert result.verdict == "ungraded"
+
+    rendered = machine_report(result)["scenarios"][0]["runs"][0]
+    assert rendered["terminal_state"] == "approval_budget_exhausted"
+    assert rendered["stop_condition"] == "approval_budget_exhausted"
+    assert rendered["score"]["state"] == "ungraded"
+    assert "stop=approval_budget_exhausted" in human_summary(result)
+
+
 @pytest.mark.parametrize("branch", ["session_factory", "replay_recordings"])
 def test_timeout_and_wedge_are_paired_distinct_qualification_outcomes(
     tmp_path: Path, branch: str

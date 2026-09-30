@@ -164,6 +164,7 @@ DP_OPERATOR_MODES = frozenset({"scripted", "generated_surface", "driver", "llm_r
 DP_QUALIFICATION_DISPOSITIONS = frozenset({"CERTIFIED", "QUALIFIED", "OBSERVED", "REJECTED", "INVALID"})
 DP_TERMINAL_STATES = frozenset({
     "completed", "script_exhausted", "sentinel_trip", "environment_wedge", "turn_timeout",
+    "turn_budget_exhausted_pending_answer", "approval_budget_exhausted",
 })
 DP_FAILURE_MODES = frozenset({
     "sentinel_trip", "environment_wedge", "turn_timeout", "one_obstacle_per_turn",
@@ -253,6 +254,7 @@ DP_REQUIRED_IDENTITY_FIELDS = ("skill_pack_version", "run_id")
 DP_CLEAN_TERMINAL_STATES = frozenset({"completed"})
 DP_INTERRUPTED_TERMINAL_STATES = frozenset({
     "sentinel_trip", "environment_wedge", "script_exhausted", "turn_timeout",
+    "turn_budget_exhausted_pending_answer", "approval_budget_exhausted",
 })
 DP_ERROR_SCORE_STATES = frozenset({"automatic zero", "invalid", "ungraded"})
 CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")

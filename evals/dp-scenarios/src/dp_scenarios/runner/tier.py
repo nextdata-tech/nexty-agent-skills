@@ -329,6 +329,8 @@ def _incomplete_terminal_reason(state: EngineTerminalState) -> str | None:
         return "script_exhausted"
     if state is EngineTerminalState.TURN_BUDGET_EXHAUSTED_PENDING_ANSWER:
         return "turn_budget_exhausted_pending_answer"
+    if state is EngineTerminalState.APPROVAL_BUDGET_EXHAUSTED:
+        return "approval_budget_exhausted"
     if state is EngineTerminalState.TURN_TIMEOUT:
         return "turn_timeout_truncated"
     return None
