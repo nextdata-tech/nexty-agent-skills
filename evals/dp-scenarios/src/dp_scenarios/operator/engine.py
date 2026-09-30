@@ -243,6 +243,7 @@ class TerminalState(str, Enum):
 
     COMPLETED = "completed"
     TURN_BUDGET_EXHAUSTED_PENDING_ANSWER = "turn_budget_exhausted_pending_answer"
+    APPROVAL_BUDGET_EXHAUSTED = "approval_budget_exhausted"
     SCRIPT_EXHAUSTED = "script_exhausted"
     CHAIN_PREFIX_FAILED = "chain_prefix_failed"
     SENTINEL_TRIP = "sentinel_trip"
@@ -1547,6 +1548,7 @@ class OperatorEngine:
         sentinel_tripped = False
         environment_wedged = False
         turn_timed_out = False
+        approval_budget_exhausted = False
         failure_reason: str | None = None
         failure_detail: str | None = None
         last_mcp_call: str | None = None
@@ -1956,11 +1958,9 @@ class OperatorEngine:
             # yield also keep their declared text; the trigger stays armed for
             # a later turn. Due events are appended by ``_message_for`` as on
             # any other turn.
-            revision_reapproval_turn = bool(
+            revision_reapproval_eligible = bool(
                 revision_approval_text is not None
                 and plan_rebound_by_workflow.get(current_revision_workflow, False)
-                and revision_reapproval_uses_by_workflow.get(current_revision_workflow, 0)
-                < _REVISION_REAPPROVAL_LIMIT
                 and index > 1
                 and scripted_turn.substitute_reply
                 and not yielding
@@ -1975,6 +1975,18 @@ class OperatorEngine:
                 and next_match.approval_requested
                 and next_match.solicits_operator
             )
+            revision_budget_spent = (
+                revision_reapproval_uses_by_workflow.get(current_revision_workflow, 0)
+                >= _REVISION_REAPPROVAL_LIMIT
+            )
+            # A persona clarification after the budget is spent cannot grant
+            # consent and only burns turns. Due events keep their delivery
+            # slot, as do all the more specific replies excluded above.
+            if revision_reapproval_eligible and revision_budget_spent and not injections:
+                approval_budget_exhausted = True
+                self._current_turn_active = False
+                break
+            revision_reapproval_turn = revision_reapproval_eligible and not revision_budget_spent
             approval_turn = approval_turn or revision_reapproval_turn
             directive_governs = (
                 index > 1
@@ -2858,6 +2870,29 @@ class OperatorEngine:
             # deterministic selected text, so authored prose never becomes a
             # repeat baseline.
             prior_base_texts.append(selected_base)
+            # The last agent result can exhaust approval even when the script
+            # has no slot left in which to hit the pre-send guard above.
+            if (
+                script_cursor == len(self.script.turns)
+                and revision_approval_text is not None
+                and plan_rebound_by_workflow.get(current_revision_workflow, False)
+                and revision_reapproval_uses_by_workflow.get(current_revision_workflow, 0)
+                >= _REVISION_REAPPROVAL_LIMIT
+                and next_match is not None
+                and next_match.category is Category.APPROVAL_REQUEST
+                and next_match.approval_requested
+                and next_match.solicits_operator
+                and not (
+                    declared_reapproval is not None
+                    and reapproval_uses < declared_reapproval.max_uses
+                    and review_fix_authorized
+                    and _REVISED_PLAN_PATTERN.search(previous_agent_message) is not None
+                )
+                and not next_owed_approval_turn
+                and not next_reconfirmation
+                and next_match.rule_id != _ASK_BACK_ACCEPTANCE_RULE_ID
+            ):
+                approval_budget_exhausted = True
             if sentinel_tripped or environment_wedged or turn_timed_out:
                 break
 
@@ -2874,6 +2909,9 @@ class OperatorEngine:
                 if failure_reason == REVIEWER_DEADLINE_EXCEEDED
                 else "turn_timeout"
             )
+        elif approval_budget_exhausted:
+            terminal_state = TerminalState.APPROVAL_BUDGET_EXHAUSTED
+            reason = "approval_budget_exhausted"
         elif chain_prefix_failed:
             terminal_state = TerminalState.CHAIN_PREFIX_FAILED
             reason = "chain_prefix_failed"

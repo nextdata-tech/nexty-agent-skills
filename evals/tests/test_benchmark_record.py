@@ -532,6 +532,19 @@ class BenchmarkRecordTests(unittest.TestCase):
 
         self.assertEqual("ERROR", recorder.cell_rows("", dp_report(run))[0]["status"])
 
+    def test_dp_budget_terminal_states_are_valid_but_never_pass(self):
+        for terminal_state in (
+            "turn_budget_exhausted_pending_answer",
+            "approval_budget_exhausted",
+        ):
+            with self.subTest(terminal_state=terminal_state):
+                self.assertIn(terminal_state, recorder.DP_TERMINAL_STATES)
+                self.assertIn(terminal_state, recorder.DP_INTERRUPTED_TERMINAL_STATES)
+                run = dp_run(score_state="passed", terminal_state=terminal_state)
+                self.assertEqual(
+                    "ERROR", recorder.cell_rows("", dp_report(run))[0]["status"]
+                )
+
     def test_dp_automatic_zero_is_error(self):
         run = dp_run(score_state="automatic zero")
 

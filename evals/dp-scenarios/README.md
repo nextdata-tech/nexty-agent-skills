@@ -72,6 +72,19 @@ A passing run is not automatically trustworthy, so every run also carries a
 A run that stopped early can never be reported clean, because the gates it did
 reach are not evidence about the ones it never got to.
 
+#### Engine terminal states
+
+| State | Meaning |
+|---|---|
+| `completed` | The scripted interaction ended with a clean terminal result. |
+| `turn_budget_exhausted_pending_answer` | The turn budget ended while an operator answer or review choice was still owed. |
+| `approval_budget_exhausted` | The agent asked for approval after exhausting a workflow's two revision reapprovals. The run is incomplete and remains ungraded. |
+| `script_exhausted` | The operator script ended without proving completion. |
+| `chain_prefix_failed` | A chained scenario's prefix failed, so its suffix could not run. |
+| `sentinel_trip` | A protected sentinel was observed in agent output. |
+| `environment_wedge` | The run's environment failed before the scenario could be judged. |
+| `turn_timeout` | A provider turn exceeded its time limit. |
+
 ## Operator modes
 
 The operator is the harness playing the human. It has three modes, and the mode
