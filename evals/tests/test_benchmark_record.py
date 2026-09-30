@@ -438,6 +438,23 @@ class BenchmarkRecordTests(unittest.TestCase):
                 "operator_router",
             )
 
+    def test_dp_pair_ignores_only_the_router_prompt_hash(self):
+        # The router prompt is operator code; an operator fix between arms is
+        # the measured change. Every other router pin must still match.
+        router = {
+            "backend": "codex", "effort": "medium", "mode": "llm",
+            "model_id": "gpt-6.1-sol", "prompt_hash": "a" * 64, "timeout_seconds": 120.0,
+        }
+        run = dp_run()
+        run["manifest"]["agent_sampling_params"]["operator_router"] = dict(router)
+        _, before = recorder._dp_pair_pins(run["scenario_id"], run)
+        run["manifest"]["agent_sampling_params"]["operator_router"] = {**router, "prompt_hash": "b" * 64}
+        _, after = recorder._dp_pair_pins(run["scenario_id"], run)
+        self.assertEqual(before, after)
+        run["manifest"]["agent_sampling_params"]["operator_router"] = {**router, "model_id": "other"}
+        _, other_model = recorder._dp_pair_pins(run["scenario_id"], run)
+        self.assertNotEqual(before, other_model)
+
     def test_dp_report_rejects_malformed_redacted_touched_file_envelopes(self):
         invalid = (
             ({"redacted": False, "sha256": "a" * 64, "size_bytes": 1}, "redacted"),
