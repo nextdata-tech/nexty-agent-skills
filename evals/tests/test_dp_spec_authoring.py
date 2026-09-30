@@ -696,6 +696,28 @@ def _span_mismatch_result(text: str = sample()):
     return parsed, proposal, workflow_v3_validator.validation_result(parsed, proposal)
 
 
+def _proposal_with_open_questions(question_specs: list[dict]) -> tuple[str, dict]:
+    sections = "\n\n".join(
+        f"### {re.sub(r'[^a-z0-9]+', ' ', question['id'].lower()).strip().title()}\n\n{question['question']}"
+        for question in question_specs
+    )
+    text = sample().replace("## Open Questions\n", f"## Open Questions\n\n{sections}\n")
+    parsed = v3.parse(text)
+    proposal = proposal_for(text, open_questions=question_specs)
+    for question in question_specs:
+        source_id = re.sub(r"[^a-z0-9]+", "_", question["id"].lower()).strip("_")
+        source_path = f"v3:open_questions[{source_id}].text"
+        path = f"v3:open_questions[{question['id']}].text"
+        if source_path != path:
+            proposal["anchors"][source_path] = path
+        proposal["provenance"][path] = "explicit"
+        proposal["source_spans"][path] = parsed.source_map.spans[source_path].to_dict()
+        proposal["echo"]["coverage"].append(path)
+    if question_specs:
+        proposal["echo"]["text"] += " Each open question will be resolved with the user before preparation."
+    return text, proposal
+
+
 def test_workflow_v3_validator_emits_the_complete_same_parse_structural_map():
     parsed, _, result = _span_mismatch_result()
 
@@ -725,6 +747,183 @@ def test_workflow_v3_validator_v2_preserves_v1_issue_semantics():
     for key in ("code", "path", "message", "expected_source_span"):
         assert v1_result["issue"][key] == v2_result["issue"][key]
     assert "source_spans" not in v1_result["issue"]
+
+
+@pytest.mark.parametrize("protocol", ("v1", "v2"))
+def test_workflow_v3_validator_empty_and_nonblocking_questions_succeed(protocol):
+    empty_parsed = v3.parse(sample())
+    empty_result = workflow_v3_validator.validation_result(
+        empty_parsed, proposal_for(sample()), protocol=protocol
+    )
+    assert empty_result["ok"] is True
+    assert empty_result["issue"] is None
+
+    text, proposal = _proposal_with_open_questions([{
+        "id": "regional_coverage",
+        "question": "Which regions should appear in the comparison?",
+        "blocking": False,
+    }])
+    result = workflow_v3_validator.validation_result(v3.parse(text), proposal, protocol=protocol)
+    assert result["ok"] is True
+    assert result["issue"] is None
+
+
+@pytest.mark.parametrize("protocol", ("v1", "v2"))
+def test_workflow_v3_validator_non_proposed_status_still_rejects_without_new_issue(protocol):
+    text = sample(status="draft")
+    result = workflow_v3_validator.validation_result(
+        v3.parse(text), proposal_for(text), protocol=protocol
+    )
+
+    assert result["ok"] is False
+    assert result["issue"] is None
+
+
+@pytest.mark.parametrize("protocol", ("v1", "v2"))
+def test_workflow_v3_validator_emits_bounded_static_issue_for_minimal_b6_shaped_question(protocol):
+    secret_id = "attrition-denominator"
+    secret_prose = "What denominator should represent employee headcount at year end?"
+    text, proposal = _proposal_with_open_questions([{
+        "id": secret_id,
+        "question": secret_prose,
+        "blocking": True,
+    }])
+
+    result = workflow_v3_validator.validation_result(v3.parse(text), proposal, protocol=protocol)
+
+    issue = result["issue"]
+    assert result["ok"] is False
+    assert issue == {
+        "code": "v3.open_question.blocking_unresolved",
+        "path": "v3:open_questions[0].blocking",
+        "message": (
+            "Open Question 1 blocks preparation. Ask the user, record their answer in the blueprint "
+            "as a Decision, regenerate the complete proposal, and prepare again. Never change blocking yourself."
+        ),
+    }
+    assert len(issue["code"].encode("utf-8")) <= 128
+    assert len(issue["path"].encode("utf-8")) <= 256
+    assert len(issue["message"].encode("utf-8")) <= 512
+    assert proposal["proposal"]["open_questions"][0]["blocking"] is True
+    report = json.dumps(result, sort_keys=True)
+    for secret in (secret_id, secret_prose, "denominator", "headcount"):
+        assert secret not in report
+    assert not {"expected_source_span", "source_spans", "source_map_code"} & issue.keys()
+
+
+@pytest.mark.parametrize("protocol", ("v1", "v2"))
+def test_workflow_v3_validator_cli_returns_exit_2_and_static_blocking_report(tmp_path: Path, protocol: str):
+    secret_id = "attrition-denominator"
+    secret_prose = "What denominator should represent employee headcount at year end?"
+    text, proposal = _proposal_with_open_questions([{
+        "id": secret_id,
+        "question": secret_prose,
+        "blocking": True,
+    }])
+    source_path = tmp_path / "blueprint.md"
+    proposal_path = tmp_path / "proposal.json"
+    source_path.write_text(text, encoding="utf-8")
+    proposal_path.write_text(json.dumps(proposal), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "workflow_v3_validate_proposal.py"),
+            str(source_path),
+            str(proposal_path),
+            "--protocol",
+            protocol,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    result = json.loads(completed.stdout)
+    assert result["schema"] == (
+        workflow_v3_validator.VALIDATION_SCHEMA_V1 if protocol == "v1"
+        else workflow_v3_validator.VALIDATION_SCHEMA_V2
+    )
+    assert result["ok"] is False
+    assert result["issue"]["code"] == "v3.open_question.blocking_unresolved"
+    assert result["issue"]["path"] == "v3:open_questions[0].blocking"
+    assert result["issue"]["message"] == (
+        "Open Question 1 blocks preparation. Ask the user, record their answer in the blueprint "
+        "as a Decision, regenerate the complete proposal, and prepare again. Never change blocking yourself."
+    )
+    for secret in (secret_id, secret_prose, "denominator", "headcount"):
+        assert secret not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("protocol", ("v1", "v2"))
+def test_workflow_v3_validator_reports_first_blocking_question_by_array_index(protocol):
+    question_specs = [
+        {
+            "id": "regional_coverage",
+            "question": "Which regions should appear in the comparison?",
+            "blocking": False,
+        },
+        {
+            "id": "attrition-denominator",
+            "question": "What denominator should represent employee headcount at year end?",
+            "blocking": True,
+        },
+        {
+            "id": "attrition_threshold",
+            "question": "Which headcount threshold marks attrition?",
+            "blocking": True,
+        },
+    ]
+    text, proposal = _proposal_with_open_questions(question_specs)
+
+    result = workflow_v3_validator.validation_result(v3.parse(text), proposal, protocol=protocol)
+
+    assert result["issue"] == {
+        "code": "v3.open_question.blocking_unresolved",
+        "path": "v3:open_questions[1].blocking",
+        "message": (
+            "Open Question 2 blocks preparation. Ask the user, record their answer in the blueprint "
+            "as a Decision, regenerate the complete proposal, and prepare again. Never change blocking yourself."
+        ),
+    }
+
+
+@pytest.mark.parametrize("protocol", ("v1", "v2"))
+def test_workflow_v3_validator_structural_primary_issue_precedes_blocking_question(protocol):
+    text, proposal = _proposal_with_open_questions([{
+        "id": "attrition-denominator",
+        "question": "What denominator should represent employee headcount at year end?",
+        "blocking": True,
+    }])
+    parsed = v3.parse(text)
+    proposal["authoring_version"] = "invalid-version"
+    proposal["proposal"]["delivery"]["port"] = "static-artifact"
+    structural_issues = v3.validate_proposal(parsed, proposal, require_locked_decisions=False)
+    expected = min(structural_issues, key=lambda item: (item.path, item.code, item.message))
+
+    result = workflow_v3_validator.validation_result(parsed, proposal, protocol=protocol)
+
+    assert result["issue"]["code"] == expected.code
+    assert result["issue"]["path"] == expected.path
+    assert result["issue"]["message"] == expected.message
+    assert result["issue"]["code"] != "v3.open_question.blocking_unresolved"
+
+
+def test_workflow_v3_validator_keeps_existing_issue_field_bounds():
+    parsed = v3.parse(sample())
+    proposal = proposal_for(sample())
+    issue = v3.ValidationIssue(
+        code="c" * 1024,
+        path="p" * 1024,
+        message="m" * 1024,
+    )
+
+    projected = workflow_v3_validator._issue_payload(parsed, proposal, issue, protocol=2)
+
+    assert len(projected["code"].encode("utf-8")) == 128
+    assert len(projected["path"].encode("utf-8")) == 256
+    assert len(projected["message"].encode("utf-8")) == 512
 
 
 def test_workflow_v3_validator_omits_map_for_invalid_path_and_reports_stable_code():
