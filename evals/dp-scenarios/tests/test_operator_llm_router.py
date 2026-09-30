@@ -114,7 +114,7 @@ def test_router_routes_a_declared_decision_and_the_reply_stays_scripted() -> Non
     assert "router_fallback" not in rows[0]["claim"]
 
 
-def test_router_never_sees_answer_text_or_gold() -> None:
+def test_router_sees_source_topics_but_never_decision_answers_or_gold() -> None:
     seen: list[dict] = []
 
     def decide(view: dict) -> dict:
@@ -126,8 +126,9 @@ def test_router_never_sees_answer_text_or_gold() -> None:
     assert WEEKEND not in blob and REVIEW_FIX not in blob
     for fact in FINANCE.ground_truth.values():
         assert fact.fact not in blob
+    # B11 T2 needs declared topic text for opaque source keys such as data.
     for answer in FINANCE.source_answers.values():
-        assert answer not in blob
+        assert answer in blob
     ids = {option["id"] for option in seen[0]["options"]}
     assert {"approval", "decision:weekend_fx", "none", "deflect:decision"} <= ids
     # The generic review authorization is only offered while a review is in play.

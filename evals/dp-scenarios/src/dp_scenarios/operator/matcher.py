@@ -274,6 +274,10 @@ SOLICITATION_PATTERN = re.compile(
     r"\bsay\s+(?:whether|which|if)\b"
     r"|(?:^|[.!?\n]\s*)\s*(?:name|list|select)\s+(?:the\s+)?(?:findings|issues|blockers)\b"
     r"|(?:^|[.!?\n]\s*)\s*for\s+each\s+(?:finding|issue|blocker)\s*,?\s*say\b"
+    r"|\bdecide\s+whether\b"
+    r"|\bor\s+confirm\s+that\b"
+    r"|\btell\s+me\s+\([a-z0-9]\)"
+    r"|\beither\s+send\s+[\"']?approved\b"
     r"|\breply\s+(?:yes|no)\b"
     # "Reply with ..." is an addressed instruction to the operator. Unlike
     # a bare "choose" or "confirm" in a task list, it does not narrate a
@@ -559,7 +563,13 @@ def _active_request_clauses(message: str) -> list[str]:
         clause for clause in asks
         if _OPTIONAL_AMEND_OFFER_PATTERN.search(clause) is None
         and not _is_status_only_clause(clause)
+        and not re.search(
+            r"^\s*i(?:['’]d|\s+would|['’]ll|\s+will)\s+(?:start|create|build)\b"
+            r"[^?]*\bonly\s+on\s+your\s+explicit\s+go-?ahead\b", clause, re.I,
+        )
     ]
+    if not primary and any(_CONDITIONAL_REVISION_PATTERN.search(clause) for clause in clauses):
+        return []
     active_clause = (primary or asks or [None])[-1]
     return [active_clause] if active_clause is not None else []
 
@@ -611,6 +621,24 @@ def _referenced_options_text(message: str, ask_clause: str) -> str | None:
 
     reference = _REFERENCED_OPTIONS_PATTERN.search(ask_clause)
     if reference is None:
+        if re.search(r"\b(?:one of (?:these|the following)|reply with one|pick one)\b", ask_clause, re.I):
+            prose = _NON_PROSE.sub(" ", message)
+            ask_offset = prose.rfind(ask_clause)
+            if ask_offset < 0:
+                return None
+            # Only the adjacent offered list belongs to this reference, never
+            # unrelated bullets in an earlier result or finding recap.
+            tail = prose[ask_offset:]
+            first_bullet = re.search(r"(?m)^[ \t]*[-*]\s+", tail)
+            if first_bullet is None:
+                return None
+            preamble = tail[:first_bullet.start()]
+            if len(preamble) > len(ask_clause) + 100:
+                return None
+            block = re.split(r"\n[ \t]*\n", tail[first_bullet.start():], maxsplit=1)[0]
+            bullets = re.findall(r"(?m)^[ \t]*[-*]\s+(.+)$", block)
+            if len(bullets) >= 2:
+                return "\n".join(bullets)
         return None
     prose = _NON_PROSE.sub(" ", message)
     ask_offset = prose.rfind(ask_clause)
@@ -746,9 +774,14 @@ def _review_fix_request(message: str, context: str = "") -> str | None:
         # addressed request, despite the intervening blank line.
         if _REVIEW_REPLY_TEMPLATE_PATTERN.search(candidate) is None:
             continue
+        if re.search(r"\bapprove\s+\([a-z0-9]\)\s+for\b", candidate, re.I):
+            return candidate
         tail = prose.split(candidate, 1)[-1]
         proposed = re.match(r"\s*>?\s*([^\n]{1,300})", tail)
-        if proposed is not None and _REVIEW_FIX_ACTION_PATTERN.search(proposed.group(1)):
+        if proposed is not None and (
+            _REVIEW_FIX_ACTION_PATTERN.search(proposed.group(1))
+            or re.search(r"\bapprove\s+\([a-z0-9]\)\s+for\b", proposed.group(1), re.I)
+        ):
             return f"{candidate} {proposed.group(1)}"
     for candidate in reversed(request_clauses):
         if _CONDITIONAL_REVISION_PATTERN.search(candidate) is not None:
@@ -854,8 +887,8 @@ _AUTHORIZATION_ALTERNATIVE_PATTERN = re.compile(
 )
 _CONDITIONAL_REVISION_PATTERN = re.compile(
     r"^\s*(?:if|(?:let\s+me\s+know|tell\s+me)\s+if)\s+you\s+"
-    r"(?:want|would\s+(?:(?:like|prefer)|rather))\b.{0,160}"
-    r"\b(?:chang(?:e|ed)|revis(?:e|ed))\b",
+    r"(?:do\s+)?(?:want|would\s+(?:(?:like|prefer)|rather))\b.{0,160}"
+    r"\b(?:chang(?:e|ed)|revis(?:e|ed)|new\s+(?:versioned\s+)?(?:release|workflow|product)|create\s+another\s+release)\b",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -971,7 +1004,7 @@ _REVIEW_FIX_ENUMERATED_CHOICE_PATTERN = re.compile(
     r"\bproceed\s+with\s+(?:all|both|some|none|either|any)\b", re.IGNORECASE
 )
 _REVIEW_REPLY_TEMPLATE_PATTERN = re.compile(
-    r"\breply\s+with\s+(?:this|the\s+following|something\s+like)\s*:\s*$",
+    r"\breply\s+with\s+(?:this|the\s+following|something\s+like)\s*:[*_]*",
     re.IGNORECASE,
 )
 _REVIEW_FINDING_SELECTION_PATTERN = re.compile(
@@ -1572,6 +1605,7 @@ class MatcherBank:
         excluded_decision_ids: frozenset[str],
         available_event_ids: tuple[str, ...],
         active_overlay_ids: tuple[str, ...],
+        allow_suppression_abbreviation: bool = False,
     ) -> DecisionAnswer | None:
         """Select the best declared decision for one actual request clause.
 
@@ -1598,6 +1632,17 @@ class MatcherBank:
                 break
             matches.append(decision)
             excluded.add(decision.decision_id)
+        if not matches and allow_suppression_abbreviation and re.search(r"\bsuppress(?:ed|ion|ing)?\b", clause, re.I):
+            # A suppression choice can abbreviate the declared compound
+            # topic; do not infer unrelated denominator/baseline decisions.
+            matches = [
+                decision for decision in self.answer_sheet.decision_answers.values()
+                if "suppression" in decision.terms
+                and decision.decision_id not in excluded_decision_ids
+                and self.decision_is_available(decision.decision_id, available_event_ids=available_event_ids)
+            ]
+            if len(matches) != 1:
+                return None
         if not matches:
             return None
         if len(matches) == 1:
@@ -1619,6 +1664,12 @@ class MatcherBank:
         """Compatibility hook retained for callers that explicitly revalidate a bank."""
 
         validate_reachable_material(self.persona, self.answer_sheet, obstacle_terms=self.obstacle_terms)
+
+    @staticmethod
+    def has_conditional_revision_offer(message: str) -> bool:
+        """Whether the message offers a future revision conditionally."""
+        return any(_CONDITIONAL_REVISION_PATTERN.search(clause)
+                   for clause in _REQUEST_CLAUSE_SPLIT.split(_NON_PROSE.sub(" ", message)))
 
     @staticmethod
     def has_review_finding_context(message: str) -> bool:
@@ -1668,6 +1719,11 @@ class MatcherBank:
 
         approval = result.approval_requested or bool(APPROVAL_REQUEST_PATTERN.search(message))
         asked = result.solicits_operator or solicits_operator(message)
+        if (result.category is Category.OTHER and not _active_request_clauses(message)
+            and any(_CONDITIONAL_REVISION_PATTERN.search(clause)
+                    for clause in _current_request_clauses(message))):
+            approval = False
+            asked = False
         if approval == result.approval_requested and asked == result.solicits_operator:
             return result
         return replace(result, approval_requested=approval, solicits_operator=asked)
@@ -1712,6 +1768,22 @@ class MatcherBank:
         is_question = "?" in message or bool(INTERROGATIVE_OPENER_PATTERN.match(message))
         request_clauses = _active_request_clauses(message)
         request_text = " ".join(request_clauses)
+        if not request_clauses and any(
+            _CONDITIONAL_REVISION_PATTERN.search(clause)
+            for clause in _current_request_clauses(message)
+        ):
+            return MatchResult(Category.OTHER, "fallback.no-leading", self.persona.no_leading_fallback, matched=False)
+        diagnostic_choice = next((
+            clause for clause in request_clauses
+            if re.search(r"\brun\s+diagnostic\b", clause, re.I)
+            and not re.search(r"\bapprove\s+(?:the\s+)?(?:blueprint|plan)\b", clause, re.I)
+        ), None)
+        if diagnostic_choice is not None:
+            return MatchResult(
+                Category.DECISION_REQUEST, "unmatched.decision_request",
+                self.persona.no_leading_fallback, matched=False,
+                matched_request_clause=diagnostic_choice,
+            )
         approval_clauses = [
             clause
             for clause in request_clauses
@@ -1744,6 +1816,19 @@ class MatcherBank:
                 approval_context = bool(
                     _APPROVAL_CONTEXT_PATTERN.search(prose[paragraph_start:paragraph_end])
                 )
+        blocking_asks = [
+            clause for clause in _current_request_clauses(message)
+            if clause not in approval_clauses
+            and re.search(r"\b(?:blocking|cannot proceed|can't proceed|before (?:I|we) can)\b", clause, re.I)
+            and not re.search(r"\b(?:non[- ]blocking|not blocking|none blocking|neither blocking)\b", clause, re.I)
+            and "?" in clause
+        ]
+        if approval_clauses and blocking_asks and _review_fix_request(message, context) is None:
+            return MatchResult(
+                Category.SOURCE_QUESTION, "unmatched.source_question",
+                self.persona.no_leading_fallback, matched=False,
+                matched_request_clause=blocking_asks[-1],
+            )
         explicit_approval_ask = bool(approval_clauses) or (
             approval_context and not other_substantive_asks
         )
@@ -1810,7 +1895,9 @@ class MatcherBank:
                             or decision.retired_after_overlay not in active_overlays
                         )
                         and any(
-                            _decision_term_present(term, alternatives.casefold())
+                            (_decision_term_present(term, alternatives.casefold())
+                             or (term.casefold() == "suppression"
+                                 and re.search(r"\bsuppress(?:ed|ion|ing)?\b", alternatives, re.I)))
                             for term in decision.terms
                         )
                     ]
@@ -1918,6 +2005,31 @@ class MatcherBank:
                 matched_request_clause=review_disposition_request,
             )
 
+        # A source-value confirmation names a literal declared in the source
+        # answer. Incidental hypothetical releases in the risk recap cannot
+        # turn it into a workflow-revision decision.
+        if approval_rule is None and request_clauses:
+            raw_message = message.replace("`", "")
+            source_confirmation_clauses = _active_request_clauses(raw_message)
+            if source_confirmation_clauses and re.search(
+                r"^\s*tell\s+me\s+which\s+of\s+these\s+you\s+want\b",
+                source_confirmation_clauses[-1], re.I,
+            ):
+                source_confirmation_clauses = _current_request_clauses(raw_message)
+            for key, answer in self.answer_sheet.source_answers.items():
+                declared = re.search(r"\b(?:only|use only)\s+([\w-]+)\s+records\b", answer, re.I)
+                confirmation = next((
+                    clause for clause in source_confirmation_clauses
+                    if declared
+                    and re.search(r"\b(?:confirm|right|correct)\b", clause, re.I)
+                    and re.search(rf"(?<!\w){re.escape(declared.group(1))}(?!\w)", clause, re.I)
+                ), None)
+                if confirmation is not None:
+                    return MatchResult(
+                        Category.SOURCE_QUESTION, f"source.answer.{key}", answer,
+                        answer_key=key, matched_request_clause=confirmation,
+                    )
+
         # A declared decision is more specific than the generic approval
         # persona, but its complete term set must occur in one actual ask
         # clause. Combining separate requests could otherwise manufacture a
@@ -1933,6 +2045,7 @@ class MatcherBank:
                 excluded_decision_ids=excluded_decision_ids,
                 available_event_ids=available_event_ids,
                 active_overlay_ids=active_overlays,
+                allow_suppression_abbreviation=bool(re.search(r"\bsuppress(?:ed|ion|ing)?\b", clause, re.I)),
             )
             if request_decision is not None:
                 request_decision_clause = clause
@@ -1946,7 +2059,8 @@ class MatcherBank:
             for clause in reversed(_current_request_clauses(message)):
                 if (
                     clause in request_clauses
-                    or _QUESTION_CLAUSE_END.search(clause) is None
+                    or (_QUESTION_CLAUSE_END.search(clause) is None
+                        and not re.search(r"\bdecide\s+whether\b", clause, re.I))
                     or _CONDITIONAL_REVISION_PATTERN.search(clause) is not None
                 ):
                     continue
@@ -1955,6 +2069,7 @@ class MatcherBank:
                     excluded_decision_ids=excluded_decision_ids,
                     available_event_ids=available_event_ids,
                     active_overlay_ids=active_overlays,
+                    allow_suppression_abbreviation=bool(re.search(r"\bsuppress(?:ed|ion|ing)?\b", clause, re.I)),
                 )
                 if request_decision is not None:
                     request_decision_clause = clause
@@ -2000,7 +2115,9 @@ class MatcherBank:
                             or decision.retired_after_overlay not in active_overlays
                         )
                         and any(
-                            _decision_term_present(term, alternatives.casefold())
+                            (_decision_term_present(term, alternatives.casefold())
+                             or (term.casefold() == "suppression"
+                                 and re.search(r"\bsuppress(?:ed|ion|ing)?\b", alternatives, re.I)))
                             for term in decision.terms
                         )
                     ]
@@ -2350,7 +2467,7 @@ class MatcherBank:
         )
         if classified.category is Category.OTHER:
             return classified
-        if classified.rule_id == "review.choice_undeclared":
+        if classified.rule_id == "review.choice_undeclared" or classified.rule_id.startswith("source.answer."):
             return classified
         if classified.category is Category.DECISION_REQUEST and classified.decision_id is not None:
             return classified

@@ -19,6 +19,7 @@ driver landed.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,7 +177,15 @@ class PersonaCard:
         template = self.reply_bank.get(
             "review_choice_recommended", (DEFAULT_REVIEW_CHOICE_RECOMMENDED,)
         )[0]
-        return template.replace("{option}", recommended_option)
+        # The label is lifted from the agent's prose: drop its own trailing
+        # punctuation and "(my recommendation)"-style tags so the reply never
+        # reads "recommendation)., as you recommend".
+        label = re.sub(
+            r"\s*\((?:my\s+)?recommend(?:ation|ed)\)\s*$", "",
+            recommended_option.strip().rstrip(".,;:!?").strip(), flags=re.IGNORECASE,
+        ).rstrip(".,;:!?").strip()
+        label = re.sub(r"^(?:my\s+)?recommend(?:ed|ation)\s*:\s*", "", label, flags=re.IGNORECASE)
+        return template.replace("{option}", label)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "PersonaCard":

@@ -16,8 +16,8 @@ fallback in the ledger.
 
 The view is deliberately narrow: the agent's latest message (sentinel-redacted
 by the engine), optionally the one before it, and option ids with one-line
-topic descriptions.  It never carries answer text, gold, tool results, file
-contents or sentinels.  The view is never persisted.
+topic descriptions, including declared source-answer topic text. It never
+carries decision answers, gold, tool results, file contents or sentinels.  The view is never persisted.
 """
 
 from __future__ import annotations
@@ -78,10 +78,13 @@ Return ONE JSON object and nothing else, with exactly these keys:
  "recommended_option_label": <string or null>}
 
 Rules:
-- Route on what the engineer is asking the operator for NOW, in its final ask. A recap of earlier work, a plan summary, a report of status, a statement that something was approved already, or a promise to ask later is NOT an ask: use option_id "none", category "other", solicits_operator false, approval_requested false.
+- Route on what the engineer is asking the operator for NOW, in its final ask. A conditional future offer ("if you want, I can create another release") is not a present request. A recap of earlier work, a plan summary, a report of status, a statement that something was approved already, or a promise to ask later is NOT an ask: use option_id "none", category "other", solicits_operator false, approval_requested false.
 - `approval_requested` is true only when the engineer explicitly asks the operator to approve, sign off, confirm or say Approve so that it may proceed. `solicits_operator` is true whenever the engineer asks the operator for anything at all (an answer, a choice, approval, a fact).
 - Choose a declared decision or fact option only when the ask is actually about that topic. When the ask is a decision, fact or status question no listed topic covers, choose the matching `deflect:` option. Never stretch a topic to fit.
-- If the engineer both requests approval and asks a separate question, route on the question the operator must answer to unblock the engineer, and still set approval_requested true.
+- If the engineer both requests approval and asks a genuinely blocking separate question, route on that question and still set approval_requested true. A disclosed non-blocking assumption or invitation to correct it does not displace an explicit approval ask.
+- Choose decision:review_fix_authorization when the current ask requests authorization to apply reported corrections and offers no alternative options to pick between. For review choices between options, use review_choice, accepting the engineer's recommended option when one is given and otherwise using the no-choice reply.
+- When referenced alternatives unambiguously include a declared decision, choose that decision rather than generic deflection. Do not answer unrelated undeclared denominator or baseline choices.
+- Never select a numbered-option answer for a conditional future release offer without a present choice request and the corresponding offered options.
 - category must match the chosen option: approval -> approval_request; decision:*, review_choice and deflect:decision -> decision_request; fact:*, source:* and deflect:source_question -> source_question; status:* and deflect:status -> status_query; none -> other.
 - Any option other than "none" requires solicits_operator true. "approval" requires approval_requested true.
 - `recommended_option_label` is used only with review_choice: the exact label of the alternative the engineer itself recommends, copied verbatim from agent_message, else null. Always null otherwise.
@@ -187,8 +190,8 @@ def build_options(
     the run has not unlocked is not offered at all.  Already-delivered
     decisions stay offered but are annotated, and the engine enforces
     answered-once after routing.  The generic review authorization is offered
-    only while a review is in play.  Descriptions are the declared topic
-    terms, never the answer text.
+    only while a review is in play. Descriptions use declared decision topic
+    terms and source-answer text, so opaque source keys still have a topic.
     """
 
     sheet = matcher.answer_sheet
@@ -212,7 +215,7 @@ def build_options(
                     "decision",
                     "decision_request",
                     "The engineer reports review findings and asks whether or how to fix, apply, "
-                    "repair or dispose of them (authorization to proceed with the fixes).",
+                    "repair them (authorization to apply corrections, with no alternative options to pick between).",
                 )
             )
             continue
@@ -240,7 +243,8 @@ def build_options(
                 "review_choice",
                 "decision_request",
                 "The engineer presents labelled alternatives for handling review findings and asks "
-                "which to take; put the alternative it recommends, verbatim, in recommended_option_label.",
+                "which to take. Put the alternative it recommends, "
+                "verbatim, in recommended_option_label.",
             )
         )
     for key in sorted(sheet.ground_truth):
@@ -255,7 +259,7 @@ def build_options(
         )
     for key in sorted(sheet.source_answers):
         options.append(
-            RouterOption(SOURCE_PREFIX + key, "source", "source_question", f"A question about the source data topic: {key}")
+            RouterOption(SOURCE_PREFIX + key, "source", "source_question", f"A question about the source data topic {key}: {sheet.source_answers[key]}")
         )
     for key in sorted(sheet.status_answers):
         options.append(

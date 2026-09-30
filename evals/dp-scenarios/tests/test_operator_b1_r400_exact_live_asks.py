@@ -134,13 +134,15 @@ def test_failed_turns_keep_consent_and_review_choices_separate() -> None:
         + "\nThe rate limit is slowing us down; just use the first page if necessary."
     )
     approvals = [row for row in result.ledger_rows if row.get("action_kind") == "spec_approved"]
-    assert [row["turn"] for row in approvals] == [4]
+    # Turn 12 is the second ask after one clarification at turn 9;
+    # the previously deferred updated-plan approval now answers it.
+    assert [row["turn"] for row in approvals] == [4, 12]
     assert approvals[0]["artifact_ref"] == sent[3]
 
     # Turns 9 and 12 are live approval asks. An earlier source caveat and the
     # fixed raw-surface option cannot supply consent or silently choose a fix.
     assert sent[8] == APPROVAL_REPLY
-    assert sent[11] == APPROVAL_REPLY
+    assert sent[11] == script_turn_text(SHEET.turns[10])
     raw_choice = SHEET.decision_answers["raw_output_surface"].answer
     assert raw_choice not in sent[11:]
     for operator_turn, expected in (
@@ -201,12 +203,13 @@ def test_raw_choice_beat_stays_owed_until_an_unoccupied_turn() -> None:
     )
     result = OperatorEngine(script, transport).run()
 
-    assert transport.message_texts[1:3] == (APPROVAL_REPLY, APPROVAL_REPLY)
+    # Second ask after one clarification consumes the later approval slot.
+    assert transport.message_texts[1:3] == (APPROVAL_REPLY, "Approved later.")
     assert transport.message_texts[3] == raw_choice
     assert transport.message_texts.count(raw_choice) == 1
     assert [
         row["turn"] for row in result.ledger_rows if row.get("action_kind") == "spec_approved"
-    ] == [5]
+    ] == [3]
 
 
 def test_source_answer_still_suppresses_a_repeat() -> None:
