@@ -92,7 +92,8 @@ Two rules that fail at load and surprise people:
 - `turns[0]` must **equal `opening_message` exactly** — same string, not a
   paraphrase.
 
-`ground_truth`, `driver_forbidden_terms`, `gap_stance` and `reapproval` are
+`ground_truth`, `driver_forbidden_terms`, `gap_stance`, `reapproval` and
+`source_answer_terms` are
 optional keys. A sheet without them keeps the existing behavior.
 
 - `opening_message` — the contributor's own vague first words, verbatim.
@@ -103,6 +104,15 @@ optional keys. A sheet without them keeps the existing behavior.
   - `approval: true` — transmitting this turn *is* the approval of record.
 - `ground_truth` — facts the operator reveals when asked. Each has `terms` (the
   words in an agent's question that trigger it) and `fact` (what it then says).
+- `source_answer_terms` — optional aliases for existing `source_answers`
+  keys, such as `period: [baseline, reporting period]`. Each alias list must
+  be non-empty; undeclared source keys fail at load. Explicit compound asks
+  can leave a secondary source answer owed until the next delivery slot.
+- A `decision_answers` entry may set `clarify_first: true` (boolean, default
+  `false`) to plant the persona's ambiguous `decision_request` reply on the
+  first ask. Only a transmitted reply advances this state, keyed by decision
+  ID. The next ask for the same decision gets its declared `answer` (or first
+  stage); the initial clarification never counts as a delivered decision.
 - `driver_forbidden_terms` — vocabulary the agent must discover for itself.
   Required if the scenario will ever run with a model-driven operator.
 - `gap_stance` — what it *means* here when the operator cannot answer

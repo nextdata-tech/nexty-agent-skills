@@ -799,6 +799,34 @@ the answer actually sent at the start of a turn. Follow-ups that grade an
 authorization use the delivered fields; the last selected answer may never
 have reached the agent.
 
+A decision can opt into a planted ambiguity with `clarify_first: true`
+(a boolean, default `false`). On its first ask, the operator sends the
+persona's `decision_request` reply instead of the declared answer. Only an
+actually transmitted clarification advances the state, keyed by decision ID;
+the next ask for that decision receives its declared answer (or first stage).
+The clarification is not recorded as a delivered decision. For example:
+
+```yaml
+decision_answers:
+  B6-suppression-N:
+    terms: [small-group, suppression]
+    clarify_first: true
+    answer: "Suppress department-month values under five people and mark them as suppressed."
+```
+
+An optional `source_answer_terms` mapping declares aliases for existing
+`source_answers` keys, for example `period: [baseline, reporting period]`.
+The loader rejects undeclared source keys and empty alias lists. In scripted
+mode, aliases in explicit request clauses identify secondary source answers
+in compound asks. In LLM mode, the router selects secondary source or fact
+answers through `additional_option_ids`; the regex matcher does not replace
+a valid router choice. Secondary answers remain owed until transmitted,
+without replacing the first ambiguity plant or a clarified approval.
+
+For review dispositions, the router returns `recommended_option_labels` in
+finding order so the reply accepts each recommendation. The parser also
+accepts the earlier singular `recommended_option_label` response shape.
+
 An optional `scenario.yaml` `chain` block declares `trigger: first_publication`,
 `prefix_turns`, `source_family`, `from_state`, `to_state`, `decision_overlay`,
 and `stage_values`. The loader rejects unknown keys, undeclared overlays, and

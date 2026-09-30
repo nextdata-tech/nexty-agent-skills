@@ -58,6 +58,7 @@ from .matcher import (
     MatcherError,
     asks_for_a_choice,
     is_review_disposition_ask,
+    _operator_request_clauses,
     review_finding_ids,
 )
 from .router import OperatorRouter, RouterView, build_options
@@ -1280,16 +1281,17 @@ class OperatorEngine:
         delivered_decision_ids: frozenset[str],
         decision_stage_counts: Mapping[str, int],
         markers: Sequence[bytes],
-    ) -> tuple[MatchResult | None, str | None]:
+    ) -> tuple[MatchResult | None, tuple[MatchResult, ...], str | None]:
         """Ask the router which declared response applies to ``agent_message``.
 
-        Returns ``(match, None)`` for a validated, currently-available choice
-        and ``(None, reason)`` when the caller must fall back to the regex
-        matcher.  ``(None, None)`` means the router was not consulted.
+        Returns the validated primary choice, any separately declared answers
+        the router selected from the same compound ask, and a failure reason.
+        ``(None, (), reason)`` means the caller must fall back to regex;
+        ``(None, (), None)`` means the router was not consulted.
         """
 
         if self.router is None or not agent_message.strip():
-            return None, None
+            return None, (), None
         review_in_play = bool(
             review_context
             or self.matcher.has_review_finding_context(agent_message)
@@ -1310,19 +1312,28 @@ class OperatorEngine:
         outcome = self.router.route(view)
         decision = outcome.decision
         if decision is None:
-            return None, outcome.failure_reason or "router_error"
-        return (
-            self.matcher.route_result(
+            return None, (), outcome.failure_reason or "router_error"
+        primary = self.matcher.route_result(
                 decision.option.option_id,
                 decision.option.kind,
                 message=agent_message,
                 approval_requested=decision.approval_requested,
                 solicits_operator=decision.solicits_operator,
-                recommended_option_label=decision.recommended_option_label,
+                recommended_option_labels=decision.recommended_option_labels,
                 decision_stage_counts=decision_stage_counts,
-            ),
-            None,
+            )
+        secondary = tuple(
+            self.matcher.route_result(
+                option.option_id,
+                option.kind,
+                message=agent_message,
+                approval_requested=False,
+                solicits_operator=True,
+                decision_stage_counts=decision_stage_counts,
+            )
+            for option in decision.additional_options
         )
+        return primary, secondary, None
 
     def _message_for(self, base: str, injections: tuple[EventInjection, ...]) -> OperatorMessage:
         attachments = tuple(
@@ -1559,6 +1570,15 @@ class OperatorEngine:
         delivered_decision_clauses: dict[str, set[str]] = {}
         delivered_decision_stage_counts: dict[str, int] = {}
         delivered_decision_ids: set[str] = set()
+        # A clarify-first decision is considered clarified only after its
+        # persona reply was actually transmitted. Selection alone must not
+        # advance this state (a fixed beat or failed driver may displace it).
+        clarified_decision_ids: set[str] = set()
+        pending_clarification_id: str | None = None
+        # Compound asks can name more than one declared answer. Keep the
+        # secondary choices until a later slot can deliver them; a primary
+        # decision and its clarification keep priority.
+        owed_secondary_answers: deque[MatchResult] = deque()
         source_challenge_counts: dict[str, int] = {}
         pending_ask_back_decision = False
         review_fix_authorized = False
@@ -1617,9 +1637,39 @@ class OperatorEngine:
         driver_flexible_slot_seen = False
         review_repair = self.script.answer_sheet.decision_answers.get("review_fix_authorization")
 
+        def live_review_request(current_match: MatchResult | None) -> bool:
+            return bool(
+                current_match is not None
+                and current_match.solicits_operator
+                and (
+                    current_match.rule_id == "review.choice_undeclared"
+                    or current_match.decision_id == "review_fix_authorization"
+                )
+            )
+
+        def stale_approval_slot(turn: ScriptTurn, current_match: MatchResult | None) -> bool:
+            """Whether a scripted approval has no current plan to approve."""
+
+            return bool(
+                turn.approval
+                and revision_approval_text is not None
+                and not plan_rebound_by_workflow.get(current_revision_workflow, False)
+                and not (
+                    current_match is not None
+                    and current_match.approval_requested
+                    and current_match.solicits_operator
+                )
+                and not live_review_request(current_match)
+            )
+
         def fixed_beat_ready(
             turn: ScriptTurn, current_match: MatchResult | None
         ) -> bool:
+            if stale_approval_slot(turn, current_match):
+                # Approval text is a response to a live consent request, not
+                # a free-standing beat. In particular, an old approval slot
+                # after publication stays owed without being transmitted.
+                return False
             # A fixed review-repair authorization must never be released just
             # because a finding was mentioned earlier in the conversation.
             # Other fixed beats keep the existing queue behavior; the
@@ -1685,6 +1735,7 @@ class OperatorEngine:
                 scheduled_turn = ScriptTurn("Please continue.")
             self.turn_pointer = index - 1
             self._current_turn_active = True
+            promoted_secondary: MatchResult | None = None
             if (
                 next_match is not None
                 and next_match.decision_id is not None
@@ -1699,6 +1750,69 @@ class OperatorEngine:
                 next_reply = None
                 next_match = None
                 pending_sheet_key = None
+            # An answer explicitly asked for alongside the previous primary
+            # choice may use a neutral later slot. It never displaces a live
+            # decision or approval request; those have their own answer or
+            # clarification to deliver first.
+            if owed_secondary_answers:
+                queued_answer = owed_secondary_answers[0]
+                promoted_secondary = queued_answer
+                same_answer_selected = bool(
+                    next_match is not None
+                    and next_match.answer_key is not None
+                    and next_match.answer_key == queued_answer.answer_key
+                )
+                approval_has_priority = bool(
+                    next_match is not None
+                    and next_match.category is Category.APPROVAL_REQUEST
+                    and next_match.approval_requested
+                    and next_match.solicits_operator
+                    and (
+                        current_revision_workflow,
+                        consent_generation_by_workflow.get(current_revision_workflow, 0),
+                    ) in clarification_sent
+                )
+                live_approval_ask = bool(
+                    next_match is not None
+                    and next_match.category is Category.APPROVAL_REQUEST
+                    and next_match.approval_requested
+                    and next_match.solicits_operator
+                )
+                clarifying_first = pending_clarification_id is not None
+                can_append = bool(
+                    next_match is not None
+                    and not approval_has_priority
+                    and not clarifying_first
+                    and (
+                        next_match.decision_id is not None
+                        or next_match.answer_key is not None
+                        or next_match.rule_id == "review.choice_undeclared"
+                    )
+                )
+                if same_answer_selected:
+                    # The answer sheet already selected this queued answer;
+                    # transmit it once and retire the queue only on send.
+                    pass
+                elif live_approval_ask and not approval_has_priority and not clarifying_first:
+                    # A source fact explicitly owed from the earlier compound
+                    # ask takes the next slot before initial consent. The
+                    # approval line remains owed by the existing approval
+                    # mechanism, and a clarification that already established
+                    # consent scope always retains priority.
+                    next_match = queued_answer
+                    next_reply = queued_answer.reply
+                    pending_sheet_key = _served_reply_key(queued_answer.rule_id)
+                elif can_append and next_reply is not None:
+                    # A compound ask gets its secondary declared answer in the
+                    # same response as the primary answer. This keeps a live
+                    # approval clarification ahead of the queued scope answer.
+                    next_reply = f"{next_reply}\n{queued_answer.reply}"
+                elif not approval_has_priority and not clarifying_first and (
+                    next_match is None or not next_match.solicits_operator
+                ):
+                    next_match = queued_answer
+                    next_reply = queued_answer.reply
+                    pending_sheet_key = _served_reply_key(queued_answer.rule_id)
             publication_snapshot: Mapping[str, object] | None = None
             if self.script.events.publication_card_ids and self.publication_history_reader is not None:
                 try:
@@ -1818,6 +1932,7 @@ class OperatorEngine:
                 and (
                     owed_fixed_beats
                     or not fixed_beat_ready(scheduled_turn, next_match)
+                    or stale_approval_slot(scheduled_turn, next_match)
                     or (decision_answer_pending and not scheduled_turn.approval)
                     or (clarified_approval_ask and not scheduled_turn.approval)
                     or (unanswered_review_disposition and not scheduled_turn.approval)
@@ -2368,6 +2483,21 @@ class OperatorEngine:
                 and (not authorable or driver_fallback_transmitted or driver_conveyed)
             ):
                 served_reply_keys.add(pending_sheet_key)
+            if (
+                promoted_secondary is not None
+                and selected_base is next_reply
+                and next_reply is not None
+                and next_reply in message.text
+                and promoted_secondary.reply in message.text
+                and (not authorable or driver_fallback_transmitted or driver_conveyed)
+            ):
+                secondary_key = _served_reply_key(promoted_secondary.rule_id)
+                if secondary_key is not None:
+                    served_reply_keys.add(secondary_key)
+                owed_secondary_answers = deque(
+                    item for item in owed_secondary_answers
+                    if item is not promoted_secondary
+                )
             for injection in delivered:
                 fired_events.append(injection.card_id)
                 delivered_event_turns[injection.card_id] = index
@@ -2395,6 +2525,15 @@ class OperatorEngine:
                 and next_reply is not None
                 and next_reply in message.text
             )
+            if (
+                pending_clarification_id is not None
+                and selected_base is next_reply
+                and next_reply is not None
+                and next_reply in message.text
+                and (not authorable or driver_fallback_transmitted or driver_conveyed)
+            ):
+                clarified_decision_ids.add(pending_clarification_id)
+                pending_clarification_id = None
             delivered_decision_id = (
                 next_match.decision_id
                 if decision_answer_delivered and next_match is not None
@@ -2492,7 +2631,7 @@ class OperatorEngine:
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
                 pending_review_finding_keys = _review_finding_keys(agent_message)
-            routed_match, router_failure = self._route_match(
+            routed_match, routed_secondary_matches, router_failure = self._route_match(
                 agent_message,
                 previous_agent_message=previous_agent_message,
                 review_context=pending_review_context,
@@ -2503,6 +2642,7 @@ class OperatorEngine:
             )
             if routed_match is not None:
                 match = routed_match
+                secondary_matches = routed_secondary_matches
             else:
                 match = self.matcher.reply_for(
                     agent_message,
@@ -2513,6 +2653,27 @@ class OperatorEngine:
                 if router_failure is not None:
                     match = replace(
                         match, router_fallback=True, router_failure_reason=router_failure
+                    )
+                secondary_matches = ()
+                # Scripted mode has no model list. Its only compound-answer
+                # aliases are those explicitly declared for source keys on
+                # this answer sheet. In router mode we rely solely on the
+                # validated additional_option_ids field above.
+                if match.decision_id is not None:
+                    secondary_matches = tuple(
+                        self.matcher.route_result(
+                            f"source:{key}",
+                            "source",
+                            message=agent_message,
+                            approval_requested=False,
+                            solicits_operator=True,
+                            decision_stage_counts=delivered_decision_stage_counts,
+                        )
+                        for key, _answer in self.script.answer_sheet.source_answers_for(
+                        " ".join(_operator_request_clauses(agent_message)),
+                        include_keys=False,
+                    )
+                        if key != match.answer_key
                     )
             if (
                 match.decision_id is not None
@@ -2533,21 +2694,81 @@ class OperatorEngine:
                     # Re-run the ordered matcher with only this decision
                     # removed. A different rule can then answer the actual
                     # clause instead of losing the turn to an empty reply.
-                    match = self.matcher.reply_for(
-                        agent_message,
-                        context=pending_review_context,
-                        excluded_decision_ids=frozenset({match.decision_id}),
-                        available_event_ids=tuple(fired_events),
-                        decision_stage_counts=delivered_decision_stage_counts,
-                    )
-                    if router_failure is not None or routed_match is not None:
-                        # A routed choice the engine's answered-once rule
-                        # refuses is a recorded fallback, not a silent one.
+                    if routed_match is not None:
+                        # A valid model choice still passes through the
+                        # deterministic answered-once guard. Do not ask the
+                        # regex matcher to replace that choice in llm mode;
+                        # deflect the refused repeat using the persona bank.
+                        match = self.matcher.route_result(
+                            "deflect:decision",
+                            "deflect",
+                            message=agent_message,
+                            approval_requested=routed_match.approval_requested,
+                            solicits_operator=routed_match.solicits_operator,
+                            decision_stage_counts=delivered_decision_stage_counts,
+                        )
                         match = replace(
                             match,
                             router_fallback=True,
-                            router_failure_reason=router_failure or "router_answered_once",
+                            router_failure_reason="router_answered_once",
                         )
+                    else:
+                        match = self.matcher.reply_for(
+                            agent_message,
+                            context=pending_review_context,
+                            excluded_decision_ids=frozenset({match.decision_id}),
+                            available_event_ids=tuple(fired_events),
+                            decision_stage_counts=delivered_decision_stage_counts,
+                        )
+                        if router_failure is not None:
+                            # A failed router already fell back to the
+                            # ordered matcher; preserve the provider failure.
+                            match = replace(
+                                match,
+                                router_fallback=True,
+                                router_failure_reason=router_failure,
+                            )
+
+            # The opt-in first response asks the persona to clarify. The
+            # answer remains selected but is not marked delivered and does
+            # not count as answered until a later same-decision ask is routed.
+            if (
+                pending_clarification_id is not None
+                and pending_clarification_id not in clarified_decision_ids
+                and match.decision_id != pending_clarification_id
+            ):
+                # A different selected response supersedes the old pending
+                # clarification. Never attach the old decision id to this new
+                # outgoing persona reply.
+                pending_clarification_id = None
+            if match.decision_id is not None:
+                declared_decision = self.script.answer_sheet.decision_answers.get(match.decision_id)
+                if (
+                    declared_decision is not None
+                    and declared_decision.clarify_first
+                    and match.decision_id not in clarified_decision_ids
+                ):
+                    pending_clarification_id = match.decision_id
+                    match = replace(
+                        match,
+                        rule_id="persona.decision_request",
+                        reply=self.script.persona.replies_for("decision_request")[0],
+                        decision_id=None,
+                        answer_key=None,
+                        matched=False,
+                        ground_truth=False,
+                        decision_stage=None,
+                        decision_final=None,
+                    )
+
+            for secondary in secondary_matches:
+                if secondary.answer_key == match.answer_key:
+                    continue
+                key = _served_reply_key(secondary.rule_id)
+                if key is not None and key not in served_reply_keys and not any(
+                    item.answer_key == secondary.answer_key for item in owed_secondary_answers
+                ):
+                    owed_secondary_answers.append(secondary)
 
             # A chain transition can be reported by a transport completion
             # callback while this turn is being returned. Keep the current
@@ -3033,6 +3254,7 @@ class OperatorEngine:
                 len(records) >= self.script.turn_budget
                 and (
                     pending_review_disposition
+                    or bool(owed_secondary_answers)
                     or (
                         next_match is not None
                         and next_match.solicits_operator
@@ -3047,6 +3269,11 @@ class OperatorEngine:
                 # The budget cannot be extended to flush a displaced beat.
                 # An unanswered final question above keeps its more specific
                 # terminal state; otherwise this is an incomplete script.
+                terminal_state = TerminalState.SCRIPT_EXHAUSTED
+                reason = "script_exhausted"
+            elif owed_secondary_answers:
+                # A compound ask is not complete while its separately
+                # declared secondary answer remains undelivered.
                 terminal_state = TerminalState.SCRIPT_EXHAUSTED
                 reason = "script_exhausted"
             else:
