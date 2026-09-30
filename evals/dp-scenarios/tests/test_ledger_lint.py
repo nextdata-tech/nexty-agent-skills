@@ -789,3 +789,13 @@ def test_supersession_diff_requires_a_declared_term(tmp_path: Path) -> None:
     write_ledger(path, complete_rows())
     with pytest.raises(ValueError, match="term"):
         supersession_diff(path, term=None, change_turn=2)  # type: ignore[arg-type]
+
+
+def test_multi_word_answer_sheet_keys_are_accepted_rule_ids() -> None:
+    from dp_scenarios.ledger.lint import MATCHED_RULE_ID_RE
+
+    assert MATCHED_RULE_ID_RE.fullmatch("source.answer.event id")
+    assert MATCHED_RULE_ID_RE.fullmatch("source.answer.billing contacts")
+    assert MATCHED_RULE_ID_RE.fullmatch("source.answer.event id  x") is None
+    assert MATCHED_RULE_ID_RE.fullmatch("source.answer. event") is None
+    assert MATCHED_RULE_ID_RE.fullmatch("the agent said yes") is None

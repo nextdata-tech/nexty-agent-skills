@@ -53,7 +53,9 @@ MATCHED_RULE_ID_RE = re.compile(
     r"persona\.(?:source_question|approval_request|decision_request|status_query|other|diagnostic_request)|"
     r"stance\.ask_back\.accept_recommendation|"
     r"unmatched\.(?:source_question|decision_request|status_query)|"
-    r"(?:source|decision|status)\.answer\.[A-Za-z0-9][A-Za-z0-9_.-]*|"
+    # Answer-sheet keys may be multi-word ("event id"), so single spaces are
+    # allowed between key words; nothing else widens.
+    r"(?:source|decision|status)\.answer\.[A-Za-z0-9][A-Za-z0-9_.-]*(?: [A-Za-z0-9_.-]+)*|"
     r"ground_truth\.[A-Za-z0-9][A-Za-z0-9_.-]*|"
     # Harness-authored literals emitted directly by the operator's generic
     # rule bank and its escalation branches (matcher.py's ``_RULES`` and

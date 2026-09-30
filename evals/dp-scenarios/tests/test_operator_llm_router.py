@@ -358,11 +358,6 @@ def test_every_routed_rule_id_is_lint_accepted() -> None:
     )
     assert options
     for option in options:
-        if " " in option.option_id.split(":", 1)[-1]:
-            # A spaced answer-sheet key yields the same ``source.answer.<key>``
-            # id on the regex path; that is a pre-existing lint gap, not the
-            # router's to paper over.
-            continue
         result = matcher.route_result(
             option.option_id,
             option.kind,
