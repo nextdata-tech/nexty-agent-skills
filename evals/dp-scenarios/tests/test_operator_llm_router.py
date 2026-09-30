@@ -240,6 +240,89 @@ def test_invalid_router_output_falls_back_to_regex_and_is_recorded(response, rea
     assert "routed_by" not in row["claim"]
 
 
+def test_current_router_schema_requires_lists_and_only_allows_solicited_source_extras() -> None:
+    matcher = MatcherBank(PERSONA, FINANCE)
+    options = build_options(
+        matcher,
+        available_event_ids=(),
+        delivered_decision_ids=frozenset(),
+        decision_stage_counts={},
+        review_in_play=False,
+    )
+    view = RouterView("What is the source and supporting data?", "", options)
+
+    def current(**updates):
+        payload = {
+            "category": "source_question",
+            "option_id": "source:source",
+            "approval_requested": False,
+            "solicits_operator": True,
+            "recommended_option_labels": [],
+            "additional_option_ids": [],
+        }
+        payload.update(updates)
+        return json.dumps(payload)
+
+    valid = validate_response(current(additional_option_ids=["source:data"]), view)
+    assert valid.decision is not None
+    assert [item.option_id for item in valid.decision.additional_options] == ["source:data"]
+
+    for field, invalid in (
+        ("recommended_option_labels", None),
+        ("recommended_option_labels", "Option A"),
+        ("additional_option_ids", None),
+        ("additional_option_ids", "source:data"),
+    ):
+        outcome = validate_response(current(**{field: invalid}), view)
+        assert outcome.decision is None and outcome.failure_reason == "router_invalid_schema"
+
+    review_options = build_options(
+        matcher,
+        available_event_ids=(),
+        delivered_decision_ids=frozenset(),
+        decision_stage_counts={},
+        review_in_play=True,
+    )
+    legacy_view = RouterView("The review recommends Option A.", "", review_options)
+    legacy = {
+        "category": "decision_request",
+        "option_id": "review_choice",
+        "approval_requested": False,
+        "solicits_operator": True,
+        "recommended_option_label": "Option A",
+    }
+    assert validate_response(json.dumps(legacy), legacy_view).decision is not None
+    malformed_legacy = {**legacy, "recommended_option_label": []}
+    outcome = validate_response(json.dumps(malformed_legacy), legacy_view)
+    assert outcome.decision is None and outcome.failure_reason == "router_invalid_schema"
+
+    unsolicited = validate_response(
+        json.dumps({
+            "category": "other",
+            "option_id": "none",
+            "approval_requested": False,
+            "solicits_operator": False,
+            "recommended_option_labels": [],
+            "additional_option_ids": ["source:data"],
+        }),
+        view,
+    )
+    assert unsolicited.decision is None and unsolicited.failure_reason == "router_inconsistent"
+
+    decision_extra = validate_response(
+        json.dumps({
+            "category": "decision_request",
+            "option_id": "decision:weekend_fx",
+            "approval_requested": False,
+            "solicits_operator": True,
+            "recommended_option_labels": [],
+            "additional_option_ids": ["decision:reversal"],
+        }),
+        view,
+    )
+    assert decision_extra.decision is None and decision_extra.failure_reason == "router_inconsistent"
+
+
 def test_a_staged_decision_that_is_not_yet_available_is_rejected_then_fallback() -> None:
     # same_month_classification unlocks only after event B7-same-month fires.
     matcher = MatcherBank(MRR.persona, MRR.answer_sheet)
@@ -314,8 +397,12 @@ def test_provider_exception_falls_back_without_leaking_its_message() -> None:
 def test_answered_once_is_still_enforced_for_a_routed_decision() -> None:
     # The router insists on weekend_fx every time.  The first (and a verbatim
     # re-ask) are answered; a *different* question about it is not re-answered
-    # from the routed choice -- the engine's own rule refuses it and the regex
-    # path, with the decision excluded, decides.
+    # from the routed choice -- the engine's own rule refuses it and deflects.
+    # The regex path would instead match the source answer after excluding the
+    # already-delivered decision, so this pins the model choice against an
+    # adversarial matcher override.
+    # This expectation intentionally changed: llm mode must not let a regex
+    # re-match replace a valid model choice with an unrelated source answer.
     router = _router(
         lambda view: _pick("decision:weekend_fx", "decision_request")
         if "weekend" in view["agent_message"].casefold()
@@ -331,12 +418,47 @@ def test_answered_once_is_still_enforced_for_a_routed_decision() -> None:
         ],
         router,
     )
+    regex_alternative = MatcherBank(PERSONA, FINANCE).reply_for(
+        "What data should I use to verify the weekend rate?",
+        excluded_decision_ids=frozenset({"weekend_fx"}),
+    )
+    assert regex_alternative.answer_key == "data"
+    assert regex_alternative.reply == FINANCE.source_answers["data"]
     assert transport.message_texts[2] == WEEKEND
     assert transport.message_texts[3] == WEEKEND
     assert transport.message_texts[4] != WEEKEND
     third = result.turns[3].match
     assert third.router_fallback and third.router_failure_reason == "router_answered_once"
-    assert third.routed_by is None
+    assert third.routed_by == "llm"
+
+
+def test_valid_router_choices_never_call_the_regex_reply_matcher(monkeypatch) -> None:
+    original_reply_matcher = MatcherBank.reply_for
+
+    def forbidden_reply_matcher(self, message, *args, **kwargs):
+        # Empty transport completions do not consult the router, so its
+        # ordinary fallback remains available when there was no model choice.
+        if not message.strip():
+            return original_reply_matcher(self, message, *args, **kwargs)
+        raise AssertionError("a valid router choice must not rerun the regex matcher")
+
+    monkeypatch.setattr(MatcherBank, "reply_for", forbidden_reply_matcher)
+    router = _router(
+        lambda view: _pick("decision:weekend_fx", "decision_request")
+        if "weekend" in view["agent_message"].casefold()
+        else _pick("none", "other", solicits=False)
+    )
+    result, transport = _run(
+        _script(5),
+        [
+            "Should we exclude the weekend rate?",
+            "What data should I use to verify the weekend rate?",
+        ],
+        router,
+    )
+    assert transport.message_texts[1] == WEEKEND
+    assert result.turns[1].match.rule_id == "unmatched.decision_request"
+    assert result.turns[1].match.routed_by == "llm"
 
 
 def test_none_routes_to_the_no_leading_fallback_and_asks_nothing() -> None:

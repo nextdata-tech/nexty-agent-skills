@@ -169,23 +169,36 @@ class PersonaCard:
             return self.reply_bank.get(category, (DEFAULT_REVIEW_CHOICE,))
         return self.reply_bank.get(category, (self.fallback,))
 
-    def review_choice_reply(self, recommended_option: str | None) -> str:
-        """Accept a named recommendation or delegate an undeclared choice."""
+    def review_choice_reply(
+        self, recommended_option: str | Sequence[str] | None
+    ) -> str:
+        """Accept every named recommendation or delegate an undeclared choice."""
 
-        if recommended_option is None:
+        if recommended_option is None or recommended_option == () or recommended_option == []:
             return self.replies_for("review_choice")[0]
         template = self.reply_bank.get(
             "review_choice_recommended", (DEFAULT_REVIEW_CHOICE_RECOMMENDED,)
         )[0]
-        # The label is lifted from the agent's prose: drop its own trailing
-        # punctuation and "(my recommendation)"-style tags so the reply never
-        # reads "recommendation)., as you recommend".
-        label = re.sub(
-            r"\s*\((?:my\s+)?recommend(?:ation|ed)\)\s*$", "",
-            recommended_option.strip().rstrip(".,;:!?").strip(), flags=re.IGNORECASE,
-        ).rstrip(".,;:!?").strip()
-        label = re.sub(r"^(?:my\s+)?recommend(?:ed|ation)\s*:\s*", "", label, flags=re.IGNORECASE)
-        return template.replace("{option}", label)
+        labels = (recommended_option,) if isinstance(recommended_option, str) else tuple(recommended_option)
+        cleaned: list[str] = []
+        for recommended in labels:
+            # The label is lifted from the agent's prose: drop its own trailing
+            # punctuation and "(my recommendation)"-style tags so the reply never
+            # reads "recommendation)., as you recommend".
+            label = re.sub(
+                r"\s*\((?:my\s+)?recommend(?:ation|ed)\)\s*$", "",
+                recommended.strip().rstrip(".,;:!?").strip(), flags=re.IGNORECASE,
+            ).rstrip(".,;:!?").strip()
+            label = re.sub(
+                r"^(?:my\s+)?recommend(?:ed|ation)\s*:\s*", "", label,
+                flags=re.IGNORECASE,
+            )
+            if label and label.casefold() not in {item.casefold() for item in cleaned}:
+                cleaned.append(label)
+        if not cleaned:
+            return self.replies_for("review_choice")[0]
+        combined = cleaned[0] if len(cleaned) == 1 else " and ".join(cleaned)
+        return template.replace("{option}", combined)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "PersonaCard":

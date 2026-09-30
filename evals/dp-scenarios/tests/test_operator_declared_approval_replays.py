@@ -55,7 +55,12 @@ def _approval_text(scenario: Any, ordinal: int = 0) -> str:
 
 
 def _script(scenario: Any, turns: tuple[object, ...] | None = None) -> OperatorScript:
-    resolved = turns or (scenario.answer_sheet.opening_message, "Please continue.")
+    resolved = turns or (
+        scenario.answer_sheet.opening_message,
+        "Please continue.",
+        "Please continue.",
+        "Please continue.",
+    )
     return OperatorScript.from_components(
         scenario.persona,
         scenario.answer_sheet,
@@ -284,7 +289,10 @@ def test_b1_review_choice_keeps_recommendation_acceptance(mode: str) -> None:
     if mode == "stub_llm":
         assert transport.message_texts[1] == "Go with option 1, as you recommend."
     else:
-        assert transport.message_texts[1] == CRM.persona.review_choice_reply(None)
+        # This live B1 review labels option 1 as “my recommendation”; the
+        # scripted matcher now accepts that explicit recommendation marker,
+        # matching the model-routed choice while keeping it undeclared.
+        assert transport.message_texts[1] == "Go with option 1, as you recommend."
     assert result.turns[1].delivered_decision_id is None
 
 
@@ -300,7 +308,7 @@ def test_b6_referenced_suppression_alternatives_select_the_declared_decision(
     answer = HEADCOUNT.answer_sheet.decision_answers["B6-suppression-N"].answer
     result, transport = _run(
         HEADCOUNT,
-        [target],
+        [target, target],
         mode,
         router_target=target,
         option_id="decision:B6-suppression-N",
@@ -308,9 +316,15 @@ def test_b6_referenced_suppression_alternatives_select_the_declared_decision(
     )
 
     assert scope in target.casefold()
-    assert transport.message_texts[1] == answer
-    assert result.turns[0].match.decision_id == "B6-suppression-N"
-    assert result.turns[1].delivered_decision_id == "B6-suppression-N"
+    # Intentional B6 expectation change: clarify_first requires the persona's
+    # ambiguous answer on the first ask, then delivers the declared answer on
+    # the next ask for this same decision.
+    assert result.turns[0].match.rule_id == "persona.decision_request"
+    assert transport.message_texts[1] == HEADCOUNT.persona.replies_for("decision_request")[0]
+    assert result.turns[1].delivered_decision_id is None
+    assert transport.message_texts[2] == answer
+    assert result.turns[1].match.decision_id == "B6-suppression-N"
+    assert result.turns[2].delivered_decision_id == "B6-suppression-N"
 
 
 @pytest.mark.parametrize("mode", MODES)

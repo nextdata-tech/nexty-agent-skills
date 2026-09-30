@@ -42,7 +42,13 @@ ANSWER_SHEET_KEYS = frozenset(
 # package that declares one opts into brief-backed answers for otherwise
 # unmatched questions (see MatcherBank._unmatched).
 OPTIONAL_ANSWER_SHEET_KEYS = frozenset(
-    {"driver_forbidden_terms", "ground_truth", "gap_stance", "reapproval"}
+    {
+        "driver_forbidden_terms",
+        "ground_truth",
+        "gap_stance",
+        "reapproval",
+        "source_answer_terms",
+    }
 )
 
 #: What it *means* in this drill that the operator cannot answer something.
@@ -179,6 +185,7 @@ class DecisionAnswer:
     retired_after_event: str | None = None
     available_after_overlay: str | None = None
     retired_after_overlay: str | None = None
+    clarify_first: bool = False
 
     @property
     def is_staged(self) -> bool:
@@ -217,6 +224,8 @@ class DecisionAnswer:
             entry["available_after_overlay"] = self.available_after_overlay
         if self.retired_after_overlay is not None:
             entry["retired_after_overlay"] = self.retired_after_overlay
+        if self.clarify_first:
+            entry["clarify_first"] = True
         return entry
 
 
@@ -275,6 +284,10 @@ class AnswerSheet:
     """What an unanswerable question means here; see :data:`GAP_STANCES`."""
     reapproval: ReapprovalAnswer | None = None
     """Optional bounded approval for a revised plan after an authorized review fix."""
+    source_answer_terms: Mapping[str, tuple[str, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    """Optional semantic aliases for source-answer keys in compound asks."""
 
     @property
     def turn_one(self) -> str:
@@ -296,9 +309,33 @@ class AnswerSheet:
         lowered = question.casefold()
         for key in sorted(self.source_answers):
             answer = self.source_answers[key]
-            if term_present(key, lowered):
+            if term_present(key, lowered) or any(
+                term_present(term, lowered)
+                for term in self.source_answer_terms.get(key, ())
+            ):
                 return key, answer
         return None
+
+    def source_answers_for(
+        self, question: str, *, include_keys: bool = True
+    ) -> tuple[tuple[str, str], ...]:
+        """Return declared source answers mentioned by a compound ask.
+
+        ``include_keys=False`` restricts compound secondary selection to the
+        answer sheet's explicit semantic aliases. This avoids treating a
+        source-key word in a review recap as a second question.
+        """
+
+        lowered = question.casefold()
+        return tuple(
+            (key, self.source_answers[key])
+            for key in sorted(self.source_answers)
+            if (include_keys and term_present(key, lowered))
+            or any(
+                term_present(term, lowered)
+                for term in self.source_answer_terms.get(key, ())
+            )
+        )
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "AnswerSheet":
@@ -442,6 +479,10 @@ class AnswerSheet:
             mapping["gap_stance"] = self.gap_stance
         if self.reapproval is not None:
             mapping["reapproval"] = self.reapproval.to_mapping()
+        if self.source_answer_terms:
+            mapping["source_answer_terms"] = {
+                key: list(terms) for key, terms in self.source_answer_terms.items()
+            }
         return mapping
 
 
@@ -458,6 +499,10 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
     result: dict[str, DecisionAnswer] = {}
     for decision_id, entry in raw.items():
         identifier = _string(decision_id, "answer_sheet.decision_answers key")
+        # The legacy string form has no optional fields. Initialize every
+        # per-entry default before branching so a prior mapping entry cannot
+        # leak its clarify_first value into this one.
+        clarify_first = False
         available_after_event = None
         retired_after_event = None
         available_after_overlay = None
@@ -480,6 +525,7 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
                     "retired_after_event",
                     "available_after_overlay",
                     "retired_after_overlay",
+                    "clarify_first",
                 },
                 f"answer_sheet.decision_answers.{identifier}",
             )
@@ -540,6 +586,11 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
                 if "available_after_overlay" in data
                 else None
             )
+            clarify_first = data.get("clarify_first", False)
+            if not isinstance(clarify_first, bool):
+                raise AnswerSheetError(
+                    f"answer_sheet.decision_answers.{identifier}.clarify_first must be a boolean"
+                )
             retired_after_overlay = (
                 _string(
                     data["retired_after_overlay"],
@@ -565,6 +616,7 @@ def _decision_mapping(value: object) -> dict[str, DecisionAnswer]:
             retired_after_event,
             available_after_overlay,
             retired_after_overlay,
+            clarify_first,
         )
     return result
 
@@ -643,12 +695,28 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
     reapproval = (
         _reapproval_mapping(raw["reapproval"]) if "reapproval" in raw else None
     )
+    source_answers = _answer_mapping(raw["source_answers"], "answer_sheet.source_answers")
+    source_answer_terms: dict[str, tuple[str, ...]] = {}
+    if "source_answer_terms" in raw:
+        raw_source_terms = _mapping(raw["source_answer_terms"], "answer_sheet.source_answer_terms")
+        unknown_source_keys = sorted(set(raw_source_terms) - set(source_answers))
+        if unknown_source_keys:
+            raise AnswerSheetError(
+                "answer_sheet.source_answer_terms names undeclared source answer(s): "
+                + ", ".join(map(str, unknown_source_keys))
+            )
+        source_answer_terms = {
+            _string(key, "answer_sheet.source_answer_terms key"): _strings(
+                terms, f"answer_sheet.source_answer_terms.{key}"
+            )
+            for key, terms in raw_source_terms.items()
+        }
     return AnswerSheet(
         version=version,
         scenario_id=_string(raw["scenario_id"], "answer_sheet.scenario_id"),
         opening_message=opening,
         turns=turns,
-        source_answers=MappingProxyType(_answer_mapping(raw["source_answers"], "answer_sheet.source_answers")),
+        source_answers=MappingProxyType(source_answers),
         decision_answers=MappingProxyType(_decision_mapping(raw["decision_answers"])),
         status_answers=MappingProxyType(_answer_mapping(raw["status_answers"], "answer_sheet.status_answers")),
         opening_forbidden_terms=forbidden,
@@ -658,6 +726,7 @@ def answer_sheet_from_mapping(value: Mapping[str, object]) -> AnswerSheet:
         ground_truth=MappingProxyType(ground_truth),
         gap_stance=gap_stance,
         reapproval=reapproval,
+        source_answer_terms=MappingProxyType(source_answer_terms),
     )
 
 

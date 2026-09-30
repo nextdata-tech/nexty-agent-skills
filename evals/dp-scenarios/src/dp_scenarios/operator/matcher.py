@@ -16,7 +16,7 @@ generation.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Pattern
@@ -170,7 +170,7 @@ APPROVAL_REQUEST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _APPROVAL_CONTEXT_PATTERN = re.compile(
-    r"\b(?:need|require|requires|cannot|can\s+not|can't|unable\s+to\s+proceed|"
+    r"\b(?:need|needs|require|requires|cannot|can\s+not|can't|unable\s+to\s+proceed|"
     r"waiting\s+for|awaiting|without)\b.{0,140}\bapproval\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -251,6 +251,7 @@ SOLICITATION_PATTERN = re.compile(
     r"|\bwhat\s+i\s+need\s*:\s*\**\s*an?\s+(?:explicit\s+)?choice"
     r"|\b(?:i|we)\s+can\s+only\s+(?:relay|record|accept)\s+your\s+approval\s+if\s+you\s+(?:state|give|send)"
     r"|\b(?:i|we)\s+need\s+you\s+to"
+    r"|\b(?:needs|requires)\s+your\s+explicit\s+approval\b"
     # There is no "confirm" alternative of its own. An addressed confirm is
     # already covered -- "please confirm" by the first alternative, "can you
     # confirm" by the bare "can you" -- and a *bare* "confirm the|that" fires
@@ -277,6 +278,7 @@ SOLICITATION_PATTERN = re.compile(
     r"|\bdecide\s+whether\b"
     r"|\bor\s+confirm\s+that\b"
     r"|\btell\s+me\s+\([a-z0-9]\)"
+    r"|\b(?:needs|requires)\s+your\s+explicit\s+approval\b"
     r"|\beither\s+send\s+[\"']?approved\b"
     r"|\breply\s+(?:yes|no)\b"
     # "Reply with ..." is an addressed instruction to the operator. Unlike
@@ -1051,7 +1053,7 @@ _LETTERED_REVIEW_CHOICE_PATTERN = re.compile(
     r"(?m)^\s*(?:[-*]\s*)?(?:[A-Z]|[0-9]+)[.):]\s+\S+", re.IGNORECASE
 )
 _REVIEW_CHOICE_PROMPT_PATTERN = re.compile(
-    r"\b(?:what\s+(?:do|would|should)\s+you\s+want|"
+    r"\b(?:what\s+(?:do|would|should)\s+you\s+want|do\s+you\s+want|"
     r"what\s+should\s+i\s+do|needs?\s+your\s+choice|"
     r"reply\s+with\s+(?:a\s+)?(?:single|one)\s+(?:letter|number)|"
     r"choose\s+one|reply\s+[\"']?\d+[\"']?\s+(?:or|/)\s+[\"']?\d+[\"']?)\b",
@@ -1064,7 +1066,8 @@ _REVIEW_CHOICE_PROMPT_PATTERN = re.compile(
 # marker alongside "-"/"*".
 _REVIEW_ALTERNATIVES_PATTERN = re.compile(
     r"\boption\s*(?:\(?[a-z]\)?|\d+)(?!\w)"
-    r"|^\s*(?:[-*|]\s*)?[*_]{0,2}(?:[a-z]|\d+)[.):]\s+\S+"
+    r"|^\s*(?:[-*|]\s*)?[*_]{0,2}(?:\([a-z]\)|(?:[a-z]|\d+)[.):])\s+\S+"
+    r"|^\s*(?:[-*|]\s*)?[*_]{0,2}(?:fix|defer(?:\s+instead)?)[*_]{0,2}\s*:"
     r"|\bshould\s+(?:i|we)\b[^?\n]{0,160}\bor\b[^?\n]{0,160}\?",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -1084,11 +1087,11 @@ _REVIEW_RECOMMENDATION_PATTERN = re.compile(
 # own as an offered alternative.
 _REVIEW_RECOMMENDED_LABEL_SUFFIX_PATTERN = re.compile(
     r"(?m)^\s*(?:[-*|]\s*)?[*_]{0,2}(?:option\s+)?(?P<label>[a-z]|\d+)(?:[.):])?"
-    r"\s*[^\n]{0,200}?(?P<marker>\(\s*recommended\s*\))",
+    r"\s*[^\n]{0,200}?(?P<marker>\(\s*(?:my\s+)?recommend(?:ed|ation)\s*\))",
     re.IGNORECASE,
 )
 _REVIEW_OFFERED_LABEL_PATTERN = re.compile(
-    r"^\s*(?:[-*|]\s*)?[*_]{0,2}(?P<listed>[a-z]|\d+)[.):]\s+\S+"
+    r"^\s*(?:[-*|]\s*)?[*_]{0,2}(?P<listed>\([a-z]\)|[a-z]|\d+)[.):]?\s+\S+"
     r"|\boption\s*\(?(?P<named>[a-z]|\d+)\)?(?!\w)",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -1119,7 +1122,7 @@ def _names_offered_alternative_labels(message: str, request_clause: str) -> bool
     """
 
     offered = {
-        (match.group("listed") or match.group("named")).casefold()
+        (match.group("listed") or match.group("named")).strip("()").casefold()
         for match in _REVIEW_OFFERED_LABEL_PATTERN.finditer(message)
     }
     if len(offered) < 2:
@@ -1151,6 +1154,33 @@ def _explicit_review_choice(message: str, request_clause: str) -> bool:
     )
 
 
+def _review_finding_choice_clause(message: str) -> str | None:
+    """Return the direct question in a message's explicit finding disposition."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    heading = re.search(r"\bdecision\s+for\s+you\s*:\s*finding\s+(\d+)\b", prose, re.I)
+    if heading is None:
+        return None
+    paragraph_start = prose.rfind("\n\n", 0, heading.start()) + 2
+    paragraph_end = prose.find("\n\n", heading.end())
+    if paragraph_end < 0:
+        paragraph_end = len(prose)
+    paragraph = prose[paragraph_start:paragraph_end]
+    questions = [
+        clause for clause in _current_request_clauses(message)
+        if "?" in clause and clause in paragraph
+    ]
+    return questions[0] if questions else None
+
+
+def _review_choice_prompt_clause(message: str) -> str | None:
+    """Find an explicit review disposition prompt that has no question mark."""
+
+    prose = _NON_PROSE.sub(" ", message)
+    prompt = re.search(r"\bdecision\s+for\s+you\s*:\s*choose\s+one\b", prose, re.I)
+    return prompt.group(0) if prompt is not None else None
+
+
 def _recommended_review_option(message: str, request_clause: str) -> str | None:
     """Read a named recommendation from this ask, never from prior context."""
 
@@ -1180,7 +1210,7 @@ def _recommended_review_option(message: str, request_clause: str) -> str | None:
             + offered_text[suffix_recommendation.end("marker") :]
         )
     offered = {
-        (match.group("listed") or match.group("named")).casefold()
+        (match.group("listed") or match.group("named")).strip("()").casefold()
         for match in _REVIEW_OFFERED_LABEL_PATTERN.finditer(offered_text)
     }
     candidates = sorted(
@@ -1199,7 +1229,151 @@ def _recommended_review_option(message: str, request_clause: str) -> str | None:
         if re.match(r"\s*\)?\s+for\s+both\b", current_text[match.end():], re.I):
             option += " for both findings"
         return option
+    marker_search_text = current_text
+    marker_source_text = offered_text
+    marker_base_offset = 0
+    if (
+        not re.search(r"\b(?:this|that)\s+is\s+my\s+recommendation\b", current_text, re.I)
+        and re.search(r"\bchoose\s+one\b", request_clause, re.I)
+        and ask_offset >= 0
+    ):
+        marker_search_text = prose[ask_offset:]
+        marker_source_text = prose
+        marker_base_offset = ask_offset
+    if re.search(r"\b(?:this|that)\s+is\s+my\s+recommendation\b", marker_search_text, re.I):
+        marker = re.search(
+            r"\b(?:this|that)\s+is\s+my\s+recommendation\b",
+            marker_search_text,
+            re.I,
+        )
+        if marker is not None:
+            offered_before = [
+                match for match in _REVIEW_OFFERED_LABEL_PATTERN.finditer(marker_source_text)
+                if match.start() < marker_base_offset + marker.start()
+            ]
+            if offered_before:
+                label = (offered_before[-1].group("listed") or offered_before[-1].group("named")).strip("()")
+                return f"option {label.upper() if label.isalpha() else label}"
     return None
+
+
+def _recommended_review_options(message: str, request_clause: str) -> tuple[str, ...]:
+    """Return every recommendation that a broad review ask accepts.
+
+    Explicit option labels keep their original extraction path. For numbered
+    findings, a broad "both/all" request also accepts a finding's proposed
+    fix when another finding has an explicit recommendation. This treats the
+    proposal as a disposition to apply, without promoting the proposal's
+    underlying business assumptions to confirmed decisions.
+    """
+
+    labels: list[str] = []
+    label = _recommended_review_option(message, request_clause)
+    if label is not None:
+        labels.append(label)
+
+    prose = _NON_PROSE.sub(" ", message)
+    explicit_for_finding: dict[int, str] = {}
+    for match in re.finditer(
+        r"\bfor\s+finding\s+(?P<number>\d+)\s*,?\s*"
+        r"(?:i\s+)?(?:my\s+)?recommend(?:ation)?\s*(?:is\s+)?(?P<value>[^.!?\n]+)",
+        prose,
+        re.IGNORECASE,
+    ):
+        explicit_for_finding[int(match.group("number"))] = match.group("value").strip()
+    finding_heading = re.search(
+        r"\bdecision\s+for\s+you\s*:\s*finding\s+(?P<number>\d+)\b", prose, re.I
+    )
+    if finding_heading is not None:
+        paragraph_end = prose.find("\n\n", finding_heading.end())
+        if paragraph_end < 0:
+            paragraph_end = len(prose)
+        recommendation = re.search(
+            r"\bi\s+recommend\s+(?P<value>[^.!?\n]+)",
+            prose[finding_heading.start():paragraph_end],
+            re.I,
+        )
+        if recommendation is not None:
+            explicit_for_finding[int(finding_heading.group("number"))] = (
+                recommendation.group("value").strip()
+            )
+    # A broad review ask accepts findings, not every recommendation elsewhere
+    # in the message (for example, an unrelated baseline or denominator
+    # suggestion). Capture unnumbered recommendations only inside a numbered
+    # finding section; an explicitly numbered footer belongs to its named
+    # finding even when the footer follows another finding's proposed fix.
+    sections = list(
+        re.finditer(r"(?im)^\s*[*_]{0,2}(?P<number>\d+)\.\s+\S+", prose)
+    )
+    def finding_section(index: int) -> tuple[int, str]:
+        start = sections[index]
+        end = sections[index + 1].start() if index + 1 < len(sections) else len(prose)
+        paragraph_end = prose.find("\n\n", start.start())
+        if paragraph_end >= 0:
+            end = min(end, paragraph_end)
+        section = prose[start.start():end]
+        prefix = prose[:start.start()]
+        plural_review_findings = bool(
+            re.search(
+                r"\breview(?:er)?\b.{0,120}\bfound\s+(?:two|2|three|3|four|4)\s+"
+                r"(?:blocking\s+)?(?:problems|findings|issues)\b",
+                prefix,
+                re.I | re.S,
+            )
+        )
+        options_heading = re.search(r"(?im)^\s*options\s*$", prefix)
+        is_finding = bool(
+            re.search(r"\b(?:finding|problem|issue|proposed\s+fix|why\s+it\s+matters)\b", section, re.I)
+            or (plural_review_findings and options_heading is None)
+        )
+        return end, section if is_finding else ""
+
+    explicit_phrases: list[str] = []
+    section_recommendations: list[str] = []
+    for index, start in enumerate(sections):
+        _end, section = finding_section(index)
+        if not section:
+            continue
+        for recommendation in re.finditer(
+            r"\bi\s+recommend\s+(?P<value>[^.!?\n]+)", section, re.IGNORECASE
+        ):
+            if not re.search(r"\bfor\s+finding\s+\d+", section[:recommendation.start()], re.I):
+                explicit_phrases.append(recommendation.group("value").strip())
+        number = int(start.group("number"))
+        for recommendation in _REVIEW_RECOMMENDED_LABEL_SUFFIX_PATTERN.finditer(section):
+            label = recommendation.group("label")
+            section_recommendations.append(
+                f"option {label.upper() if label.isalpha() else label} for finding {number}"
+            )
+    for value in (*explicit_for_finding.values(), *explicit_phrases, *section_recommendations):
+        if value and value.casefold() not in {item.casefold() for item in labels}:
+            labels.append(value)
+
+    broad_acceptance = bool(
+        re.search(r"\b(?:both|all|each)\b", request_clause, re.IGNORECASE)
+        or re.search(r"which\s+of\s+these\s+to\s+fix", request_clause, re.IGNORECASE)
+    )
+    if broad_acceptance and len(sections) > 1 and labels:
+        for index, start in enumerate(sections):
+            number = int(start.group("number"))
+            _end, section = finding_section(index)
+            if not section:
+                continue
+            has_explicit = number in explicit_for_finding or bool(
+                re.search(r"\bi\s+recommend\b|\brecommendation\b", section, re.I)
+                and not re.search(r"\bfor\s+finding\s+(?!" + str(number) + r"\b)\d+", section, re.I)
+            ) or bool(_REVIEW_RECOMMENDED_LABEL_SUFFIX_PATTERN.search(section))
+            if has_explicit:
+                continue
+            proposed = re.search(
+                r"\bproposed\s+fix\s*:\s*(?P<value>[^\n]+)", section, re.I
+            )
+            if proposed is None:
+                continue
+            value = proposed.group("value").strip().strip("*_ ").rstrip(".;:!? ")
+            if value and value.casefold() not in {item.casefold() for item in labels}:
+                labels.append(value)
+    return tuple(labels)
 
 
 def _declares_review_choice(answer: str, message: str) -> bool:
@@ -1861,6 +2035,14 @@ class MatcherBank:
             ),
             None,
         ) if review_in_play else None
+        if review_choice_clause is None and review_in_play:
+            finding_choice = _review_finding_choice_clause(message)
+            if finding_choice is not None and _explicit_review_choice(message, finding_choice):
+                review_choice_clause = finding_choice
+        if review_choice_clause is None and review_in_play:
+            prompt_clause = _review_choice_prompt_clause(message)
+            if prompt_clause is not None and _explicit_review_choice(message, prompt_clause):
+                review_choice_clause = prompt_clause
         if review_choice_clause is not None:
             specific_choice = self._request_decision(
                 _decision_lookup_text(message, review_choice_clause),
@@ -1923,9 +2105,10 @@ class MatcherBank:
                 Category.DECISION_REQUEST,
                 "review.choice_undeclared",
                 self.persona.review_choice_reply(
-                    _recommended_review_option(message, review_choice_clause)
+                    _recommended_review_options(message, review_choice_clause)
                 ),
                 matched=False,
+                solicits_operator=True,
                 matched_request_clause=review_choice_clause,
             )
         review_fix_request = (
@@ -2340,6 +2523,7 @@ class MatcherBank:
         approval_requested: bool,
         solicits_operator: bool,
         recommended_option_label: str | None = None,
+        recommended_option_labels: Sequence[str] | None = None,
         decision_stage_counts: Mapping[str, int] | None = None,
     ) -> MatchResult:
         """Build the fixed response for one validated model-router choice.
@@ -2378,10 +2562,15 @@ class MatcherBank:
                 **common,
             )
         if kind == "review_choice":
+            labels: str | Sequence[str] | None = (
+                tuple(recommended_option_labels)
+                if recommended_option_labels is not None
+                else recommended_option_label
+            )
             return MatchResult(
                 Category.DECISION_REQUEST,
                 "review.choice_undeclared",
-                self.persona.review_choice_reply(recommended_option_label),
+                self.persona.review_choice_reply(labels),
                 matched=False,
                 matched_request_clause=clause,
                 **common,
