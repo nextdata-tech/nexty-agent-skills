@@ -410,6 +410,34 @@ class BenchmarkRecordTests(unittest.TestCase):
             "backend",
         )
 
+    def test_dp_report_accepts_and_validates_the_llm_operator_router_pin(self):
+        # ``--operator-router llm`` runs (#424) pin the routing model next to
+        # the agent's own sampling params.
+        router = {
+            "backend": "codex",
+            "effort": "medium",
+            "mode": "llm",
+            "model_id": "gpt-6.1-sol",
+            "prompt_hash": "a" * 64,
+            "timeout_seconds": 120.0,
+        }
+        payload = dp_report(dp_run())
+        payload["scenarios"][0]["runs"][0]["manifest"]["agent_sampling_params"]["operator_router"] = dict(router)
+        payload["scenarios"][0]["runs"][0]["qualification"]["operator_mode"] = "llm_router"
+        compact = recorder.compact_report(payload)
+        self.assertEqual("llm_router", compact["scenarios"][0]["runs"][0]["qualification"]["operator_mode"])
+        self.assertEqual(
+            router,
+            compact["scenarios"][0]["runs"][0]["manifest"]["agent_sampling_params"]["operator_router"],
+        )
+        for field, value in (("mode", "regex"), ("backend", "other"), ("effort", "extreme"),
+                             ("prompt_hash", "not-applicable"), ("extra", 1)):
+            self.assert_dp_rejected(
+                lambda payload, field=field, value=value: payload["scenarios"][0]["runs"][0]["manifest"]
+                ["agent_sampling_params"].update(operator_router={**router, field: value}),
+                "operator_router",
+            )
+
     def test_dp_report_rejects_malformed_redacted_touched_file_envelopes(self):
         invalid = (
             ({"redacted": False, "sha256": "a" * 64, "size_bytes": 1}, "redacted"),

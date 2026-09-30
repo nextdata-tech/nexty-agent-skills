@@ -160,7 +160,7 @@ DP_AGENT_BACKENDS = frozenset({"claude", "codex"})
 DP_AGENT_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 DP_ROUTE_FIDELITY_STATUSES = frozenset({"examined", "unexamined", "not-applicable"})
 DP_REPLAY_STATUSES = frozenset({"verified", "mismatch", "not-attempted"})
-DP_OPERATOR_MODES = frozenset({"scripted", "generated_surface", "driver"})
+DP_OPERATOR_MODES = frozenset({"scripted", "generated_surface", "driver", "llm_router"})
 DP_QUALIFICATION_DISPOSITIONS = frozenset({"CERTIFIED", "QUALIFIED", "OBSERVED", "REJECTED", "INVALID"})
 DP_TERMINAL_STATES = frozenset({
     "completed", "script_exhausted", "sentinel_trip", "environment_wedge", "turn_timeout",
@@ -849,10 +849,14 @@ def _validate_agent_sampling(value: Any, path: str, validation_mode: str) -> Non
     if validation_mode == "live":
         # ``backend`` names the live agent adapter (claude or codex); older
         # reports predate it, so it stays optional.
-        raw = _exact_keys(value, {"backend", "effort", "temperature"}, path,
+        raw = _exact_keys(value, {"backend", "effort", "temperature", "operator_router"}, path,
                           required={"effort", "temperature"})
         if "backend" in raw:
             _enum(raw["backend"], DP_AGENT_BACKENDS, f"{path}.backend")
+        # ``operator_router`` pins the model that routes operator replies
+        # under ``--operator-router llm``; scripted-operator runs omit it.
+        if "operator_router" in raw:
+            _validate_operator_router(raw["operator_router"], f"{path}.operator_router")
         _enum(raw["effort"], DP_AGENT_EFFORTS, f"{path}.effort")
         _safe_text(raw["effort"], f"{path}.effort")
         if raw["temperature"] != "provider-default":
@@ -861,6 +865,17 @@ def _validate_agent_sampling(value: Any, path: str, validation_mode: str) -> Non
         return
     raw = _exact_keys(value, {"temperature"}, path, required={"temperature"})
     _number(raw["temperature"], f"{path}.temperature", minimum=0, maximum=2)
+
+
+def _validate_operator_router(value: Any, path: str) -> None:
+    raw = _exact_keys(value, {"backend", "effort", "mode", "model_id", "prompt_hash", "timeout_seconds"},
+                      path, required={"backend", "effort", "mode", "model_id", "prompt_hash", "timeout_seconds"})
+    _enum(raw["mode"], frozenset({"llm"}), f"{path}.mode")
+    _enum(raw["backend"], DP_AGENT_BACKENDS, f"{path}.backend")
+    _enum(raw["effort"], DP_AGENT_EFFORTS, f"{path}.effort")
+    _safe_text(raw["model_id"], f"{path}.model_id")
+    _hash(raw["prompt_hash"], f"{path}.prompt_hash", allow_not_applicable=False)
+    _number(raw["timeout_seconds"], f"{path}.timeout_seconds", minimum=1)
 
 
 def _validate_driver_sampling(value: Any, path: str, driver_model_id: str) -> None:
