@@ -559,6 +559,54 @@ driver reproduces a scripted line verbatim and *not* when the driver repeats
 itself: a driver that sends the same sentence three turns running passes with all
 four counters at zero.
 
+#### Routing the operator with a model
+
+The regex matcher decides which declared response answers each agent message,
+and it misreads asks phrased in unfamiliar markdown shapes. `--operator-router
+llm` replaces only that *decision* with a model's:
+
+```bash
+uv run python scripts/run_local_claude.py ... \
+  --operator-router llm --router-backend codex --router-model gpt-6-sol
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--operator-router` | `regex` | `regex` is the unchanged, byte-stable matcher; `llm` enables the router |
+| `--router-backend` | `codex` | `codex` or `claude` (the locally logged-in CLI; no key in the harness) |
+| `--router-model` | required for `llm` | e.g. `gpt-6-sol` (codex), `sonnet` (claude) |
+| `--router-effort` | `medium` | reasoning effort |
+| `--router-timeout` | `90` | seconds per call before that turn falls back |
+
+For each agent message the router sees the message (sentinel-redacted), the one
+before it, and the responses that are *available now*: each unlocked declared
+decision (by topic terms, never its answer), `approval`, the review
+authorization and review choice while a review is in play, the declared fact,
+source and status topics, the persona's deflections, and `none`. It returns one
+strict JSON object (`category`, `option_id`, `approval_requested`,
+`solicits_operator`, `recommended_option_label`). It never sees gold, tool
+results, files, sentinels or any answer text.
+
+The engine keeps everything else: the reply text still comes from the answer
+sheet or persona, and answered-once, event/overlay staging, owed beats,
+re-approval limits, forbidden terms, the ledger and terminal states are
+unchanged. An id that was not offered, malformed or inconsistent output, a
+label the agent never wrote, a timeout, a provider error, or a decision the
+engine's answered-once rule refuses all fall back to the regex matcher for that
+turn. Rule ids are the existing shapes (`decision.answer.<id>`,
+`persona.<category>`, `review.choice_undeclared`, ...). Ledger claims add
+`routed_by: "llm"` when the model chose, and `router_fallback: true` when it
+did not; the reason is on `MatchResult.router_failure_reason`.
+
+**Grading implications.** A routed run is not deterministic turn for turn, so
+replay verification is `not-attempted`, the run is capped below CERTIFIED (like
+a driver run), and its `operator_mode` is `llm_router`. The router's backend,
+model, effort, timeout and prompt hash are pinned under
+`agent_sampling_params.operator_router` in the manifest, so runs with different
+routers never compare as identical. Scripted runs (`regex`) are untouched.
+Use the router to observe agent behaviour without matcher misreads, not to
+certify.
+
 #### Keeping the key around between runs
 
 `evals/dp-scenarios/.env` is gitignored for local credentials. Create it once,

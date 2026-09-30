@@ -17,7 +17,7 @@ import re
 import unicodedata
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
@@ -60,6 +60,7 @@ from .matcher import (
     is_review_disposition_ask,
     review_finding_ids,
 )
+from .router import OperatorRouter, RouterView, build_options
 from .text_match import term_present
 from .persona import PersonaCard
 from .transport import Attachment, OperatorMessage, Transport, TurnResult, TouchedFile, ToolCall
@@ -941,6 +942,7 @@ class OperatorEngine:
         counter_readers: Sequence[object] = (),
         generated_operator: GeneratedOperator | None = None,
         driver: DriverOperator | None = None,
+        router: OperatorRouter | None = None,
         extra_sentinels: Sequence[bytes | str] = (),
         publication_history_reader: Callable[[], Mapping[str, object] | None] | None = None,
         chain_prefix_turns: int | None = None,
@@ -966,6 +968,9 @@ class OperatorEngine:
         self.chain_prefix_turns = chain_prefix_turns
         self._chain_switched = False
         self.driver = driver
+        # Optional model router: decides WHICH declared response applies to an
+        # agent message.  ``None`` keeps the regex matcher's byte-stable path.
+        self.router = router
         self.ledger_writer = ledger_writer
         self.supervisor_reader = supervisor_reader
         self._run_id: str | None = None
@@ -1264,6 +1269,60 @@ class OperatorEngine:
             return DriverViolation("beat", detail)
         return None
 
+    def _route_match(
+        self,
+        agent_message: str,
+        *,
+        previous_agent_message: str,
+        review_context: str,
+        fired_events: Sequence[str],
+        delivered_decision_ids: frozenset[str],
+        decision_stage_counts: Mapping[str, int],
+        markers: Sequence[bytes],
+    ) -> tuple[MatchResult | None, str | None]:
+        """Ask the router which declared response applies to ``agent_message``.
+
+        Returns ``(match, None)`` for a validated, currently-available choice
+        and ``(None, reason)`` when the caller must fall back to the regex
+        matcher.  ``(None, None)`` means the router was not consulted.
+        """
+
+        if self.router is None or not agent_message.strip():
+            return None, None
+        review_in_play = bool(
+            review_context
+            or self.matcher.has_review_finding_context(agent_message)
+            or is_review_disposition_ask(agent_message, review_context)
+        )
+        options = build_options(
+            self.matcher,
+            available_event_ids=tuple(fired_events),
+            delivered_decision_ids=delivered_decision_ids,
+            decision_stage_counts=decision_stage_counts,
+            review_in_play=review_in_play,
+        )
+        view = RouterView(
+            agent_message=_operator_context(agent_message, markers),
+            previous_agent_message=_operator_context(previous_agent_message, markers),
+            options=options,
+        )
+        outcome = self.router.route(view)
+        decision = outcome.decision
+        if decision is None:
+            return None, outcome.failure_reason or "router_error"
+        return (
+            self.matcher.route_result(
+                decision.option.option_id,
+                decision.option.kind,
+                message=agent_message,
+                approval_requested=decision.approval_requested,
+                solicits_operator=decision.solicits_operator,
+                recommended_option_label=decision.recommended_option_label,
+                decision_stage_counts=decision_stage_counts,
+            ),
+            None,
+        )
+
     def _message_for(self, base: str, injections: tuple[EventInjection, ...]) -> OperatorMessage:
         attachments = tuple(
             Attachment(item.name, item.content, item.kind)
@@ -1400,6 +1459,12 @@ class OperatorEngine:
         if operator_mode != "scripted":
             claim = dict(claim) if isinstance(claim, Mapping) else {}
             claim["operator_mode"] = operator_mode
+        if match is not None and match.routed_by is not None:
+            claim = dict(claim) if isinstance(claim, Mapping) else {}
+            claim["routed_by"] = match.routed_by
+        if match is not None and match.router_fallback:
+            claim = dict(claim) if isinstance(claim, Mapping) else {}
+            claim["router_fallback"] = True
         if operator_directive != "answer":
             claim = dict(claim) if isinstance(claim, Mapping) else {}
             claim["operator_directive"] = operator_directive
@@ -1491,6 +1556,7 @@ class OperatorEngine:
         served_reply_keys: set[str] = set()
         delivered_decision_clauses: dict[str, set[str]] = {}
         delivered_decision_stage_counts: dict[str, int] = {}
+        delivered_decision_ids: set[str] = set()
         source_challenge_counts: dict[str, int] = {}
         pending_ask_back_decision = False
         review_fix_authorized = False
@@ -2266,7 +2332,11 @@ class OperatorEngine:
                     ),
                     None,
                 )
+            if delivered_decision_id is not None:
+                delivered_decision_ids.add(delivered_decision_id)
             if decision_answer_delivered and next_match is not None:
+                if next_match.decision_id is not None:
+                    delivered_decision_ids.add(next_match.decision_id)
                 if next_match.decision_stage is not None:
                     decision_id = next_match.decision_id or ""
                     delivered_decision_stage_counts[decision_id] = (
@@ -2344,12 +2414,28 @@ class OperatorEngine:
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
                 pending_review_finding_keys = _review_finding_keys(agent_message)
-            match = self.matcher.reply_for(
+            routed_match, router_failure = self._route_match(
                 agent_message,
-                context=pending_review_context,
-                available_event_ids=tuple(fired_events),
+                previous_agent_message=previous_agent_message,
+                review_context=pending_review_context,
+                fired_events=fired_events,
+                delivered_decision_ids=frozenset(delivered_decision_ids),
                 decision_stage_counts=delivered_decision_stage_counts,
+                markers=self._redaction_markers((*active_sentinels, *pending_sentinels)),
             )
+            if routed_match is not None:
+                match = routed_match
+            else:
+                match = self.matcher.reply_for(
+                    agent_message,
+                    context=pending_review_context,
+                    available_event_ids=tuple(fired_events),
+                    decision_stage_counts=delivered_decision_stage_counts,
+                )
+                if router_failure is not None:
+                    match = replace(
+                        match, router_fallback=True, router_failure_reason=router_failure
+                    )
             if (
                 match.decision_id is not None
                 and match.decision_id != "review_fix_authorization"
@@ -2376,6 +2462,14 @@ class OperatorEngine:
                         available_event_ids=tuple(fired_events),
                         decision_stage_counts=delivered_decision_stage_counts,
                     )
+                    if router_failure is not None or routed_match is not None:
+                        # A routed choice the engine's answered-once rule
+                        # refuses is a recorded fallback, not a silent one.
+                        match = replace(
+                            match,
+                            router_fallback=True,
+                            router_failure_reason=router_failure or "router_answered_once",
+                        )
 
             # A chain transition can be reported by a transport completion
             # callback while this turn is being returned. Keep the current
@@ -2859,7 +2953,15 @@ class OperatorEngine:
             failure_reason=failure_reason,
             failure_detail=failure_detail,
             last_mcp_call=last_mcp_call,
-            operator_mode=("driver" if self.driver is not None else "generated_surface" if self.generated_operator is not None else "scripted"),
+            operator_mode=(
+                "driver"
+                if self.driver is not None
+                else "generated_surface"
+                if self.generated_operator is not None
+                else "llm_router"
+                if self.router is not None
+                else "scripted"
+            ),
             driver_identity=(
                 {"model_id": self.driver.model_id, "temperature": self.driver.temperature}
                 if self.driver is not None

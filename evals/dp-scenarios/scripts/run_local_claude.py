@@ -29,6 +29,13 @@ from dp_scenarios.canary.probe import resolve_supervisor
 from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.operator.driver import DriverOperator
 from dp_scenarios.operator.codex_driver import CodexDriverProvider
+from dp_scenarios.operator.router import (
+    ROUTER_BACKENDS,
+    ROUTER_MODES,
+    ClaudeRouterProvider,
+    CodexRouterProvider,
+    OperatorRouter,
+)
 from dp_scenarios.operator.openai_driver import (
     DriverConfigError,
     OpenAIDriverProvider,
@@ -548,6 +555,56 @@ def driver_configuration(
     return driver_pins, factory
 
 
+def router_configuration(
+    args: argparse.Namespace,
+    pins: PinnedVersions,
+) -> tuple[PinnedVersions, OperatorRouter | None]:
+    """Return the pins and router implied by the ``--operator-router`` flags.
+
+    The default (``regex``) is the identity, so scripted ledgers and manifests
+    stay byte-stable.  With ``llm`` the provider is constructed here, before
+    the drift canary and any agent spend, so a missing CLI fails fast.  The
+    router's identity (backend, model, effort, timeout, prompt hash) is pinned
+    inside ``agent_sampling_params["operator_router"]``, so two runs that
+    differ in router are never treated as an identical manifest.
+    """
+
+    mode = getattr(args, "operator_router", "regex")
+    if mode not in ROUTER_MODES:
+        raise TierError("--operator-router must be regex or llm")
+    backend = getattr(args, "router_backend", None)
+    model = getattr(args, "router_model", None)
+    effort = getattr(args, "router_effort", None)
+    timeout_arg = getattr(args, "router_timeout", None)
+    if mode == "regex":
+        if any(value is not None for value in (backend, model, effort, timeout_arg)):
+            raise TierError("--router-backend/--router-model/--router-effort/--router-timeout require --operator-router llm")
+        return pins, None
+    backend = backend or "codex"
+    if backend not in ROUTER_BACKENDS:
+        raise TierError("--router-backend must be codex or claude")
+    if not isinstance(model, str) or not model.strip():
+        raise TierError("--operator-router llm requires --router-model")
+    effort = effort or "medium"
+    timeout = float(timeout_arg if timeout_arg is not None else 90.0)
+    if timeout <= 0:
+        raise TierError("--router-timeout must be positive")
+    provider_class = CodexRouterProvider if backend == "codex" else ClaudeRouterProvider
+    provider = provider_class(model=model, effort=effort, timeout_seconds=timeout)
+    router = OperatorRouter(
+        provider,
+        model_id=model,
+        timeout_seconds=timeout,
+        backend=backend,
+        effort=effort,
+    )
+    router_pins = replace(
+        pins,
+        agent_sampling_params={**pins.agent_sampling_params, "operator_router": router.pins()},
+    )
+    return router_pins, router
+
+
 def _tool_grant_arguments(args: argparse.Namespace, *, oauth_token_present: bool = False) -> list[str]:
     """Return the adapter flags that decide the agent's tool grants.
 
@@ -737,6 +794,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=400,
         help="maximum completion tokens per provider call, including reasoning tokens",
     )
+    parser.add_argument(
+        "--operator-router",
+        choices=ROUTER_MODES,
+        default="regex",
+        help=(
+            "how the scripted operator picks which declared response answers each agent message: "
+            "'regex' (default, byte-stable) or 'llm' (a model chooses among the currently available "
+            "options; the reply text stays scripted; regex is the fallback and is recorded)"
+        ),
+    )
+    parser.add_argument("--router-backend", choices=ROUTER_BACKENDS, default=None, help="router provider CLI (default: codex)")
+    parser.add_argument("--router-model", default=None, help="router model id, e.g. gpt-6-sol (codex) or sonnet (claude)")
+    parser.add_argument("--router-effort", choices=("low", "medium", "high", "xhigh", "max"), default=None, help="router reasoning effort (default: medium)")
+    parser.add_argument("--router-timeout", type=float, default=None, help="seconds per router call (default: 90)")
     parser.add_argument("--model-call-budget", type=float)
     parser.add_argument("--wall-clock-budget", type=float)
     return parser
@@ -843,6 +914,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pins,
         openai_api_key=credentials.get(OPENAI_API_KEY),
     )
+    pins, operator_router = router_configuration(args, pins)
 
     if args.output_dir is None:
         report_dir = Path(tempfile.mkdtemp(prefix="dp-scenarios-local-report-"))
@@ -970,6 +1042,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_host_home=args.allow_host_home,
             staged_job_helper_dir=exact_job_helper_dir,
             operator_factory=operator_factory,
+            operator_router=operator_router,
             review_timeout_seconds=review_timeout_seconds,
             max_workers=args.jobs,
         ).run()
