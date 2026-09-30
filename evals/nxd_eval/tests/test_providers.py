@@ -18,11 +18,11 @@ MCP_URL = "http://127.0.0.1:8765/pharma-mesh/rpcs/mcp-api/mcp"
 @pytest.mark.parametrize(
     ("model_id", "inspect_model"),
     [
-        ("claude-sonnet-4-5", "openai/anthropic/claude-sonnet-4-5"),
-        ("anthropic/claude-sonnet-4-5", "openai/anthropic/claude-sonnet-4-5"),
-        ("openai/gpt-5.1", "openai/openai/gpt-5.1"),
-        ("google/gemini-3.1-pro", "openai/google/gemini-3.1-pro"),
-        ("perplexity/sonar", "openai/perplexity/sonar"),
+        ("claude-sonnet-4-5", "openai-api/perplexity/anthropic/claude-sonnet-4-5"),
+        ("anthropic/claude-sonnet-4-5", "openai-api/perplexity/anthropic/claude-sonnet-4-5"),
+        ("openai/gpt-5.1", "openai-api/perplexity/openai/gpt-5.1"),
+        ("google/gemini-3.1-pro", "openai-api/perplexity/google/gemini-3.1-pro"),
+        ("perplexity/sonar", "openai-api/perplexity/perplexity/sonar"),
     ],
 )
 def test_perplexity_model_configures_responses_api_without_global_openai_env(
@@ -51,28 +51,12 @@ def test_perplexity_model_configures_responses_api_without_global_openai_env(
     assert model is expected
     assert captured["name"] == inspect_model
     assert captured["base_url"] == "https://api.perplexity.ai/v1"
-    assert captured["api_key"] == "pplx-test-key"
+    assert "api_key" not in captured
     assert captured["responses_api"] is True
-    assert captured["client_timeout"] == 42.0
+    assert captured["timeout"] == 42.0
     assert captured["config"].max_tokens == 2048
     assert "OPENAI_API_KEY" not in os.environ
     assert "OPENAI_BASE_URL" not in os.environ
-
-
-def test_perplexity_model_prefers_explicit_key(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def fake_get_model(_name, **kwargs):
-        captured.update(kwargs)
-        return object()
-
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "environment-key")
-    monkeypatch.setattr(providers, "require_python_module", lambda *_args: None)
-    monkeypatch.setattr(providers, "get_model", fake_get_model)
-
-    perplexity_model("claude-haiku-4-5", api_key="explicit-key")
-
-    assert captured["api_key"] == "explicit-key"
 
 
 def test_perplexity_model_requires_key(monkeypatch):

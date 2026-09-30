@@ -24,7 +24,6 @@ class PerplexityConfigurationError(RuntimeError):
 def perplexity_model(
     model: str,
     *,
-    api_key: str | None = None,
     max_output_tokens: int = 4096,
     client_timeout: float = 120.0,
 ) -> Model:
@@ -39,9 +38,11 @@ def perplexity_model(
     as ``"claude-sonnet-4-5"`` remains a shorthand for
     ``"anthropic/claude-sonnet-4-5"``.
 
-    The OpenAI SDK is supplied by nxd_eval's existing ``openai`` extra. The
-    API key defaults to :envvar:`PERPLEXITY_API_KEY`; pass ``api_key`` to avoid
-    reading the environment (for example, when a caller owns secret loading).
+    The OpenAI SDK is supplied by nxd_eval's existing ``openai`` extra. Set
+    :envvar:`PERPLEXITY_API_KEY` before constructing a model. Keeping the key
+    in the environment (rather than embedding it in the model object) means
+    Inspect can reconstruct model roles from an ``.eval`` log for scoring or
+    retrying without changing it to ``OPENAI_API_KEY``.
     """
     if not isinstance(model, str) or not model.strip():
         raise PerplexityConfigurationError("model must be a non-empty Perplexity model ID")
@@ -50,10 +51,9 @@ def perplexity_model(
     if client_timeout <= 0:
         raise PerplexityConfigurationError("client_timeout must be positive")
 
-    resolved_key = api_key if api_key is not None else os.environ.get(PERPLEXITY_API_KEY_ENV)
-    if not resolved_key or not resolved_key.strip():
+    if not os.environ.get(PERPLEXITY_API_KEY_ENV, "").strip():
         raise PerplexityConfigurationError(
-            f"{PERPLEXITY_API_KEY_ENV} is not set. Set it or pass api_key= to perplexity_model()."
+            f"{PERPLEXITY_API_KEY_ENV} is not set. Set it before calling perplexity_model()."
         )
 
     require_python_module(
@@ -66,10 +66,9 @@ def perplexity_model(
         model_id = f"anthropic/{model_id}"
 
     return get_model(
-        f"openai/{model_id}",
+        f"openai-api/perplexity/{model_id}",
         base_url=PERPLEXITY_BASE_URL,
-        api_key=resolved_key,
         config=GenerateConfig(max_tokens=max_output_tokens),
         responses_api=True,
-        client_timeout=client_timeout,
+        timeout=client_timeout,
     )

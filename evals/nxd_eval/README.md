@@ -199,8 +199,7 @@ writes an `.eval` log under `logs/`; browse it with
 
 Use the small `perplexity_model()` adapter for Perplexity's Agent API. It uses
 the existing OpenAI SDK extra, creates a configured Inspect model for the
-Responses API, and does not change `OPENAI_API_KEY` or `OPENAI_BASE_URL` for
-the rest of the process.
+Responses API, and uses `PERPLEXITY_API_KEY` directly—never `OPENAI_API_KEY`.
 
 ```bash
 uv sync --project evals/nxd_eval --extra openai
@@ -222,13 +221,15 @@ log = run_suite(
 Use any model ID Perplexity exposes to your account, including
 `anthropic/<model>`, `openai/<model>`, `google/<model>`, or
 `perplexity/<model>`. A bare Claude slug remains shorthand for
-`anthropic/<slug>`. The adapter prepends Inspect's OpenAI-provider selector and
+`anthropic/<slug>`. The adapter uses Inspect's OpenAI-compatible provider and
 configures `https://api.perplexity.ai/v1` with `responses_api=True` for both the
-agent and grader. The model catalog changes, so the Agent API—not a stale local
-allowlist—is authoritative for whether a selected model is available. Run a
-one-case live smoke test before a large suite: the external Agent API can reject
-some empty-content multi-turn histories, which no client-side model
-configuration can correct.
+agent and grader. Because that provider records the Perplexity service name in
+the `.eval` log, later `inspect score` or retry operations read
+`PERPLEXITY_API_KEY` again rather than needing an OpenAI key. The model catalog
+changes, so the Agent API—not a stale local allowlist—is authoritative for
+whether a selected model is available. Run a one-case live smoke test before a
+large suite: the external Agent API can reject some empty-content multi-turn
+histories, which no client-side model configuration can correct.
 
 The baseline question is *"How many subjects are in the registry?"*; the
 built-in `includes()` scorer checks the agent's answer contains `4` (ground truth
