@@ -1,7 +1,5 @@
 # nxd_eval — Inspect-based evaluation framework
 
-Answer anchoring ignores prose suffix forms such as `1.4k`, `$1.2M`, and `1.2e6`; a zero-row answered call cannot be anchored.
-
 Isolated uv project (mirrors `evals/mcp/`): heavy deps (`inspect_ai`,
 `statsmodels`, `scipy`, `scikit-learn`) live here, never in the root or
 `evals/run.py`. Everything runs via `uv run --project evals/nxd_eval …` — never
@@ -221,10 +219,18 @@ text-to-SQL PoC never drift on what "PASS" means — including the name-aware
 guard that FAILs two numeric measures swapped.
 
 `rows_equal` and the compiled-SQL scorers grade the successful query whose
-numeric results best match the final answer (latest query breaks ties), so a
-later exploratory query does not replace the query the answer reflects. If the
-answer has no numeric values or none overlap, they fall back to the latest
-successful query.
+numeric results best match the final answer. Answer anchoring ignores prose
+suffix forms such as `1.4k`, `$1.2M`, and `1.2e6`. Calls rank by the share of
+significant answer numbers explained, then by the share of numeric result cells
+that match answer numbers, then by recency. Final-rank ties select the latest
+call and are recorded in `tied_call_indexes`. If the answer has no numeric
+values or none overlap, they fall back to the latest answered query.
+
+Scorer metadata records `graded_call_index` and `selection`, whose values are
+`answer-anchored`, `answer-anchored-tie`, or `last-answered-fallback`; tied
+selections also include `tied_call_indexes`. A zero-row call cannot be anchored
+because it has no result cells. A zero-row filtered query followed by a probe
+is therefore graded on the probe, a known limitation.
 
 nxd_eval **owns** the EX core, at `src/nxd_eval/_ex_core/score.py` — the pure
 scoring surface (`score_one`, `rows_equal_name_aware`, `_norm_rowset`,

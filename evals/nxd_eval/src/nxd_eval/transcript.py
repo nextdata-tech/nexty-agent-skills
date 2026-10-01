@@ -50,7 +50,8 @@ def _is_query_tool(name: object) -> bool:
 # leading ``1`` and read as full confidence. Such non-``0.NN`` forms return
 # ``None`` (no confidence pair) rather than a wrong value.
 _CONFIDENCE_RE = re.compile(
-    r"CONFIDENCE:\s*([01](?:\.\d+)?|\.\d+|\d*\.\d+)(?![\d%])", re.IGNORECASE
+    r"[*_]*CONFIDENCE[*_]*\s*:\s*[*_]*(?:(?:low|medium|high)\s*(?:[-–—]\s*)?)?\(?\s*([01](?:\.\d+)?|\.\d+|\d*\.\d+)(?![\d%])\s*\)?",
+    re.IGNORECASE,
 )
 
 # Numeric values the agent states in its final answer. Commas are accepted only
@@ -61,9 +62,13 @@ _CONFIDENCE_RE = re.compile(
 _ANSWER_NUMBER_RE = re.compile(
     r"(?<![\w.,−])([+−-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%)?(?!\w|,\d|\.\d)"
 )
-_TRAILING_CONFIDENCE_RE = re.compile(r"^\s*CONFIDENCE\s*:", re.IGNORECASE)
+_ACCOUNTING_ANSWER_RE = re.compile(
+    r"\(\s*[$€£¥]?\s*([+−-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%)?\s*\)"
+)
+_TRAILING_CONFIDENCE_RE = re.compile(r"^\s*[*_]*CONFIDENCE[*_]*\s*:", re.IGNORECASE)
 _CONFIDENCE_ANYWHERE_RE = re.compile(
-    r"\**\s*CONFIDENCE\s*\**\s*[:=]\s*\**\s*-?\d*\.?\d+", re.IGNORECASE
+    r"[*_]*\s*CONFIDENCE\s*[*_]*\s*[:=]\s*[*_]*(?:(?:low|medium|high)\s*(?:[-–—]\s*)?)?\(?\s*-?\d*\.?\d+\s*\)?",
+    re.IGNORECASE,
 )
 _ISO_DATETIME_RE = re.compile(r"(?<!\w)\d{4}-\d{2}-\d{2}(?:[Tt ][0-9:.+-]+(?:[Zz]|[+-]\d{2}:?\d{2})?)?(?!\w)")
 
@@ -91,6 +96,10 @@ def _answer_numbers(text: str) -> list[_AnswerNumber]:
     answer_text = "\n".join(re.sub(r"^\s*\d+[.)]\s+", "", line) for line in lines)
     answer_text = _CONFIDENCE_ANYWHERE_RE.sub(" ", answer_text)
     answer_text = _ISO_DATETIME_RE.sub(" ", answer_text)
+    answer_text = _ACCOUNTING_ANSWER_RE.sub(
+        lambda match: "-" + match.group(1).lstrip("+−-") + ("%" if match.group(2) else ""),
+        answer_text,
+    )
 
     out: list[_AnswerNumber] = []
     seen: set[tuple[Decimal, int, bool]] = set()
@@ -148,11 +157,11 @@ def _numeric_cells(rows: list[dict]) -> list[Decimal]:
     return values
 
 
-def _rounded_equal(actual: Decimal, stated: Decimal, decimal_places: int) -> bool:
-    """Compare within the displayed half-up rounding interval, without quantize."""
+def _within_display_unit(actual: Decimal, stated: Decimal, decimal_places: int) -> bool:
+    """Compare within one display unit, preserving exact low-precision zero."""
     if stated == 0 and decimal_places == 0:
         return actual == 0
-    tolerance = Decimal(5).scaleb(-decimal_places - 1)
+    tolerance = Decimal(1).scaleb(-decimal_places)
     actual_exp = actual.as_tuple().exponent
     stated_exp = stated.as_tuple().exponent
     min_exp = min(actual_exp, stated_exp)
@@ -164,46 +173,45 @@ def _rounded_equal(actual: Decimal, stated: Decimal, decimal_places: int) -> boo
     with localcontext() as ctx:
         ctx.prec = precision
         distance = abs(actual - stated)
-    if distance < tolerance:
-        return True
-    # At a half step ROUND_HALF_UP goes away from zero.
-    return distance == tolerance and abs(actual) < abs(stated)
+    return distance < tolerance
 
 
 def _round_key(value: Decimal, decimal_places: int) -> Decimal:
     """Stable half-up bucket key, with enough local precision for huge cells."""
-    if decimal_places < 0:  # low-precision zero only matches an exact zero cell
+    if decimal_places < 0:
         return value
     with localcontext() as ctx:
         ctx.prec = max(28, len(value.as_tuple().digits) + decimal_places + 4)
         return value.scaleb(decimal_places).to_integral_value(rounding=ROUND_HALF_UP)
 
 
-def _number_keys(number: _AnswerNumber) -> tuple[tuple[int, Decimal], ...]:
-    precision = -1 if number.value == 0 and number.decimal_places == 0 else number.decimal_places
-    keys = [(precision, _round_key(number.value, precision))]
+def _number_forms(number: _AnswerNumber) -> tuple[tuple[int, Decimal], ...]:
+    """Displayed value and, for percentages, its fractional representation."""
+    forms = [(number.decimal_places, number.value)]
     if number.is_percent:
-        precision = number.decimal_places + 2
-        with localcontext() as ctx:
-            ctx.prec = max(28, len(number.value.as_tuple().digits) + precision + 4)
-            fractional = number.value / Decimal(100)
-        keys.append((precision, _round_key(fractional, precision)))
-    return tuple(keys)
+        forms.append((number.decimal_places + 2, number.value / Decimal(100)))
+    return tuple(forms)
 
 
-def _number_matches(number: _AnswerNumber, value: Decimal) -> bool:
-    """Whether one result cell supports a displayed answer number.
-
-    A percentage token such as ``12.5%`` matches either 12.5 percentage points
-    or 0.125 as a fraction. Its visible precision is carried through the
-    conversion: one decimal place in percentage points is three in fractions.
-    """
-    if _rounded_equal(value, number.value, number.decimal_places):
-        return True
-    if number.is_percent:
-        fractional = number.value / Decimal(100)
-        return _rounded_equal(value, fractional, number.decimal_places + 2)
-    return False
+def _matching_cell_indexes(
+    number: _AnswerNumber,
+    buckets: dict[int, dict[Decimal, list[tuple[int, Decimal]]]],
+) -> set[int]:
+    """Find cells strictly within one display unit of an answer token."""
+    matches: set[int] = set()
+    for precision, stated in _number_forms(number):
+        if stated == 0 and precision == 0:
+            candidate_keys = (Decimal(0),)
+        else:
+            center = _round_key(stated, precision)
+            candidate_keys = tuple(
+                center + offset for offset in (Decimal(-1), Decimal(0), Decimal(1))
+            )
+        for key in candidate_keys:
+            for index, value in buckets.get(precision, {}).get(key, ()):
+                if _within_display_unit(value, stated, precision):
+                    matches.add(index)
+    return matches
 
 
 def parse_confidence(text: str) -> float | None:
@@ -332,10 +340,10 @@ class Transcript:
     def answer_call(self) -> QueryCall | None:
         """Select the successful result that best supports the numeric answer.
 
-        Coverage is the fraction of a call's numeric result cells that match
-        any unique numeric token in the final answer at its displayed precision.
-        The latest call wins ties. If the answer has no numbers or no successful
-        result overlaps it, this falls back to the latest answered call.
+        Rank calls by the share of significant answer numbers explained, then
+        by the share of numeric result cells matching answer numbers, then by
+        recency. Final-rank ties are recorded in scorer metadata. If no answer
+        number anchors a successful result, fall back to the latest answered call.
         """
         return self.answer_call_selection()[0]
 
@@ -354,10 +362,7 @@ class Transcript:
         if not significant:
             significant = [number for number in numbers if not number.is_year] or numbers
             # Small integers may anchor when they are the only non-year values.
-        precision_targets: dict[int, set[Decimal]] = {}
-        for number in significant:
-            for precision, key in _number_keys(number):
-                precision_targets.setdefault(precision, set()).add(key)
+        precisions = {precision for number in numbers for precision, _ in _number_forms(number)}
 
         ranked: list[tuple[int, int, int, QueryCall]] = []
         for index, call in enumerate(self.calls):
@@ -366,23 +371,22 @@ class Transcript:
             cells = _numeric_cells(call.rows)
             if not cells:
                 continue
-            cell_keys: dict[int, set[Decimal]] = {}
-            for precision in precision_targets:
-                cell_keys[precision] = {_round_key(cell, precision) for cell in cells}
-            matched_numbers = sum(
-                1 for number in significant
-                if any(key in cell_keys.get(precision, ()) for precision, key in _number_keys(number))
-            )
-            # Small integers are allowed to add call-cell coverage, but never
-            # establish an anchor while significant answer numbers are present.
-            cell_targets = {p: set(keys) for p, keys in precision_targets.items()}
-            for number in numbers:
-                for precision, key in _number_keys(number):
-                    cell_targets.setdefault(precision, set()).add(key)
-            covered_cells = sum(
-                1 for cell in cells
-                if any(_round_key(cell, p) in keys for p, keys in cell_targets.items())
-            )
+            buckets: dict[int, dict[Decimal, list[tuple[int, Decimal]]]] = {
+                precision: {} for precision in precisions
+            }
+            for index, cell in enumerate(cells):
+                for precision in precisions:
+                    key = _round_key(cell, precision)
+                    buckets[precision].setdefault(key, []).append((index, cell))
+            number_matches = {
+                id(number): _matching_cell_indexes(number, buckets)
+                for number in significant
+            }
+            matched_numbers = sum(bool(number_matches[id(number)]) for number in significant)
+            covered = set().union(
+                *(_matching_cell_indexes(number, buckets) for number in numbers)
+            ) if numbers else set()
+            covered_cells = len(covered)
             if matched_numbers:
                 ranked.append((matched_numbers, covered_cells, len(cells), call))
 

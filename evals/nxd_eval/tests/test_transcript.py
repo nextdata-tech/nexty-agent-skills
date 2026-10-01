@@ -342,6 +342,38 @@ def test_answer_call_matches_formatted_negative_decimal_and_percent():
     assert tx.answer_call() is call
 
 
+def test_answer_parenthesized_accounting_number_is_negative():
+    call = _query_call([{"loss": -1234}])
+    tx = Transcript(
+        calls=[call],
+        final_answer="The loss was (1,234). Tax (estimated at 5%) was separate.",
+    )
+    assert tx.answer_call() is call
+
+
+def test_answer_parenthetical_aside_does_not_turn_its_number_negative():
+    positive = _query_call([{"n": 1234}])
+    negative = _query_call([{"n": -1234}])
+    tx = Transcript(calls=[positive, negative], final_answer="The loss was (about 1,234).")
+    assert tx.answer_call() is positive
+
+
+@pytest.mark.parametrize(
+    ("cell", "answer"),
+    [(2.675, "2.67"), (2.345, "2.34"), (9.99, "9.9")],
+)
+def test_answer_rounding_accepts_values_within_one_display_unit(cell, answer):
+    call = _query_call([{"n": cell}])
+    tx = Transcript(calls=[call], final_answer=f"The value was {answer}.")
+    assert tx.answer_call_selection() == (call, "answer-anchored")
+
+
+def test_answer_rounding_does_not_match_adjacent_integer_at_strict_boundary():
+    adjacent = _query_call([{"n": 4}])
+    tx = Transcript(calls=[adjacent], final_answer="The value was 3.")
+    assert tx.answer_call_selection() == (adjacent, "last-answered-fallback")
+
+
 def test_answer_call_percentage_points_are_supported_too():
     points = _query_call([{"rate": 12.5}])
     tx = Transcript(calls=[points], final_answer="The rate was 12.5%.")
@@ -364,6 +396,10 @@ def test_answer_call_ignores_trailing_confidence_digits():
         "**CONFIDENCE:** 0.87",
         "inline CONFIDENCE: 0.87 in prose",
         "CONFIDENCE: 0.87\n[^1]: calibrated against 2024 observations",
+        "_Confidence_: 0.87",
+        "*Confidence*: 0.87",
+        "CONFIDENCE: high (0.87)",
+        "Confidence: medium — 0.6",
     ],
 )
 def test_answer_parser_strips_confidence_anywhere_and_markdown(confidence):
