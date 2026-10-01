@@ -25,6 +25,12 @@ separate entry points. **This README documents the first one only.**
 A sixth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
 customer-facing form lives under `evals/private/cross-dp-joins/`.
 
+Scenarios marked with `fixtures/mcp.json` exercise the installed
+`nxd-query-data-product` discovery path against a local authenticated gateway:
+`find_mesh.py` reads a per-cell isolated `NXD_HOME`, then the shipped gateway
+scripts list and call function/hash-namespaced tools forwarded to the semantic
+fixture server. See [`evals/mcp/README.md`](mcp/README.md).
+
 ## What runs in CI vs. what only runs locally
 
 Nothing in the scenario suite runs automatically on a pull request. Agent runs

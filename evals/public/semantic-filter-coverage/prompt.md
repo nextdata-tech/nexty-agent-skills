@@ -7,6 +7,9 @@ execute raw SQL. Keep comparisons as comparisons and breakdowns as breakdowns.
 
 ## Task for the agent
 
+Use the semantic MCP tools following the installed `nxd-query-data-product`
+skill to reach the data product.
+
 Answer these four questions using the semantic tools available in your session.
 For each answer, briefly state the measure and scope you are querying, then
 report the returned values in a compact table where that helps:

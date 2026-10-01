@@ -177,13 +177,12 @@ JOB_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
 #   {"tools": ["list_models","describe_model","run_semantic_query"],
 #    "dp": "semantic-demo", "rpc_port": "mcp-api"}
-# When present, run.py starts evals/mcp/semantic_server.py as a Streamable-HTTP
-# MCP server (via uv / EVAL_MCP_PYTHON, so its heavy deps — the real
+# When present, run.py starts evals/mcp/semantic_server.py and an authenticated
+# local gateway proxy (via uv / EVAL_MCP_PYTHON, so its heavy deps — the real
 # nxd.experimental.semantic compiler + Snowflake connector — stay out of the
-# stdlib-only runner) and puts a fake `nxd` on the agent's PATH so the
-# nxd-query-data-product skill's shipped HTTP toolchain (`nxd mcp health` +
-# Streamable-HTTP) discovers + drives the genuine tools, exactly as in
-# production. Without this, the agent can only Read the catalog fixture and
+# stdlib-only runner). The shipped nxd-query-data-product scripts discover an
+# isolated NXD_HOME and call the namespaced tools through that gateway. Without
+# this, the agent can only Read the catalog fixture and
 # *narrate* tool output (fabricating SQL + rows) — which the xhigh judge
 # correctly fails.
 MCP_DIR = EVALS_DIR / "mcp"
@@ -1139,9 +1138,14 @@ def _local_mesh_agent_environment(nxd_home: Path) -> dict[str, str]:
 def _runtime_redaction_values(
     fixture_secrets: Sequence[str], configured_markers: Sequence[str],
     mesh_spec: Mapping[str, Any] | None,
+    extra_secrets: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """Collect runner-known literals that must never persist in agent artifacts."""
-    values = [*fixture_secrets, *(str(marker) for marker in configured_markers if str(marker))]
+    values = [
+        *fixture_secrets,
+        *(str(marker) for marker in configured_markers if str(marker)),
+        *(secret for secret in extra_secrets if secret),
+    ]
     if mesh_spec is not None:
         token = os.environ.get("EVAL_MESH_TOKEN", "").strip()
         if token:
@@ -3646,50 +3650,65 @@ def _mcp_python() -> tuple[str, list[str]]:
 
 
 @contextlib.contextmanager
-def semantic_http_server(scenario_dir: Path, mcp_spec: dict):
+def semantic_http_server(scenario_dir: Path, mcp_spec: dict, token: str):
     """Start the semantic DP as a Streamable-HTTP MCP server for the duration of
-    a scenario, and yield the (endpoint_url, env_overrides) the agent needs.
+    a scenario, and yield its gateway URL and isolated agent environment.
 
-    This mirrors production: the nxd-query-data-product skill discovers DP MCP
-    endpoints by shelling out to ``nxd mcp health`` and then opens an HTTP MCP
-    session. We start the real server, then point a fake ``nxd`` (on the agent's
-    PATH) at it via EVAL_MCP_ENDPOINT — so the skill's shipped toolchain drives
-    the genuine tools unchanged. Server + fake-nxd shim are torn down on exit.
+    Start the fixture DP MCP server and an authenticated mesh-gateway proxy.
+    The skill discovers the mesh from a private temporary NXD_HOME and reaches
+    the fixture through its normal gateway-tools/mcp-call path.
     """
     fixtures_dir = str((scenario_dir / "fixtures").resolve())
     dp = mcp_spec.get("dp", "semantic-demo")
     rpc_port = mcp_spec.get("rpc_port", "mcp-api")
-    tool_count = len(mcp_spec.get("tools", []))
+    command, base_args = _mcp_python()
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}/{dp}/rpcs/{rpc_port}/mcp/"
+    gateway_port = _free_port()
+    gateway_endpoint = f"http://127.0.0.1:{gateway_port}/dp/mcp/"
+    gateway_cmd = [
+        sys.executable, str(MCP_DIR / "fake_mesh_gateway.py"),
+        "--host", "127.0.0.1", "--port", str(gateway_port),
+        "--path", "/dp/mcp/", "--upstream", endpoint,
+        "--dp", dp,
+    ]
 
-    command, base_args = _mcp_python()
     cmd = [command, *base_args, "-m", "semantic_server", fixtures_dir,
            "--http", "--host", "127.0.0.1", "--port", str(port),
            "--dp", dp, "--rpc-port", rpc_port]
+    server_env = dict(os.environ)
+    server_env["EVAL_MESH_TOKEN"] = ""
     proc = subprocess.Popen(
-        cmd, cwd=str(MCP_DIR), env=dict(os.environ),
+        cmd, cwd=str(MCP_DIR), env=server_env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    # Isolate the agent from any live mesh session on the host. The query
-    # skill's scripts resolve the active mesh from NXD_HOME (default ~/.nxd);
-    # if the machine running the eval has a valid `nxd login` session, mesh
-    # discovery hijacks the cell to the LIVE mesh and the graded run measures
-    # live data instead of the fixtures behind the stub server. An empty
-    # NXD_HOME reproduces the CI condition (no local mesh config), so
-    # discovery falls through to `nxd mcp health` — the fake nxd on PATH.
-    nxd_home = tempfile.mkdtemp(prefix="eval-nxd-home-")
+    gateway_proc: subprocess.Popen | None = None
+    nxd_home = Path(tempfile.mkdtemp(prefix="eval-nxd-home-"))
     try:
         _wait_for_http(endpoint, proc, timeout_s=60)
-        env = {
-            "EVAL_MCP_ENDPOINT": endpoint,
-            "EVAL_MCP_DP": dp,
-            "EVAL_MCP_TOOL_COUNT": str(tool_count),
-            "NXD_HOME": nxd_home,
+        gateway_proc = subprocess.Popen(
+            gateway_cmd, cwd=str(MCP_DIR),
+            env={**server_env, "NEXTY_SEMANTIC_GATEWAY_TOKEN": token},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        _wait_for_http(gateway_endpoint, gateway_proc, timeout_s=15)
+        mesh_spec = {
+            "mesh": "local", "dp": dp,
+            "api_url": f"http://127.0.0.1:{gateway_port}/api",
+            "app_url": f"http://127.0.0.1:{gateway_port}/app",
         }
-        yield endpoint, env
+        prepare_local_mesh_nxd_home(nxd_home, mesh_spec, token)
+        env = _local_mesh_agent_environment(nxd_home)
+        env["NXD_MCP_ALLOW_HTTP_LOCALHOST"] = "1"
+        yield gateway_endpoint, env
     finally:
         shutil.rmtree(nxd_home, ignore_errors=True)
+        if gateway_proc is not None:
+            gateway_proc.terminate()
+            try:
+                gateway_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                gateway_proc.kill()
         proc.terminate()
         try:
             proc.wait(timeout=10)
@@ -4240,23 +4259,6 @@ def desktop_stdio_runtime(
             }
         with session:
             yield bin_dir, env_over, desktop_python, session, stub_observations
-
-
-def _write_fake_nxd(bin_dir: Path) -> None:
-    """Write a `nxd` shim onto a dir that gets prepended to the agent's PATH.
-
-    The shim execs fake_nxd.py with the EVAL_MCP_* env the agent inherits, so
-    `nxd mcp health` returns the running server's endpoint. Only the subcommands
-    the query skill calls are stubbed (see fake_nxd.py)."""
-    command, base_args = _mcp_python()
-    interp = " ".join([command, *base_args])
-    shim = bin_dir / "nxd"
-    shim.write_text(
-        "#!/usr/bin/env bash\n"
-        f'exec {interp} "{MCP_DIR / "fake_nxd.py"}" "$@"\n',
-        encoding="utf-8",
-    )
-    shim.chmod(0o755)
 
 
 JUDGE_SYSTEM = (
@@ -5129,9 +5131,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     except LocalMeshSetupError as exc:
         res.error = f"local mesh marker error: {exc}"
         return res
-    if mesh_spec is not None and scenario_needs_mcp(scenario_dir) is not None:
+    try:
+        mcp_spec = scenario_needs_mcp(scenario_dir)
+    except (OSError, json.JSONDecodeError) as exc:
+        res.error = f"MCP marker error: {exc}"
+        return res
+    if mesh_spec is not None and mcp_spec is not None:
         res.error = "a scenario cannot opt into both fixtures/mesh.json and fixtures/mcp.json"
         return res
+    mcp_gateway_token = "nxdpat_" + secrets.token_urlsafe(32) if mcp_spec is not None else ""
 
     desktop_spec = scenario_needs_desktop(scenario_dir)
     desktop_stdio_spec = scenario_needs_desktop_stdio(scenario_dir)
@@ -5177,7 +5185,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if str(path)
     )
     redaction_values = _runtime_redaction_values(
-        fixture_runtime_secrets, configured_redaction_markers, mesh_spec
+        fixture_runtime_secrets, configured_redaction_markers, mesh_spec,
+        (mcp_gateway_token,) if mcp_gateway_token else (),
     )
     # desktop cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
@@ -5317,7 +5326,6 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # MCP scenarios run a live Streamable-HTTP semantic server + a fake `nxd`
         # on PATH so the query skill's shipped HTTP toolchain drives the real
         # tools. Tool calls reach Snowflake, so allow a longer timeout.
-        mcp_spec = scenario_needs_mcp(scenario_dir)
         # Omitted entirely for single-turn scenarios so their call is byte-for-
         # byte what it was, and a backend that never sees the kwarg cannot be
         # perturbed by multi-turn support existing.
@@ -5385,15 +5393,14 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     res.metrics = preflight_metrics
                     return res
             elif mcp_spec is not None:
-                bin_dir = Path(tmp) / "bin"
-                bin_dir.mkdir(parents=True, exist_ok=True)
-                _write_fake_nxd(bin_dir)
                 try:
-                    with semantic_http_server(scenario_dir, mcp_spec) as (_ep, env_over):
+                    with semantic_http_server(
+                        scenario_dir, mcp_spec, mcp_gateway_token
+                    ) as (_ep, env_over):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=agent_effort,
-                            env_overrides={**env_over, **source_isolation_env}, path_prepend=bin_dir,
+                            env_overrides={**env_over, **source_isolation_env},
                             skill_pack_dir=plugin_dir, **source_audit_kwargs,
                             **turn_kwargs,
                         )

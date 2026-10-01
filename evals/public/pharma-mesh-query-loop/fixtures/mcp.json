@@ -1,1 +1,1 @@
-{"comment":"Opt-in marker: pharma single-DP stub for the query-loop test agents.","tools":["list_models","describe_model","run_semantic_query"],"dp":"pharma-stub","rpc_port":"mcp-api"}
+{"comment":"Opt-in marker: run.py serves this pharma fixture through the authenticated local mesh gateway and an isolated NXD_HOME.","tools":["list_models","describe_model","run_semantic_query"],"dp":"pharma-stub","rpc_port":"mcp-api"}
