@@ -1,0 +1,38 @@
+{
+  "name": "Preserve semantic query filters across models",
+  "skills": [
+    "nxd-query-data-product",
+    "nxd-semantic-query-intent"
+  ],
+  "ci_skip": "requires the operator-deployed eval-provider-enrollment data product on the local dev mesh, its Snowflake-backed semantic MCP tools, and an operator-provided EVAL_MESH_TOKEN; do not substitute the local semantic stub",
+  "checks": [
+    {
+      "id": "q1-filtered-products",
+      "check": "For Q1, report enrolled_patients by product as ALL=3, ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1. These are distinct patients with DAILY rows. Specific wrong outputs: dropping the region scope yields ALL=9, ALPHAVIR=4, ALPHAVIR SC=3, BETAMAB=3; dropping the specialty scope yields ALL=7, ALPHAVIR=3, ALPHAVIR SC=2, BETAMAB=3; dropping both yields ALL=21, ALPHAVIR=9, ALPHAVIR SC=6, BETAMAB=7; filtering region_name by the abbreviated exact value 'Gulf Coast' yields zero for every product; using the raw row-count metric ENROLLMENT_ROWS (which ignores the DAILY definition) instead of ENROLLED_PATIENTS yields ALL=7, ALPHAVIR=4, ALPHAVIR SC=2, BETAMAB=2. Keep ALL as its own rollup row and do not add it to the product-specific rows (their sum including ALL would be 7, which is not a requested total)."
+    },
+    {
+      "id": "q2-specialty-comparison",
+      "check": "For Q2, return exactly two separate comparison rows: Neurology=8 and Psychiatry & Neurology=9 enrolled patients. The query must restrict specialty_group to those two values and group by specialty_group. Returning every specialty is wrong (it also includes Rheumatology=2 and Internal Medicine=2); summing the requested two rows into one value 17 is wrong."
+    },
+    {
+      "id": "q3-region-breakdown",
+      "check": "For Q3, return the full region breakdown: NE Gulf Coast=7, NE Great Lakes=10, SW Desert=4. region_name is a grouping dimension here, not a filter. Omitting the grouping produces the grand total 21 and fails; returning only one region also fails."
+    },
+    {
+      "id": "q4-verified-zero",
+      "check": "For Q4, report zero enrolled patients for BETAMAB in SW Desert, after verifying both values occur in the data: BETAMAB has 7 enrolled patients across other regions, while SW Desert has 4 enrolled patients on other products. Dropping the product filter returns 4; dropping the region filter returns 7. Do not hedge that the value might be misspelled or absent once those independent checks are established."
+    },
+    {
+      "id": "discovery-before-query",
+      "check": "Before the first run_semantic_query call, the agent calls list_models and describe_model for every model returned, including patient_enrollment, patient_provider, enrollment_metrics, and any marker model the catalog exposes. It learns the grains, join, metric definition, and available dimensions rather than guessing concept names."
+    },
+    {
+      "id": "scope-is-in-query-filters",
+      "check": "The run_semantic_query tool arguments carry the scope constraints: Q1 filters region_name to the full stored 'NE Gulf Coast' value (or an equivalent contains/pattern predicate) AND specialty_group to 'Psychiatry & Neurology'; Q2 filters specialty_group to IN ('Neurology','Psychiatry & Neurology') and groups by specialty_group; Q3 groups by region_name with no region_name filter; Q4 filters product_name='BETAMAB' AND region_name='SW Desert'. Saying the scope only in prose while omitting it from the tool call fails."
+    },
+    {
+      "id": "no-raw-sql",
+      "check": "The agent uses concept names and governed run_semantic_query selections only. It never authors a raw SQL string or calls a SQL execution tool."
+    }
+  ]
+}

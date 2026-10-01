@@ -44,6 +44,7 @@ MARKER_RESOLVERS = {
     "desktop.json": run.scenario_needs_desktop,
     "desktop_stdio.json": run.scenario_needs_desktop_stdio,
     "mcp.json": run.scenario_needs_mcp,
+    "mesh.json": run.scenario_needs_mesh,
     "http_stub.json": run.scenario_needs_http_stub,
 }
 

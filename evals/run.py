@@ -198,6 +198,9 @@ MCP_SERVER_SIDE_FIXTURES = {
     "mcp.json",           # runner opt-in marker
     "golden_pairs.json",  # expected verdicts — that's the rubric, never show it
 }
+LOCAL_MESH_RUNNER_SIDE_FIXTURES = {
+    "mesh.json",  # local live-mesh runtime marker, never agent input
+}
 JOB_RUNNER_SIDE_FIXTURES = {
     # These fixtures are trusted runner inputs. The agent gets data/ and the
     # checker, but never the known-good preflight closure or opt-in marker.
@@ -847,6 +850,303 @@ def scenario_needs_mcp(scenario_dir: Path) -> dict | None:
     if not marker.exists():
         return None
     return json.loads(marker.read_text(encoding="utf-8"))
+
+
+class LocalMeshSetupError(RuntimeError):
+    """A local-mesh prerequisite failed before the agent was started."""
+
+
+def scenario_needs_mesh(scenario_dir: Path) -> dict | None:
+    """Return the parsed fixtures/mesh.json for a local-mesh scenario, else None."""
+    marker = scenario_dir / "fixtures" / "mesh.json"
+    if not marker.exists():
+        return None
+    try:
+        spec = json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise LocalMeshSetupError(f"invalid fixtures/mesh.json: {exc}") from exc
+    if not isinstance(spec, dict) or spec.get("mesh") != "local":
+        raise LocalMeshSetupError("fixtures/mesh.json must be an object with \"mesh\": \"local\"")
+    missing = [key for key in ("dp", "api_url", "app_url")
+               if not isinstance(spec.get(key), str) or not spec[key].strip()]
+    if missing:
+        raise LocalMeshSetupError(
+            "fixtures/mesh.json is missing non-empty string field(s): " + ", ".join(missing)
+        )
+    return spec
+
+
+def _local_mesh_gateway_url(api_url: str) -> str:
+    """Resolve the single-host local mesh gateway from its registered API URL."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(api_url)
+    if parts.scheme != "https" or not parts.netloc:
+        raise LocalMeshSetupError("local mesh api_url must be an absolute HTTPS URL")
+    path = parts.path.rstrip("/")
+    if path.endswith("/api"):
+        path = path[:-4]
+    return urlunsplit((parts.scheme, parts.netloc, f"{path}/dp/mcp/", "", ""))
+
+
+def _write_private_text(path: Path, value: str) -> None:
+    """Create a temporary credential file with owner-only permissions."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(value)
+
+
+def prepare_local_mesh_nxd_home(
+    nxd_home: Path, mesh_spec: Mapping[str, Any], token: str
+) -> None:
+    """Write the isolated registry, active CLI config, and PAT into NXD_HOME.
+
+    This function never reads the host's ~/.nxd directory. Its caller supplies
+    the operator token explicitly, and the token file is private to the temp home.
+    """
+    from urllib.parse import urlsplit
+
+    nxd_home.mkdir(parents=True, exist_ok=True)
+    api_url = str(mesh_spec["api_url"]).rstrip("/")
+    app_url = str(mesh_spec["app_url"]).rstrip("/")
+    host = urlsplit(api_url).hostname
+    if not host:
+        raise LocalMeshSetupError("local mesh api_url has no hostname")
+    registry = {
+        "local": {
+            "api_url": api_url,
+            "app_url": app_url,
+        }
+    }
+    (nxd_home / "meshes.json").write_text(
+        json.dumps(registry, indent=2) + "\n", encoding="utf-8"
+    )
+    # nxd_api.py reads this as the active-mesh fallback; meshes.json remains
+    # authoritative for the query toolchain and keeps the mesh name explicit.
+    (nxd_home / "config.yaml").write_text(
+        f"url: {json.dumps(api_url)}\nskipversioncheck: true\n",
+        encoding="utf-8",
+    )
+    _write_private_text(
+        nxd_home / "tokens.json",
+        json.dumps({host: {"access_token": token}}, indent=2) + "\n",
+    )
+    try:
+        os.chmod(nxd_home / "tokens.json", 0o600)
+    except OSError:
+        pass
+
+
+def _local_mesh_ca_bundle() -> str | None:
+    """Return the first configured local mesh CA bundle that exists."""
+    for env_name in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "NXD_CA_BUNDLE"):
+        ca_file = os.environ.get(env_name)
+        if ca_file and Path(ca_file).is_file():
+            return ca_file
+
+
+def _local_mesh_ssl_context() -> Any:
+    """Build the transport context used by the local mesh preflight."""
+    import ssl
+
+    ca_file = _local_mesh_ca_bundle()
+    if ca_file:
+        return ssl.create_default_context(cafile=ca_file)
+    if os.environ.get("NXD_MCP_INSECURE") == "1":
+        return ssl._create_unverified_context()
+    return ssl.create_default_context()
+
+
+def _local_mesh_post(
+    endpoint: str,
+    body: Mapping[str, Any],
+    token: str,
+    context: Any,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Send one small Streamable-HTTP JSON-RPC request without extra packages."""
+    import urllib.error
+    import urllib.request
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "X-Nextdata-Token": token,
+    }
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=12) as response:
+            status = response.status
+            response_headers = response.headers
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        # Never include request headers or the PAT in setup diagnostics.
+        raise LocalMeshSetupError(f"gateway returned HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise LocalMeshSetupError(
+            f"gateway request failed ({type(exc).__name__}); check that the local mesh is reachable"
+        ) from exc
+    if status >= 400:
+        raise LocalMeshSetupError(f"gateway returned HTTP {status}")
+    session = response_headers.get("Mcp-Session-Id") or response_headers.get("mcp-session-id")
+    if not raw.strip():
+        return {}, session
+    if "text/event-stream" in response_headers.get("Content-Type", "").lower():
+        parsed: dict[str, Any] = {}
+        for line in raw.splitlines():
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if payload and payload != "[DONE]":
+                    try:
+                        parsed = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+        return parsed, session
+    try:
+        return json.loads(raw), session
+    except json.JSONDecodeError as exc:
+        raise LocalMeshSetupError("gateway returned a non-JSON MCP response") from exc
+
+
+def list_local_mesh_tools(
+    mesh_spec: Mapping[str, Any], token: str
+) -> list[dict[str, Any]]:
+    """Initialize the MCP gateway session and return its tools/list result."""
+    if not token.startswith("nxdpat_"):
+        raise LocalMeshSetupError(
+            "EVAL_MESH_TOKEN must be a Nextdata personal access token (nxdpat_…); "
+            "the MCP gateway does not accept the OAuth token from nxd login"
+        )
+    endpoint = _local_mesh_gateway_url(str(mesh_spec["api_url"]))
+    context = _local_mesh_ssl_context()
+    initialized, session_id = _local_mesh_post(
+        endpoint,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "nexty-local-mesh-eval", "version": "1"},
+            },
+        },
+        token,
+        context,
+    )
+    del initialized
+    if not session_id:
+        raise LocalMeshSetupError("gateway initialize response omitted Mcp-Session-Id")
+    _local_mesh_post(
+        endpoint,
+        {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        token,
+        context,
+        session_id,
+    )
+    response, _ = _local_mesh_post(
+        endpoint,
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        token,
+        context,
+        session_id,
+    )
+    if response.get("error"):
+        message = str(response["error"].get("message", "unknown MCP error"))
+        raise LocalMeshSetupError(f"gateway tools/list failed: {message}")
+    result = response.get("result") or {}
+    tools = result.get("tools") if isinstance(result, dict) else None
+    if not isinstance(tools, list):
+        raise LocalMeshSetupError("gateway tools/list response did not contain a tools array")
+    return [tool for tool in tools if isinstance(tool, dict)]
+
+
+def _check_local_mesh_tools(mesh_spec: Mapping[str, Any], tools: Sequence[Mapping[str, Any]]) -> None:
+    """Require the scenario's DP to expose the three semantic query tools."""
+    dp = str(mesh_spec["dp"])
+    required = {"list_models", "semantic_model", "describe_model", "run_semantic_query"}
+    found: set[str] = set()
+    matching_owners: set[str] = set()
+    for tool in tools:
+        name = str(tool.get("name") or "")
+        description = str(tool.get("description") or "")
+        owner_match = re.search(r"data product:\s*([^,)]+)", description, re.IGNORECASE)
+        owner = owner_match.group(1).strip() if owner_match else ""
+        # The NXD server may append the deployment environment to the short
+        # name when the spec leaves environment unset (e.g. -nxd-internal).
+        if owner == dp or owner.startswith(dp + "-"):
+            matching_owners.add(owner)
+            function = name.rpartition("__")[0] if "__" in name else name
+            if function in required:
+                found.add(function)
+    missing = sorted(required - found)
+    if missing:
+        endpoint = _local_mesh_gateway_url(str(mesh_spec["api_url"]))
+        owners = ", ".join(sorted(matching_owners)) or "none"
+        raise LocalMeshSetupError(
+            f"gateway is reachable at {endpoint}, but DP {dp!r} has no listed "
+            f"semantic tool(s): {', '.join(missing)} (matching DP tool owner(s): {owners}). "
+            "Deploy the data product and wait for its MCP port to start."
+        )
+
+
+@contextlib.contextmanager
+def local_mesh_runtime(mesh_spec: Mapping[str, Any]):
+    """Prepare isolated NXD_HOME and preflight the operator's real local mesh."""
+    token = os.environ.get("EVAL_MESH_TOKEN", "").strip()
+    if not token:
+        raise LocalMeshSetupError(
+            "local mesh scenario requires EVAL_MESH_TOKEN; mint a PAT for the local mesh and export it"
+        )
+    nxd_home = Path(tempfile.mkdtemp(prefix="eval-local-mesh-nxd-home-"))
+    try:
+        prepare_local_mesh_nxd_home(nxd_home, mesh_spec, token)
+        try:
+            tools = list_local_mesh_tools(mesh_spec, token)
+            _check_local_mesh_tools(mesh_spec, tools)
+        except LocalMeshSetupError as exc:
+            endpoint = _local_mesh_gateway_url(str(mesh_spec["api_url"]))
+            raise LocalMeshSetupError(f"local mesh preflight failed for {endpoint}: {exc}") from exc
+        yield _local_mesh_agent_environment(nxd_home)
+    finally:
+        shutil.rmtree(nxd_home, ignore_errors=True)
+
+
+def _local_mesh_agent_environment(nxd_home: Path) -> dict[str, str]:
+    """Pass the isolated home to the agent without duplicating its PAT in env."""
+    environment = {
+        "NXD_HOME": str(nxd_home),
+        # The shipped toolchain reads the PAT from this run's private
+        # NXD_HOME/tokens.json. Do not also expose the operator variable to
+        # every subprocess the backend starts.
+        "EVAL_MESH_TOKEN": "",
+    }
+    if _local_mesh_ca_bundle():
+        # mcp_http.py also honors NXD_MCP_INSECURE. Mask an inherited explicit
+        # opt-out so its verified client agrees with the verified preflight
+        # whenever a usable CA bundle is configured.
+        environment["NXD_MCP_INSECURE"] = ""
+    return environment
+
+
+def _runtime_redaction_values(
+    fixture_secrets: Sequence[str], configured_markers: Sequence[str],
+    mesh_spec: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    """Collect runner-known literals that must never persist in agent artifacts."""
+    values = [*fixture_secrets, *(str(marker) for marker in configured_markers if str(marker))]
+    if mesh_spec is not None:
+        token = os.environ.get("EVAL_MESH_TOKEN", "").strip()
+        if token:
+            values.append(token)
+    return tuple(dict.fromkeys(values))
 
 
 def scenario_needs_desktop(scenario_dir: Path) -> dict | None:
@@ -4824,6 +5124,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         agent_backend.name != "claude" and bool(skill_set.skills)
     )
 
+    try:
+        mesh_spec = scenario_needs_mesh(scenario_dir)
+    except LocalMeshSetupError as exc:
+        res.error = f"local mesh marker error: {exc}"
+        return res
+    if mesh_spec is not None and scenario_needs_mcp(scenario_dir) is not None:
+        res.error = "a scenario cannot opt into both fixtures/mesh.json and fixtures/mcp.json"
+        return res
+
     desktop_spec = scenario_needs_desktop(scenario_dir)
     desktop_stdio_spec = scenario_needs_desktop_stdio(scenario_dir)
     http_stub_spec = scenario_needs_http_stub(scenario_dir)
@@ -4867,11 +5176,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         for path in deterministic_cfg.get("redaction_input_files", [])
         if str(path)
     )
-    redaction_values = tuple(
-        dict.fromkeys(
-            [*fixture_runtime_secrets]
-            + [str(marker) for marker in configured_redaction_markers if str(marker)]
-        )
+    redaction_values = _runtime_redaction_values(
+        fixture_runtime_secrets, configured_redaction_markers, mesh_spec
     )
     # desktop cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
@@ -4954,7 +5260,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     # cheap. The judge is never cached (it's cheap and the rubric changes often).
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
     cache_file = None
-    if cache_dir and not is_nex890:
+    if cache_dir and not is_nex890 and mesh_spec is None:
         workspace_setup_id = (
             INCREMENTAL_FOLLOWUP_WORKSPACE_SETUP_ID
             if followup_turns and name == "incremental-transform-state"
@@ -5044,7 +5350,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         )
         agent_timeout = (
             max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
-            if mcp_spec is not None
+            if mcp_spec is not None or mesh_spec is not None
             else max(args.agent_timeout, JOB_AGENT_TIMEOUT_S)
             if (desktop_spec is not None or desktop_stdio_spec is not None)
             else args.agent_timeout
@@ -5060,7 +5366,25 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 return res
 
             runner_mcp_trace: str | None = None
-            if mcp_spec is not None:
+            if mesh_spec is not None:
+                try:
+                    with local_mesh_runtime(mesh_spec) as env_over:
+                        preflight_metrics["local_mesh_preflight"] = "passed"
+                        ok, trace, metrics = agent_backend.run_agent(
+                            ws, prompt, agent_model, agent_timeout,
+                            extra_dirs=extra_dirs, effort=agent_effort,
+                            env_overrides={**env_over, **source_isolation_env},
+                            skill_pack_dir=plugin_dir, **source_audit_kwargs,
+                            **turn_kwargs,
+                        )
+                        failure = source_audit_failure(metrics)
+                        if failure is not None:
+                            return failure
+                except LocalMeshSetupError as exc:
+                    res.error = f"local mesh setup failed: {exc}"
+                    res.metrics = preflight_metrics
+                    return res
+            elif mcp_spec is not None:
                 bin_dir = Path(tmp) / "bin"
                 bin_dir.mkdir(parents=True, exist_ok=True)
                 _write_fake_nxd(bin_dir)

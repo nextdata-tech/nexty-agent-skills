@@ -14,7 +14,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Cross-DP joins** | `evals/cross-dp-joins/harness/run_eval.py` | local only | Compiler-strategy and agent trials for cross-data-product join fan-out safety. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 28 of the 49 public scenarios.**
+installs and covers 28 of the 50 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -112,10 +112,10 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-28 of 49 public scenarios. The remaining 21 declare `ci_skip` in their
-`checks.json`. Seventeen need a Tier 2 or Tier 3 install; three are gated on the agent
-backend; and one requires an operator-provided source-isolation wrapper:
-backend; and one requires an operator-provided source-isolation wrapper:
+28 of 50 public scenarios. The remaining 22 declare `ci_skip` in their
+`checks.json`. Eighteen need a live runtime or operator setup; three are gated
+on the agent backend; and one requires an operator-provided source-isolation
+wrapper:
 
 | Scenario | Needs |
 |---|---|
@@ -124,6 +124,7 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `pharma-mesh-query-hard` | semantic MCP server (Tier 2) |
 | `pharma-mesh-query-loop` | semantic MCP server (Tier 2) |
 | `semantic-intent-validation` | semantic MCP server (Tier 2) |
+| `semantic-filter-coverage` | deployed local mesh DP + operator-provided `EVAL_MESH_TOKEN` (`evals/local-mesh/README.md`) |
 | `job-loop-serve-query-refine` | live desktop supervisor (Tier 3) |
 | `job-loop-export-handoff` | live desktop supervisor (Tier 3) |
 | `country-income-trajectory` | live desktop supervisor (Tier 3) |
@@ -326,6 +327,7 @@ Set by you:
 | `EVAL_MCP_PYTHON` | 2 | interpreter carrying the matched nxd wheel set |
 | `SNOWFLAKE_*` | 2 | lower-env connection (env only, never written to disk) |
 | `EVAL_MCP_CAN_SEE_PII=1` | 2 | bypass the governed PII mask — debugging the executor only |
+| `EVAL_MESH_TOKEN` | local mesh | operator-provided local-mesh PAT for `semantic-filter-coverage`; stored only in the disposable `NXD_HOME` created by the runner |
 | `EVAL_DESKTOP_SUPERVISOR_DIR` | 3 | desktop supervisor location |
 | `EVAL_DESKTOP_PYTHON` | 3 | interpreter for the supervisor |
 | `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by job-loop fixtures |
