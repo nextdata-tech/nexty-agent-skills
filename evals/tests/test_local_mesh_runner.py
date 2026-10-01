@@ -260,6 +260,7 @@ def test_semantic_gateway_auth_namespaces_and_forwards_and_resolves_mesh(tmp_pat
             with pytest.raises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(request, timeout=3)
             assert error.value.code == expected
+            assert error.value.read() == b""
 
         nxd_home = tmp_path / "nxd-home"
         mesh_spec = {
@@ -340,8 +341,27 @@ def test_semantic_server_gateway_tools_smoke_without_snowflake(
         pytest.skip("uv has no selected runtime in this checkout; set EVAL_MCP_PYTHON or configure uv")
     if interpreter_probe.returncode:
         pytest.fail(f"matched semantic MCP interpreter could not start: {interpreter_probe.stderr.strip()[-500:]}")
+    nxd_available = subprocess.run(
+        [*interpreter, "-c", "import nxd.experimental.semantic"],
+        cwd=run.MCP_DIR, text=True, capture_output=True, timeout=30,
+    )
+    missing_root_nxd = (
+        nxd_available.returncode != 0
+        and "No module named 'nxd'" in nxd_available.stderr
+    )
+    explicit_interpreter = bool(os.environ.get("EVAL_MCP_PYTHON", "").strip())
+    if missing_root_nxd and not explicit_interpreter:
+        pytest.skip(
+            "default semantic MCP interpreter lacks the private nxd wheel; "
+            "install the matched wheel set or set EVAL_MCP_PYTHON to run this smoke test"
+        )
+    if nxd_available.returncode:
+        pytest.fail(
+            "semantic MCP interpreter is present but nxd.experimental.semantic "
+            f"is unavailable: {nxd_available.stderr.strip()[-500:]}"
+        )
     available = subprocess.run(
-        [*interpreter, "-c", "import mcp, nxd.experimental.semantic, snowflake.connector, typing_extensions"],
+        [*interpreter, "-c", "import mcp, snowflake.connector, typing_extensions"],
         cwd=run.MCP_DIR, text=True, capture_output=True, timeout=30,
     )
     if available.returncode:
@@ -370,13 +390,36 @@ def test_semantic_server_gateway_tools_smoke_without_snowflake(
             "gateway_tools.py", "list-dps", "--endpoint", endpoint,
             "--token-file", str(token_file),
         ).stdout)
-        assert any(dp.get("fullName") == mcp_spec["dp"] for dp in listed["data_products"])
+        assert isinstance(listed["data_products"], str)
+        listed_products = json.loads(listed["data_products"])
+        assert listed["count"] == listed["total_count"] == 1
+        assert listed_products == [{
+            "name": mcp_spec["dp"], "domain": None, "description": None,
+            "status": None, "endpoint": None, "access_stats": None,
+            "promise_stats": None,
+        }]
 
         details = json.loads(run_script(
             "gateway_tools.py", "details", "--dp", mcp_spec["dp"], "--models",
             "--endpoint", endpoint, "--token-file", str(token_file),
         ).stdout)
-        assert details["fullName"] == mcp_spec["dp"]
+        assert details["data_products"][0]["fullName"] == mcp_spec["dp"]
+        assert details["data_products"][0]["name"] == mcp_spec["dp"]
+        semantic_models = details["data_products"][0]["semanticModels"]
+        assert semantic_models["models"]
+        assert semantic_models["dataProductGlossaryLinks"] is None
+
+        details_without_models = json.loads(run_script(
+            "gateway_tools.py", "details", "--dp", mcp_spec["dp"],
+            "--endpoint", endpoint, "--token-file", str(token_file),
+        ).stdout)
+        assert "semanticModels" not in details_without_models["data_products"][0]
+
+        unknown_details = json.loads(run_script(
+            "gateway_tools.py", "details", "--dp", "unknown-dp", "--models",
+            "--endpoint", endpoint, "--token-file", str(token_file),
+        ).stdout)
+        assert unknown_details == {"data_products": []}
 
         grouped = json.loads(run_script(
             "gateway_tools.py", "tools", "--dp", mcp_spec["dp"],

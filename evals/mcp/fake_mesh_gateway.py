@@ -16,6 +16,7 @@ import secrets
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
@@ -61,29 +62,78 @@ class Gateway:
             {
                 "name": "discovery-system-dp-production__list_data_products",
                 "description": "List data products in the mesh",
-                "inputSchema": {"type": "object", "properties": {}},
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "filter_domain": {"type": ["string", "null"]},
+                        "offset": {"type": ["integer", "null"]},
+                        "limit": {"type": ["integer", "null"]},
+                    },
+                },
             },
             {
                 "name": "proxy__get_data_product_details",
                 "description": "Get details for a data product",
-                "inputSchema": {"type": "object", "properties": {"dataProduct": {"type": "string"}}},
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "dataProduct": {"type": ["string", "null"]},
+                        "includeInputs": {"type": ["boolean", "null"]},
+                        "includeExpectations": {"type": ["boolean", "null"]},
+                        "includeOutputs": {"type": ["boolean", "null"]},
+                        "includePromises": {"type": ["boolean", "null"]},
+                        "includePolicies": {"type": ["boolean", "null"]},
+                        "includeOwner": {"type": ["boolean", "null"]},
+                        "includeContact": {"type": ["boolean", "null"]},
+                        "includeMetadataLinks": {"type": ["boolean", "null"]},
+                        "includeSemanticModels": {"type": ["boolean", "null"]},
+                    },
+                },
             },
         ]
 
     def _builtin_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
         if name == "discovery-system-dp-production__list_data_products":
-            return {"data_products": [{
-                "fullName": self.dp, "name": self.dp,
-                "semantic_models": self.catalog.get("list_models", []),
-            }]}
-        if name == "proxy__get_data_product_details":
-            if arguments.get("dataProduct") != self.dp:
-                return {"error": f"unknown data product: {arguments.get('dataProduct', '')}"}
-            details = self.catalog.get("describe_model", {})
+            offset = max(0, int(arguments.get("offset") or 0))
+            limit = max(1, min(100, int(arguments.get("limit") or 100)))
+            domain_filter = arguments.get("filter_domain")
+            summaries = [{
+                "name": self.dp,
+                "domain": None,
+                "description": None,
+                "status": None,
+                "endpoint": None,
+                "access_stats": None,
+                "promise_stats": None,
+            }]
+            if domain_filter:
+                summaries = []
+            page = summaries[offset:offset + limit]
             return {
-                "fullName": self.dp, "name": self.dp, "rpc_port": self.rpc_port,
-                "semantic_models": list(details.values()) if isinstance(details, dict) else [],
+                "data_products": json.dumps(page),
+                "count": len(page),
+                "total_count": len(summaries),
+                "offset": offset,
+                "next_offset": offset + len(page),
+                "has_more": offset + len(page) < len(summaries),
+                "notice": "",
+                "error": "",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+        if name == "proxy__get_data_product_details":
+            requested = arguments.get("dataProduct")
+            products = (
+                []
+                if requested not in (None, self.dp)
+                else [{"fullName": self.dp, "name": self.dp}]
+            )
+            if products and arguments.get("includeSemanticModels", False):
+                details = self.catalog.get("describe_model", {})
+                products[0]["semanticModels"] = {
+                    "models": list(details.values()) if isinstance(details, dict) else [],
+                    "dataProductGlossaryLinks": None,
+                }
+            return {"data_products": products}
         return None
 
     @staticmethod
@@ -130,10 +180,18 @@ class Gateway:
             if isinstance(name, str):
                 builtin = self._builtin_call(name, params.get("arguments") or {})
                 if builtin is not None:
-                    response = {"jsonrpc": "2.0", "id": body.get("id"), "result": {
-                        "content": [{"type": "text", "text": json.dumps(builtin)}],
-                        "structuredContent": builtin,
-                    }}
+                    if name == "discovery-system-dp-production__list_data_products":
+                        result = {
+                            "content": [{"type": "text", "text": json.dumps(builtin)}],
+                            "isError": False,
+                        }
+                    else:
+                        result = {
+                            "content": [{"type": "text", "text": json.dumps(builtin["data_products"])}],
+                            "isError": False,
+                            "structuredContent": builtin,
+                        }
+                    response = {"jsonrpc": "2.0", "id": body.get("id"), "result": result}
                     return 200, "application/json", json.dumps(response).encode(), session_id
             function, separator, suffix = name.rpartition("__") if isinstance(name, str) else ("", "", "")
             if not separator or suffix != self.tool_hash:
@@ -169,10 +227,16 @@ def make_handler(gateway: Gateway, path: str):
                 return
             supplied = self.headers.get("X-Nextdata-Token", "")
             if not supplied:
-                self.send_error(401, "missing X-Nextdata-Token")
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
             if not hmac.compare_digest(supplied, gateway.token):
-                self.send_error(403, "invalid X-Nextdata-Token")
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))

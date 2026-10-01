@@ -56,7 +56,8 @@ mode. The installed `nxd-query-data-product` scripts discover that mesh with
 The PAT is stored with owner-only permissions, omitted from the agent's
 environment, redacted from artifacts, and deleted with the temporary home when
 the cell ends. Loopback HTTP is enabled only for this runner process and only
-for localhost addresses; remote HTTP endpoints continue to upgrade to HTTPS.
+for `127.0.0.1` and `::1` with `NXD_MCP_ALLOW_HTTP_LOCALHOST=1`; remote HTTP
+endpoints continue to upgrade to HTTPS.
 
 ## Credentials
 

@@ -11,10 +11,14 @@ record: null
 
 ## Notes
 
-No public agent scenario distinguishes this transport/test-harness fix. Customer
+No public agent scenario distinguishes this transport/test-harness fix. The
+standalone `mcp_http.py` and `find_mesh.py` checks import runtime dependencies
+(`requests`, and through `nxd_api.py` the lazily imported PyYAML when config
+fallback is used), so root CI must include `requests` while the MCP server's
+private `nxd` wheel remains an optional local smoke-test dependency. Customer
 behavior is unchanged unless `NXD_MCP_ALLOW_HTTP_LOCALHOST=1`, which only the
-eval harness sets for `127.0.0.1`; the opt-in allows HTTP to the local fixture
-gateway while remote HTTP endpoints continue to upgrade to HTTPS.
+eval harness sets for `127.0.0.1` and `::1`; the opt-in allows HTTP to the local
+fixture gateway while remote HTTP endpoints continue to upgrade to HTTPS.
 
 ## Evidence
 
