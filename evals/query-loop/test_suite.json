@@ -1,5 +1,5 @@
 {
-  "comment": "Query-skill test suite for the fresh pharma mesh (see MESH_DESIGN.md). Each case is an NL question an ISOLATED sonnet agent must answer by driving the strict-mode MCP toolchain (nxd mcp health -> describe_model -> run_semantic_query). `expect`/`why`/`gold_note` are issue-miner context, NEVER shown to the agent. Cases target the discriminators: chasm traps, confusable concepts, cross-grain PII refusal, multi-hop joins, plus happy-path baselines.",
+  "comment": "Query-skill test suite for the fresh pharma mesh (see MESH_DESIGN.md). Each case is an NL question an ISOLATED sonnet agent must answer by discovering data products and semantic models through gateway_tools.py (list-dps -> details --models), then calling run_semantic_query with mcp_call.py. `expect`/`why`/`gold_note` are issue-miner context, NEVER shown to the agent. Cases target the discriminators: chasm traps, confusable concepts, cross-grain PII refusal, multi-hop joins, plus happy-path baselines.",
   "cases": [
     {
       "id": "q01-baseline-single-grain",

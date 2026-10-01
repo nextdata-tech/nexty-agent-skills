@@ -72,7 +72,7 @@ def normalise_endpoint(endpoint: str) -> str:
 
         host = (urlsplit(endpoint).hostname or "").lower()
         loopback_opt_in = os.environ.get("NXD_MCP_ALLOW_HTTP_LOCALHOST") == "1"
-        if not (loopback_opt_in and host in {"127.0.0.1", "::1", "localhost"}):
+        if not (loopback_opt_in and host in {"127.0.0.1", "::1"}):
             endpoint = "https://" + endpoint[len("http://"):]
     if not endpoint.endswith("/"):
         endpoint += "/"

@@ -1097,7 +1097,7 @@ def _check_local_mesh_tools(mesh_spec: Mapping[str, Any], tools: Sequence[Mappin
 
 
 @contextlib.contextmanager
-def local_mesh_runtime(mesh_spec: Mapping[str, Any]):
+def local_mesh_runtime(mesh_spec: Mapping[str, Any], cell_tmp: Path | None = None):
     """Prepare isolated NXD_HOME and preflight the operator's real local mesh."""
     token = os.environ.get("EVAL_MESH_TOKEN", "").strip()
     if not token:
@@ -1113,7 +1113,12 @@ def local_mesh_runtime(mesh_spec: Mapping[str, Any]):
         except LocalMeshSetupError as exc:
             endpoint = _local_mesh_gateway_url(str(mesh_spec["api_url"]))
             raise LocalMeshSetupError(f"local mesh preflight failed for {endpoint}: {exc}") from exc
-        yield _local_mesh_agent_environment(nxd_home)
+        environment = _local_mesh_agent_environment(nxd_home)
+        if cell_tmp is not None:
+            private_tmp = cell_tmp / "tmp"
+            private_tmp.mkdir(parents=True, exist_ok=True)
+            environment["TMPDIR"] = str(private_tmp)
+        yield environment
     finally:
         shutil.rmtree(nxd_home, ignore_errors=True)
 
@@ -3650,7 +3655,9 @@ def _mcp_python() -> tuple[str, list[str]]:
 
 
 @contextlib.contextmanager
-def semantic_http_server(scenario_dir: Path, mcp_spec: dict, token: str):
+def semantic_http_server(
+    scenario_dir: Path, mcp_spec: dict, token: str, cell_tmp: Path | None = None
+):
     """Start the semantic DP as a Streamable-HTTP MCP server for the duration of
     a scenario, and yield its gateway URL and isolated agent environment.
 
@@ -3663,14 +3670,14 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict, token: str):
     rpc_port = mcp_spec.get("rpc_port", "mcp-api")
     command, base_args = _mcp_python()
     port = _free_port()
-    endpoint = f"http://127.0.0.1:{port}/{dp}/rpcs/{rpc_port}/mcp/"
+    endpoint = f"http://127.0.0.1:{port}/{dp}/rpcs/{rpc_port}/mcp"
     gateway_port = _free_port()
     gateway_endpoint = f"http://127.0.0.1:{gateway_port}/dp/mcp/"
     gateway_cmd = [
         sys.executable, str(MCP_DIR / "fake_mesh_gateway.py"),
         "--host", "127.0.0.1", "--port", str(gateway_port),
         "--path", "/dp/mcp/", "--upstream", endpoint,
-        "--dp", dp,
+        "--dp", dp, "--catalog", str((scenario_dir / "fixtures" / "catalog.json").resolve()),
     ]
 
     cmd = [command, *base_args, "-m", "semantic_server", fixtures_dir,
@@ -3691,7 +3698,11 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict, token: str):
             env={**server_env, "NEXTY_SEMANTIC_GATEWAY_TOKEN": token},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        _wait_for_http(gateway_endpoint, gateway_proc, timeout_s=15)
+        _wait_for_http(
+            gateway_endpoint, gateway_proc, timeout_s=15,
+            headers={"X-Nextdata-Token": token},
+        )
+        _preflight_fake_gateway(gateway_endpoint, gateway_proc, token, dp, mcp_spec)
         mesh_spec = {
             "mesh": "local", "dp": dp,
             "api_url": f"http://127.0.0.1:{gateway_port}/api",
@@ -3700,6 +3711,10 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict, token: str):
         prepare_local_mesh_nxd_home(nxd_home, mesh_spec, token)
         env = _local_mesh_agent_environment(nxd_home)
         env["NXD_MCP_ALLOW_HTTP_LOCALHOST"] = "1"
+        if cell_tmp is not None:
+            private_tmp = cell_tmp / "tmp"
+            private_tmp.mkdir(parents=True, exist_ok=True)
+            env["TMPDIR"] = str(private_tmp)
         yield gateway_endpoint, env
     finally:
         shutil.rmtree(nxd_home, ignore_errors=True)
@@ -3716,14 +3731,17 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict, token: str):
             proc.kill()
 
 
-def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> None:
+def _wait_for_http(
+    endpoint: str, proc: subprocess.Popen, timeout_s: int,
+    headers: Mapping[str, str] | None = None,
+) -> None:
     """Poll the MCP endpoint until it answers (or the server dies / times out)."""
     import urllib.error
     import urllib.request
 
     deadline = time.time() + timeout_s
-    # An MCP initialize POST; we only care that the socket accepts + the app
-    # responds (any HTTP status, incl. 307/400), not the body.
+    # An MCP initialize POST. Only a successful response means ready; in
+    # particular, an unauthenticated 401 is not evidence that the gateway works.
     body = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05", "capabilities": {},
@@ -3735,16 +3753,89 @@ def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> Non
         req = urllib.request.Request(
             endpoint, data=body, method="POST",
             headers={"Content-Type": "application/json",
-                     "Accept": "application/json, text/event-stream"},
+                     "Accept": "application/json, text/event-stream",
+                     **dict(headers or {})},
         )
         try:
-            urllib.request.urlopen(req, timeout=3)
-            return
+            with urllib.request.urlopen(req, timeout=3) as response:
+                if 200 <= response.status < 300:
+                    return
         except urllib.error.HTTPError:
-            return  # app responded (e.g. 307/400) — it's up
+            pass
         except (urllib.error.URLError, ConnectionError, OSError):
             time.sleep(0.5)
     raise TimeoutError(f"MCP server did not come up within {timeout_s}s at {endpoint}")
+
+
+def _mcp_json_response(response) -> dict[str, Any]:
+    raw = response.read()
+    content_type = response.headers.get("Content-Type", "")
+    if "text/event-stream" in content_type.lower():
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            if line.startswith("data:"):
+                try:
+                    value = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    return value
+        return {}
+    value = json.loads(raw.decode("utf-8"))
+    return value if isinstance(value, dict) else {}
+
+
+def _preflight_fake_gateway(
+    endpoint: str, proc: subprocess.Popen, token: str, dp: str, mcp_spec: Mapping[str, Any]
+) -> None:
+    """Prove the authenticated fake gateway lists the scenario's semantic tools."""
+    import urllib.error
+    import urllib.request
+
+    def post(body: dict[str, Any], session: str | None = None):
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "X-Nextdata-Token": token,
+        }
+        if session:
+            headers["Mcp-Session-Id"] = session
+        request = urllib.request.Request(
+            endpoint, data=json.dumps(body).encode(), headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return _mcp_json_response(response), response.headers.get("Mcp-Session-Id")
+
+    try:
+        initialized, session = post({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "eval-preflight", "version": "1"}},
+        })
+        if initialized.get("error") or not session:
+            raise RuntimeError(f"initialize response incomplete: {initialized!r}")
+        listed, _ = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, session)
+        if listed.get("error"):
+            raise RuntimeError(f"tools/list returned JSON-RPC error: {listed['error']!r}")
+        tools = listed.get("result", {}).get("tools", [])
+        names = {
+            str(tool.get("name", "")).rpartition("__")[0]
+            for tool in tools if isinstance(tool, dict)
+        }
+        required = set(mcp_spec.get("tools", ()))
+        missing = sorted(required - names)
+        if not isinstance(tools, list) or not required or missing:
+            raise RuntimeError(
+                f"DP {dp!r} semantic tools missing from tools/list: {missing or sorted(required)}"
+            )
+    except Exception as exc:
+        if proc.poll() is not None:
+            detail = f"fake gateway exited with code {proc.returncode}; "
+        else:
+            detail = ""
+        raise RuntimeError(
+            f"authenticated fake-gateway preflight failed for DP {dp!r} at {endpoint}: "
+            f"{detail}{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 class HttpStubSetupError(RuntimeError):
@@ -5376,7 +5467,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             runner_mcp_trace: str | None = None
             if mesh_spec is not None:
                 try:
-                    with local_mesh_runtime(mesh_spec) as env_over:
+                    with local_mesh_runtime(mesh_spec, Path(tmp)) as env_over:
                         preflight_metrics["local_mesh_preflight"] = "passed"
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
@@ -5395,7 +5486,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             elif mcp_spec is not None:
                 try:
                     with semantic_http_server(
-                        scenario_dir, mcp_spec, mcp_gateway_token
+                        scenario_dir, mcp_spec, mcp_gateway_token, Path(tmp)
                     ) as (_ep, env_over):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,

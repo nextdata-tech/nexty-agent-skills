@@ -8,6 +8,8 @@ Streamable-HTTP operations used by nxd-query-data-product.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import hmac
 import json
 import secrets
@@ -38,12 +40,58 @@ def _decode_response(raw: bytes, content_type: str) -> dict[str, Any]:
 
 
 class Gateway:
-    def __init__(self, upstream: str, token: str, dp: str):
-        self.upstream = upstream.rstrip("/") + "/"
+    def __init__(self, upstream: str, token: str, dp: str, catalog: dict[str, Any] | None = None):
+        # FastMCP's HTTP route redirects /mcp/ to /mcp. urllib does not
+        # preserve a POST body across that redirect, so target the canonical
+        # no-trailing-slash route directly.
+        self.upstream = upstream.rstrip("/")
         self.token = token
         self.dp = dp
+        self.catalog = catalog or {}
+        upstream_parts = urlsplit(upstream).path.rstrip("/").split("/")
+        self.rpc_port = upstream_parts[-2] if upstream_parts[-1] == "mcp" else upstream_parts[-1]
+        self.tool_hash = base64.b32encode(
+            hashlib.sha256(f"{dp}__{self.rpc_port}".encode()).digest()
+        ).decode("ascii").lower()[:10]
         self.sessions: dict[str, str] = {}
         self.lock = threading.Lock()
+
+    def _builtins(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "discovery-system-dp-production__list_data_products",
+                "description": "List data products in the mesh",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "proxy__get_data_product_details",
+                "description": "Get details for a data product",
+                "inputSchema": {"type": "object", "properties": {"dataProduct": {"type": "string"}}},
+            },
+        ]
+
+    def _builtin_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+        if name == "discovery-system-dp-production__list_data_products":
+            return {"data_products": [{
+                "fullName": self.dp, "name": self.dp,
+                "semantic_models": self.catalog.get("list_models", []),
+            }]}
+        if name == "proxy__get_data_product_details":
+            if arguments.get("dataProduct") != self.dp:
+                return {"error": f"unknown data product: {arguments.get('dataProduct', '')}"}
+            details = self.catalog.get("describe_model", {})
+            return {
+                "fullName": self.dp, "name": self.dp, "rpc_port": self.rpc_port,
+                "semantic_models": list(details.values()) if isinstance(details, dict) else [],
+            }
+        return None
+
+    @staticmethod
+    def _rpc_error(body: dict[str, Any], code: int, message: str) -> bytes:
+        return json.dumps({
+            "jsonrpc": "2.0", "id": body.get("id"),
+            "error": {"code": code, "message": message},
+        }).encode()
 
     def request(self, body: dict[str, Any], upstream_session: str | None = None):
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
@@ -73,15 +121,23 @@ class Gateway:
         with self.lock:
             upstream_session = self.sessions.get(session_id or "")
         if not upstream_session:
-            return 400, "text/plain", b"unknown MCP session", None
+            return 400, "application/json", self._rpc_error(body, -32000, "unknown MCP session"), None
 
         forwarded = dict(body)
         params = forwarded.get("params")
         if isinstance(params, dict) and method == "tools/call":
             name = params.get("name", "")
+            if isinstance(name, str):
+                builtin = self._builtin_call(name, params.get("arguments") or {})
+                if builtin is not None:
+                    response = {"jsonrpc": "2.0", "id": body.get("id"), "result": {
+                        "content": [{"type": "text", "text": json.dumps(builtin)}],
+                        "structuredContent": builtin,
+                    }}
+                    return 200, "application/json", json.dumps(response).encode(), session_id
             function, separator, suffix = name.rpartition("__") if isinstance(name, str) else ("", "", "")
-            if not separator or suffix != "0123456789":
-                return 404, "application/json", json.dumps({"error": "unknown gateway tool"}).encode(), session_id
+            if not separator or suffix != self.tool_hash:
+                return 200, "application/json", self._rpc_error(body, -32601, f"Unknown tool: {name}"), session_id
             params = dict(params)
             params["name"] = function
             forwarded["params"] = params
@@ -94,9 +150,10 @@ class Gateway:
             if isinstance(tools, list):
                 for tool in tools:
                     if isinstance(tool, dict) and isinstance(tool.get("name"), str):
-                        tool["name"] = f"{tool['name']}__0123456789"
+                        tool["name"] = f"{tool['name']}__{self.tool_hash}"
                         description = str(tool.get("description", ""))
-                        tool["description"] = f"(data product: {self.dp}, port: semantic) {description}"
+                        tool["description"] = f"(data product: {self.dp}, port: {self.rpc_port}) {description}"
+                tools.extend(self._builtins())
                 raw = json.dumps(response).encode()
                 ctype = "application/json"
         return status, ctype, raw, session_id
@@ -147,13 +204,16 @@ def main() -> int:
     parser.add_argument("--path", default="/dp/mcp/")
     parser.add_argument("--upstream", required=True)
     parser.add_argument("--dp", required=True)
+    parser.add_argument("--catalog", required=True)
     args = parser.parse_args()
     import os
 
     token = os.environ.get("NEXTY_SEMANTIC_GATEWAY_TOKEN", "")
     if not token:
         parser.error("NEXTY_SEMANTIC_GATEWAY_TOKEN is required")
-    gateway = Gateway(args.upstream, token, args.dp)
+    with open(args.catalog, encoding="utf-8") as catalog_file:
+        catalog = json.load(catalog_file)
+    gateway = Gateway(args.upstream, token, args.dp, catalog)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(gateway, args.path))
     try:
         server.serve_forever()

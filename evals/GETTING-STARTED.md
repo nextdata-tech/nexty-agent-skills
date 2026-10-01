@@ -279,9 +279,10 @@ set -a; source <snowflake .env>; set +a
 python3 evals/run.py --skill-set current_pack --scenario semantic-intent-validation
 ```
 
-`run.py` handles the rest: starts the server on a free port, puts a fake `nxd`
-on the agent's PATH so `nxd mcp health` discovers it, runs the agent against
-the shipped toolchain unchanged, tears the server down after the cell.
+`run.py` handles the rest: starts the semantic server and authenticated local
+mesh gateway on free ports, writes an isolated `NXD_HOME` so the skill's
+`gateway_tools.py` discovery resolves the fixture DP, runs the agent against
+the shipped gateway/MCP toolchain, and tears both servers down after the cell.
 
 Fixture format and the cross-DP mesh model: [`evals/mcp/README.md`](mcp/README.md).
 
@@ -336,8 +337,9 @@ Set by you:
 | `NXD_CA_BUNDLE` | 1/2 | per-cluster TLS trust store; unset = system store |
 | `NXD_SKILL_PYTHON` | — | interpreter for skill-invoked subprocesses |
 
-Injected by `run.py` — **never set these by hand**: `EVAL_MCP_ENDPOINT`,
-`EVAL_MCP_DP`, `EVAL_MCP_TOOL_COUNT`, `NXD_JOB_CHECK_TMPDIR`.
+Injected by `run.py` — **never set these by hand**: `NXD_HOME`,
+`NXD_MCP_ALLOW_HTTP_LOCALHOST` (the loopback stand-in only),
+`NXD_JOB_CHECK_TMPDIR`.
 
 ---
 

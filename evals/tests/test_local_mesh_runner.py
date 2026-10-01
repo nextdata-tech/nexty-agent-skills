@@ -8,6 +8,7 @@ import os
 import ssl
 import stat
 import sys
+import shutil
 import subprocess
 import threading
 import urllib.error
@@ -149,6 +150,16 @@ def test_nxd_home_preparation_uses_only_operator_token_and_private_file(tmp_path
     assert stat.S_IMODE(os.stat(nxd_home / "tokens.json").st_mode) == 0o600
 
 
+def test_local_mesh_runtime_scopes_tmpdir_to_the_cell(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("EVAL_MESH_TOKEN", "nxdpat_synthetic-unit-test-token")
+    monkeypatch.setattr(run, "list_local_mesh_tools", lambda *_args: [])
+    monkeypatch.setattr(run, "_check_local_mesh_tools", lambda *_args: None)
+
+    with run.local_mesh_runtime(_mesh_spec(), tmp_path) as env:
+        assert Path(env["TMPDIR"]) == tmp_path / "tmp"
+        assert Path(env["TMPDIR"]).is_dir()
+
+
 def test_local_gateway_url_is_derived_from_api_url() -> None:
     assert run._local_mesh_gateway_url("https://nxd.nxd.local/api") == (
         "https://nxd.nxd.local/dp/mcp/"
@@ -226,6 +237,7 @@ def test_mcp_http_allows_only_opted_in_loopback_http(monkeypatch) -> None:
     monkeypatch.setenv("NXD_MCP_ALLOW_HTTP_LOCALHOST", "1")
     assert module.normalise_endpoint("http://127.0.0.1:8765/dp/mcp") == "http://127.0.0.1:8765/dp/mcp/"
     assert module.normalise_endpoint("http://example.test/dp/mcp") == "https://example.test/dp/mcp/"
+    assert module.normalise_endpoint("http://localhost:8765/dp/mcp") == "https://localhost:8765/dp/mcp/"
     assert module.normalise_endpoint("http://[::1]:8765/dp/mcp") == "http://[::1]:8765/dp/mcp/"
 
     monkeypatch.delenv("NXD_MCP_ALLOW_HTTP_LOCALHOST")
@@ -280,7 +292,11 @@ def test_semantic_gateway_auth_namespaces_and_forwards_and_resolves_mesh(tmp_pat
         )
         grouped = json.loads(tools.stdout)
         listed = next(iter(grouped["per_dp_tool_groups"].values()))[0]
-        assert listed["wire_name"] == "run_semantic_query__0123456789"
+        assert listed["wire_name"].startswith("run_semantic_query__")
+        suffix = listed["wire_name"].rsplit("__", 1)[1]
+        assert len(suffix) == 10
+        assert all(character in "abcdefghijklmnopqrstuvwxyz234567" for character in suffix)
+        assert listed["description"].startswith("(data product: fixture-dp, port: mcp-api)")
 
         output = tmp_path / "call.json"
         called = subprocess.run(
@@ -292,6 +308,14 @@ def test_semantic_gateway_auth_namespaces_and_forwards_and_resolves_mesh(tmp_pat
         assert json.loads(output.read_text(encoding="utf-8")) == {
             "fixture_call": {"measures": ["m"]}
         }
+        unknown = subprocess.run(
+            [sys.executable, str(scripts / "mcp_call.py"), "--endpoint", endpoint,
+             "--tool", "unknown_tool__aaaaaaaaaa", "--token-file", str(token_file),
+             "--out", str(tmp_path / "unknown.json")],
+            env=env, text=True, capture_output=True, timeout=10,
+        )
+        assert unknown.returncode != 0
+        assert "MCP error -32601" in unknown.stderr
     finally:
         proxy.shutdown()
         upstream.shutdown()
@@ -302,47 +326,76 @@ def test_semantic_gateway_auth_namespaces_and_forwards_and_resolves_mesh(tmp_pat
 
 
 def test_semantic_server_gateway_tools_smoke_without_snowflake(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
 ) -> None:
-    for module_name in (
-        "mcp", "nxd.experimental.semantic", "snowflake.connector", "typing_extensions",
-    ):
-        try:
-            available = importlib.util.find_spec(module_name) is not None
-        except (ImportError, ModuleNotFoundError):
-            available = False
-        if not available:
-            pytest.skip(f"semantic fixture server dependency unavailable: {module_name}")
-    try:
-        from nxd.experimental.semantic import SemanticRegistry
-        import inspect
-
-        if "data_product" not in inspect.signature(SemanticRegistry.model).parameters:
-            pytest.skip(
-                "installed NXD semantic wheel is older than the fixture contract; "
-                "SemanticRegistry.model lacks data_product (tools/list itself is DB-free)"
-            )
-    except (ImportError, AttributeError, ValueError) as exc:
-        pytest.skip(f"could not verify the installed NXD semantic fixture contract: {type(exc).__name__}")
-
-    monkeypatch.setenv("EVAL_MCP_PYTHON", sys.executable)
+    command, base_args = run._mcp_python()
+    if shutil.which(command) is None and not Path(command).is_file():
+        pytest.skip(f"matched semantic MCP interpreter is unavailable: {command}")
+    interpreter = [command, *base_args]
+    interpreter_probe = subprocess.run(
+        [*interpreter, "-c", "import sys; print(sys.executable)"],
+        cwd=run.MCP_DIR, text=True, capture_output=True, timeout=30,
+    )
+    if interpreter_probe.returncode and command == "uv" and "No version is set for command uv" in interpreter_probe.stderr:
+        pytest.skip("uv has no selected runtime in this checkout; set EVAL_MCP_PYTHON or configure uv")
+    if interpreter_probe.returncode:
+        pytest.fail(f"matched semantic MCP interpreter could not start: {interpreter_probe.stderr.strip()[-500:]}")
+    available = subprocess.run(
+        [*interpreter, "-c", "import mcp, nxd.experimental.semantic, snowflake.connector, typing_extensions"],
+        cwd=run.MCP_DIR, text=True, capture_output=True, timeout=30,
+    )
+    if available.returncode:
+        pytest.fail(
+            "matched semantic MCP interpreter is present but its declared server "
+            f"dependencies are unavailable: {available.stderr.strip()[-500:]}"
+        )
     scenario = ROOT / "evals" / "public" / "semantic-intent-validation"
     mcp_spec = run.scenario_needs_mcp(scenario)
     token = "nxdpat_semantic-smoke-test-token"
     scripts = ROOT / "src" / "nxd-query-data-product" / "scripts"
     token_file = tmp_path / "gateway-token.txt"
     token_file.write_text(token, encoding="utf-8")
-    with run.semantic_http_server(scenario, mcp_spec, token) as (_endpoint, env_over):
-        result = subprocess.run(
-            [sys.executable, str(scripts / "gateway_tools.py"), "tools",
-             "--dp", mcp_spec["dp"], "--token-file", str(token_file)],
-            env={**os.environ, **env_over, "NXD_MCP_ALLOW_HTTP_LOCALHOST": "1",
-                 "PYTHONPATH": str(scripts)},
-            text=True, capture_output=True, check=True, timeout=30,
-        )
-    groups = json.loads(result.stdout)["per_dp_tool_groups"]
-    listed = [tool["function"] for group in groups.values() for tool in group]
-    assert set(listed) >= {"list_models", "describe_model", "run_semantic_query"}
+    env = {**os.environ, "PYTHONPATH": str(scripts)}
+    with run.semantic_http_server(scenario, mcp_spec, token, tmp_path) as (endpoint, env_over):
+        assert Path(env_over["TMPDIR"]) == tmp_path / "tmp"
+        script_env = {**env, **env_over}
+
+        def run_script(script: str, *args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [*interpreter, str(scripts / script), *args], env=script_env,
+                cwd=run.MCP_DIR, text=True, capture_output=True, check=True, timeout=30,
+            )
+
+        listed = json.loads(run_script(
+            "gateway_tools.py", "list-dps", "--endpoint", endpoint,
+            "--token-file", str(token_file),
+        ).stdout)
+        assert any(dp.get("fullName") == mcp_spec["dp"] for dp in listed["data_products"])
+
+        details = json.loads(run_script(
+            "gateway_tools.py", "details", "--dp", mcp_spec["dp"], "--models",
+            "--endpoint", endpoint, "--token-file", str(token_file),
+        ).stdout)
+        assert details["fullName"] == mcp_spec["dp"]
+
+        grouped = json.loads(run_script(
+            "gateway_tools.py", "tools", "--dp", mcp_spec["dp"],
+            "--endpoint", endpoint, "--token-file", str(token_file),
+        ).stdout)
+        groups = grouped["per_dp_tool_groups"]
+        listed_tools = [tool for group in groups.values() for tool in group]
+        semantic_tools = {tool["function"] for tool in listed_tools}
+        assert semantic_tools >= {"list_models", "describe_model", "run_semantic_query"}
+        assert all(f"port: {mcp_spec['rpc_port']}" in tool["description"] for tool in listed_tools)
+
+        list_models = next(tool["wire_name"] for tool in listed_tools if tool["function"] == "list_models")
+        output = tmp_path / "list-models.json"
+        called = json.loads(run_script(
+            "mcp_call.py", "--endpoint", endpoint, "--tool", list_models,
+            "--token-file", str(token_file), "--out", str(output),
+        ).stdout)
+        assert called["is_error"] is False
+        assert json.loads(output.read_text(encoding="utf-8"))
 
 
 def test_mesh_tls_verifies_certificates_by_default(monkeypatch) -> None:
