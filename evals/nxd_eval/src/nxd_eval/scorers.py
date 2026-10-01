@@ -135,7 +135,7 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
 
     tx = extract(state)
     gold_rows = _gold_rows_from_target(target)
-    call = tx.last_answered_call()
+    call, selection = tx.answer_call_selection()
     actual_rows = call.rows if call is not None else None
 
     verdict = scoring.score_one(
@@ -152,6 +152,10 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
         "made_query": tx.made_query,
         "n_queries": len(tx.calls),
         "compiled_sql": call.compiled_sql if call else None,
+        "graded_call_index": next(
+            (i for i, candidate in enumerate(tx.calls) if candidate is call), None
+        ),
+        "selection": selection,
     }
     # Carry the agent's verbalized confidence (if any) alongside the 0/1
     # outcome so report.py can build the (correctness, confidence) pairs the
@@ -191,7 +195,7 @@ deterministic_ex = rows_equal
 
 
 def _compiled_sql(tx: Transcript) -> str | None:
-    call = tx.last_answered_call()
+    call = tx.answer_call()
     if call and call.compiled_sql:
         return call.compiled_sql
     # Fall back to the last call that carried any compiled_sql (even if errored).

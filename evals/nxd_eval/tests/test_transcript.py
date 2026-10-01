@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from nxd_eval.transcript import extract
+from nxd_eval.transcript import QueryCall, Transcript, extract
 
 
 def _msg(**kw):
@@ -50,6 +50,10 @@ def _transcript(function: str, result: dict) -> object:
             ),
         ]
     )
+
+
+def _query_call(rows: list[dict], *, errored: bool = False) -> QueryCall:
+    return QueryCall(arguments={}, result={"rows": rows}, errored=errored)
 
 
 _SUCCESS = {"columns": ["PUMS"], "rows": ["[22583.0]"], "error": ""}
@@ -282,3 +286,76 @@ def test_mixed_transcript_last_answered_call_returns_the_success():
     assert last is not None
     assert last.measures == ["PUMS"]
     assert last.rows == [{"PUMS": 22583.0}]
+
+
+# --------------------------------------------------------------------------- #
+# Answer-anchored result selection
+# --------------------------------------------------------------------------- #
+
+
+def test_answer_call_uses_highest_fraction_of_numeric_cells():
+    """Coverage is matched cells / each call's numeric-cell count."""
+    exploratory = _query_call([{"n": 1}, {"n": 2}, {"n": 99}])  # 2/3
+    answer = _query_call([{"n": 3}])  # 1/1, despite fewer absolute matches
+    tx = Transcript(
+        calls=[exploratory, answer],
+        final_answer="The values were 1, 2, and 3.",
+    )
+    assert tx.answer_call() is answer
+    assert tx.answer_call_selection() == (answer, "answer-anchored")
+
+
+def test_answer_call_tie_uses_latest_call():
+    first = _query_call([{"n": 5}])
+    latest = _query_call([{"n": 5}])
+    tx = Transcript(calls=[first, latest], final_answer="There were 5.")
+    assert tx.answer_call() is latest
+
+
+def test_answer_call_matches_formatted_negative_decimal_and_percent():
+    call = _query_call([{"amount": -1234.5, "rate": 0.125}])
+    tx = Transcript(
+        calls=[call],
+        final_answer="The amount was -1,234.50 and the rate was 12.5%.",
+    )
+    assert tx.answer_call() is call
+
+
+def test_answer_call_percentage_points_are_supported_too():
+    points = _query_call([{"rate": 12.5}])
+    tx = Transcript(calls=[points], final_answer="The rate was 12.5%.")
+    assert tx.answer_call_selection() == (points, "answer-anchored")
+
+
+def test_answer_call_ignores_trailing_confidence_digits():
+    answer = _query_call([{"n": 10}])
+    confidence_value = _query_call([{"n": 0.87}])
+    tx = Transcript(
+        calls=[answer, confidence_value],
+        final_answer="There were 10 subjects.\nCONFIDENCE: 0.87",
+    )
+    assert tx.answer_call() is answer
+
+
+def test_answer_call_ignores_numbered_markdown_list_index():
+    answer = _query_call([{"n": 10}])
+    list_index = _query_call([{"n": 1}])
+    tx = Transcript(calls=[answer, list_index], final_answer="1. There were 10 subjects.")
+    assert tx.answer_call() is answer
+
+
+def test_answer_call_without_numeric_overlap_falls_back_to_last_answered():
+    first = _query_call([{"n": 1}])
+    latest = _query_call([{"n": 2}])
+    tx = Transcript(calls=[first, latest], final_answer="The answer is unavailable.")
+    assert tx.answer_call_selection() == (latest, "last-answered-fallback")
+
+    no_overlap = Transcript(calls=[first, latest], final_answer="There were 500.")
+    assert no_overlap.answer_call_selection() == (latest, "last-answered-fallback")
+
+
+def test_answer_call_skips_errored_results():
+    errored = _query_call([{"n": 5}], errored=True)
+    latest = _query_call([{"n": 1}])
+    tx = Transcript(calls=[errored, latest], final_answer="There were 5.")
+    assert tx.answer_call_selection() == (latest, "last-answered-fallback")

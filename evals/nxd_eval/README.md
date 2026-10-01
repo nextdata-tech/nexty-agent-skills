@@ -218,6 +218,12 @@ from the seed: 4 subjects — US, US, DE, FR).
 text-to-SQL PoC never drift on what "PASS" means — including the name-aware
 guard that FAILs two numeric measures swapped.
 
+`rows_equal` and the compiled-SQL scorers grade the successful query whose
+numeric results best match the final answer (latest query breaks ties), so a
+later exploratory query does not replace the query the answer reflects. If the
+answer has no numeric values or none overlap, they fall back to the latest
+successful query.
+
 nxd_eval **owns** the EX core, at `src/nxd_eval/_ex_core/score.py` — the pure
 scoring surface (`score_one`, `rows_equal_name_aware`, `_norm_rowset`,
 `matches_compiler`, `fanout_of`, `distinct_results`). The cross-DP join-strategy

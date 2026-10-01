@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 QUERY_TOOL = "run_semantic_query"
@@ -51,6 +52,99 @@ def _is_query_tool(name: object) -> bool:
 _CONFIDENCE_RE = re.compile(
     r"CONFIDENCE:\s*([01](?:\.\d+)?|\.\d+|\d*\.\d+)(?![\d%])", re.IGNORECASE
 )
+
+# Numeric values the agent states in its final answer. Commas are accepted only
+# as conventional three-digit thousands separators, and a trailing percent sign
+# is retained so percentage-point and fractional result representations can both
+# be matched. The surrounding boundaries avoid extracting numbers embedded in
+# identifiers or decimal fragments.
+_ANSWER_NUMBER_RE = re.compile(
+    r"(?<![\w.,])([+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%)?(?!\w|,\d|\.\d)"
+)
+_TRAILING_CONFIDENCE_RE = re.compile(r"^\s*CONFIDENCE\s*:", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class _AnswerNumber:
+    """One displayed numeric token and its visible decimal precision."""
+
+    value: Decimal
+    decimal_places: int
+    is_percent: bool
+
+
+def _answer_numbers(text: str) -> list[_AnswerNumber]:
+    """Parse final-answer numbers, excluding confidence and list ordinals."""
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and _TRAILING_CONFIDENCE_RE.match(lines[-1]):
+        lines.pop()
+    # Ordered-list labels are structure, not values to match against query
+    # results. Strip only conventional line prefixes such as ``1. `` or ``2) ``.
+    answer_text = "\n".join(re.sub(r"^\s*\d+[.)]\s+", "", line) for line in lines)
+
+    out: list[_AnswerNumber] = []
+    seen: set[tuple[Decimal, int, bool]] = set()
+    for match in _ANSWER_NUMBER_RE.finditer(answer_text):
+        raw = match.group(1).replace(",", "")
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            continue
+        if not value.is_finite():
+            continue
+        decimals = raw.partition(".")[2]
+        number = _AnswerNumber(
+            value=value,
+            decimal_places=len(decimals),
+            is_percent=bool(match.group(2)),
+        )
+        key = (number.value, number.decimal_places, number.is_percent)
+        if key not in seen:
+            out.append(number)
+            seen.add(key)
+    return out
+
+
+def _numeric_cells(rows: list[dict]) -> list[Decimal]:
+    """Collect finite numeric cells from parsed result rows."""
+    values: list[Decimal] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for value in row.values():
+            # bool is an int subclass, but never a numeric result for anchoring.
+            if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+                continue
+            try:
+                parsed = Decimal(str(value))
+            except InvalidOperation:
+                continue
+            if parsed.is_finite():
+                values.append(parsed)
+    return values
+
+
+def _rounded_equal(actual: Decimal, stated: Decimal, decimal_places: int) -> bool:
+    """Compare at the precision the agent displayed, using half-up rounding."""
+    quantum = Decimal(1).scaleb(-decimal_places)
+    return actual.quantize(quantum, rounding=ROUND_HALF_UP) == stated
+
+
+def _number_matches(number: _AnswerNumber, value: Decimal) -> bool:
+    """Whether one result cell supports a displayed answer number.
+
+    A percentage token such as ``12.5%`` matches either 12.5 percentage points
+    or 0.125 as a fraction. Its visible precision is carried through the
+    conversion: one decimal place in percentage points is three in fractions.
+    """
+    if _rounded_equal(value, number.value, number.decimal_places):
+        return True
+    if number.is_percent:
+        fractional = number.value / Decimal(100)
+        return _rounded_equal(value, fractional, number.decimal_places + 2)
+    return False
 
 
 def parse_confidence(text: str) -> float | None:
@@ -175,6 +269,47 @@ class Transcript:
             if not call.errored and call.rows is not None:
                 return call
         return None
+
+    def answer_call(self) -> QueryCall | None:
+        """Select the successful result that best supports the numeric answer.
+
+        Coverage is the fraction of a call's numeric result cells that match
+        any unique numeric token in the final answer at its displayed precision.
+        The latest call wins ties. If the answer has no numbers or no successful
+        result overlaps it, this falls back to the latest answered call.
+        """
+        return self.answer_call_selection()[0]
+
+    def answer_call_selection(self) -> tuple[QueryCall | None, str]:
+        """Return ``(call, source)`` for answer anchoring and scorer metadata."""
+        numbers = _answer_numbers(self.final_answer)
+        if not numbers:
+            return self.last_answered_call(), "last-answered-fallback"
+
+        best_call: QueryCall | None = None
+        best_covered = 0
+        best_total = 1
+        for call in self.calls:
+            if call.errored or call.rows is None:
+                continue
+            cells = _numeric_cells(call.rows)
+            if not cells:
+                continue
+            covered = sum(
+                1
+                for cell in cells
+                if any(_number_matches(number, cell) for number in numbers)
+            )
+            # Compare exact coverage fractions by cross multiplication. Updating
+            # on equality makes the later call win a tie.
+            if covered and covered * best_total >= best_covered * len(cells):
+                best_call = call
+                best_covered = covered
+                best_total = len(cells)
+
+        if best_call is not None:
+            return best_call, "answer-anchored"
+        return self.last_answered_call(), "last-answered-fallback"
 
     def any_error(self) -> bool:
         """True if any query returned an error (compile refusal / exec failure)."""
