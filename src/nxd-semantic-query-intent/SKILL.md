@@ -22,9 +22,16 @@ The gate validates intent-to-selection mapping before governed execution:
 1. Check that catalog coverage is complete for the agreed scope before relying
    on relevance or grain decisions.
 2. Have the catalog-aware critic compare the question, selection, and model
-   descriptions, including compatibility and reachability metadata. Enumerate
-   every constraint in the verbatim question and map it to a filter or selected
-   dimension; a missing constraint is `likely-wrong`.
+   descriptions, including compatibility and reachability metadata. Every SCOPE
+   constraint (a named value, entity, segment, or time window that narrows the
+   population) maps to a filter. A requested BREAKDOWN (such as "by product" or
+   "per month") maps to a grouped dimension. A comparison of named values (such
+   as "Psychiatry vs Neurology") needs a filter restricting to those values and
+   grouping by that dimension; grouping never substitutes for filtering on a
+   named value. If a scope filter is missing, first add it when a catalog
+   dimension can express the constraint, then re-run the critic. Return
+   `likely-wrong` and abstain or clarify only when no catalog dimension can
+   express the constraint.
 3. Show a plain-language round-trip echo assembled from the selected concepts'
    descriptions, including applicable PII or governance notes.
 4. Clarify or abstain when the mapping is ambiguous, likely wrong, unavailable,

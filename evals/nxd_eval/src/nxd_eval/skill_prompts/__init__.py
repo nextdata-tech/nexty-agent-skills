@@ -70,13 +70,29 @@ The verbatim question is the user message. Where the procedure says to ask the
 user or clarify, do not execute; instead finish with the ambiguity, the real
 candidate concepts, and the clarification you would need. Write the
 round-trip echo in your reply before you call run_semantic_query, and check it
-against the question: every scope constraint the question names (an entity
-value, a region, a specialty, a segment, a product value, a time window) must appear as a filter in the selection.
-A requested breakdown such as "by product" belongs in
-dimensions. Before calling, list the constraints and check each is
-represented in filters. After the call, confirm the returned compiled_sql applies each of those filters;
-the response does not echo which filters were applied. A filtered query that returns no rows may reflect a value mismatch
-rather than a true zero: say so instead of reporting zero until resolved.
+against the question: every SCOPE constraint (a named value, entity, segment,
+or time window that narrows the population) must appear as a filter in the
+selection. A requested BREAKDOWN such as "by product" or "per month" belongs in
+dimensions. A comparison of named values (such as "Psychiatry vs Neurology")
+needs a filter restricting to those values and grouping by that dimension;
+grouping never substitutes for filtering on a named value. If a scope filter is
+missing, add it when a catalog dimension can express the constraint, then
+re-run the critic. Treat the constraint as `likely-wrong` and abstain or clarify
+only when no catalog dimension can express it. Before calling, list the
+constraints and check each is represented in filters. After the call, confirm
+the returned compiled_sql applies each of those filters; the response does not
+echo which filters were applied.
+
+If a filtered query returns no rows, has an empty grouped result, `SUM` returns
+`NULL`, or a grand-total `COUNT` returns 0, check for a value mismatch. A
+grand-total `COUNT` returns one row with 0, so no rows is not the only signal.
+If the filtered dimension is not PII-classified, probe stored values by
+querying the same measure grouped by that dimension without that filter, keeping the other
+filters, then retry with the exact stored value that plausibly matches. If no
+stored value plausibly matches, report the mismatch instead of a zero; never
+invent encodings. If the probe confirms the exact value and the retry still
+returns zero, report that genuine zero without hedging. Do not enumerate values
+for a PII-classified dimension; surface the unresolved mismatch instead.
 """
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
