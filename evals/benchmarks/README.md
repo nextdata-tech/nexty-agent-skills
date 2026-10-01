@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-10-01 | B3 review severity convergence and conditional beat retirement (sonnet, llm router) | MIXED | marketing-attribution | [`2026-10-01-b3-review-convergence-sonnet-pass`](entries/2026-10-01-b3-review-convergence-sonnet-pass.md) |
 | 2026-09-30 | Blocking Open Questions return an actionable prepare diagnostic | NO_EVAL | — | [`2026-09-30-blocking-open-question-prepare-diagnostic`](entries/2026-09-30-blocking-open-question-prepare-diagnostic.md) |
 | 2026-09-30 | dp-scenarios operator: LLM router (#424, #430), B5 live Sonnet pass | PASS | inventory-position | [`2026-09-30-b5-llm-router-sonnet-pass`](entries/2026-09-30-b5-llm-router-sonnet-pass.md) |
 | 2026-09-30 | dp-scenarios operator: clarify-once approval and router rules (#430), B1 live Sonnet pass | MIXED | crm-pipeline | [`2026-09-30-b1-router-approval-fixes-sonnet-pass`](entries/2026-09-30-b1-router-approval-fixes-sonnet-pass.md) |
