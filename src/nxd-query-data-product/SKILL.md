@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.54.9
+  version: 0.54.10
 ---
 
 # nxd data product query
@@ -306,6 +306,28 @@ first three as a discover→select→run protocol, not free-form SQL:
    - The response's `time_grains` confirms what was applied.
    - Never fetch day-level rows and add them up yourself: that is wrong for
      distinct counts and averages. Never run one query per period either.
+   - **Filters:** Follow the `run_semantic_query` tool description as the
+     authority for its supported `op` symbols; do not infer or invent operators.
+     Each filter has shape `{"dimension": ..., "op": ..., "value": ...}` — the
+     key is `op`, not `operator`; omit `value` for `IS NULL` / `IS NOT NULL`.
+     Filters are ANDed; there is no OR or query-time filtering on a measure.
+   - Before calling, enumerate every scope constraint in the verbatim question
+     (entity value, region, segment, product value, time window) and check that
+     each is represented in `filters`. A requested breakdown such as "by
+     product" also belongs in `dimensions`. After the call, inspect
+     `compiled_sql` and verify that it applies every listed filter; the response
+     does not echo which filters were applied.
+   - A filter can use a dimension from a join-reachable model without grouping
+     by it, subject to the compiler's reachability and governance checks. One
+     refusal case: if the selection combines metrics homed on different models
+     and filters on a dimension from a non-spine metric's home model, the
+     compiler rejects it unless that same dimension is also grouped. On that
+     `CompileError`, add the dimension to `dimensions` or re-scope the query —
+     never drop the filter to make it compile.
+   - Match values to their stored form. `describe_model` does not expose sample
+     values, so a filtered query returning 0 rows may reflect a value mismatch;
+     see [reference/troubleshooting.md](reference/troubleshooting.md) and do not
+     report it as a true zero without resolving the mismatch.
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly
    one grain, grain boundaries are visible before you query. Combining measures
    from **join-reachable** models in ONE `run_semantic_query` call is safe — the

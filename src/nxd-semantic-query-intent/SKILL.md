@@ -6,7 +6,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.54.9
+  version: 0.54.10
 ---
 
 # Semantic query intent validation
@@ -22,7 +22,9 @@ The gate validates intent-to-selection mapping before governed execution:
 1. Check that catalog coverage is complete for the agreed scope before relying
    on relevance or grain decisions.
 2. Have the catalog-aware critic compare the question, selection, and model
-   descriptions, including compatibility and reachability metadata.
+   descriptions, including compatibility and reachability metadata. Enumerate
+   every constraint in the verbatim question and map it to a filter or selected
+   dimension; a missing constraint is `likely-wrong`.
 3. Show a plain-language round-trip echo assembled from the selected concepts'
    descriptions, including applicable PII or governance notes.
 4. Clarify or abstain when the mapping is ambiguous, likely wrong, unavailable,

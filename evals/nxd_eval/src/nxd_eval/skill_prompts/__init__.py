@@ -70,12 +70,13 @@ The verbatim question is the user message. Where the procedure says to ask the
 user or clarify, do not execute; instead finish with the ambiguity, the real
 candidate concepts, and the clarification you would need. Write the
 round-trip echo in your reply before you call run_semantic_query, and check it
-against the question: every constraint the question names (a region, a
-specialty, a product, a time window) must appear as a filter in the selection.
-After the call, confirm the returned compiled_sql applies each of those
-filters. The server does not check filter values against the data, so a
-filter that returns no rows may be a misspelled value rather than a true zero:
-say so instead of reporting zero.
+against the question: every scope constraint the question names (an entity
+value, a region, a specialty, a segment, a product value, a time window) must appear as a filter in the selection.
+A requested breakdown such as "by product" belongs in
+dimensions. Before calling, list the constraints and check each is
+represented in filters. After the call, confirm the returned compiled_sql applies each of those filters;
+the response does not echo which filters were applied. A filtered query that returns no rows may reflect a value mismatch
+rather than a true zero: say so instead of reporting zero until resolved.
 """
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")

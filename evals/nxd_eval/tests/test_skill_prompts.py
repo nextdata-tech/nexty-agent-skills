@@ -101,6 +101,7 @@ def test_prompt_carries_the_query_procedure_and_intent_gate():
         "running non-interactively",
         "must appear as a filter in the selection",
         "compiled_sql applies each of those",
+        "enumerate every constraint in the verbatim question",
         "Semantic-layer MCP ports",
         "Intent gate (REQUIRED before `run_semantic_query`)",
         "Catalog-aware critic",
