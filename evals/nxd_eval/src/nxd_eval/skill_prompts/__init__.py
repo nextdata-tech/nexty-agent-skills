@@ -65,17 +65,20 @@ through its semantic MCP tools: list_models, describe_model and
 run_semantic_query. Answer only from rows returned by run_semantic_query, using
 concept names, never raw SQL. Follow the procedure below exactly.
 
-You are running non-interactively: no user can answer a follow-up question.
-The verbatim question is the user message. Where the procedure says to ask the
-user or clarify, do not execute; instead finish with the ambiguity, the real
-candidate concepts, and the clarification you would need. Write the
-round-trip echo in your reply before you call run_semantic_query, and check it
-against the question: every constraint the question names (a region, a
-specialty, a product, a time window) must appear as a filter in the selection.
-After the call, confirm the returned compiled_sql applies each of those
-filters. The server does not check filter values against the data, so a
-filter that returns no rows may be a misspelled value rather than a true zero:
-say so instead of reporting zero.
+This harness is non-interactive: no user can answer a follow-up question. Where
+the skill says to ask or clarify, do not execute; finish with the ambiguity, the
+real candidate concepts, and the clarification needed. Write the round-trip echo in your reply before calling run_semantic_query. Follow the intent and filter rules in the nxd-semantic-query-intent and nxd-query-data-product skills.
+
+If a filtered query returns no rows, has an empty grouped result, `SUM` returns
+`NULL`, or a grand-total `COUNT` returns 0, check for a value mismatch. A
+grand-total `COUNT` returns one row with 0, so no rows is not the only signal.
+If the filtered dimension is not PII-classified, probe stored values by
+querying the same measure grouped by that dimension without that filter, keeping the other
+filters, then retry with the exact stored value that plausibly matches. If no
+stored value plausibly matches, report the mismatch instead of a zero; never
+invent encodings. If the probe confirms the exact value and the retry still
+returns zero, report that genuine zero without hedging. Do not enumerate values
+for a PII-classified dimension; surface the unresolved mismatch instead.
 """
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")

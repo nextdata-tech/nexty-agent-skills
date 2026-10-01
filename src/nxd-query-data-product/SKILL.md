@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.54.9
+  version: 0.54.10
 ---
 
 # nxd data product query
@@ -306,6 +306,52 @@ first three as a discover→select→run protocol, not free-form SQL:
    - The response's `time_grains` confirms what was applied.
    - Never fetch day-level rows and add them up yourself: that is wrong for
      distinct counts and averages. Never run one query per period either.
+   - **Filters:** Follow the `run_semantic_query` tool description as the
+     authority for its supported `op` symbols; do not infer or invent operators.
+     Each filter has shape `{"dimension": ..., "op": ..., "value": ...}` — the
+     key is `op`, not `operator`; omit `value` for `IS NULL` / `IS NOT NULL`.
+     Filters are ANDed; there is no disjunction across different dimensions.
+     Alternatives on one dimension use `IN` / `NOT IN`. There is no query-time
+     filtering on a measure.
+   - Before calling, enumerate every SCOPE constraint in the verbatim question
+     (a named value, entity, segment, or time window that narrows the population)
+     and honor it: use a filter when a catalog dimension's description expresses
+     it; if a metric definition already encodes it (for example, a
+     partner-sourced metric), choosing that metric satisfies the constraint
+     without a filter. Similar-looking dimension values alone do not establish
+     the meaning. A requested BREAKDOWN such as "by product"
+     or "per month" belongs in `dimensions`. A comparison of named values (for
+     example, "Psychiatry vs Neurology") needs an `IN` filter restricting to
+     those values and grouping by that dimension; grouping never substitutes
+     for filtering on a named value. After the call, check `filters_applied` in
+     the response when present; otherwise confirm each filter in `compiled_sql`.
+   - A filter can use a dimension from a join-reachable model without grouping
+     by it, subject to the compiler's reachability and governance checks. The
+     compiler can refuse a filter in either of these cases:
+     - A filter on a non-spine measure-home dimension is refused if other
+       selected metrics are homed elsewhere, unless you also group by that
+       dimension.
+     - An ungrouped filter on a dimension reached through a fan-out path is
+       refused unless every filter on that dimension uses `=` with one scalar
+       value; such a path can match multiple child rows for one metric key.
+     `=` and `IN` are case-sensitive; `ILIKE` is case-insensitive, but an
+     ungrouped `ILIKE` on a fan-out dimension is refused. Probe stored values
+     and use exact `=` when possible. Depending on the refusal, use one `=`
+     value for the fan-out filter, group by the filter dimension, or query the
+     metrics separately. Never drop the filter to make the query compile.
+   - **Resolve empty and zero results.** If a filtered query returns no rows,
+     has an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT`
+     returns 0, check for a value mismatch. A grand-total `COUNT` returns one
+     row with 0, so no rows is not the only signal. If the filtered dimension
+     is not PII-classified, probe its stored values by querying the same measure
+     grouped by that dimension without that filter (keep the other filters),
+     then retry with the exact stored value that plausibly matches. If no stored
+     value plausibly matches, report the mismatch instead of a zero; never
+     invent encodings. If the probe confirms the exact value and the retry still
+     returns zero, report that genuine zero without hedging. For a
+     PII-classified dimension, do not enumerate values; surface the unresolved
+     mismatch rather than guessing. See
+     [reference/troubleshooting.md](reference/troubleshooting.md).
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly
    one grain, grain boundaries are visible before you query. Combining measures
    from **join-reachable** models in ONE `run_semantic_query` call is safe — the

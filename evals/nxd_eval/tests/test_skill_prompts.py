@@ -98,9 +98,12 @@ def test_wheel_force_include_mapping_matches_pack_directories():
 def test_prompt_carries_the_query_procedure_and_intent_gate():
     prompt = skill_prompt()
     for needle in (
-        "running non-interactively",
-        "must appear as a filter in the selection",
-        "compiled_sql applies each of those",
+        "non-interactive",
+        "Write the round-trip echo in your reply before calling run_semantic_query",
+        "partner-sourced metric",
+        "filters_applied` in",
+        "probe its stored values by querying the same measure",
+        "grand-total `COUNT` returns 0",
         "Semantic-layer MCP ports",
         "Intent gate (REQUIRED before `run_semantic_query`)",
         "Catalog-aware critic",
@@ -109,6 +112,21 @@ def test_prompt_carries_the_query_procedure_and_intent_gate():
     ):
         assert needle in prompt
     assert prompt.rstrip().endswith(CONFIDENCE_INSTRUCTION)
+
+
+@pytest.mark.skipif(not SRC.is_dir(), reason="skill pack sources not in this checkout")
+def test_prompt_keeps_skill_sourced_scope_and_zero_probe_rules():
+    prompt = skill_prompt()
+    intent_skill = (SRC / "nxd-semantic-query-intent/SKILL.md").read_text()
+    query_skill = (SRC / "nxd-query-data-product/SKILL.md").read_text()
+    for needle, source in (
+        ("Every SCOPE", intent_skill),
+        ("partner-sourced metric", intent_skill),
+        ("A requested BREAKDOWN", intent_skill),
+        ("probe its stored values by querying the same measure", query_skill),
+    ):
+        assert needle in source
+        assert needle in prompt
 
 
 def test_prompt_has_no_links_into_the_skill_tree():

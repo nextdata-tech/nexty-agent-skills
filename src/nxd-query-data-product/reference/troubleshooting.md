@@ -17,8 +17,21 @@ confirm which before changing the query.
 | RPC/MCP call fails to connect / 404 | Wrong tool wire name or trailing-slash mismatch on the multiplexer endpoint; or the DP MCP port is unhealthy. | Re-confirm the `<function>__<hash>` name from `gateway_tools.py tools --dp <dp>` and check `gateway_tools.py health`; if the port itself is failing, debug the DP with **nxd-debug-data-product**. |
 | `run_semantic_query` returns "metrics span multiple grains" / "no join path connects model X to model Y" | Metrics from two models NOT connected by any documented join were combined in one call (chasm-trap guard) — correct governance, not a transient error. Join-reachable models (including cross-DP via a `to_data_product` edge) ARE combinable in one call; the compiler pre-aggregates each grain before joining (fan-out-safe). | Do NOT retry the same combined call or hand-write a join. Call `describe_model` on each model to confirm the join topology. If the models ARE join-reachable, the single call is correct — check the concept names. If they are NOT connected by any join, issue one `run_semantic_query` per model sharing a compatible dimension and present the result sets separately; a genuine cross-DP join requires the owning DP to publish a `to_data_product` join edge. See §6d "Semantic-layer MCP ports". |
 | `run_semantic_query` returns `error: "dimension X is not compatible with metric Y"` | The dimension can't slice that metric (not in `compatible_dimensions`, no join reaching it). | Re-pick from `describe_model`'s `compatible_dimensions` / `joins.reaches_dimensions`; re-run the §6f gate. |
-| Filtered semantic query returns 0 rows, but the unfiltered query returns rows | Likely a **value mismatch** — the NL literal (`"California"`) doesn't match the stored encoding (`"CA"`); structural validation can't catch it (the dimension exists, only the value diverges). | Surface to the user; ask for the stored form or drop the filter. Do **NOT** retry with invented encodings. Durable fix is server-side value-linking (§6f "Not yet built"). |
+| Semantic query returns no rows, an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT` returns 0 | A filter may use a value that differs from the stored value. | Follow “Resolving semantic query zeros” below before reporting a zero. |
 
 When the failure is the Data Product itself (port unhealthy, no data produced,
 RPC pod crashing) rather than the query, switch to the
 **nxd-debug-data-product** skill.
+
+## Resolving semantic query zeros
+
+If a filtered query returns no rows, has an empty grouped result, `SUM` returns
+`NULL`, or a grand-total `COUNT` returns 0, check whether a filter value matches
+the stored form before reporting a zero. If the filtered dimension is not
+PII-classified, probe its stored values by querying the same measure grouped by
+that dimension without that filter, keeping the other filters. Retry with the
+exact stored value that plausibly matches. If no stored value plausibly matches, report the
+mismatch instead of a zero; never invent encodings. If the probe confirms the
+exact value and the retry still returns zero, report that genuine zero without
+hedging. Do not enumerate values for a PII-classified dimension; surface the
+unresolved mismatch instead.
