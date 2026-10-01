@@ -315,24 +315,30 @@ first three as a discover→select→run protocol, not free-form SQL:
      filtering on a measure.
    - Before calling, enumerate every SCOPE constraint in the verbatim question
      (a named value, entity, segment, or time window that narrows the population)
-     and represent each as a filter. A requested BREAKDOWN such as "by product"
+     and honor it: use a filter when a catalog dimension's description expresses
+     it; if a metric definition already encodes it (for example, a
+     partner-sourced metric), choosing that metric satisfies the constraint
+     without a filter. Similar-looking dimension values alone do not establish
+     the meaning. A requested BREAKDOWN such as "by product"
      or "per month" belongs in `dimensions`. A comparison of named values (for
      example, "Psychiatry vs Neurology") needs an `IN` filter restricting to
      those values and grouping by that dimension; grouping never substitutes
-     for filtering on a named value. After the call, inspect `compiled_sql` and
-     verify that it applies every listed filter; the response does not echo
-     which filters were applied.
+     for filtering on a named value. After the call, check `filters_applied` in
+     the response when present; otherwise confirm each filter in `compiled_sql`.
    - A filter can use a dimension from a join-reachable model without grouping
      by it, subject to the compiler's reachability and governance checks. The
      compiler can refuse a filter in either of these cases:
-     - A filter on a dimension of a model that homes one selected metric is
-       refused if other selected metrics are homed elsewhere, unless you also
-       group by that dimension.
+     - A filter on a non-spine measure-home dimension is refused if other
+       selected metrics are homed elsewhere, unless you also group by that
+       dimension.
      - An ungrouped filter on a dimension reached through a fan-out path is
        refused unless every filter on that dimension uses `=` with one scalar
        value; such a path can match multiple child rows for one metric key.
-     Read the `CompileError` and re-scope the query; never drop a filter to make
-     it compile.
+     `=` and `IN` are case-sensitive; `ILIKE` is case-insensitive, but an
+     ungrouped `ILIKE` on a fan-out dimension is refused. Probe stored values
+     and use exact `=` when possible. Depending on the refusal, use one `=`
+     value for the fan-out filter, group by the filter dimension, or query the
+     metrics separately. Never drop the filter to make the query compile.
    - **Resolve empty and zero results.** If a filtered query returns no rows,
      has an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT`
      returns 0, check for a value mismatch. A grand-total `COUNT` returns one

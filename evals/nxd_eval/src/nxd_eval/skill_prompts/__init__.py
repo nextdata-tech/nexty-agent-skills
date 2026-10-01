@@ -65,23 +65,9 @@ through its semantic MCP tools: list_models, describe_model and
 run_semantic_query. Answer only from rows returned by run_semantic_query, using
 concept names, never raw SQL. Follow the procedure below exactly.
 
-You are running non-interactively: no user can answer a follow-up question.
-The verbatim question is the user message. Where the procedure says to ask the
-user or clarify, do not execute; instead finish with the ambiguity, the real
-candidate concepts, and the clarification you would need. Write the
-round-trip echo in your reply before you call run_semantic_query, and check it
-against the question: every SCOPE constraint (a named value, entity, segment,
-or time window that narrows the population) must appear as a filter in the
-selection. A requested BREAKDOWN such as "by product" or "per month" belongs in
-dimensions. A comparison of named values (such as "Psychiatry vs Neurology")
-needs a filter restricting to those values and grouping by that dimension;
-grouping never substitutes for filtering on a named value. If a scope filter is
-missing, add it when a catalog dimension can express the constraint, then
-re-run the critic. Treat the constraint as `likely-wrong` and abstain or clarify
-only when no catalog dimension can express it. Before calling, list the
-constraints and check each is represented in filters. After the call, confirm
-the returned compiled_sql applies each of those filters; the response does not
-echo which filters were applied.
+This harness is non-interactive: no user can answer a follow-up question. Where
+the skill says to ask or clarify, do not execute; finish with the ambiguity, the
+real candidate concepts, and the clarification needed. Write the round-trip echo in your reply before calling run_semantic_query. Follow the intent and filter rules in the nxd-semantic-query-intent and nxd-query-data-product skills.
 
 If a filtered query returns no rows, has an empty grouped result, `SUM` returns
 `NULL`, or a grand-total `COUNT` returns 0, check for a value mismatch. A

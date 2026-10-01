@@ -98,13 +98,10 @@ def test_wheel_force_include_mapping_matches_pack_directories():
 def test_prompt_carries_the_query_procedure_and_intent_gate():
     prompt = skill_prompt()
     for needle in (
-        "running non-interactively",
-        "compiled_sql applies each of those",
-        "Every SCOPE",
-        "A requested BREAKDOWN",
-        "A comparison of named values",
-        "grouping never substitutes for",
-        "If a scope filter is missing, first add it",
+        "non-interactive",
+        "Write the round-trip echo in your reply before calling run_semantic_query",
+        "partner-sourced metric",
+        "filters_applied` in",
         "probe its stored values by querying the same measure",
         "grand-total `COUNT` returns 0",
         "Semantic-layer MCP ports",
@@ -124,6 +121,7 @@ def test_prompt_keeps_skill_sourced_scope_and_zero_probe_rules():
     query_skill = (SRC / "nxd-query-data-product/SKILL.md").read_text()
     for needle, source in (
         ("Every SCOPE", intent_skill),
+        ("partner-sourced metric", intent_skill),
         ("A requested BREAKDOWN", intent_skill),
         ("probe its stored values by querying the same measure", query_skill),
     ):

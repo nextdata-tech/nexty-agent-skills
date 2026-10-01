@@ -192,14 +192,16 @@ can't do. These are candidates for convergence with a future first-class `nxd.sp
 
 | Gap | Why it needs product-side work | Leverage |
 |---|---|---|
-| **Value-linking / `resolve_value`** | Grounding a filter *value* against the real stored form (`"California"` → `"CA"`, `"last quarter"` → a date range) needs a warehouse `SELECT DISTINCT` against the real column. The three tools don't expose cell values, so no client-side cleverness substitutes. This is where plausible-but-wrong **filter** answers leak in. Durable home: a governed `resolve_value(dimension, nl_literal)` tool (or a dialect `DISTINCT` method) that returns the canonical stored form *before* the filter is built. | **High** |
+| **Value-linking / `resolve_value`** | Grounding a filter *value* against the real stored form (`"California"` → `"CA"`, `"last quarter"` → a date range) may require probing a semantic query grouped by that dimension. This exposes only governed, non-PII values and may not resolve every phrase. A dedicated governed `resolve_value(dimension, nl_literal)` tool (or dialect `DISTINCT` method) could return the canonical stored form before the filter is built. | **High** |
 | **`describe_model` dimension enrichment** | `compatible_dimensions` / `reaches_dimensions` may carry dimension *names*; the critic leans on the model's `dimensions` block for what each *means*. Returning full dimension objects `{name, description, type, pii}` everywhere a dimension is referenced removes the cross-ref. | Medium (ergonomics) |
 | **Server-side echo** | Each client re-derives the restatement from the catalog. A `selection_restatement` field on the `run_semantic_query` response — computed purely from selection + registry, so still deterministic — gives every client the echo for free. | Low/med (optional) |
 
-Until value-linking exists, the only client-side handling for a value mismatch is
-**after** execution: a filtered query returning 0 rows while the unfiltered query
-returns rows is the symptom — surface it to the user, never retry with invented
-encodings. (See the value-mismatch row in `SKILL.md`'s troubleshooting table.)
+Until value-linking exists, when a filtered query returns no rows, an empty
+grouped result, `SUM` returns `NULL`, or a grand-total `COUNT` returns 0, probe
+stored values through a grouped semantic query if the dimension is not PII,
+then retry with an exact plausible value. Never invent encodings; if probing
+cannot resolve the mismatch, surface it to the user. See the value-mismatch row
+in `SKILL.md`'s troubleshooting table.
 
 ---
 
