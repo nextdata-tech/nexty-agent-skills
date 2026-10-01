@@ -309,6 +309,22 @@ def test_rows_equal_confidence_digits_do_not_anchor_result():
     assert s.metadata["selection"] == "answer-anchored"
 
 
+def test_rows_equal_records_answer_anchor_tie_indexes():
+    rows = [{"n": 5}]
+    st = _state(
+        calls=[
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 5 first", "rows": rows}),
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 5 latest", "rows": rows}),
+        ],
+        final="There were 5 subjects.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(rows)))
+    assert s.value == CORRECT
+    assert s.metadata["graded_call_index"] == 1
+    assert s.metadata["selection"] == "answer-anchored-tie"
+    assert s.metadata["tied_call_indexes"] == [0, 1]
+
+
 # --------------------------------------------------------------------------- #
 # sql_contains / sql_excludes — substring on compiled SQL
 # --------------------------------------------------------------------------- #

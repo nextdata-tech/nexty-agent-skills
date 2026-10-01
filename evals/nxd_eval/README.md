@@ -1,5 +1,7 @@
 # nxd_eval — Inspect-based evaluation framework
 
+Answer anchoring ignores prose suffix forms such as `1.4k`, `$1.2M`, and `1.2e6`; a zero-row answered call cannot be anchored.
+
 Isolated uv project (mirrors `evals/mcp/`): heavy deps (`inspect_ai`,
 `statsmodels`, `scipy`, `scikit-learn`) live here, never in the root or
 `evals/run.py`. Everything runs via `uv run --project evals/nxd_eval …` — never

@@ -135,7 +135,7 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
 
     tx = extract(state)
     gold_rows = _gold_rows_from_target(target)
-    call, selection = tx.answer_call_selection()
+    call, selection, tied_call_indexes = tx.answer_call_selection_details()
     actual_rows = call.rows if call is not None else None
 
     verdict = scoring.score_one(
@@ -157,6 +157,8 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
         ),
         "selection": selection,
     }
+    if selection == "answer-anchored-tie":
+        metadata["tied_call_indexes"] = tied_call_indexes
     # Carry the agent's verbalized confidence (if any) alongside the 0/1
     # outcome so report.py can build the (correctness, confidence) pairs the
     # selective-prediction / calibration metrics ride on. Absent ⇒ omitted, and
