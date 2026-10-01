@@ -950,3 +950,19 @@ def test_prepare_classifies_user_questions_and_runtime_failures_before_recovery(
         assert marker in skill[question:recovery]
     assert "supervisor.proposal_validator." not in skill + reference
     assert len(JOB_SKILL.read_text(encoding="utf-8").splitlines()) < 500
+
+
+def test_bare_affirmative_is_neither_approval_nor_a_choice() -> None:
+    # Live B6 router4: the agent asked three open questions with its own
+    # recommendations, took "Yes." as accepting all of them, then took "Sure."
+    # as plan approval and generated the closure before any explicit approval.
+    root = Path(__file__).resolve().parents[2]
+    workflow = " ".join(
+        (root / "src/nxd-run-job-loop/reference/workflow-v2.md").read_text(encoding="utf-8").split()
+    )
+    skill = " ".join((root / "src/nxd-run-job-loop/SKILL.md").read_text(encoding="utf-8").split())
+    assert 'A bare reply such as "yes", "sure", "fine" or "ok" that names nothing settles nothing.' in workflow
+    assert "including your own recommendations" in workflow
+    assert "Re-ask once, naming the single item you need." in workflow
+    assert "An affirmative reply to that single-item re-ask settles that item" in workflow
+    assert 'A bare "yes"/"sure" that names nothing is neither approval nor a choice' in skill
