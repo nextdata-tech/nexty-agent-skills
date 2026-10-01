@@ -17,6 +17,11 @@ reference calculates joiners and leavers by set difference between consecutive
 snapshots, then calculates monthly attrition in basis points as leavers divided
 by opening-month headcount.
 
+The export cannot settle that denominator, so the answer sheet declares it as
+`B6-turnover-denominator`: leavers divided by the department's prior-month
+headcount, rounded half up to a whole basis point. Like the suppression
+decision it uses `clarify_first`, so the operator answers only the second ask.
+
 Research has three people in each seeded report month, below the threshold
 `N = 5`. The expected report suppresses every measure in those department-month
 rows. The planted event asks the agent to flag anything needing an analyst
