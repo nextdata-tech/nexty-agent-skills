@@ -36,6 +36,16 @@ decision_answers:
       suppression: [hidden, hide]
     answer: "Suppress department-month values under five people and mark them as suppressed."
     clarify_first: true
+  # The export cannot settle the attrition denominator, so the agent must ask.
+  # Gold divides leavers by the department's prior-month (opening) headcount.
+  # On an equal scripted match, decisions are tried in id order; this id sorts
+  # after B6-suppression-N so the planted decision wins that tie.
+  B6-turnover-denominator:
+    terms: [attrition, denominator]
+    synonyms:
+      denominator: [divided by, divide]
+    answer: "Divide each month's leavers by the department's opening headcount, which is the prior month's snapshot (December 2023 for January). Report attrition in basis points, rounded half up to a whole basis point."
+    clarify_first: true
   B6-personal-data-projection:
     terms: [byte-exact, drop]
     answer: "Before landing anything, drop full_name, email, and salary_eur; retain opaque_person_token, department, snapshot_month, and the month fields needed for the monthly report."
