@@ -79,7 +79,7 @@ reach are not evidence about the ones it never got to.
 | `completed` | The scripted interaction ended with a clean terminal result. |
 | `turn_budget_exhausted_pending_answer` | The turn budget ended while an operator answer or review choice was still owed. |
 | `approval_budget_exhausted` | The agent asked for approval after exhausting a workflow's two revision reapprovals. The run is incomplete and remains ungraded. |
-| `script_exhausted` | The operator script ended without proving completion. |
+| `script_exhausted` | The operator script ended without proving completion, or an applicable operator answer or fixed beat remains owed. |
 | `chain_prefix_failed` | A chained scenario's prefix failed, so its suffix could not run. |
 | `sentinel_trip` | A protected sentinel was observed in agent output. |
 | `environment_wedge` | The run's environment failed before the scenario could be judged. |
@@ -601,12 +601,13 @@ strict JSON object (`category`, `option_id`, `approval_requested`,
 results, files, sentinels or any answer text.
 
 The engine keeps everything else: the reply text still comes from the answer
-sheet or persona, and answered-once, event/overlay staging, owed beats,
-re-approval limits, forbidden terms, the ledger and terminal states are
-unchanged. An id that was not offered, malformed or inconsistent output, a
-label the agent never wrote, a timeout, a provider error, or a decision the
-engine's answered-once rule refuses all fall back to the regex matcher for that
-turn. Rule ids are the existing shapes (`decision.answer.<id>`,
+sheet or persona, and answered-once, event/overlay staging, re-approval limits,
+forbidden terms and the ledger stay deterministic. Applicable owed beats remain
+queued; after a successful governed query confirms publication, obsolete
+conditional review or approval beats no longer keep the run open. An id that
+was not offered, malformed or inconsistent output, a label the agent never
+wrote, a timeout, a provider error, or a decision the engine's answered-once
+rule refuses all fall back to the regex matcher for that turn. Rule ids are the existing shapes (`decision.answer.<id>`,
 `persona.<category>`, `review.choice_undeclared`, ...). Ledger claims add
 `routed_by: "llm"` when the model chose, and `router_fallback: true` when it
 did not; the reason is on `MatchResult.router_failure_reason`.

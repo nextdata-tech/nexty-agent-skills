@@ -106,6 +106,21 @@ def _rebinds_workflow(call: ToolCall) -> bool:
     return isinstance(payload, Mapping) and bool(payload) and "error" not in payload
 
 
+def _successful_semantic_query(call: ToolCall) -> bool:
+    """Whether a governed semantic query completed successfully."""
+
+    if not isinstance(call.name, str) or not (
+        call.name == "run_semantic_query" or call.name.endswith("__run_semantic_query")
+    ):
+        return False
+    payload = call.result
+    if isinstance(payload, Mapping) and "is_error" in payload:
+        if payload.get("is_error") is not False:
+            return False
+        payload = payload.get("content")
+    return isinstance(payload, Mapping) and bool(payload) and "error" not in payload
+
+
 def _workflow_identity(call: ToolCall) -> str | None:
     """The workflow/blueprint identity a rebind call names, if any.
 
@@ -177,6 +192,26 @@ def _review_finding_keys(message: str) -> frozenset[str]:
 
     identifiers = review_finding_ids(message)
     return frozenset(f"id:{identifier}" for identifier in identifiers)
+
+
+def _has_unkeyed_material_review_finding(message: str) -> bool:
+    """Keep an unkeyed blocking finding pending even when it is only narrated."""
+
+    for clause in re.split(r"(?<=[.!?])\s+|\n+", message):
+        severity = re.search(r"\b(?:blocking|blocker|critical|high|medium)\b", clause, re.I)
+        if severity is not None:
+            prefix = clause[: severity.start()]
+            if re.search(r"\b(?:no|none|without)\s*$|\bnon[- ]?$", prefix, re.I):
+                continue
+            return True
+        if re.search(
+            r"\breview(?:er)?(?:['’]s)?\b.{0,80}\b(?:found|reported|identified|flagged|raised)\b"
+            r".{0,100}\bmissing\s+(?:a\s+)?required\b",
+            clause,
+            re.I,
+        ):
+            return True
+    return False
 
 
 _CHALLENGE_STOP_WORDS = frozenset(
@@ -1620,6 +1655,7 @@ class OperatorEngine:
         current_revision_workflow: str | None = None
         plan_rebound_by_workflow: dict[str | None, bool] = {}
         revision_reapproval_uses_by_workflow: dict[str | None, int] = {}
+        publication_observed_since_rebind = False
         # A clarification belongs to consent identity, never wording or phase.
         consent_generation_by_workflow: dict[str | None, int] = {}
         clarification_sent: set[tuple[str | None, int]] = set()
@@ -1629,6 +1665,7 @@ class OperatorEngine:
         prior_operator_messages: list[str] = []
         pending_review_context = ""
         pending_review_finding_keys: frozenset[str] = frozenset()
+        pending_unkeyed_review_finding = False
         answered_review_finding_keys: set[str] = set()
         # A declared fixed beat displaced by an answerable decision stays in
         # script order. Later fixed beats join the queue; a substitutable slot
@@ -1707,6 +1744,50 @@ class OperatorEngine:
                 return False
             return True
 
+        def fixed_beat_resolved_after_publication(
+            beat: tuple[ScriptTurn, tuple[EventInjection, ...]],
+            current_match: MatchResult | None,
+        ) -> bool:
+            """Whether a published run made this conditional beat obsolete.
+
+            Keep the beat until the current plan has been queried successfully:
+            a later review or rebind can still make it actionable. Beat-bound
+            events are never discarded with their text.
+            """
+
+            turn, bound_events = beat
+            if not publication_observed_since_rebind or bound_events:
+                return False
+            if turn.approval:
+                return stale_approval_slot(turn, current_match)
+            if (
+                review_repair is not None
+                and turn.text == review_repair.answer
+            ):
+                unresolved_findings = bool(
+                    pending_review_finding_keys - answered_review_finding_keys
+                ) or pending_unkeyed_review_finding
+                live_review_ask = live_review_request(current_match) or (
+                    current_match is not None
+                    and current_match.solicits_operator
+                    and current_match.decision_id == "review_fix_authorization"
+                )
+                return not unresolved_findings and not live_review_ask
+            return False
+
+        def retire_resolved_fixed_beats(
+            current_match: MatchResult | None,
+        ) -> None:
+            if not publication_observed_since_rebind or not owed_fixed_beats:
+                return
+            retained = [
+                beat
+                for beat in owed_fixed_beats
+                if not fixed_beat_resolved_after_publication(beat, current_match)
+            ]
+            owed_fixed_beats.clear()
+            owed_fixed_beats.extend(retained)
+
         consumed_approval_slots: set[int] = set()
         script_cursor = 0
         index = 0
@@ -1730,6 +1811,12 @@ class OperatorEngine:
             scheduled_index = script_cursor + 1
             scheduled_turn = self.script.turns[script_cursor]
             script_cursor += 1
+            retire_resolved_fixed_beats(next_match)
+            if fixed_beat_resolved_after_publication((scheduled_turn, ()), next_match):
+                # A stale approval or a review authorization with no unresolved
+                # finding no longer has a response to deliver. Preserve any
+                # event triggered on this declared slot; only the text is idle.
+                scheduled_turn = ScriptTurn("Please continue.")
             moved_approval_phase: int | None = None
             if scheduled_index in consumed_approval_slots:
                 scheduled_turn = ScriptTurn("Please continue.")
@@ -2602,9 +2689,13 @@ class OperatorEngine:
                 and not authorable
             ):
                 pending_review_context = ""
+                pending_unkeyed_review_finding = False
             if self._scan(result, tuple(active_sentinels)):
                 self.failure_modes.append("sentinel_trip")
                 sentinel_tripped = True
+            last_mcp_call_changed = bool(
+                result.last_mcp_call and result.last_mcp_call != last_mcp_call
+            )
             if result.last_mcp_call:
                 last_mcp_call = result.last_mcp_call
             if result.environment_wedged and not result.turn_timed_out:
@@ -2631,6 +2722,14 @@ class OperatorEngine:
             if self.matcher.has_review_finding_context(agent_message):
                 pending_review_context = agent_message
                 pending_review_finding_keys = _review_finding_keys(agent_message)
+                if not pending_review_finding_keys and (
+                    is_review_disposition_ask(agent_message, pending_review_context)
+                    or _has_unkeyed_material_review_finding(agent_message)
+                ):
+                    # A reported material finding remains unresolved even if
+                    # the agent narrates it without asking a direct question.
+                    # Clear/LOW advisory recaps do not create repair debt.
+                    pending_unkeyed_review_finding = True
             routed_match, routed_secondary_matches, router_failure = self._route_match(
                 agent_message,
                 previous_agent_message=previous_agent_message,
@@ -3071,6 +3170,7 @@ class OperatorEngine:
             if approval_turn or reconfirm_applied:
                 clarification_sent.discard(pending_approval_key)
                 plan_rebound_by_workflow[current_revision_workflow] = False
+                publication_observed_since_rebind = False
                 if scripted_approval_fired or owed_approval_turn or reconfirm_applied:
                     # The declared approval line this turn carried, before any
                     # due event was appended; a revision re-approval resends
@@ -3078,9 +3178,14 @@ class OperatorEngine:
                     # answer is scenario-specific text for its own moment and
                     # is never recycled here.
                     revision_approval_text = selected_base
+            rebound_this_turn = False
             for call in result.tool_calls:
+                if _successful_semantic_query(call):
+                    publication_observed_since_rebind = True
                 if not _rebinds_workflow(call):
                     continue
+                rebound_this_turn = True
+                publication_observed_since_rebind = False
                 identity = _workflow_identity(call)
                 if identity is not None:
                     current_revision_workflow = identity
@@ -3089,6 +3194,15 @@ class OperatorEngine:
                 )
                 if revision_approval_text is not None:
                     plan_rebound_by_workflow[current_revision_workflow] = True
+            if (
+                result.last_mcp_call == "run_semantic_query:ok"
+                and last_mcp_call_changed
+                and not rebound_this_turn
+            ):
+                # Some adapters retain last_mcp_call across turns. Use that
+                # fallback only when the observation changed; a successful
+                # ToolCall in this turn is the stronger signal above.
+                publication_observed_since_rebind = True
             if defer_scheduled_approval:
                 # The scripted approval for this turn was swallowed by a
                 # pending decision answer; keep its text owed rather than
@@ -3197,6 +3311,10 @@ class OperatorEngine:
             if sentinel_tripped or environment_wedged or turn_timed_out:
                 break
 
+        # A successful query may be the final agent turn. Retire only now
+        # in that case; the publication milestone still protects beats when
+        # the result arrives before their scheduled slot.
+        retire_resolved_fixed_beats(next_match)
         if environment_wedged and not turn_timed_out:
             terminal_state = TerminalState.ENVIRONMENT_WEDGE
             reason = "environment_wedge"
