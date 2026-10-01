@@ -169,6 +169,19 @@ def test_declared_followup_sentinels_are_planted_in_the_generated_fixture(tmp_pa
     assert all(sentinel in source_bytes for sentinel in declared_bytes)
 
 
+def test_b6_declares_the_gold_attrition_denominator_after_one_clarification() -> None:
+    decision = SCENARIO.answer_sheet.decision_answers["B6-turnover-denominator"]
+    assert decision.clarify_first is True
+    assert "prior month's snapshot" in decision.answer
+    assert "rounded half up" in decision.answer
+    # Router3 turn 2 wording: the agent offered three denominators.
+    ask = (
+        "Attrition denominator: should leavers be divided by the month's headcount, "
+        "the prior month's headcount, or the average of the two?"
+    )
+    assert SCENARIO.answer_sheet.answer_for_decision(ask) == decision
+
+
 def test_b6_loads_as_full_with_the_planted_judgement_and_e10_request() -> None:
     assert SCENARIO.id == "headcount-attrition"
     assert SCENARIO.tier == "full"

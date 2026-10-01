@@ -305,7 +305,16 @@ def test_b6_referenced_suppression_alternatives_select_the_declared_decision(
     turn: int, scope: str, mode: str
 ) -> None:
     target = _message("b6", turn)
-    answer = HEADCOUNT.answer_sheet.decision_answers["B6-suppression-N"].answer
+    # Turns 6 and 7 also ask about "the attrition denominator" by name, while
+    # suppression appears only abbreviated. The scripted matcher ranks the
+    # explicitly named declared decision first; the router is told to pick
+    # suppression.
+    expected = (
+        "B6-turnover-denominator"
+        if mode == "scripted" and turn in (6, 7)
+        else "B6-suppression-N"
+    )
+    answer = HEADCOUNT.answer_sheet.decision_answers[expected].answer
     result, transport = _run(
         HEADCOUNT,
         [target, target],
@@ -323,8 +332,8 @@ def test_b6_referenced_suppression_alternatives_select_the_declared_decision(
     assert transport.message_texts[1] == HEADCOUNT.persona.replies_for("decision_request")[0]
     assert result.turns[1].delivered_decision_id is None
     assert transport.message_texts[2] == answer
-    assert result.turns[1].match.decision_id == "B6-suppression-N"
-    assert result.turns[2].delivered_decision_id == "B6-suppression-N"
+    assert result.turns[1].match.decision_id == expected
+    assert result.turns[2].delivered_decision_id == expected
 
 
 @pytest.mark.parametrize("mode", MODES)

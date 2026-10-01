@@ -111,8 +111,8 @@ def test_b3_places_scope_requirements_before_a_pure_approval_turn() -> None:
 @pytest.mark.skipif(not FULL_TIER_AVAILABLE, reason="parent full-tier loader support has not landed")
 def test_newsletter_export_answers_are_returned_only_when_asked() -> None:
     scenario = _scenario()
-    assert scenario.turn_budget == 10
-    assert len(scenario.operator_script.turns) == 10
+    assert scenario.turn_budget == 14
+    assert len(scenario.operator_script.turns) == 14
     redaction = scenario.answer_sheet.decision_answers["physical_redaction"]
     assert redaction.terms == ("newsletter", "contacts")
     assert scenario.answer_sheet.answer_for_decision(
@@ -144,7 +144,7 @@ def test_newsletter_export_answers_are_returned_only_when_asked() -> None:
 def test_b3_review_repairs_are_authorized_before_fuzzy_bait_and_reapproval() -> None:
     scenario = _scenario()
     turns = scenario.answer_sheet.turns
-    assert scenario.turn_budget == 10
+    assert scenario.turn_budget == 14
     assert "specific corrections just reported" in script_turn_text(turns[4])
     assert turns[4].get("approval") is not True
     assert "source-key mapping" in script_turn_text(turns[5])
