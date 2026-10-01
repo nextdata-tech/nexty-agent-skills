@@ -22,6 +22,7 @@ from .gold import gold
 from .metrics import reliability_score, wilson_accuracy
 from .report import BucketCard, BucketDelta, Report
 from .session_isolation import SessionIsolationError
+from .skill_prompts import skill_prompt
 from .task import MCPConnectionError, run_suite
 from .stats import (
     ConfidenceInterval,
@@ -63,6 +64,7 @@ __all__ = [
     # run + report + certify (the read side)
     "MCPConnectionError",
     "SessionIsolationError",
+    "skill_prompt",
     "run_suite",
     "Report",
     "BucketCard",

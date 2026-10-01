@@ -36,6 +36,12 @@ build-backend = "hatchling.build"
 # src-layout: the importable package is src/nxd_eval, EX core vendored under it.
 packages = ["src/nxd_eval"]
 
+# The wheel ships without the repository, so it carries the skill trees that
+# skill_prompt() renders. A build without ../../src fails in hatchling itself.
+[tool.hatch.build.targets.wheel.force-include]
+"../../src/nxd-query-data-product" = "nxd_eval/_skills/nxd-query-data-product"
+"../../src/nxd-semantic-query-intent" = "nxd_eval/_skills/nxd-semantic-query-intent"
+
 [tool.uv]
 package = true                # distributable wheel served from the NXD pip registry
 

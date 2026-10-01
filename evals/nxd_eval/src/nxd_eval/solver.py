@@ -36,7 +36,7 @@ from inspect_ai.tool import mcp_server_http
 # The agent-under-test's system prompt. Deliberately does NOT mention gold rows,
 # judge checks, or the expected discriminator — those are judge-only. It only
 # describes the honest tool-driven analyst behaviour.
-AGENT_PROMPT = (
+_ANALYST_PROMPT = (
     "You are a data analyst answering questions about a governed data product "
     "through its semantic MCP tools. You have three tools: list_models, "
     "describe_model, and run_semantic_query. To answer a question you MUST call "
@@ -47,12 +47,19 @@ AGENT_PROMPT = (
     "missing metric, an incompatible dimension, an ambiguous request, or a "
     "governed/PII grouping — say so and ask or decline rather than inventing "
     "rows or metrics.\n\n"
+)
+
+# Shared with the skill-derived prompts so every arm elicits the same
+# confidence line ``report.py`` parses.
+CONFIDENCE_INSTRUCTION = (
     "After your answer, on a final line by itself, state your calibrated "
     "confidence that your answer is correct as 'CONFIDENCE: 0.NN', a number "
     "between 0 and 1 (e.g. 'CONFIDENCE: 0.85'). Report it honestly: use a high "
     "value only when the tools clearly support the answer, and a low value when "
     "you are guessing or had to decline."
 )
+
+AGENT_PROMPT = _ANALYST_PROMPT + CONFIDENCE_INSTRUCTION
 
 
 def mcp_solver(

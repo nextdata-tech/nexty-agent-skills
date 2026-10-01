@@ -199,6 +199,29 @@ The baseline question is *"How many subjects are in the registry?"*; the
 built-in `includes()` scorer checks the agent's answer contains `4` (ground truth
 from the seed: 4 subjects — US, US, DE, FR).
 
+### 5. Run with the plugin's querying instructions
+
+The default `AGENT_PROMPT` is a short generic analyst prompt, and the agent has
+no way to load Agent Skills. That is what a client like Perplexity sees, and
+`variant=` only labels the run, it does not change the agent. To measure an
+agent that follows the `nexty-datamesh` querying procedure, pass the
+skill-derived prompt:
+
+```python
+from nxd_eval import run_suite, skill_prompt
+
+run_suite(suite, agent_prompt=skill_prompt(), epochs=5, ...)
+```
+
+`skill_prompt()` renders the semantic-port protocol from
+`nxd-query-data-product` plus the `nxd-semantic-query-intent` gate at call time.
+Checkouts read the repository's `src/`; the wheel embeds both complete skill
+directories under `nxd_eval/_skills/` at build time, so an installed wheel
+renders the same prompt without the repository. The packaging test builds the
+wheel and renders from it outside the checkout. Build the wheel directly
+(`hatch build -t wheel` or `uv build --wheel`); an sdist cannot carry
+`../../src`, so a wheel built from one fails.
+
 ## Deterministic scorers (the offline lane)
 
 `src/nxd_eval/scorers.py` implements the deterministic scoring lane as Inspect
