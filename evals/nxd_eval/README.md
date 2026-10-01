@@ -213,15 +213,14 @@ from nxd_eval import run_suite, skill_prompt
 run_suite(suite, agent_prompt=skill_prompt(), epochs=5, ...)
 ```
 
-`skill_prompt()` is the semantic-port protocol from `nxd-query-data-product`
-plus the `nxd-semantic-query-intent` gate (coverage, critic, round-trip echo,
-abstain on ambiguity), with a preamble that binds the gate to a
-non-interactive run. Run it next to the default prompt on the same suite and
-epochs: the gap is what the instructions buy. The text is vendored in
-`src/nxd_eval/skill_prompts/` because the wheel ships without `src/`;
-`tests/test_skill_prompts.py` fails when it is stale. Regenerate from the
-repository root with `uv run --project evals/nxd_eval python -m
-nxd_eval.skill_prompts`.
+`skill_prompt()` renders the semantic-port protocol from
+`nxd-query-data-product` plus the `nxd-semantic-query-intent` gate at call time.
+Checkouts read the repository's `src/`; the wheel embeds both complete skill
+directories under `nxd_eval/_skills/` at build time, so an installed wheel
+renders the same prompt without the repository. The packaging test builds the
+wheel and renders from it outside the checkout. Build the wheel directly
+(`hatch build -t wheel` or `uv build --wheel`); an sdist cannot carry
+`../../src`, so a wheel built from one fails.
 
 ## Deterministic scorers (the offline lane)
 

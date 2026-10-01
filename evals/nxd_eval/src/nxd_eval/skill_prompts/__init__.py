@@ -1,4 +1,4 @@
-"""Agent system prompts derived from the shipped skill pack.
+"""Agent system prompts rendered from the shipped skill pack at call time.
 
 The Inspect agent under test is a bare ``react()`` loop with the semantic MCP
 tools and a system prompt. It has no Skill tool, so a client that cannot load
@@ -9,22 +9,24 @@ runtime) only ever sees what the system prompt and the MCP surface tell it.
 instructions" rather than "this model, unaided".
 
 The text is not written here. :func:`render_from_skills` slices it out of the
-skill files under ``src/`` and the result is vendored next to this module,
-because the wheel is installed without the repository. A test regenerates it
-from ``src/`` and fails when the vendored copy is stale; rerun
-``python -m nxd_eval.skill_prompts`` from the repository root to refresh it.
+skill files under the repository's ``src/`` tree, or the embedded ``_skills``
+tree in an installed wheel.
 """
 
 from __future__ import annotations
 
 import re
-from importlib import resources
 from pathlib import Path
 
 from ..solver import CONFIDENCE_INSTRUCTION
 
-#: Pack name -> vendored prompt file in this package.
-PACKS = {"nexty-datamesh": "nexty_datamesh_query.md"}
+# Pack name -> complete skill directories embedded in the wheel.
+PACKS = {
+    "nexty-datamesh": (
+        "nxd-query-data-product",
+        "nxd-semantic-query-intent",
+    ),
+}
 
 # Where each slice lives in the skill pack, relative to ``src/``. A slice runs
 # from its start heading up to (not including) its end marker, so a renamed or
@@ -90,8 +92,32 @@ def _slice(text: str, start: str, end: str | None, where: str) -> str:
     return _LINK.sub(r"\1", text[i:j]).strip()
 
 
-def render_from_skills(src_root: Path) -> str:
-    """Build the ``nexty-datamesh`` query prompt from the skill files in ``src_root``."""
+def _contains_pack_skills(root: Path) -> bool:
+    return all((root / skill_dir).is_dir() for dirs in PACKS.values() for skill_dir in dirs)
+
+
+def skills_root() -> Path:
+    """Return embedded skill files, falling back to this checkout's ``src/``."""
+    package_root = Path(__file__).resolve().parents[1]
+    embedded = package_root / "_skills"
+    if _contains_pack_skills(embedded):
+        return embedded
+
+    parents = Path(__file__).resolve().parents
+    repository_src = parents[5] / "src" if len(parents) > 5 else embedded
+    if _contains_pack_skills(repository_src):
+        return repository_src
+
+    expected = ", ".join(sorted({skill for dirs in PACKS.values() for skill in dirs}))
+    raise FileNotFoundError(
+        f"skill sources not found in {embedded} or {repository_src}; expected: {expected}"
+    )
+
+
+def render_from_skills(src_root: Path, pack: str = "nexty-datamesh") -> str:
+    """Build ``pack``'s query prompt from its skill files in ``src_root``."""
+    if pack not in PACKS:
+        raise ValueError(f"unknown pack {pack!r}; expected one of {sorted(PACKS)}")
     parts = [_PREAMBLE.strip()]
     for rel, start, end in _SLICES:
         parts.append(_slice((src_root / rel).read_text(), start, end, rel))
@@ -100,11 +126,10 @@ def render_from_skills(src_root: Path) -> str:
 
 
 def skill_prompt(pack: str = "nexty-datamesh") -> str:
-    """Return the vendored agent system prompt for ``pack``.
+    """Render the agent system prompt for ``pack`` from its skill files.
 
     Pass it as ``run_suite(..., agent_prompt=skill_prompt())``.
     """
     if pack not in PACKS:
         raise ValueError(f"unknown pack {pack!r}; expected one of {sorted(PACKS)}")
-    return resources.files(__package__).joinpath(PACKS[pack]).read_text()
-
+    return render_from_skills(skills_root(), pack)
