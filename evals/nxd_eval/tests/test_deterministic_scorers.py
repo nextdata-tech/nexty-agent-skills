@@ -204,6 +204,127 @@ def test_rows_equal_default_set_mode_still_fails_real_difference():
     assert s.metadata["verdict"] == "FAIL"
 
 
+def test_rows_equal_anchors_to_answer_before_later_exploratory_query():
+    """The stated answer chooses its supporting result, not the last query."""
+    answer_rows = [{"n": 5}]
+    st = _state(
+        calls=[
+            (
+                {"measures": ["n"], "filters": ["correct-result-only"]},
+                {"compiled_sql": "SELECT 5", "rows": answer_rows},
+            ),
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 99", "rows": [{"n": 99}]}),
+        ],
+        final="There were 5 subjects.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(answer_rows)))
+    assert s.value == CORRECT
+    assert s.metadata["graded_call_index"] == 0
+    assert s.metadata["selection"] == "answer-anchored"
+    assert s.metadata["compiled_sql"] == "SELECT 5"
+
+
+def test_rows_equal_anchors_to_later_answer_after_earlier_exploration():
+    exploratory_rows = [{"n": 99}]
+    answer_rows = [{"n": 5}]
+    st = _state(
+        calls=[
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 99", "rows": exploratory_rows}),
+            (
+                {"measures": ["n"], "filters": ["correct-result-only"]},
+                {"compiled_sql": "SELECT 5", "rows": answer_rows},
+            ),
+        ],
+        final="There were 5 subjects.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(answer_rows)))
+    assert s.value == CORRECT
+    assert s.metadata["graded_call_index"] == 1
+    assert s.metadata["selection"] == "answer-anchored"
+
+
+def test_rows_equal_disagreement_with_gold_fails_on_answer_anchored_rows():
+    """Gold agreement cannot override the result matching the stated answer."""
+    gold_rows = [{"n": 99}]
+    answer_rows = [{"n": 5}]
+    st = _state(
+        calls=[
+            (
+                {"measures": ["n"], "filters": ["correct-result-only"]},
+                {"compiled_sql": "SELECT 99", "rows": gold_rows},
+            ),
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 5", "rows": answer_rows}),
+        ],
+        final="There were 5 subjects.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(gold_rows)))
+    assert s.value == INCORRECT
+    assert s.metadata["graded_call_index"] == 1
+    assert s.metadata["selection"] == "answer-anchored"
+
+
+def test_rows_equal_numberless_answer_falls_back_to_last_answered_call():
+    final_rows = [{"n": 5}]
+    st = _state(
+        calls=[
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 5", "rows": final_rows}),
+        ],
+        final="The final cohort was larger.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(final_rows)))
+    assert s.value == CORRECT
+    assert s.metadata["graded_call_index"] == 0
+    assert s.metadata["selection"] == "last-answered-fallback"
+
+
+def test_rows_equal_number_formatting_and_percentage_fraction_match():
+    """Thousands separators, displayed precision, negatives, and fractions work.
+
+    ``12.5%`` matches either a percentage-point result of 12.5 or its
+    fractional representation 0.125; this case exercises the latter.
+    """
+    rows = [{"count": 1374, "amount": -1234.504, "rate": 0.125}]
+    st = _state(
+        calls=[({"measures": ["amount", "rate"]}, {"compiled_sql": "s", "rows": rows})],
+        final="The count is 1,374, amount is -1,234.50, and rate is 12.5%.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(rows)))
+    assert s.value == CORRECT
+    assert s.metadata["selection"] == "answer-anchored"
+
+
+def test_rows_equal_confidence_digits_do_not_anchor_result():
+    answer_rows = [{"n": 10}]
+    confidence_rows = [{"n": 0.87}]
+    st = _state(
+        calls=[
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 10", "rows": answer_rows}),
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 0.87", "rows": confidence_rows}),
+        ],
+        final="There were 10 subjects.\nCONFIDENCE: 0.87",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(answer_rows)))
+    assert s.value == CORRECT
+    assert s.metadata["graded_call_index"] == 0
+    assert s.metadata["selection"] == "answer-anchored"
+
+
+def test_rows_equal_records_answer_anchor_tie_indexes():
+    rows = [{"n": 5}]
+    st = _state(
+        calls=[
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 5 first", "rows": rows}),
+            ({"measures": ["n"]}, {"compiled_sql": "SELECT 5 latest", "rows": rows}),
+        ],
+        final="There were 5 subjects.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(rows)))
+    assert s.value == CORRECT
+    assert s.metadata["graded_call_index"] == 1
+    assert s.metadata["selection"] == "answer-anchored-tie"
+    assert s.metadata["tied_call_indexes"] == [0, 1]
+
+
 # --------------------------------------------------------------------------- #
 # sql_contains / sql_excludes — substring on compiled SQL
 # --------------------------------------------------------------------------- #
@@ -220,6 +341,30 @@ def test_sql_contains_present_and_missing():
     )
     assert _run(sql_contains("FROM subjects"), st, Target("")).value == CORRECT
     assert _run(sql_contains("JOIN prescriptions"), st, Target("")).value == INCORRECT
+
+
+def test_sql_contains_uses_answer_anchored_call():
+    st = _state(
+        calls=[
+            (
+                {"measures": ["n"], "filters": ["correct-result-only"]},
+                {
+                    "compiled_sql": "SELECT 5 FROM subjects WHERE active = TRUE",
+                    "rows": [{"n": 5}],
+                },
+            ),
+            (
+                {"measures": ["n"]},
+                {
+                    "compiled_sql": "SELECT 99 FROM subjects WHERE inactive = TRUE",
+                    "rows": [{"n": 99}],
+                },
+            ),
+        ],
+        final="There were 5 subjects.",
+    )
+    assert _run(sql_contains("WHERE active = TRUE"), st, Target("")).value == CORRECT
+    assert _run(sql_contains("WHERE inactive = TRUE"), st, Target("")).value == INCORRECT
 
 
 def test_sql_excludes_flags_forbidden_join():

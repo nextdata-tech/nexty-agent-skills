@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from typing import Any
 
 QUERY_TOOL = "run_semantic_query"
@@ -49,8 +50,168 @@ def _is_query_tool(name: object) -> bool:
 # leading ``1`` and read as full confidence. Such non-``0.NN`` forms return
 # ``None`` (no confidence pair) rather than a wrong value.
 _CONFIDENCE_RE = re.compile(
-    r"CONFIDENCE:\s*([01](?:\.\d+)?|\.\d+|\d*\.\d+)(?![\d%])", re.IGNORECASE
+    r"[*_]*CONFIDENCE[*_]*\s*:\s*[*_]*(?:(?:low|medium|high)\s*(?:[-–—]\s*)?)?\(?\s*([01](?:\.\d+)?|\.\d+|\d*\.\d+)(?![\d%])\s*\)?",
+    re.IGNORECASE,
 )
+
+# Numeric values the agent states in its final answer. Commas are accepted only
+# as conventional three-digit thousands separators, and a trailing percent sign
+# is retained so percentage-point and fractional result representations can both
+# be matched. The surrounding boundaries avoid extracting numbers embedded in
+# identifiers or decimal fragments.
+_ANSWER_NUMBER_RE = re.compile(
+    r"(?<![\w.,−])([+−-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%)?(?!\w|,\d|\.\d)"
+)
+_ACCOUNTING_ANSWER_RE = re.compile(
+    r"\(\s*[$€£¥]?\s*([+−-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%)?\s*\)"
+)
+_TRAILING_CONFIDENCE_RE = re.compile(r"^\s*[*_]*CONFIDENCE[*_]*\s*:", re.IGNORECASE)
+_CONFIDENCE_ANYWHERE_RE = re.compile(
+    r"[*_]*\s*CONFIDENCE\s*[*_]*\s*[:=]\s*[*_]*(?:(?:low|medium|high)\s*(?:[-–—]\s*)?)?\(?\s*-?\d*\.?\d+\s*\)?",
+    re.IGNORECASE,
+)
+_ISO_DATETIME_RE = re.compile(r"(?<!\w)\d{4}-\d{2}-\d{2}(?:[Tt ][0-9:.+-]+(?:[Zz]|[+-]\d{2}:?\d{2})?)?(?!\w)")
+
+
+@dataclass(frozen=True)
+class _AnswerNumber:
+    """One displayed numeric token and its visible decimal precision."""
+
+    value: Decimal
+    decimal_places: int
+    is_percent: bool
+    significant: bool = True
+    is_year: bool = False
+
+
+def _answer_numbers(text: str) -> list[_AnswerNumber]:
+    """Parse final-answer numbers, excluding confidence and list ordinals."""
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and _TRAILING_CONFIDENCE_RE.match(lines[-1]):
+        lines.pop()
+    # Ordered-list labels are structure, not values to match against query
+    # results. Strip only conventional line prefixes such as ``1. `` or ``2) ``.
+    answer_text = "\n".join(re.sub(r"^\s*\d+[.)]\s+", "", line) for line in lines)
+    answer_text = _CONFIDENCE_ANYWHERE_RE.sub(" ", answer_text)
+    answer_text = _ISO_DATETIME_RE.sub(" ", answer_text)
+    answer_text = _ACCOUNTING_ANSWER_RE.sub(
+        lambda match: "-" + match.group(1).lstrip("+−-") + ("%" if match.group(2) else ""),
+        answer_text,
+    )
+
+    out: list[_AnswerNumber] = []
+    seen: set[tuple[Decimal, int, bool]] = set()
+    for match in _ANSWER_NUMBER_RE.finditer(answer_text):
+        raw = match.group(1).replace(",", "").replace("−", "-")
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            continue
+        if not value.is_finite():
+            continue
+        decimals = raw.partition(".")[2]
+        bare_integer = not decimals and "." not in raw
+        year = bare_integer and "," not in match.group(1) and value == value.to_integral_value() and 1900 <= value <= 2100
+        small_integer = bare_integer and abs(value) < 10
+        number = _AnswerNumber(
+            value=value,
+            decimal_places=len(decimals),
+            is_percent=bool(match.group(2)),
+            significant=not small_integer and not year,
+            is_year=year,
+        )
+        key = (number.value, number.decimal_places, number.is_percent)
+        if key not in seen:
+            out.append(number)
+            seen.add(key)
+    if out and all(number.is_year for number in out):
+        # A year can anchor only when there is no other usable answer number.
+        out = [
+            _AnswerNumber(n.value, n.decimal_places, n.is_percent, True, True)
+            for n in out
+        ]
+    return out
+
+
+def _numeric_cells(rows: list[dict]) -> list[Decimal]:
+    """Collect finite numeric cells from parsed result rows."""
+    values: list[Decimal] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for value in row.values():
+            # bool is an int subclass, but never a numeric result for anchoring.
+            if isinstance(value, bool) or not isinstance(value, (int, float, Decimal, str)):
+                continue
+            try:
+                raw = str(value).strip().replace("−", "-")
+                if raw.startswith("(") and raw.endswith(")"):
+                    raw = "-" + raw[1:-1]
+                parsed = Decimal(raw.replace(",", ""))
+            except InvalidOperation:
+                continue
+            if parsed.is_finite():
+                values.append(parsed)
+    return values
+
+
+def _within_display_unit(actual: Decimal, stated: Decimal, decimal_places: int) -> bool:
+    """Compare within one display unit, preserving exact low-precision zero."""
+    if stated == 0 and decimal_places == 0:
+        return actual == 0
+    tolerance = Decimal(1).scaleb(-decimal_places)
+    actual_exp = actual.as_tuple().exponent
+    stated_exp = stated.as_tuple().exponent
+    min_exp = min(actual_exp, stated_exp)
+    precision = max(
+        len(actual.as_tuple().digits) + actual_exp - min_exp,
+        len(stated.as_tuple().digits) + stated_exp - min_exp,
+        28,
+    ) + 2
+    with localcontext() as ctx:
+        ctx.prec = precision
+        distance = abs(actual - stated)
+    return distance < tolerance
+
+
+def _round_key(value: Decimal, decimal_places: int) -> Decimal:
+    """Stable half-up bucket key, with enough local precision for huge cells."""
+    if decimal_places < 0:
+        return value
+    with localcontext() as ctx:
+        ctx.prec = max(28, len(value.as_tuple().digits) + decimal_places + 4)
+        return value.scaleb(decimal_places).to_integral_value(rounding=ROUND_HALF_UP)
+
+
+def _number_forms(number: _AnswerNumber) -> tuple[tuple[int, Decimal], ...]:
+    """Displayed value and, for percentages, its fractional representation."""
+    forms = [(number.decimal_places, number.value)]
+    if number.is_percent:
+        forms.append((number.decimal_places + 2, number.value / Decimal(100)))
+    return tuple(forms)
+
+
+def _matching_cell_indexes(
+    number: _AnswerNumber,
+    buckets: dict[int, dict[Decimal, list[tuple[int, Decimal]]]],
+) -> set[int]:
+    """Find cells strictly within one display unit of an answer token."""
+    matches: set[int] = set()
+    for precision, stated in _number_forms(number):
+        if stated == 0 and precision == 0:
+            candidate_keys = (Decimal(0),)
+        else:
+            center = _round_key(stated, precision)
+            candidate_keys = tuple(
+                center + offset for offset in (Decimal(-1), Decimal(0), Decimal(1))
+            )
+        for key in candidate_keys:
+            for index, value in buckets.get(precision, {}).get(key, ()):
+                if _within_display_unit(value, stated, precision):
+                    matches.add(index)
+    return matches
 
 
 def parse_confidence(text: str) -> float | None:
@@ -175,6 +336,81 @@ class Transcript:
             if not call.errored and call.rows is not None:
                 return call
         return None
+
+    def answer_call(self) -> QueryCall | None:
+        """Select the successful result that best supports the numeric answer.
+
+        Rank calls by the share of significant answer numbers explained, then
+        by the share of numeric result cells matching answer numbers, then by
+        recency. Final-rank ties are recorded in scorer metadata. If no answer
+        number anchors a successful result, fall back to the latest answered call.
+        """
+        return self.answer_call_selection()[0]
+
+    def answer_call_selection(self) -> tuple[QueryCall | None, str]:
+        """Return ``(call, source)`` for answer anchoring and scorer metadata."""
+        call, source, _ = self.answer_call_selection_details()
+        return call, source
+
+    def answer_call_selection_details(self) -> tuple[QueryCall | None, str, list[int]]:
+        """Return selection plus indexes tied at the final answer-anchoring rank."""
+        numbers = _answer_numbers(self.final_answer)
+        if not numbers:
+            return self.last_answered_call(), "last-answered-fallback", []
+
+        significant = [number for number in numbers if number.significant]
+        if not significant:
+            significant = [number for number in numbers if not number.is_year] or numbers
+            # Small integers may anchor when they are the only non-year values.
+        precisions = {precision for number in numbers for precision, _ in _number_forms(number)}
+
+        ranked: list[tuple[int, int, int, QueryCall]] = []
+        for index, call in enumerate(self.calls):
+            if call.errored or call.rows is None:
+                continue
+            cells = _numeric_cells(call.rows)
+            if not cells:
+                continue
+            buckets: dict[int, dict[Decimal, list[tuple[int, Decimal]]]] = {
+                precision: {} for precision in precisions
+            }
+            for index, cell in enumerate(cells):
+                for precision in precisions:
+                    key = _round_key(cell, precision)
+                    buckets[precision].setdefault(key, []).append((index, cell))
+            number_matches = {
+                id(number): _matching_cell_indexes(number, buckets)
+                for number in significant
+            }
+            matched_numbers = sum(bool(number_matches[id(number)]) for number in significant)
+            covered = set().union(
+                *(_matching_cell_indexes(number, buckets) for number in numbers)
+            ) if numbers else set()
+            covered_cells = len(covered)
+            if matched_numbers:
+                ranked.append((matched_numbers, covered_cells, len(cells), call))
+
+        if not ranked:
+            return self.last_answered_call(), "last-answered-fallback", []
+
+        # Primary: share of significant answer numbers explained (common
+        # denominator, so compare counts). Secondary: call-cell coverage.
+        best = ranked[0]
+        tied = [best]
+        for candidate in ranked[1:]:
+            primary_better = candidate[0] > best[0]
+            primary_equal = candidate[0] == best[0]
+            secondary_better = primary_equal and candidate[1] * best[2] > best[1] * candidate[2]
+            secondary_equal = primary_equal and candidate[1] * best[2] == best[1] * candidate[2]
+            if primary_better or secondary_better:
+                best = candidate
+                tied = [candidate]
+            elif secondary_equal:
+                tied.append(candidate)
+        tied_indexes = [i for i, call in enumerate(self.calls) if any(call is item[3] for item in tied)]
+        latest_index = tied_indexes[-1]
+        selected = self.calls[latest_index]
+        return selected, "answer-anchored-tie" if len(tied_indexes) > 1 else "answer-anchored", tied_indexes
 
     def any_error(self) -> bool:
         """True if any query returned an error (compile refusal / exec failure)."""
