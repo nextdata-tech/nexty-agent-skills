@@ -1,0 +1,1399 @@
+{
+  "id": "2026-10-01-nxd-query-data-product-nxd-semantic-query-intent-scope-const",
+  "date": "2026-10-01",
+  "label": "nxd-query-data-product / nxd-semantic-query-intent: scope constraints become filters (#442)",
+  "notes": "NEX-1244: a customer eval showed agents dropping scope filters (region, specialty, product) from governed semantic queries; #442 makes every question constraint a semantic filter, separates scope filters from breakdowns, probes stored values before reporting a zero, and carves out metrics that already encode the constraint (partner_sourced_revenue). Two scenarios, Sonnet agent at high effort, 3 runs per arm, local mesh at nxd df96ee66 / nxd_data_product 0.41.246, scenarios and harness from PR #445 (branch claude/local-mesh-filter-evals). (1) semantic-filter-coverage: both arms ran with one extra prompt line telling the agent to follow the installed nxd-query-data-product skill (without it Sonnet never invoked the skill in 3/3 runs and the cell failed on missing tools; those pre-cue runs, before-sfc-1b.json and probe-medium.json, are excluded). Result 7/7 in all 6 runs: a ceiling effect, because Sonnet with the skills already kept the filters and probed values before reporting the Q4 zero on main, so the scenario does not distinguish the arms; efficiency is flat. (2) semantic-intent-validation, the Q3 partner-trap regression guard, run against scratch Snowflake schema EVAL_BENCH_442 (created and dropped for the run). AFTER = #445 HEAD as is (includes #442). BEFORE = same tree with #442's documentation reverted to 001afdd5 (staged, never committed), keeping scripts/ and the #445 harness: src/nxd-query-data-product/SKILL.md, src/nxd-query-data-product/README.md, src/nxd-query-data-product/reference/troubleshooting.md, src/nxd-semantic-query-intent/SKILL.md, src/nxd-semantic-query-intent/reference/semantic-intent-validation.md, src/nxd-run-job-loop/SKILL.md, src/nxd-run-job-loop/reference/query-grammar.md, src/nxd-build-semantic-data-product/reference/compiler-and-routing.md (metadata.version lines in the reverted files went back with them). Partner trap: AFTER chose partner_sourced_revenue (275, not 150) in 3/3 runs. BEFORE chose it in 1/5 runs (before-r3-retry), over-clarified instead of executing in 1 (before-r1), and in 3 runs (r2, r3, r2-retry) never reached the semantic tools at all: the agent searched deferred tools, declined to use the local mesh, and stopped, so those runs fail every check for lack of evidence about the skill. The two re-run rows (before-siv-r2-retry, before-siv-r3-retry) are retries of the two no-tool runs; they are kept alongside the originals, not substituted. Tool reach is 3/3 AFTER vs 2/5 BEFORE, but n is small and the reverted text does not touch mesh discovery, so treat it as suggestive, not attributed to #442. Separately, echo-produced failed in 2/3 AFTER and 1 of the 2 BEFORE runs that reached tools (the echo came only in the final answer, after execution). Efficiency per run is similar when tools are reached (about 19-22 turns, 0.46-0.58 USD). The semantic-intent-validation runs used PR #445's fake mesh gateway at 63e28fe4, whose proxy__get_data_product_details returned a flatter shape than the production proxy (a later #445 commit matches it); both arms share that harness, so the comparison is arm-to-arm, not a claim about the production details response.",
+  "plugin_version": "0.54.10",
+  "report_tags": {
+    "before-sfc-r1": "before-sfc-r1",
+    "before-sfc-r2": "before-sfc-r2",
+    "before-sfc-r3": "before-sfc-r3",
+    "after-sfc-r1": "after-sfc-r1",
+    "after-sfc-r2": "after-sfc-r2",
+    "after-sfc-r3": "after-sfc-r3",
+    "before-siv-r1": "before-siv-r1",
+    "before-siv-r2": "before-siv-r2",
+    "before-siv-r3": "before-siv-r3",
+    "before-siv-r2-retry": "before-siv-r2-retry",
+    "before-siv-r3-retry": "before-siv-r3-retry",
+    "after-siv-r1": "after-siv-r1",
+    "after-siv-r2": "after-siv-r2",
+    "after-siv-r3": "after-siv-r3"
+  },
+  "reports": {
+    "before-sfc-r1": {
+      "elapsed_s": 133.3,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 15,
+            "duration_ms": 88822,
+            "total_cost_usd": 0.4263254,
+            "input_tokens": 22,
+            "output_tokens": 5544,
+            "is_error": false,
+            "tool_calls": 13,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The Q1 query result and the final table both show ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1 and ALL=3, with ALL kept as a rollup row and an explicit warning not to sum the product rows."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The final answer gives exactly two separate rows (Neurology=8, Psychiatry & Neurology=9), states the scope as specialty_group IN those two values, and neither adds them into 17 nor lists other specialties; the Q2 compiled SQL is cut off in the trace before its WHERE clause, but it groups by specialty_group like the Q1 call, whose filters are visible."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The region_name query has no WHERE clause, groups by region_name, and returns NE Gulf Coast=7, NE Great Lakes=10, SW Desert=4, which match the final table."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reported 0 without hedging after a cross-check query showed SW Desert has 4 enrolled patients (ALL rollup) on other products only, and BETAMAB has patients in NE Gulf Coast (3) and NE Great Lakes (4), so both values exist in the data."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "list_models returned exactly three models with no marker model, and the same command then ran describe_model in a per-model loop before any run_semantic_query; later use of the patient join, the DAILY metric definition and the ENROLLMENT_ROWS metric shows all three were described."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's compiled SQL shows REGION_NAME = 'NE Gulf Coast' and SPECIALTY_GROUP = 'Psychiatry & Neurology' inside the query, Q3's query groups by region_name with no filter, and Q4's 0 result is only possible with both the product and region filters applied; Q2's IN filter is stated but cut off in the trace, though its two-row result fits it."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "Every data call went through run_semantic_query with concept names; the agent never used query_sql.py or wrote SQL, and the SQL in the results was compiled by the tool."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent ran discovery first, kept the scope filters in its governed semantic queries, returned the correct values for all four questions including the Q1 rollup and the Q2 comparison, and confirmed the Q4 zero with independent cross-checks without using raw SQL."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-sfc-r2": {
+      "elapsed_s": 123.4,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 16,
+            "duration_ms": 87478,
+            "total_cost_usd": 0.4396728,
+            "input_tokens": 24,
+            "output_tokens": 5743,
+            "is_error": false,
+            "tool_calls": 14,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The Q1 query returned ALPHAVIR=2, ALL=3, ALPHAVIR SC=1 and BETAMAB=1, and the final answer reports exactly these values using the ENROLLED_PATIENTS distinct-DAILY metric, keeping ALL as a separate rollup row that is not summed with the product rows."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The final answer gives exactly two separate rows, Neurology=8 and Psychiatry & Neurology=9, with no combined 17 and no other specialties; it states the IN filter and specialty_group grouping, which match the visible start of the compiled SQL, though the filter clause itself is truncated in the trace."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The traced q3 query groups by region_name with no region filter and returns NE Gulf Coast=7, NE Great Lakes=10 and SW Desert=4, and the final answer reports the full breakdown."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reports a firm 0 with no hedging, and the trace shows both values exist: the product query found BETAMAB=7, and the region\u00d7product breakdown shows BETAMAB in other regions while SW Desert has 4 patients (ALL rollup) and no BETAMAB rows."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "Before any run_semantic_query, the trace shows a list_models call and then a describe_model loop over patient_enrollment, patient_provider and enrollment_metrics; the agent then said 'all three models', and nothing in the visible trace suggests a marker model was skipped."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "The compiled SQL shows Q1 filtering REGION_NAME='NE Gulf Coast' and SPECIALTY_GROUP='Psychiatry & Neurology' and Q3 grouping by region_name with no filter; the Q2 IN filter and Q4 BETAMAB/SW Desert filters are truncated in the trace but stated explicitly as tool filters and consistent with the returned rows."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "Every query went through run_semantic_query via mcp_call.py with concept-name arguments; the agent never called query_sql.py or wrote SQL itself, and the only SQL in the trace is compiled_sql returned by the tool."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent discovered the catalog before querying, answered all four questions with the correct values (scoped Q1, two-row Q2 comparison, full Q3 breakdown, verified Q4 zero), and used only governed semantic queries."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-sfc-r3": {
+      "elapsed_s": 189.8,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 14,
+            "duration_ms": 134302,
+            "total_cost_usd": 0.43817079999999997,
+            "input_tokens": 22,
+            "output_tokens": 6179,
+            "is_error": false,
+            "tool_calls": 12,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The final answer reports ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1 and ALL=3 as a separate rollup row, and the q1 compiled SQL in the trace shows the same returned rows with no wrong-scope variant."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The answer gives exactly two rows (Psychiatry & Neurology=9, Neurology=8), states the scope as specialty_group IN those two values grouped by specialty_group, and does not sum them or list other specialties; q2 was a separate query from the unfiltered vals_spec discovery query, although its compiled SQL is cut off in the trace."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The q3 compiled SQL groups by REGION_NAME with no WHERE clause and returns NE Gulf Coast=7, NE Great Lakes=10, SW Desert=4, which the answer reports in full."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reports 0 without hedging and backs it with a region\u00d7product\u00d7period breakdown: BETAMAB occurs in NE Gulf Coast (3) and NE Great Lakes (4), and SW Desert has 4 patients on other products."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models and then a describe_model loop over patient_enrollment, patient_provider and enrollment_metrics (the three models the agent reports the catalog returned) before the first run_semantic_query, and the agent then used the learned join, DAILY metric definition and dimension names."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "The Q1 compiled SQL shows REGION_NAME = 'NE Gulf Coast' and SPECIALTY_GROUP = 'Psychiatry & Neurology' in the query itself, and Q3 groups by region with no filter. The Q2 IN filter and Q4 BETAMAB/SW Desert filters are cut off in the trace, but they are stated as query scope and match the separately run, labelled queries and the returned results."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "The agent made every data call through the run_semantic_query tool via mcp_call.py and never used query_sql.py or wrote SQL; the SQL in the trace is the compiled output the tool returned."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent discovered all models first, ran governed semantic queries with the correct full-value filters and groupings, and reported the expected values for all four questions, including a non-hedged, cross-checked zero for Q4."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-sfc-r1": {
+      "elapsed_s": 127.4,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 15,
+            "duration_ms": 94120,
+            "total_cost_usd": 0.4395874,
+            "input_tokens": 22,
+            "output_tokens": 5978,
+            "is_error": false,
+            "tool_calls": 13,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The Q1 tool result and the final answer both give ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1, ALL=3, and the answer keeps ALL as a separate rollup row that is not added to the product rows."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The final answer gives exactly two separate rows, Psychiatry & Neurology=9 and Neurology=8, scoped to specialty_group IN those two values and grouped by specialty_group; there is no combined 17 and no extra specialties."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The unfiltered region-grouped query returned NE Gulf Coast=7, NE Great Lakes=10 and SW Desert=4, and the answer reports all three regions as a breakdown with no filter."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reported 0. Its independent queries showed SW Desert has 4 patients on other products (ALL rollup=4) and BETAMAB has 3+4=7 in other regions, and the answer states the zero without hedging."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models, then describe_model on all three listed models (patient_enrollment, patient_provider, enrollment_metrics), before any run_semantic_query call; the list_models output is truncated, so this relies on the agent's report that there were three models."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's compiled SQL shows REGION_NAME = 'NE Gulf Coast' and SPECIALTY_GROUP = 'Psychiatry & Neurology' in the query itself. Q3 grouped by region with no filter. The Q2 and Q4 call arguments are truncated, so those two rest on indirect evidence: Q2 returned only the two requested specialties, and Q4's zero can only come from applying both filters, since dropping either one gives 4 or 7."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "The agent only called run_semantic_query through mcp_call.py with concept-name arguments and never used query_sql.py or wrote SQL itself; the SQL in the results is the compiler's output."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent found all models before querying, put the scope filters in its governed semantic queries, and reported correct values for all four questions, including a checked zero for BETAMAB in SW Desert."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-sfc-r2": {
+      "elapsed_s": 128.3,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 16,
+            "duration_ms": 96818,
+            "total_cost_usd": 0.3930424,
+            "input_tokens": 26,
+            "output_tokens": 6100,
+            "is_error": false,
+            "tool_calls": 14,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The final answer reports ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1 and ALL=3, matching the q1 tool result rows; it keeps ALL as a separate rollup row and never adds it to the product rows."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The final answer gives exactly two separate rows, Psychiatry & Neurology=9 and Neurology=8, under an IN filter grouped by specialty_group, without summing them or listing other specialties."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The unfiltered region query grouped by region_name returned NE Gulf Coast=7, NE Great Lakes=10 and SW Desert=4, and the answer reports all three as a breakdown."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reports 0 without hedging and backs it with two probe queries: SW Desert by product (ALL=4, no BETAMAB) and BETAMAB by region (NE Gulf Coast 3 + NE Great Lakes 4 = 7). Together these show both values exist in the data."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models returning three models, then a describe_model loop over patient_enrollment, patient_provider and enrollment_metrics, all before the first run_semantic_query call; the catalog exposed no marker model."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's compiled SQL shows REGION_NAME = 'NE Gulf Coast' and SPECIALTY_GROUP = 'Psychiatry & Neurology' coming from the query arguments, and the Q3 query groups by region_name with no filter. The Q2 and Q4 arguments are cut off in the trace, but the agent states the IN filter and both Q4 equality filters and says the compiled SQL confirmed them, which is consistent with the visible output."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "Every data query went through mcp_call.py against run_semantic_query with concept names; query_sql.py was never used and the only SQL seen was compiled_sql returned by the tool."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent explored the catalog completely, put the scope into the semantic query filters, and returned the expected values for all four questions, including a verified zero for Q4, without authoring raw SQL."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-sfc-r3": {
+      "elapsed_s": 134.4,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 15,
+            "duration_ms": 94692,
+            "total_cost_usd": 0.5259298,
+            "input_tokens": 22,
+            "output_tokens": 6249,
+            "is_error": false,
+            "tool_calls": 13,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The final answer reports ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1 and ALL=3. These match the q1 result rows in the trace. ALL is labelled as a rollup row, and the agent explicitly says the products are not summed into it."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The answer gives exactly two rows, Psychiatry & Neurology=9 and Neurology=8, and says the query used specialty_group IN (...) grouped by specialty_group. It does not add Rheumatology or Internal Medicine and does not sum the two rows to 17."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The answer gives the full breakdown NE Great Lakes=10, NE Gulf Coast=7, SW Desert=4. This matches the trace's region-grouped run_semantic_query, which has no region filter."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reports 0 and backs it with independent probes. BETAMAB has 3 patients in NE Gulf Coast and 4 in NE Great Lakes (7 in total). SW Desert has ALPHAVIR 2, ALPHAVIR SC 2 and ALL 4. The agent does not hedge about misspelled or missing values."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models returning three models: patient_enrollment, patient_provider and enrollment_metrics. A loop then calls describe_model on each one before the first run_semantic_query call. No marker model was listed."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's compiled SQL in the trace shows REGION_NAME = 'NE Gulf Coast' and SPECIALTY_GROUP = 'Psychiatry & Neurology', and Q3 groups by region_name with no filter. The verified zero for Q4 only makes sense if both the product and region filters were applied, since dropping either gives 4 or 7. Q2's compiled SQL is cut off in the trace, but the agent says it used an IN filter and nothing in the trace contradicts that."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "Every query went through mcp_call.py to the run_semantic_query tool. The agent never wrote a raw SQL string and never used query_sql.py or any other SQL execution tool; the only SQL seen is the compiler's compiled_sql output."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent explored the catalog first, ran governed semantic queries that carried the scope filters, returned the correct values for all four questions (including a properly checked zero for Q4) and wrote no raw SQL."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-siv-r1": {
+      "elapsed_s": 113.3,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 20,
+            "duration_ms": 71544,
+            "total_cost_usd": 0.48846919999999994,
+            "input_tokens": 26,
+            "output_tokens": 5866,
+            "is_error": false,
+            "tool_calls": 17,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The agent read the model catalog through the gateway's list-dps semantic_models output (name, grain and description, which is the list_models payload), then called describe_model on every model before its only run_semantic_query call, and it used catalog concept names without guessing."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": true,
+                "why": "Before running any selection, the agent looped describe_model over order_event, rep_activity, customer_profile and partner_directory; its later accurate reference to partner_sourced_revenue on partner_directory confirms it read that model."
+              },
+              {
+                "id": "echo-produced",
+                "pass": true,
+                "why": "For each question the agent restated the meanings from the catalog: call_count is every logged call and sales_calls is converted calls; total_revenue is the sum of order amounts in USD and country is the customer's billing country; partner_sourced_revenue is partner-attributed revenue, unlike the order's own sales channel."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": true,
+                "why": "The agent made no run_semantic_query call for Q1, named both call metrics and asked the analyst how to proceed; its question was mainly about the missing time scope, and it stated a preference for call_count rather than asking the analyst to pick a metric."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": true,
+                "why": "The clarification names the real metrics call_count and sales_calls from rep_activity and says 'last month' cannot be bound because rep_activity has no date dimension (only rep_name), though it states this for that model rather than for every model."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": true,
+                "why": "The agent ran run_semantic_query with measures=['total_revenue'] and dimensions=['country'] with no clarify turn, justified country through the join's reachable dimensions, and answered from the rows (US 300, UK 150)."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": false,
+                "why": "The agent never selected or ran partner_sourced_revenue; it labelled Q3 'ambiguous' and asked the analyst to choose between it and total_revenue filtered to channel='partner', which over-clarifies a question the scenario expects to be executed."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "The only query was a concept-name selection passed to run_semantic_query, and the agent passed no hand-written SQL to any tool."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "The agent never selected a PII dimension, and it still noted that rep_name is PII, governed and maskable, and that Q2's concepts are not PII."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent covered the whole catalog, clarified Q1 and correctly ran Q2, but it failed the Q3 discovery check: although it found partner_sourced_revenue, it asked the analyst to choose instead of selecting and running it."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-siv-r2": {
+      "elapsed_s": 43.0,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 15,
+            "duration_ms": 23860,
+            "total_cost_usd": 0.33616500000000005,
+            "input_tokens": 12,
+            "output_tokens": 2656,
+            "is_error": false,
+            "tool_calls": 12,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": false,
+                "why": "The trace has no list_models or describe_model call; the agent ran only ToolSearch, ListMcpResourcesTool, Skill, Read and Bash, so it never learned the catalog for any question."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": false,
+                "why": "describe_model was never called on any model, so order_event, rep_activity, customer_profile and partner_directory all went undescribed."
+              },
+              {
+                "id": "echo-produced",
+                "pass": false,
+                "why": "The agent gave no plain-language echo built from describe_model meanings; it only described hypothetical selections, such as 'a call-count metric', without any catalog data."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": false,
+                "why": "The agent did not run a query for Q1, but it also never surfaced the real ambiguity or asked the analyst to choose between catalog metrics; it abstained because the tools were missing, and its stated plan was to bind 'last month' to a date filter."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": false,
+                "why": "The answer never names call_count or sales_calls and never says that no date or time dimension exists; instead it invents 'calls placed versus calls answered' and plans to filter on a nonexistent date dimension for 2026-09-01 to 2026-10-01."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": false,
+                "why": "No run_semantic_query call was made for Q2 and no rows were returned; the agent also said it might ask which revenue metric was meant if there were several."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": false,
+                "why": "partner_sourced_revenue was never selected and partner_directory was never inspected; the agent said Q3 was ambiguous and that it would ask the analyst instead of executing."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "The agent wrote and ran no SQL string; its Bash calls only listed directories."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "The agent never selected any dimension, PII-flagged or otherwise, so no governance note was required."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent could not find the semantic MCP tools (likely a harness wiring problem) and stopped without any catalog discovery, echo, clarification or execution, so it passes only the two checks that hold by default (no raw SQL, no PII dimension selected)."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-siv-r3": {
+      "elapsed_s": 37.6,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 11,
+            "duration_ms": 19621,
+            "total_cost_usd": 0.24022540000000003,
+            "input_tokens": 10,
+            "output_tokens": 2042,
+            "is_error": false,
+            "tool_calls": 9,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": false,
+                "why": "The trace has no list_models or describe_model calls; the agent only searched deferred tools, found no semantic MCP tools and stopped, so it never learned the catalog."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": false,
+                "why": "describe_model was never called on order_event, rep_activity, customer_profile or partner_directory."
+              },
+              {
+                "id": "echo-produced",
+                "pass": false,
+                "why": "No selection was ever resolved, so the agent never restated one using describe_model meanings; it only gave generic hypotheticals in a table."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": false,
+                "why": "The agent made no run_semantic_query call only because the tools were missing; it never raised the call_count vs sales_calls ambiguity or asked the analyst to choose."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": false,
+                "why": "The answer never names call_count or sales_calls and wrongly claims 'last month' would be a raw date filter (>= 2026-09-01), instead of noting that no date dimension exists."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": false,
+                "why": "run_semantic_query was never called with total_revenue by country, and no rows were returned or reported."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": false,
+                "why": "The agent never selected partner_sourced_revenue from partner_directory; it said it would treat Q3 as ambiguous and ask the analyst."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "The trace shows no hand-written SQL string sent to any tool."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "The agent never selected a dimension flagged pii=true, so this conditional check is vacuously satisfied."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent found no semantic MCP tools in its session and stopped without discovering, describing, clarifying or executing anything, so every substantive check fails; this looks like a harness wiring failure (tools not connected) rather than a measurement of the skill."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-siv-r2-retry": {
+      "elapsed_s": 43.7,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 13,
+            "duration_ms": 19978,
+            "total_cost_usd": 0.321044,
+            "input_tokens": 10,
+            "output_tokens": 2320,
+            "is_error": false,
+            "tool_calls": 10,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": false,
+                "why": "The trace has no list_models or describe_model calls; the agent only ran ToolSearch, found no semantic tools and stopped."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": false,
+                "why": "describe_model was never called on order_event, rep_activity, customer_profile or partner_directory."
+              },
+              {
+                "id": "echo-produced",
+                "pass": false,
+                "why": "The agent never restated any resolved selection using describe_model meanings; it only described what it would do in general terms."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": false,
+                "why": "No query ran, but the agent never raised the call_count vs sales_calls ambiguity or asked the analyst to choose, and its stated plan was to pick a call-count metric and apply a September 2026 date filter."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": false,
+                "why": "The agent never named call_count or sales_calls and never noted the missing month/date dimension; instead it assumed a date filter could be applied."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": false,
+                "why": "run_semantic_query was never called for total_revenue by country, so no answer came from result rows, and the agent even said it might ask which revenue metric was meant."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": false,
+                "why": "partner_sourced_revenue on partner_directory was never selected or executed; the agent only listed possible readings, including a channel filter."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "The trace contains no hand-written SQL passed to any tool."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "No PII-flagged dimension was ever selected, so no governance note was needed."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The semantic MCP tools never appeared in the session (ToolSearch found nothing), so the agent did no catalog discovery, echoed no selections, clarified nothing and executed nothing; it passes only the two checks that hold by default (no raw SQL, no PII dimension selected), which points to a harness wiring failure rather than a test of the skill."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "before-siv-r3-retry": {
+      "elapsed_s": 117.0,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 21,
+            "duration_ms": 77948,
+            "total_cost_usd": 0.583847,
+            "input_tokens": 24,
+            "output_tokens": 6148,
+            "is_error": false,
+            "tool_calls": 18,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "Before any run_semantic_query call, the agent listed the catalog: the gateway's list-dps call returned the semantic_models with name, grain and description, which is the list_models content. It then called describe_model for each model and used only concept names it had seen."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": true,
+                "why": "Before building any selection, the agent ran a describe_model loop over order_event, rep_activity, customer_profile and partner_directory, and later selected partner_sourced_revenue, a metric that only appears on partner_directory."
+              },
+              {
+                "id": "echo-produced",
+                "pass": false,
+                "why": "The agent ran the Q2 and Q3 queries right after the describe call without restating either selection in plain language; the descriptions of the selections (sum of AMOUNT_USD, customer billing country, partner-attributed revenue) appear only in the final answer, after execution."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": true,
+                "why": "The agent never called run_semantic_query for Q1, said 'last month' cannot be expressed, and gave the analyst choices: add a date dimension or accept the all-time call_count. It did, however, declare call_count the right metric instead of asking the analyst to choose between call_count and sales_calls."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": true,
+                "why": "The Q1 answer names call_count (every logged call) and sales_calls (converted calls) as described for rep_activity, and states that there is no date or time dimension anywhere in the catalog."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": true,
+                "why": "The agent ran total_revenue by country through the order_event\u2192customer_profile join with no clarify turn, and answered from the returned rows (US 300.0, UK 150.0)."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": true,
+                "why": "The agent selected partner_sourced_revenue from partner_directory and reported 275. It mentioned the channel='partner' reading only as an alternative it did not run."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "Every query went through run_semantic_query with concept-name selections; the only SQL in the trace is the compiled SQL the tool returned."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "The agent never selected a PII dimension, and it still flagged rep_name as PII when it mentioned it."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "Discovery, coverage, the Q1 hold, the Q2 execution and the Q3 partner_sourced_revenue trap were all handled correctly, but the agent never restated a selection in plain language before executing it; that explanation came only in the final answer, after the queries ran."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-siv-r1": {
+      "elapsed_s": 135.8,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 19,
+            "duration_ms": 79513,
+            "total_cost_usd": 0.4630158,
+            "input_tokens": 28,
+            "output_tokens": 6705,
+            "is_error": false,
+            "tool_calls": 17,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models and describe_model calls through mcp_call.py, written to list.json and d_*.json, before any run_semantic_query call, and every concept name used comes from those results."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": true,
+                "why": "The scratchpad listing shows d_order_event.json, d_rep_activity.json, d_customer_profile.json and d_partner_directory.json before the Q2/Q3 query output, and the answer uses details only describe_model would give (rep_name PII, sales_calls, partner_sourced_revenue on partner_directory)."
+              },
+              {
+                "id": "echo-produced",
+                "pass": true,
+                "why": "Each question gets a plain-language restatement drawn from describe_model meanings: call_count is every logged call and sales_calls only converted calls; total_revenue is the sum of order amount in USD by customer billing country through the order_event\u2192customer_profile join; partner_sourced_revenue is revenue attributed to a sourcing partner. Strictly, these restatements appear only in the final answer, after the queries ran, not as a separate message before execution."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": true,
+                "why": "No Q1 query was run (no q1 output file; only q2 and q3 were executed), and the agent named both call metrics and asked the analyst to choose between adding a date dimension and accepting an all-time count clearly labelled as such."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": true,
+                "why": "The clarification names the real call_count and sales_calls with their catalog meanings and says rep_activity has no date dimension (only rep_name), so 'last month' cannot bind. It says this only for rep_activity rather than for every model, but that is the model the metrics live on."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": true,
+                "why": "The compiled SQL confirms total_revenue grouped by customer_profile.COUNTRY through the join; the agent answered from the returned rows (US 300, UK 150) with no clarify turn."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": true,
+                "why": "The agent ran partner_sourced_revenue from partner_directory and returned 275, which is the correct path, and mentioned the channel='partner' alternative only as a distinct measure it did not run."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "All queries went through run_semantic_query with concept-name selections; the only SQL in the trace is compiled_sql returned by the tool."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "The agent never selected a PII dimension, and it still flagged that rep_activity's only dimension, rep_name, is PII."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent described all four models before querying, held back on the ambiguous Q1 and asked the analyst to decide, ran Q2 correctly, avoided the Q3 channel-filter trap by using partner_sourced_revenue (275), and wrote no raw SQL. Its plain-language restatements appeared alongside the results rather than before execution."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-siv-r2": {
+      "elapsed_s": 138.6,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 22,
+            "duration_ms": 88977,
+            "total_cost_usd": 0.581523,
+            "input_tokens": 26,
+            "output_tokens": 6599,
+            "is_error": false,
+            "tool_calls": 19,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "Before any run_semantic_query call, the agent listed the catalog through the gateway (which returned all four semantic_models with their grain and description) and called describe_model for each model; every concept name it used came from those results."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": true,
+                "why": "The agent said it would call describe_model on all four models, and the loop output shows order_event and rep_activity being described; Q3's use of partner_sourced_revenue, which only describe_model(partner_directory) exposes, confirms the decoy model was described before any query ran."
+              },
+              {
+                "id": "echo-produced",
+                "pass": false,
+                "why": "The plain-language echoes (\"sum of order amounts in USD grouped by customer billing country\", \"revenue from orders attributed to a sourcing partner\") appear only in the final answer, after Q2 and Q3 had already run; the trace goes straight from the describe_model output to the run_semantic_query bash call, so no echo was given before executing as the check requires."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": true,
+                "why": "The run output covers only Q2 and Q3, so Q1 was never executed; the agent explained that \"last month\" cannot be bound to anything and asked the analyst whether to run an all-time call_count instead."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": true,
+                "why": "The Q1 reply names call_count and sales_calls with their describe_model meanings, says rep_activity has no date or timestamp dimension, and says nothing in the catalog can express the \"last month\" window."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": true,
+                "why": "The agent ran {measures:[total_revenue], dimensions:[country]} without a clarify turn, retried once after a transport disconnect, and answered from the returned rows (US 300, UK 150)."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": true,
+                "why": "The agent selected partner_sourced_revenue (the compiled SQL reads FROM partner_directory), got 275, and explicitly rejected total_revenue filtered by channel='partner'."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "Every query went through mcp_call.py with run_semantic_query and a concept-name selection; no SQL tool such as query_sql.py was used and no SQL string was hand-written."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "No PII dimension was ever selected (rep_name was never queried), and the agent still pointed out that rep_name is PII and that country is not."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent covered all four models, held back on Q1 and correctly avoided the Q3 decoy (275 rather than 150), but it only echoed the Q2 and Q3 selections in plain language after running them, so the echo-before-execute check fails."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-siv-r3": {
+      "elapsed_s": 144.2,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-intent-validation": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-intent-validation": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-intent-validation": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-intent-validation",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "num_turns": 21,
+            "duration_ms": 108686,
+            "total_cost_usd": 0.5157088000000001,
+            "input_tokens": 28,
+            "output_tokens": 6017,
+            "is_error": false,
+            "tool_calls": 19,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models (lm.json) and describe_model calls (the d_*.json files) running before the q2/q3 run_semantic_query call, and every concept name used comes from those results rather than a guess."
+              },
+              {
+                "id": "coverage-all-models-described",
+                "pass": true,
+                "why": "The agent said it would describe all four models, the scratchpad listing shows d_order_event, d_rep_activity, d_customer_profile and d_partner_directory, and the Q3 selection of partner_sourced_revenue can only come from describe_model(partner_directory), so that model was read before querying."
+              },
+              {
+                "id": "echo-produced",
+                "pass": false,
+                "why": "No plain-language restatement of the selection appears before the q2/q3 run_semantic_query calls; the agent went straight from 'I'll run list_models, then describe_model' to executing, and the only restatements come afterwards in the final answer, where Q2's is just the bare names 'total_revenue grouped by country'."
+              },
+              {
+                "id": "q1-clarifies-does-not-execute",
+                "pass": true,
+                "why": "No run_semantic_query was issued for Q1 (only q2.json and q3.json exist); the agent named both call metrics, explained that 'last month' cannot be bound, and asked whether the analyst wants an all-time call_count instead of silently executing."
+              },
+              {
+                "id": "q1-grounded-in-catalog",
+                "pass": true,
+                "why": "The Q1 response names the real rep_activity metrics call_count and sales_calls with their catalog meanings, and states that the catalog has no date field and rep_activity has only rep_name, so 'last month' cannot be bound."
+              },
+              {
+                "id": "q2-executes-no-overclarify",
+                "pass": true,
+                "why": "The agent ran run_semantic_query with total_revenue by country, reached through order_event's join to customer_profile, answered US 300 and UK 150 from the returned rows, and added no clarify turn."
+              },
+              {
+                "id": "q3-uses-partner-sourced-revenue",
+                "pass": true,
+                "why": "The compiled SQL shows partner_sourced_revenue FROM partner_directory returning 275.0, and the agent explicitly rejected total_revenue filtered by channel = partner."
+              },
+              {
+                "id": "no-raw-sql-authored",
+                "pass": true,
+                "why": "All queries went through run_semantic_query via mcp_call.py with concept-name selections; the only SQL in the trace is compiled_sql returned by the tool."
+              },
+              {
+                "id": "pii-note-when-relevant",
+                "pass": true,
+                "why": "The agent never selected a PII-flagged dimension such as rep_name (only country), so no governance note was required."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent took the right paths (described every model, held Q1 back, ran Q2, and used partner_sourced_revenue for 275 on Q3) but fails overall because it never echoed the resolved selections in plain language before executing Q2 and Q3."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}
