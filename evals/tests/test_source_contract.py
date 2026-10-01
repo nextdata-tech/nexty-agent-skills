@@ -849,6 +849,21 @@ def test_review_grades_verification_gaps_by_what_they_hide_today() -> None:
     assert "Robustness against a hypothetical future bug is never HIGH or MEDIUM on its own" in text
 
 
+def test_review_grades_presentation_gaps_as_low() -> None:
+    # Live B3 router4: three review rounds each raised a new MEDIUM asking for
+    # names or declared joins on rows that already disclosed the unmatched
+    # volume consistently with the approved rulings. Each MEDIUM blocked and
+    # forced a recapture, so the run spent its turns without publishing.
+    text = " ".join(
+        (REPO_ROOT / "src" / "nxd-review-closure" / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    assert "Neither is a presentation gap" in text
+    assert "consistent with every approved Decision and Output Promise" in text
+    assert "Grade that `LOW`." in text
+    assert "`MEDIUM` needs a consumer who would be misled" in text
+    assert "A review of a repaired capture applies the same bar" in text
+
+
 def test_pending_review_round_is_closed_before_reset() -> None:
     # A live B3 run published with all later reviews clear, but left an
     # earlier needs_user round with user_decision null, which failed the
