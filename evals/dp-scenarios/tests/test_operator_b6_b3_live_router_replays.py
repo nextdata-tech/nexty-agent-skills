@@ -742,3 +742,82 @@ def test_decision_clarify_first_and_source_alias_schema_is_validated() -> None:
     }
     mixed["decision_answers"]["later_legacy"] = "Keep the current plan."
     assert answer_sheet_from_mapping(mixed).decision_answers["later_legacy"].clarify_first is False
+
+
+ROUTER8_CHOICES = json.loads(
+    (ROOT / "tests/fixtures/operator-b6-router8-choice-replay.json").read_text()
+)
+
+
+@pytest.mark.parametrize("mode", ("scripted", "stub_llm"))
+@pytest.mark.parametrize("turn", range(5, 12))
+def test_router8_baseline_choice_delivers_declared_period(mode: str, turn: int) -> None:
+    message = ROUTER8_CHOICES[str(turn)]
+    offered: list[tuple[str, ...]] = []
+
+    def provider(view: RouterView) -> str:
+        offered.append(tuple(option.option_id for option in view.options))
+        return json.dumps(
+            _choice("deflect:decision", "decision_request")
+            if view.agent_message == message else _choice("none", "other", solicits=False)
+        )
+
+    result, transport = _run(
+        HEADCOUNT, [message], mode,
+        router=OperatorRouter(provider, model_id="stub-router8-deflection"),
+    )
+    # Before this fix a valid deflect:decision immediately returned persona
+    # Yes, even though both declared options were offered. Current scripted
+    # routing also lost the topic on generic letter asks (5/6/9/11), and turn
+    # 7 incorrectly inferred the denominator from incidental attrition text.
+    assert transport.message_texts[1] == PERIOD
+    assert result.turns[0].match.rule_id == "source.answer.period"
+    assert result.turns[0].match.decision_id is None
+    if mode == "stub_llm":
+        assert "source:period" in offered[0]
+        assert "decision:B6-turnover-denominator" in offered[0]
+        assert result.turns[0].match.routed_by == "llm"
+        assert not result.turns[0].match.router_fallback
+        # Per-turn mode describes rendering, so this value alone never proves
+        # that the model router failed or was bypassed.
+        assert result.operator_mode == "llm_router"
+        assert result.turns[0].operator_mode == "scripted"
+
+
+@pytest.mark.parametrize("mode", ("scripted", "stub_llm"))
+def test_router8_period_then_denominator_clarifies_exactly_once(mode: str) -> None:
+    baseline = ROUTER8_CHOICES["6"]
+    # The exact attrition question/options from router8 turn 5, asked alone
+    # after the baseline answer. The original run never got past the baseline.
+    denominator = ROUTER8_CHOICES["5"].split("**Question 3:", 1)[1].split("\n\nPlease reply", 1)[0]
+    denominator = "**Question 3:" + denominator + '\n\nPlease reply with "A", "B" or "C".'
+    choices = {
+        message: _choice("deflect:decision", "decision_request")
+        for message in (baseline, denominator)
+    }
+    result, transport = _run(
+        HEADCOUNT, [baseline, denominator, denominator, denominator], mode,
+        router=_router_for(choices),
+    )
+    answer = HEADCOUNT.answer_sheet.decision_answers["B6-turnover-denominator"].answer
+    assert transport.message_texts[1] == PERIOD
+    assert transport.message_texts[2] == "Yes."
+    assert transport.message_texts[3].startswith(answer)
+    assert transport.message_texts[1:].count("Yes.") == 1
+    assert result.turns[1].delivered_decision_id is None
+    assert result.turns[3].delivered_decision_id == "B6-turnover-denominator"
+
+
+@pytest.mark.parametrize("mode", ("scripted", "stub_llm"))
+def test_uncovered_decision_choice_keeps_persona_reply(mode: str) -> None:
+    message = (
+        "**Which chart colour should I use?**\n"
+        "- **A:** blue.\n- **B:** green."
+    )
+    result, transport = _run(
+        HEADCOUNT, [message], mode,
+        router=_router_for({message: _choice("deflect:decision", "decision_request")}),
+    )
+    assert transport.message_texts[1] == "Yes."
+    assert result.turns[0].match.rule_id == "persona.decision_request"
+    assert result.turns[0].match.decision_id is None

@@ -2213,6 +2213,14 @@ class MatcherBank:
                         answer_key=key, matched_request_clause=confirmation,
                     )
 
+        declared_choice = self._declared_choice_answer(
+            message, excluded_decision_ids=excluded_decision_ids,
+            available_event_ids=available_event_ids,
+            decision_stage_counts=stage_counts,
+        )
+        if declared_choice is not None:
+            return declared_choice
+
         # A declared decision is more specific than the generic approval
         # persona, but its complete term set must occur in one actual ask
         # clause. Combining separate requests could otherwise manufacture a
@@ -2514,6 +2522,63 @@ class MatcherBank:
             message,
         )
 
+    def _declared_choice_answer(
+        self,
+        message: str,
+        *,
+        available_event_ids: tuple[str, ...] = (),
+        excluded_decision_ids: frozenset[str] = frozenset(),
+        decision_stage_counts: Mapping[str, int] | None = None,
+    ) -> MatchResult | None:
+        """Resolve an addressed choice from its question and local alternatives.
+
+        A final "reply with a letter" carries no topic by itself. Keep each
+        option block with its own question, rather than searching a recap or
+        merging the terms of separate questions.
+        """
+        paragraphs = _NON_PROSE.sub(" ", message).split("\n\n")
+        for index, paragraph in enumerate(paragraphs):
+            option = re.search(
+                r"(?m)^\s*[-*]\s*(?:\*\*)?[A-Z]"
+                r"(?:\s*\([^\n]*?\))?(?:\*\*)?:", paragraph,
+            )
+            if option is None:
+                continue
+            subject = paragraph[:option.start()].strip()
+            if not subject and index:
+                subject = paragraphs[index - 1].strip()
+            letter_request = bool(
+                re.search(r"\b(?:send|reply)\b[^.\n]{0,60}\b(?:one|single|a)\s+letter\b", message, re.I)
+                and re.search(r"\bquestion\b", subject, re.I)
+            )
+            if (
+                (not solicits_operator(subject) and not letter_request)
+                or _CONDITIONAL_REVISION_PATTERN.search(subject)
+            ):
+                continue
+            # An explicit question owns its topic; incidental vocabulary in
+            # the options must not answer a different source question.
+            source_text = subject if "?" in subject else subject + "\n" + paragraph
+            source = self.answer_sheet.answer_for_source(source_text)
+            if source is not None:
+                key, answer = source
+                return MatchResult(
+                    Category.SOURCE_QUESTION, f"source.answer.{key}", answer,
+                    answer_key=key, matched_request_clause=subject,
+                )
+            decision = self.answer_sheet.answer_for_decision(
+                subject + "\n" + paragraph,
+                excluded=excluded_decision_ids,
+                available_event_ids=available_event_ids,
+                active_overlay_ids=tuple(self._active_decision_overlays),
+            )
+            if decision is not None:
+                return self._decision_result(
+                    decision, decision_stage_counts=decision_stage_counts or {},
+                    matched_request_clause=subject,
+                )
+        return None
+
     def route_result(
         self,
         option_id: str,
@@ -2525,6 +2590,8 @@ class MatcherBank:
         recommended_option_label: str | None = None,
         recommended_option_labels: Sequence[str] | None = None,
         decision_stage_counts: Mapping[str, int] | None = None,
+        available_event_ids: tuple[str, ...] = (),
+        resolve_declared_choices: bool = True,
     ) -> MatchResult:
         """Build the fixed response for one validated model-router choice.
 
@@ -2614,6 +2681,13 @@ class MatcherBank:
                 matched_request_clause=clause,
                 **common,
             )
+        if kind == "deflect" and option_id == "deflect:decision" and resolve_declared_choices:
+            declared = self._declared_choice_answer(
+                message, available_event_ids=available_event_ids,
+                decision_stage_counts=stage_counts,
+            )
+            if declared is not None:
+                return replace(declared, **common)
         if kind == "deflect":
             # The regex path's own stock lines for a question nothing declared
             # covers: a persona line, or the never-leading fallback once a
