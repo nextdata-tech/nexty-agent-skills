@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-10-02 | nxd-query-data-product: use values_complete / values_omitted from describe_model to decide whether to probe stored values | NO_EVAL | — | [`2026-10-02-stored-values-completeness-no-eval`](entries/2026-10-02-stored-values-completeness-no-eval.md) |
 | 2026-10-02 | nxd-query-data-product + nxd-semantic-query-intent: unfiltered value probes, whole compound values, no unrequested filters (#451) | MIXED | semantic-filter-coverage | [`2026-10-02-filter-discipline-451-semantic-filter-coverage`](entries/2026-10-02-filter-discipline-451-semantic-filter-coverage.md) |
 | 2026-10-02 | B6 headcount-attrition: suppression, bare-affirmative and review-ruling fixes (#448-#456) | MIXED | headcount-attrition | [`2026-10-02-b6-headcount-attrition-sonnet-pass`](entries/2026-10-02-b6-headcount-attrition-sonnet-pass.md) |
 | 2026-10-01 | nxd-query-data-product / nxd-semantic-query-intent: scope constraints become filters (#442) | MIXED | semantic-filter-coverage, semantic-intent-validation | [`2026-10-01-nxd-query-data-product-nxd-semantic-query-intent-scope-const`](entries/2026-10-01-nxd-query-data-product-nxd-semantic-query-intent-scope-const.md) |

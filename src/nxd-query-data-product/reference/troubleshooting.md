@@ -29,6 +29,18 @@ If a filtered query returns no rows, has an empty grouped result, `SUM` returns
 `NULL`, or a grand-total `COUNT` returns 0, use this procedure before reporting
 a zero:
 
+0. Check the dimension's `describe_model` entry first:
+   - `values_complete: true`: the `values` list is exhaustive. If the wanted
+     value is absent, report the mismatch directly with no probe, and map to a
+     listed value only when it is an exact or plausible encoding match
+     (abbreviation, case); otherwise the value does not exist.
+   - `values_complete: false`: the list is encoding examples only (case,
+     codes). If the wanted value is not listed, run the probe in step 1 before
+     concluding the value does not exist.
+   - `values_omitted` set (for example `"budget"`): behave as if no list was
+     returned and use the probe.
+   - No `values` field: use the probe as today.
+   Never enumerate a PII-classified dimension, whatever the list says.
 1. For each non-PII filtered or candidate dimension, probe its stored values
    grouped by that dimension, with no filters on other dimensions. The measure
    is optional. If the domain may be large, filter only the probed dimension

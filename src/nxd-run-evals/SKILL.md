@@ -10,7 +10,7 @@ allowed-tools:
   - Glob
 metadata:
   author: nextdata
-  version: 0.54.14
+  version: 0.54.15
 ---
 
 # nxd-run-evals skill
