@@ -561,6 +561,8 @@ every other state requires `applied_files: []`; list only files actually
 changed. A `not_applied` finding lists no files. `deferred_finding_ids` may
 contain only accepted `behavior_affecting` findings the user explicitly
 deferred; never defer a rejected, `out_of_scope`, or `structural_note` finding.
+Never recommend deferring an accepted `HIGH` finding; recommend its fix (see
+[Relay and authorization](../../nxd-generate-data-product/reference/adversarial-review.md#relay-and-authorization)).
 When shell access is available, load the shipped
 `$JOB_HELPER_DIR/scripts/dp_diagnostics.py` and call
 `validate_review_round(round)` before writing the round; fix every reported
