@@ -44,7 +44,7 @@ decision_answers:
   B6-turnover-denominator:
     terms: [attrition, denominator]
     synonyms:
-      denominator: [divided by, divide]
+      denominator: [divided by, divide, "÷"]
     answer: "Divide each month's leavers by the department's opening headcount, which is the prior month's snapshot (December 2023 for January). Report attrition in basis points, rounded half up to a whole basis point."
     clarify_first: true
   B6-personal-data-projection:

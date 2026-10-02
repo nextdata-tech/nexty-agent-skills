@@ -1356,6 +1356,7 @@ class OperatorEngine:
                 solicits_operator=decision.solicits_operator,
                 recommended_option_labels=decision.recommended_option_labels,
                 decision_stage_counts=decision_stage_counts,
+                available_event_ids=tuple(fired_events),
             )
         secondary = tuple(
             self.matcher.route_result(
@@ -2805,6 +2806,7 @@ class OperatorEngine:
                             approval_requested=routed_match.approval_requested,
                             solicits_operator=routed_match.solicits_operator,
                             decision_stage_counts=delivered_decision_stage_counts,
+                            resolve_declared_choices=False,
                         )
                         match = replace(
                             match,
