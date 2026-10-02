@@ -69,16 +69,7 @@ This harness is non-interactive: no user can answer a follow-up question. Where
 the skill says to ask or clarify, do not execute; finish with the ambiguity, the
 real candidate concepts, and the clarification needed. Write the round-trip echo in your reply before calling run_semantic_query. Follow the intent and filter rules in the nxd-semantic-query-intent and nxd-query-data-product skills.
 
-If a filtered query returns no rows, has an empty grouped result, `SUM` returns
-`NULL`, or a grand-total `COUNT` returns 0, check for a value mismatch. A
-grand-total `COUNT` returns one row with 0, so no rows is not the only signal.
-If the filtered dimension is not PII-classified, probe stored values by
-querying the same measure grouped by that dimension without that filter, keeping the other
-filters, then retry with the exact stored value that plausibly matches. If no
-stored value plausibly matches, report the mismatch instead of a zero; never
-invent encodings. If the probe confirms the exact value and the retry still
-returns zero, report that genuine zero without hedging. Do not enumerate values
-for a PII-classified dimension; surface the unresolved mismatch instead.
+Follow the zero-result and stored-value rules in the query skill; a genuine zero (exact value present, zero under the combined filters) is reported plainly, not refused.
 """
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")

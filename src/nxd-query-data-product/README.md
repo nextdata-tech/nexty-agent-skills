@@ -199,9 +199,9 @@ can't do. These are candidates for convergence with a future first-class `nxd.sp
 Until value-linking exists, when a filtered query returns no rows, an empty
 grouped result, `SUM` returns `NULL`, or a grand-total `COUNT` returns 0, probe
 stored values through a grouped semantic query if the dimension is not PII,
-then retry with an exact plausible value. Never invent encodings; if probing
-cannot resolve the mismatch, surface it to the user. See the value-mismatch row
-in `SKILL.md`'s troubleshooting table.
+then retry with the exact plausible value that is stored. Never invent
+encodings; if probing cannot resolve the mismatch, surface it to the user. See the
+value-mismatch row in `SKILL.md`'s troubleshooting table.
 
 ---
 

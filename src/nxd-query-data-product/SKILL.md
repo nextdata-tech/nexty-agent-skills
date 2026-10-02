@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.54.13
+  version: 0.54.14
 ---
 
 # nxd data product query
@@ -318,8 +318,9 @@ first three as a discover→select→run protocol, not free-form SQL:
      and honor it: use a filter when a catalog dimension's description expresses
      it; if a metric definition already encodes it (for example, a
      partner-sourced metric), choosing that metric satisfies the constraint
-     without a filter. Similar-looking dimension values alone do not establish
-     the meaning. A requested BREAKDOWN such as "by product"
+     without a filter. A value found in exactly one candidate dimension
+     resolves which dimension holds it; descriptions still decide whether that
+     dimension means what the question asks. A requested BREAKDOWN such as "by product"
      or "per month" belongs in `dimensions`. A comparison of named values (for
      example, "Psychiatry vs Neurology") needs an `IN` filter restricting to
      those values and grouping by that dimension; grouping never substitutes
@@ -339,19 +340,9 @@ first three as a discover→select→run protocol, not free-form SQL:
      and use exact `=` when possible. Depending on the refusal, use one `=`
      value for the fan-out filter, group by the filter dimension, or query the
      metrics separately. Never drop the filter to make the query compile.
-   - **Resolve empty and zero results.** If a filtered query returns no rows,
-     has an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT`
-     returns 0, check for a value mismatch. A grand-total `COUNT` returns one
-     row with 0, so no rows is not the only signal. If the filtered dimension
-     is not PII-classified, probe its stored values by querying the same measure
-     grouped by that dimension without that filter (keep the other filters),
-     then retry with the exact stored value that plausibly matches. If no stored
-     value plausibly matches, report the mismatch instead of a zero; never
-     invent encodings. If the probe confirms the exact value and the retry still
-     returns zero, report that genuine zero without hedging. For a
-     PII-classified dimension, do not enumerate values; surface the unresolved
-     mismatch rather than guessing. See
-     [reference/troubleshooting.md](reference/troubleshooting.md).
+   - **Resolve empty and zero results.** For empty/zero results, follow [reference/troubleshooting.md](reference/troubleshooting.md). Probe each non-PII candidate dimension grouped by it, with no filters on other dimensions; for large domains filter only it with `ILIKE '%token%'`.
+     If the requested value is not stored exactly but one stored value plausibly matches it (abbreviation, case, partial label), retry with that stored value verbatim and name it in the echo. Report mismatch only if none plausibly matches; never invent encodings.
+     An exact value present with zero under combined filters is genuine; report 0 plainly. Keep rollup/total rows such as `ALL`; report them labelled as rollups, never add them to member rows or rank them as members. Never enumerate PII.
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly
    one grain, grain boundaries are visible before you query. Combining measures
    from **join-reachable** models in ONE `run_semantic_query` call is safe — the

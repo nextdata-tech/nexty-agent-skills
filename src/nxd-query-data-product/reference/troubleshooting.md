@@ -26,12 +26,25 @@ RPC pod crashing) rather than the query, switch to the
 ## Resolving semantic query zeros
 
 If a filtered query returns no rows, has an empty grouped result, `SUM` returns
-`NULL`, or a grand-total `COUNT` returns 0, check whether a filter value matches
-the stored form before reporting a zero. If the filtered dimension is not
-PII-classified, probe its stored values by querying the same measure grouped by
-that dimension without that filter, keeping the other filters. Retry with the
-exact stored value that plausibly matches. If no stored value plausibly matches, report the
-mismatch instead of a zero; never invent encodings. If the probe confirms the
-exact value and the retry still returns zero, report that genuine zero without
-hedging. Do not enumerate values for a PII-classified dimension; surface the
-unresolved mismatch instead.
+`NULL`, or a grand-total `COUNT` returns 0, use this procedure before reporting
+a zero:
+
+1. For each non-PII filtered or candidate dimension, probe its stored values
+   grouped by that dimension, with no filters on other dimensions. The measure
+   is optional. If the domain may be large, filter only the probed dimension
+   itself with `ILIKE '%token%'` and group by that dimension. `ILIKE` is a
+   supported filter operator; filter values are scalar for this operator.
+2. Before saying a value is missing or asking which dimension it belongs to,
+   probe each non-PII candidate dimension. If the value exists in exactly one,
+   use that dimension unless its description contradicts the question. If it
+   exists in several with different meanings, or in none and no stored value
+   plausibly matches, clarify or report the mismatch as appropriate.
+3. If the requested value is not stored exactly but one stored value plausibly
+   matches it (abbreviation, case, partial label), retry with that stored
+   value verbatim and name it in the echo. Report a mismatch only if no stored
+   value plausibly matches; never invent encodings.
+4. If the exact value is present but the query returns zero under the combined
+   filters, report the genuine zero plainly, without hedging or refusal.
+5. Keep rollup/total rows such as `ALL`; report them labelled as rollups, never
+   add them to member rows or rank them as members. Never enumerate values for
+   a PII-classified dimension; surface the unresolved mismatch instead.
