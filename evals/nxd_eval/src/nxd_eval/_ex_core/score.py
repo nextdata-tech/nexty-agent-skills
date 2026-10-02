@@ -142,8 +142,12 @@ def _bucket_numeric_cells(rows: list[dict] | None) -> list[dict] | None:
 
 
 def score_one(
-    trial: dict, gold_record: dict, *, strategy_for_abstain: str | None = None
-) -> str:
+    trial: dict,
+    gold_record: dict,
+    *,
+    strategy_for_abstain: str | None = None,
+    return_projection_info: bool = False,
+) -> str | tuple[str, dict[str, list[str]]]:
     """Accuracy for a single trial via the PoC scorer.
 
     `strategy_for_abstain` is the `approach` key scoring uses to read
@@ -152,6 +156,7 @@ def score_one(
     approach = strategy_for_abstain or trial.get("strategy")
     mode = (gold_record.get("equality_mode") or "set") if gold_record else "set"
     trial_rows = trial.get("rows")
+    gold_rows = gold_record.get("rows") if gold_record else None
     gold_for_scoring = gold_record
     if mode != "numeric" and gold_record is not None:
         # "numeric" mode already tolerates float drift via the vendored
@@ -160,13 +165,41 @@ def score_one(
         trial_rows = _bucket_numeric_cells(trial_rows)
         gold_for_scoring = dict(gold_record)
         gold_for_scoring["rows"] = _bucket_numeric_cells(gold_record.get("rows"))
+    abstained = bool(trial.get("abstained"))
+    errored = bool(trial.get("errored"))
+    # Ask the vendored scorer first so its ERROR/abstention/governance order
+    # remains authoritative. Projection is relevant only on its row-comparison
+    # path (including the expected-abstention answered case).
     verdict = scoring.score_accuracy(
         trial_rows,
         gold_for_scoring,
-        abstained=bool(trial.get("abstained")),
+        abstained=abstained,
         approach=approach,
-        errored=bool(trial.get("errored")),
+        errored=errored,
     )
+    projection_info: dict[str, list[str]] = {}
+    row_comparison = not errored and not abstained and not (
+        ((gold_for_scoring or {}).get("category") or "") == "governance"
+    )
+    if row_comparison:
+        projected_rows, projected_out, projection_safe = project_extra_columns(
+            trial.get("rows"), gold_rows
+        )
+        if projected_out and projection_safe:
+            if mode != "numeric":
+                projected_rows = _bucket_numeric_cells(projected_rows)
+            trial_rows = projected_rows
+            projection_info["projected_out"] = projected_out
+            verdict = scoring.score_accuracy(
+                trial_rows,
+                gold_for_scoring,
+                abstained=abstained,
+                approach=approach,
+                errored=errored,
+            )
+        elif projected_out:
+            projection_info["projection_split"] = projected_out
+            verdict = "FAIL"
     # CP1 hardening (harness layer): the PoC's PASS is column-name blind, so two
     # numeric measures SWAPPED still score PASS. When gold has >=2 numeric measure
     # columns, re-validate name-aware and downgrade a name-mismatch PASS to FAIL.
@@ -182,7 +215,9 @@ def score_one(
         if not rows_equal_name_aware(
             trial_rows, gold_for_scoring.get("rows") if gold_for_scoring else None, mode
         ):
-            return "FAIL"
+            verdict = "FAIL"
+    if return_projection_info:
+        return verdict, projection_info
     return verdict
 
 
@@ -238,6 +273,11 @@ def rows_equal_name_aware(
     gold record has >=2 numeric measure columns, additionally require the numeric
     cells to match name-aware (so two measures SWAPPED no longer scores PASS).
     """
+    projected, projected_out, projection_safe = project_extra_columns(actual, gold_rows)
+    if not projection_safe:
+        return False
+    if projected_out:
+        actual = projected
     base = scoring.rows_equal(actual, gold_rows, mode)
     if not base or actual is None or gold_rows is None:
         return base
@@ -246,6 +286,74 @@ def rows_equal_name_aware(
     if len(gold_numeric_cols) < 2:
         return base
     return _numeric_cells_named(actual) == _numeric_cells_named(gold_rows)
+
+
+def project_extra_columns(
+    actual: list[dict] | None, gold_rows: list[dict] | None
+) -> tuple[list[dict] | None, list[str], bool]:
+    """Project strict extra result columns away without collapsing split gold keys.
+
+    Column names are matched after the same lowercase/strip normalization used
+    by the vendored row comparator. Projection is considered only when actual
+    has more columns than gold and covers every gold column. Other shapes retain
+    the vendored name-blind comparison. If an extra column varies within a
+    projected gold key, the query returned several rows for that key and must
+    not pass by set-deduplication or aggregation.
+    """
+    if actual is None or gold_rows is None or not actual or not gold_rows:
+        return actual, [], True
+
+    gold_columns = {scoring._norm_key(key) for row in gold_rows for key in row}
+    actual_columns = {scoring._norm_key(key) for row in actual for key in row}
+    if (
+        len(actual_columns) <= len(gold_columns)
+        or not gold_columns.issubset(actual_columns)
+    ):
+        return actual, [], True
+    dropped = sorted(actual_columns - gold_columns)
+    if not dropped:
+        return actual, [], True
+
+    projected = [
+        {key: value for key, value in row.items() if scoring._norm_key(key) in gold_columns}
+        for row in actual
+    ]
+
+    # Group on tolerance-normalized projected values, retaining the distinct
+    # extra-column tuples seen for each projected key. A varied extra value
+    # means the additional grouping split one gold key into multiple rows.
+    def cell_key(value):
+        value = scoring._norm_value(value)
+        if value is None:
+            return (0, "")
+        if isinstance(value, bool):
+            return (1, value)
+        if isinstance(value, float):
+            return (2, round(value / scoring._NUMERIC_TOL))
+        return (3, value)
+
+    extras_by_key: dict[tuple, set[tuple]] = {}
+    for row, projected_row in zip(actual, projected):
+        key_sig = tuple(
+            sorted(
+                (scoring._norm_key(key), cell_key(value))
+                for key, value in projected_row.items()
+            )
+        )
+        extras = tuple(
+            sorted(
+                (
+                    scoring._norm_key(key),
+                    cell_key(value),
+                )
+                for key, value in row.items()
+                if scoring._norm_key(key) in dropped
+            )
+        )
+        extras_by_key.setdefault(key_sig, set()).add(extras)
+    if any(len(extras) > 1 for extras in extras_by_key.values()):
+        return projected, dropped, False
+    return projected, dropped, True
 
 
 def matches_compiler(rows: list[dict] | None, compiler_rows: list[dict] | None) -> bool:

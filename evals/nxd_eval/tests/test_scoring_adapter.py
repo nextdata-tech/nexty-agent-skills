@@ -33,6 +33,49 @@ def test_score_one_pass_and_swap_fail():
     assert scoring.score_one({"rows": swap}, rec) == "FAIL"
 
 
+def test_score_one_preserves_name_blind_equal_arity_aliases():
+    gold = [{"num_subjects": 16, "site": "east"}]
+    actual = [{"subject_count": 16, "site": "east"}]
+    assert scoring.score_one({"rows": actual}, {"rows": gold}) == "PASS"
+
+
+def test_score_one_noncovering_superset_fails_on_arity():
+    gold = [{"num_subjects": 16, "site": "east"}]
+    actual = [{"subject_count": 16, "site": "east", "region": "north"}]
+    assert scoring.score_one({"rows": actual}, {"rows": gold}) == "FAIL"
+
+
+def test_score_one_keeps_vendored_verdicts_before_projection():
+    noncovering = [{"subject_count": 16, "region": "north", "site": "east"}]
+
+    verdict, info = scoring.score_one(
+        {"rows": noncovering},
+        {"category": "governance", "rows": [{"num_subjects": 16, "site": "east"}]},
+        return_projection_info=True,
+    )
+    assert verdict == "N/A"
+    assert info == {}
+
+    verdict, info = scoring.score_one(
+        {"rows": noncovering, "errored": True},
+        {"rows": [{"num_subjects": 16, "site": "east"}]},
+        return_projection_info=True,
+    )
+    assert verdict == "ERROR"
+    assert info == {}
+
+    verdict, info = scoring.score_one(
+        {"rows": noncovering, "abstained": True, "strategy": "A"},
+        {
+            "rows": [{"num_subjects": 16, "site": "east"}],
+            "expects_abstain": {"A": True},
+        },
+        return_projection_info=True,
+    )
+    assert verdict == "PASS"
+    assert info == {}
+
+
 def test_norm_rowset_is_order_blind_and_numeric_tolerant():
     a = [{"k": "x", "v": 3.0}, {"k": "y", "v": 4.0}]
     b = [{"k": "y", "v": 4.0000001}, {"k": "x", "v": 3.0}]  # reordered + tolerant
