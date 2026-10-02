@@ -1,0 +1,376 @@
+{
+  "id": "2026-10-02-b6-headcount-attrition-sonnet-pass",
+  "date": "2026-10-02",
+  "label": "B6 headcount-attrition: suppression, bare-affirmative and review-ruling fixes (#448-#456)",
+  "notes": "Before: router10 (Sol router, after #448-#455) passed every scored gate but ended UNGRADED turn_budget_exhausted_pending_answer after turning advisory review notes into post-publication questions. After: router12 on main 15b8a62d (#456) PASS clean 45, completed. The after run used a Claude (sonnet medium) operator router because the Codex router quota was exhausted; router11 (Codex fallback) is excluded as invalid evidence.",
+  "plugin_version": "0.54.14",
+  "report_tags": {
+    "before": "before",
+    "after": "after"
+  },
+  "reports": {
+    "before": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "headcount-attrition",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "headcount-attrition",
+              "result": "ERROR",
+              "epoch": 1,
+              "terminal_state": "turn_budget_exhausted_pending_answer",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 10
+                  },
+                  "capability": {
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "capability_shortfall_not_staged"
+                    ],
+                    "ungraded": false,
+                    "examined": false,
+                    "points": 0
+                  },
+                  "narrowing": {
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "ungraded": false,
+                    "examined": false,
+                    "points": 0
+                  },
+                  "construction": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 10
+                  },
+                  "build": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 20
+                  },
+                  "query": {
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "ungraded": false,
+                    "examined": false,
+                    "points": 0
+                  },
+                  "follow-up": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 15
+                  }
+                },
+                "total": 45,
+                "scoreable_max": 55,
+                "threshold": 36,
+                "waived_gates": {
+                  "capability": "capability_shortfall_not_staged",
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": null,
+                  "sentinel": false
+                },
+                "state": "ungraded",
+                "findings": [
+                  "capability_shortfall_not_staged",
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 12,
+                "observed_calls": 158
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "operator_router": {
+                    "backend": "codex",
+                    "effort": "medium",
+                    "mode": "llm",
+                    "model_id": "gpt-6.1-sol",
+                    "prompt_hash": "5b99854da14550a8dbcfd65f1cd6f8cba7381be428accb06cb3906b1bca290b5",
+                    "timeout_seconds": 120.0
+                  },
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.54.14",
+                "supervisor_version": "sha256:88e68a1633ef02508de7edf39ba855093684b0ecb5af69bdcb641ecd0f53033b",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "039c3366db39853bf7ad90b98aa169adb4c37671bafbb1294c185d5f9cd2a564",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "5fe4a8ee082350e1d73641c694a895d7f881ebc2990acbd7e1ccbaba7339bbd4",
+                "turn_budget": 12,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "headcount-attrition",
+                "tier": "full",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "headcount-attrition-trial-0",
+                "session_config_sha256": "sha256:fa96f1469d9f03e7866a3053a1bb50e168b1c56429431941ea6158f9eed8be71",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "OBSERVED",
+                "operator_mode": "llm_router",
+                "reasons": [
+                  "turn_budget_exhausted_pending_answer",
+                  "run_ungraded",
+                  "gate_waived:capability",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "not-attempted"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "run_semantic_query"
+              },
+              "route_fidelity": {
+                "status": "not-applicable"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "after": {
+      "report_format_version": 1,
+      "scenarios": [
+        {
+          "scenario_id": "headcount-attrition",
+          "runs": [
+            {
+              "skill_set": "dp-scenarios",
+              "scenario_id": "headcount-attrition",
+              "result": "PASS",
+              "epoch": 1,
+              "terminal_state": "completed",
+              "ungraded_criteria": [],
+              "score": {
+                "gates": {
+                  "intake": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 10
+                  },
+                  "capability": {
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "capability_shortfall_not_staged"
+                    ],
+                    "ungraded": false,
+                    "examined": false,
+                    "points": 0
+                  },
+                  "narrowing": {
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "narrowing_change_not_staged"
+                    ],
+                    "ungraded": false,
+                    "examined": false,
+                    "points": 0
+                  },
+                  "construction": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 10
+                  },
+                  "build": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 20
+                  },
+                  "query": {
+                    "required": false,
+                    "passed": false,
+                    "codes": [
+                      "query_answer_gold_not_declared"
+                    ],
+                    "ungraded": false,
+                    "examined": false,
+                    "points": 0
+                  },
+                  "follow-up": {
+                    "required": true,
+                    "passed": true,
+                    "codes": [],
+                    "ungraded": false,
+                    "examined": true,
+                    "points": 15
+                  }
+                },
+                "total": 45,
+                "scoreable_max": 55,
+                "threshold": 36,
+                "waived_gates": {
+                  "capability": "capability_shortfall_not_staged",
+                  "narrowing": "narrowing_change_not_staged",
+                  "query": "query_answer_gold_not_declared"
+                },
+                "hard_gate_flags": {
+                  "gold_access": false,
+                  "honesty": true,
+                  "route_fidelity": null,
+                  "sentinel": false
+                },
+                "state": "passed",
+                "findings": [
+                  "capability_shortfall_not_staged",
+                  "narrowing_change_not_staged",
+                  "query_answer_gold_not_declared"
+                ]
+              },
+              "efficiency": {
+                "turns": 1.0,
+                "model_calls": 0,
+                "observed_turns": 12,
+                "observed_calls": 126
+              },
+              "manifest": {
+                "agent_model_id": "claude:sonnet",
+                "agent_sampling_params": {
+                  "backend": "claude",
+                  "effort": "high",
+                  "operator_router": {
+                    "backend": "claude",
+                    "effort": "medium",
+                    "mode": "llm",
+                    "model_id": "sonnet",
+                    "prompt_hash": "5b99854da14550a8dbcfd65f1cd6f8cba7381be428accb06cb3906b1bca290b5",
+                    "timeout_seconds": 120.0
+                  },
+                  "temperature": "provider-default"
+                },
+                "driver_model_id": "not-applicable",
+                "driver_sampling_params": {},
+                "judge_model_id": "not-applicable",
+                "judge_prompt_hash": "not-applicable",
+                "skill_pack_version": "0.54.14",
+                "supervisor_version": "sha256:88e68a1633ef02508de7edf39ba855093684b0ecb5af69bdcb641ecd0f53033b",
+                "nxd_data_product_wheel_version": "python-3.12.10:sha256:8c32ba16f2a3c443f3377df1f2dbb1cc022307e4d15baf8fa5e78426bf8d9b63",
+                "fixture_dir_hash": "039c3366db39853bf7ad90b98aa169adb4c37671bafbb1294c185d5f9cd2a564",
+                "mock_api_version": "mock-1",
+                "operator_script_hash": "5fe4a8ee082350e1d73641c694a895d7f881ebc2990acbd7e1ccbaba7339bbd4",
+                "turn_budget": 12,
+                "grant_fixture_hash": "not-applicable",
+                "scenario_id": "headcount-attrition",
+                "tier": "full",
+                "trial_index": 0,
+                "canary_claims_hash": "sha256:bc220b184d9cb51a3d98ba8709870df4c1dc0e6cd3b86146f2b2e1958a9d6a34",
+                "persona_paraphrase_prompt_hash": "not-applicable",
+                "judge_calibration_set_hash": "not-applicable",
+                "fixture_seed": 29,
+                "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+                "run_id": "headcount-attrition-trial-0",
+                "session_config_sha256": "sha256:fa96f1469d9f03e7866a3053a1bb50e168b1c56429431941ea6158f9eed8be71",
+                "runtime_knobs": {
+                  "broker_fault": {
+                    "active_attempt": 1,
+                    "active_fault": "none",
+                    "enabled": false
+                  },
+                  "schema_version": 1,
+                  "transform_window": {
+                    "enabled": false
+                  },
+                  "workflow_switch": {
+                    "enabled": false
+                  }
+                },
+                "validation_mode": "live"
+              },
+              "qualification": {
+                "disposition": "QUALIFIED",
+                "operator_mode": "llm_router",
+                "reasons": [
+                  "generated_operator_is_capped_below_certified",
+                  "gate_waived:capability",
+                  "gate_waived:narrowing",
+                  "gate_waived:query"
+                ],
+                "replay_status": "not-attempted"
+              },
+              "interruption": {
+                "failure_reason": null,
+                "last_mcp_call": "run_semantic_query"
+              },
+              "route_fidelity": {
+                "status": "not-applicable"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
