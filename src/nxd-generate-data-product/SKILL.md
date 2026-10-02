@@ -14,7 +14,7 @@ allowed-tools:
   - Task
 metadata:
   author: nextdata
-  version: 0.54.10
+  version: 0.54.11
 ---
 
 # nxd-generate-data-product skill
@@ -139,7 +139,7 @@ The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved ab
   description, and which questions the semantic layer must answer.
 - The inferred model gives each base model's primary key, dimensions, joins,
   PII flags, metrics, and column types. Base roles and metric views are
-  different authored objects — see Step 2. `pii=True` and a roleless field control semantic discovery; they do not mask a column in the physical DuckDB table or direct SQL. For a file source, omit personal-data columns the approved blueprint does not need through the declared projection before landing. If an approved derived key needs a personal-data value, derive the non-identifying key in memory before landing and omit the raw value. No supported physical output may retain a dropped value. Every non-empty model, field, metric, and contract description must be copied from the relevant approved blueprint section; do not invent a paraphrase that is unreachable from the approved plan. If new wording is needed, amend and re-approve the blueprint before capture.
+  different authored objects — see Step 2. `pii=True` and a roleless field control semantic discovery; they do not mask a column in the physical DuckDB table or direct SQL. For a file source, omit personal-data columns the approved blueprint does not need through the declared projection before landing. If an approved derived key needs a personal-data value, derive the non-identifying key in memory before landing and omit the raw value. No supported physical output may retain a dropped value. When an approved Decision suppresses or withholds values below a grain (for example department-months under five people), a landed model below that grain (such as a person-level roster) is lineage only: give it its required `primary_key()` and nothing else — no dimension, join, metric or `semantic_view` — accept its queryability warnings, and say so in the blueprint. Every model a query can reach must apply the rule, so no query can recount a suppressed value. Every non-empty model, field, metric, and contract description must be copied from the relevant approved blueprint section; do not invent a paraphrase that is unreachable from the approved plan. If new wording is needed, amend and re-approve the blueprint before capture.
 - Each connector config names a **connector type** (CSV / other local file /
   database / REST API) plus its location. For non-CSV types follow
   `reference/file-source.md` / `database-source.md` / `api-source.md`; for

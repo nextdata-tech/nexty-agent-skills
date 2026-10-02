@@ -191,7 +191,10 @@ Blocking Open Questions prevent approval.
 Disclosure or suppression choices that change which rows or values are exposed,
 and choices between a baseline and the reporting period, are **blocking Open
 Questions**. Ask and get the user's answer before building; a proposed default
-does not resolve either choice.
+does not resolve either choice. Once a suppression rule is approved, the
+blueprint lists every landed model below the suppressed grain (for example a
+person-level roster) as lineage only: no semantic roles, metrics or views, so
+no query can recount a suppressed value.
 
 Constraints attached to approval — for example, "approved, but keep this field
 as a declared enum" — belong in the prepared blueprint and an executable
