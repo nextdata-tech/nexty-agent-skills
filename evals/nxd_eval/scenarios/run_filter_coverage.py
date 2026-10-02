@@ -1,8 +1,8 @@
 """Run arms A and B of the filter-coverage scenario sequentially and print reports.
 
   set -a; . evals/nxd_eval/.env; set +a            # OPENAI_API_KEY
-  export NXD_PAT=...                               # 1-day personal access token
-  export SSL_CERT_FILE=<bundle-with-nxdCA.crt-and-certifi>
+  export EVAL_MESH_TOKEN=...                       # 1-day personal access token
+  export SSL_CERT_FILE=<bundle-with-local-cluster-CA-and-certifi>
   cd evals/nxd_eval && uv run --extra openai python scenarios/run_filter_coverage.py \
       openai/gpt-6-luna [--epochs 5] [--isolate] [--arms A,B] [--chat-completions]
 """
@@ -40,9 +40,12 @@ def main() -> None:
     )
     for arm in a.arms.split(","):
         log = run_arm(
-            arm, agent_model=a.model, epochs=a.epochs,
+            arm,
+            agent_model=a.model,
+            epochs=a.epochs,
             agent_model_args=model_args,
-            log_dir=a.log_dir, isolate_sessions=a.isolate,
+            log_dir=a.log_dir,
+            isolate_sessions=a.isolate,
         )
         print(f"\n=== arm {arm} · {a.model} · {log}\n")
         print(Report.from_path(log).to_markdown())

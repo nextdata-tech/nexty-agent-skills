@@ -89,7 +89,7 @@ def mcp_solver(
         server = mcp_server_http(name="semantic", url=url, authorization=authorization)
     resolved_model = (
         get_model(model, **agent_model_args)
-        if agent_model_args is not None and model is not None
+        if agent_model_args and model is not None
         else model
     )
     agent = react(prompt=prompt or AGENT_PROMPT, tools=[server], model=resolved_model)
