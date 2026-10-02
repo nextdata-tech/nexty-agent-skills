@@ -318,8 +318,9 @@ first three as a discover→select→run protocol, not free-form SQL:
      and honor it: use a filter when a catalog dimension's description expresses
      it; if a metric definition already encodes it (for example, a
      partner-sourced metric), choosing that metric satisfies the constraint
-     without a filter. Similar-looking dimension values alone do not establish
-     the meaning. A requested BREAKDOWN such as "by product"
+     without a filter. A value found in exactly one candidate dimension
+     resolves which dimension holds it; descriptions still decide whether that
+     dimension means what the question asks. A requested BREAKDOWN such as "by product"
      or "per month" belongs in `dimensions`. A comparison of named values (for
      example, "Psychiatry vs Neurology") needs an `IN` filter restricting to
      those values and grouping by that dimension; grouping never substitutes
