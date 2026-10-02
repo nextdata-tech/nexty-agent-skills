@@ -31,6 +31,7 @@ from nxd_eval.scorers import DETERMINISTIC_EX
 from nxd_eval.scorers import JUDGE
 from nxd_eval.scorers import SLOT_MATCH
 from nxd_eval.task import MCPConnectionError
+from nxd_eval.task import _run_suite_once
 from nxd_eval.solver import mcp_solver
 from nxd_eval.task import build_task
 from nxd_eval.task import case_to_sample
@@ -288,6 +289,72 @@ def test_mcp_solver_requires_url_or_server():
 def test_mcp_solver_prompt_override():
     # A custom prompt is accepted (mesh scenarios pass their own analyst prompt).
     assert mcp_solver(MCP_URL, prompt="custom analyst prompt") is not None
+
+
+def test_mcp_solver_resolves_agent_model_with_model_args(monkeypatch):
+    import nxd_eval.solver as solver_module
+
+    model = object()
+    calls = {}
+    monkeypatch.setattr(
+        solver_module,
+        "get_model",
+        lambda name, **kwargs: calls.update(name=name, kwargs=kwargs) or model,
+    )
+    monkeypatch.setattr(solver_module, "react", lambda **kwargs: kwargs)
+    monkeypatch.setattr(solver_module, "as_solver", lambda agent: agent)
+
+    agent = mcp_solver(
+        MCP_URL,
+        model="openai/gpt-6-luna",
+        agent_model_args={"responses_api": True},
+    )
+
+    assert calls == {
+        "name": "openai/gpt-6-luna",
+        "kwargs": {"responses_api": True},
+    }
+    assert agent["model"] is model
+
+
+@pytest.mark.parametrize("model_args", [None, {}])
+def test_mcp_solver_passes_original_model_string_for_default_args(monkeypatch, model_args):
+    import nxd_eval.solver as solver_module
+
+    monkeypatch.setattr(
+        solver_module,
+        "get_model",
+        lambda *_args, **_kwargs: pytest.fail("default args should not resolve a model"),
+    )
+    monkeypatch.setattr(solver_module, "react", lambda **kwargs: kwargs)
+    monkeypatch.setattr(solver_module, "as_solver", lambda agent: agent)
+
+    agent = mcp_solver(MCP_URL, model="openai/gpt-6-luna", agent_model_args=model_args)
+
+    assert agent["model"] == "openai/gpt-6-luna"
+
+
+def test_run_suite_once_passes_empty_model_args_to_inspect_by_default(monkeypatch, tmp_path):
+    import inspect_ai
+    from types import SimpleNamespace
+
+    captured = {}
+
+    def fake_eval(_task, **kwargs):
+        captured.update(kwargs)
+        return [SimpleNamespace(location=str(tmp_path / "default.eval"))]
+
+    monkeypatch.setattr(inspect_ai, "eval", fake_eval)
+    monkeypatch.setattr(
+        "nxd_eval.task.check_inspect_model_dependency", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr("nxd_eval.task.build_task", lambda *_args, **_kwargs: object())
+    suite = Suite(name="default-model-args", cases=[])
+
+    result = _run_suite_once(suite, agent_model="openai/gpt-6-luna", log_dir=tmp_path)
+
+    assert result == tmp_path / "default.eval"
+    assert captured["model_args"] == {}
 
 
 def test_mcp_preflight_accepts_reachable_endpoint(http_status_server):

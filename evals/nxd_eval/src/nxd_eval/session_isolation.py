@@ -125,6 +125,7 @@ def run_suite_isolated(
     epochs_reducer: str,
     log_dir: str | Path,
     display: str,
+    agent_model_args: dict[str, Any] | None = None,
 ) -> Path:
     """Run each case separately and atomically collate their Inspect logs."""
     if not suite.cases:
@@ -157,6 +158,7 @@ def run_suite_isolated(
                     server_factory=server_factory,
                     agent_prompt=agent_prompt,
                     agent_model=agent_model,
+                    agent_model_args=agent_model_args,
                     authorization=authorization,
                     grader_model=grader_model,
                     epochs=epochs,
