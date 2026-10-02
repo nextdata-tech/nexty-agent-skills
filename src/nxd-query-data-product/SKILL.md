@@ -341,9 +341,9 @@ first three as a discover→select→run protocol, not free-form SQL:
      metrics separately. Never drop the filter to make the query compile.
    - **Resolve empty and zero results.** If a filtered query returns no rows,
      has an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT`
-     returns 0, check for a value mismatch. For a non-PII dimension, probe
-     its stored values by querying the same measure grouped by that dimension
-     with no filters; see the full-domain, candidate-dimension, exact-value, and
+     returns 0, check for a value mismatch. For a non-PII dimension,
+     probe its stored values by querying the same measure grouped by that
+     dimension with no filters; see the full-domain, candidate-dimension, exact-value, and
      zero-result rules in the semantic-intent skill. Never enumerate PII
      values. Never add an unrequested filter or exclusion; keep rollup/total
      rows such as `ALL` and label them as rollups. See
