@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from inspect_ai import Epochs, Task
 from inspect_ai.dataset import Sample
+from inspect_ai.model import Model
 
 from .case import ABSTAIN
 from .dependencies import check_inspect_model_dependency
@@ -308,9 +309,9 @@ def build_task(
     target: str | None = None,
     server_factory: "Callable[[], Any] | None" = None,
     agent_prompt: str | None = None,
-    agent_model: str | None = None,
+    agent_model: str | Model | None = None,
     authorization: str | None = None,
-    grader_model: str | None = None,
+    grader_model: str | Model | None = None,
     epochs: int = 1,
     epochs_reducer: str = "pass_at",
 ) -> Task:
@@ -371,9 +372,9 @@ def _run_suite_once(
     mcp_url: str | None = None,
     server_factory: "Callable[[], Any] | None" = None,
     agent_prompt: str | None = None,
-    agent_model: str | None = None,
+    agent_model: str | Model | None = None,
     authorization: str | None = None,
-    grader_model: str | None = None,
+    grader_model: str | Model | None = None,
     epochs: int = 1,
     epochs_reducer: str = "pass_at",
     log_dir: str | Path = "./logs",
@@ -451,9 +452,9 @@ def run_suite(
     mcp_url: str | None = None,
     server_factory: "Callable[[], Any] | None" = None,
     agent_prompt: str | None = None,
-    agent_model: str | None = None,
+    agent_model: str | Model | None = None,
     authorization: str | None = None,
-    grader_model: str | None = None,
+    grader_model: str | Model | None = None,
     epochs: int = 1,
     epochs_reducer: str = "pass_at",
     log_dir: str | Path = "./logs",

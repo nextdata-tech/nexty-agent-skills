@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from inspect_ai import Task
+    from inspect_ai.model import Model
 
 # The three verdict discriminators the scorer routes on. Kept as a module
 # constant so the loader, the task builder, and the (future) scorer layer all
@@ -103,9 +104,9 @@ class Suite:
         target: str | None = None,
         server_factory: "Callable[[], Any] | None" = None,
         agent_prompt: str | None = None,
-        agent_model: str | None = None,
+        agent_model: str | Model | None = None,
         authorization: str | None = None,
-        grader_model: str | None = None,
+        grader_model: str | Model | None = None,
         epochs: int = 1,
         epochs_reducer: str = "pass_at",
     ) -> "Task":

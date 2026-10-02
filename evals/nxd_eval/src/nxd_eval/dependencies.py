@@ -42,13 +42,15 @@ _INSPECT_PROVIDER_MODULES = {
 }
 
 
-def check_inspect_model_dependency(model: str | None, *, role: str = "model") -> None:
+def check_inspect_model_dependency(model: object | None, *, role: str = "model") -> None:
     """Check provider SDK extras for an Inspect ``provider/model`` string.
 
-    Unknown providers are left to Inspect, because they may be built in,
-    configured through plugins, or provided by a newer Inspect release.
+    A configured Inspect ``Model`` object needs no preflight: its factory has
+    already selected and loaded its provider. Unknown string providers are left
+    to Inspect, because they may be built in, configured through plugins, or
+    provided by a newer Inspect release.
     """
-    if not model or "/" not in model:
+    if not isinstance(model, str) or "/" not in model:
         return
     provider = model.split("/", 1)[0]
     requirement = _INSPECT_PROVIDER_MODULES.get(provider)

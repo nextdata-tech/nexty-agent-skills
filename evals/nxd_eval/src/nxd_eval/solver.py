@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from inspect_ai.agent import as_solver, react
+from inspect_ai.model import Model
 from inspect_ai.solver import Solver
 from inspect_ai.tool import mcp_server_http
 
@@ -67,7 +68,7 @@ def mcp_solver(
     *,
     server: Any | None = None,
     prompt: str | None = None,
-    model: str | None = None,
+    model: str | Model | None = None,
     authorization: str | None = None,
 ) -> Solver:
     """A react solver bound to the semantic MCP server.

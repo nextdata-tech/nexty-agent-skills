@@ -20,6 +20,7 @@ from .checks import checks, load_checks_json
 from .dependencies import DependencyCheckError
 from .gold import gold
 from .metrics import reliability_score, wilson_accuracy
+from .providers import PerplexityConfigurationError, perplexity_model
 from .report import BucketCard, BucketDelta, Report
 from .session_isolation import SessionIsolationError
 from .skill_prompts import skill_prompt
@@ -46,6 +47,8 @@ __all__ = [
     "load_checks_json",
     "gold",
     "DependencyCheckError",
+    "perplexity_model",
+    "PerplexityConfigurationError",
     # statistics contract
     "ConfidenceInterval",
     "McNemarResult",
