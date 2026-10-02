@@ -159,13 +159,16 @@ def test_public_run_suite_passes_isolation_options_to_library_runner(monkeypatch
 
     monkeypatch.setattr("nxd_eval.session_isolation.run_suite_isolated", isolated)
     suite = Suite(name="stateful-server", cases=[Case(id="a", question="q", expect="clarify")])
-    factory = lambda: object()
+
+    def factory():
+        return object()
 
     result = run_suite(
         suite,
         mcp_url="http://example.test/mcp",
         server_factory=factory,
         agent_model="mockllm/model",
+        agent_model_args={"responses_api": True},
         isolate_sessions=True,
     )
 
@@ -174,3 +177,4 @@ def test_public_run_suite_passes_isolation_options_to_library_runner(monkeypatch
     assert captured["run_one"].__name__ == "_run_suite_once"
     assert captured["mcp_url"] == "http://example.test/mcp"
     assert captured["server_factory"] is factory
+    assert captured["agent_model_args"] == {"responses_api": True}

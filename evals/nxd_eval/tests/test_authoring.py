@@ -290,6 +290,32 @@ def test_mcp_solver_prompt_override():
     assert mcp_solver(MCP_URL, prompt="custom analyst prompt") is not None
 
 
+def test_mcp_solver_resolves_agent_model_with_model_args(monkeypatch):
+    import nxd_eval.solver as solver_module
+
+    model = object()
+    calls = {}
+    monkeypatch.setattr(
+        solver_module,
+        "get_model",
+        lambda name, **kwargs: calls.update(name=name, kwargs=kwargs) or model,
+    )
+    monkeypatch.setattr(solver_module, "react", lambda **kwargs: kwargs)
+    monkeypatch.setattr(solver_module, "as_solver", lambda agent: agent)
+
+    agent = mcp_solver(
+        MCP_URL,
+        model="openai/gpt-6-luna",
+        agent_model_args={"responses_api": True},
+    )
+
+    assert calls == {
+        "name": "openai/gpt-6-luna",
+        "kwargs": {"responses_api": True},
+    }
+    assert agent["model"] is model
+
+
 def test_mcp_preflight_accepts_reachable_endpoint(http_status_server):
     url, handler = http_status_server(200)
 

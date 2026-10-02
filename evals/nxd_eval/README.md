@@ -222,6 +222,29 @@ wheel and renders from it outside the checkout. Build the wheel directly
 (`hatch build -t wheel` or `uv build --wheel`); an sdist cannot carry
 `../../src`, so a wheel built from one fails.
 
+### Local-mesh filter coverage (PR #445)
+
+This A/B suite asks four filter and grouping questions against the local-mesh
+`eval-provider-enrollment` data product. Deploy that DP with PR #445's
+`evals/local-mesh/deploy.sh`, then set `NXD_EVAL_DP_URL` to its MCP endpoint and
+provide `NXD_PAT`, `OPENAI_API_KEY`, and an `SSL_CERT_FILE` PEM bundle containing
+both the mesh's `nxdCA.crt` and the `certifi` CA bundle. Keep credentials in the
+environment or the gitignored `evals/nxd_eval/.env`; the runner reads the PAT
+from the environment only.
+
+```bash
+cd evals/nxd_eval
+uv run --extra openai python scenarios/run_filter_coverage.py \
+    openai/gpt-6-luna [--epochs 5] [--isolate] [--arms A,B]
+```
+
+Arm A uses the default bare-tools analyst prompt; arm B uses the skill-derived
+querying prompt. The runner selects Inspect's OpenAI Responses API by default;
+pass `--chat-completions` to opt out. `run_suite()` also accepts
+`agent_model_args: dict[str, Any] | None` for provider-specific model options;
+these options configure the `react()` agent model and are forwarded to
+`inspect_ai.eval(model_args=...)` as well.
+
 ## Deterministic scorers (the offline lane)
 
 `src/nxd_eval/scorers.py` implements the deterministic scoring lane as Inspect

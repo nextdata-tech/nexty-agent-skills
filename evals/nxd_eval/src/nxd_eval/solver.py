@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from inspect_ai.agent import as_solver, react
+from inspect_ai.model import get_model
 from inspect_ai.solver import Solver
 from inspect_ai.tool import mcp_server_http
 
@@ -68,6 +69,7 @@ def mcp_solver(
     server: Any | None = None,
     prompt: str | None = None,
     model: str | None = None,
+    agent_model_args: dict[str, Any] | None = None,
     authorization: str | None = None,
 ) -> Solver:
     """A react solver bound to the semantic MCP server.
@@ -76,6 +78,8 @@ def mcp_solver(
     Inspect MCP server, e.g. ``mcp_server_stdio(...)``); passing neither is an
     error. ``prompt`` overrides the default :data:`AGENT_PROMPT`. ``model``
     overrides the agent model (otherwise the task / eval model is used).
+    ``agent_model_args`` configures that model when ``model`` is a provider/model
+    string.
     ``authorization`` is the bearer token for real HTTP runs (``None`` for the
     local stub); it is ignored when a pre-built ``server`` is supplied.
     """
@@ -83,5 +87,10 @@ def mcp_solver(
         if not url:
             raise ValueError("mcp_solver: pass url= or a pre-built server=")
         server = mcp_server_http(name="semantic", url=url, authorization=authorization)
-    agent = react(prompt=prompt or AGENT_PROMPT, tools=[server], model=model)
+    resolved_model = (
+        get_model(model, **agent_model_args)
+        if agent_model_args is not None and model is not None
+        else model
+    )
+    agent = react(prompt=prompt or AGENT_PROMPT, tools=[server], model=resolved_model)
     return as_solver(agent)
