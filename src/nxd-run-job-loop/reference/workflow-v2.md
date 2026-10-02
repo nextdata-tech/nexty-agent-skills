@@ -590,7 +590,10 @@ or not, and a rejected round cannot pair with its review. Then
 report `verdict: "clear"` with an empty `findings` list. The advisory claims
 stay in `review-record.json` for the user, and they need no user decision. Never
 hold publication for an advisory claim, and never downgrade a `HIGH` or `MEDIUM`
-claim to reach this path.
+claim to reach this path. After publication, report advisory claims as notes.
+A stricter alternative to an approved Decision is an optional change you may
+offer, not an open question: do not say the result is not ready to circulate,
+do not ask the user to decide it, and do not end the turn waiting on it.
 
 Map unresolved `HIGH` and `MEDIUM` claims to `severity: "blocking"`; map
 unresolved `LOW` claims to `severity: "advisory"`. Project each unresolved
