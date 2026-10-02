@@ -966,3 +966,16 @@ def test_bare_affirmative_is_neither_approval_nor_a_choice() -> None:
     assert "Re-ask once, naming the single item you need." in workflow
     assert "An affirmative reply to that single-item re-ask settles that item" in workflow
     assert 'A bare "yes"/"sure" that names nothing is neither approval nor a choice' in skill
+
+
+def test_blocking_disclosure_questions_offer_no_accept_all_shortcut() -> None:
+    # Live B6 router6: the agent offered "use the recommendations for 1-4" for
+    # baseline and suppression; a bare "Yes." then settled both, so the report
+    # kept a baseline month and visible headcount for suppressed rows.
+    root = Path(__file__).resolve().parents[2] / "src" / "nxd-run-job-loop"
+    blueprint = " ".join((root / "reference" / "dp-blueprint.md").read_text(encoding="utf-8").split())
+    assert "Ask each of these questions on its own, with its options, so the reply must name the choice." in blueprint
+    assert 'Never offer a shortcut such as "reply yes to use my recommendations" for them' in blueprint
+    assert "leaves every one of them open" in blueprint
+    skill = " ".join((root / "SKILL.md").read_text(encoding="utf-8").split())
+    assert "never offer an accept-all-recommendations shortcut for disclosure, suppression or baseline questions" in skill
