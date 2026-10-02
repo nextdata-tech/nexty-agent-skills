@@ -103,6 +103,16 @@ def test_prompt_carries_the_query_procedure_and_intent_gate():
         "partner-sourced metric",
         "filters_applied` in",
         "probe its stored values by querying the same measure",
+        "with no filters",
+        "full stored domain",
+        "a zero under the combined filters",
+        "report 0 plainly",
+        "probe each candidate",
+        "Clarify only if it exists in several dimensions",
+        "Use stored values",
+        "matching one stored value as a whole is one value",
+        "Never add an unrequested filter or exclusion",
+        "such as `ALL`",
         "grand-total `COUNT` returns 0",
         "Semantic-layer MCP ports",
         "Intent gate (REQUIRED before `run_semantic_query`)",
@@ -124,6 +134,9 @@ def test_prompt_keeps_skill_sourced_scope_and_zero_probe_rules():
         ("partner-sourced metric", intent_skill),
         ("A requested BREAKDOWN", intent_skill),
         ("probe its stored values by querying the same measure", query_skill),
+        ("with no filters", query_skill),
+        ("retain rollup/total rows", intent_skill),
+        ("if the question phrase", intent_skill),
     ):
         assert needle in source
         assert needle in prompt

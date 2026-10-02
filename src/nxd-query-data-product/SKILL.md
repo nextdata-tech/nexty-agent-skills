@@ -341,16 +341,12 @@ first three as a discover→select→run protocol, not free-form SQL:
      metrics separately. Never drop the filter to make the query compile.
    - **Resolve empty and zero results.** If a filtered query returns no rows,
      has an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT`
-     returns 0, check for a value mismatch. A grand-total `COUNT` returns one
-     row with 0, so no rows is not the only signal. If the filtered dimension
-     is not PII-classified, probe its stored values by querying the same measure
-     grouped by that dimension without that filter (keep the other filters),
-     then retry with the exact stored value that plausibly matches. If no stored
-     value plausibly matches, report the mismatch instead of a zero; never
-     invent encodings. If the probe confirms the exact value and the retry still
-     returns zero, report that genuine zero without hedging. For a
-     PII-classified dimension, do not enumerate values; surface the unresolved
-     mismatch rather than guessing. See
+     returns 0, check for a value mismatch. For a non-PII dimension, probe
+     its stored values by querying the same measure grouped by that dimension
+     with no filters; see the full-domain, candidate-dimension, exact-value, and
+     zero-result rules in the semantic-intent skill. Never enumerate PII
+     values. Never add an unrequested filter or exclusion; keep rollup/total
+     rows such as `ALL` and label them as rollups. See
      [reference/troubleshooting.md](reference/troubleshooting.md).
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly
    one grain, grain boundaries are visible before you query. Combining measures

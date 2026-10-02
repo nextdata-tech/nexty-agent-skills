@@ -72,13 +72,21 @@ real candidate concepts, and the clarification needed. Write the round-trip echo
 If a filtered query returns no rows, has an empty grouped result, `SUM` returns
 `NULL`, or a grand-total `COUNT` returns 0, check for a value mismatch. A
 grand-total `COUNT` returns one row with 0, so no rows is not the only signal.
-If the filtered dimension is not PII-classified, probe stored values by
-querying the same measure grouped by that dimension without that filter, keeping the other
-filters, then retry with the exact stored value that plausibly matches. If no
-stored value plausibly matches, report the mismatch instead of a zero; never
-invent encodings. If the probe confirms the exact value and the retry still
-returns zero, report that genuine zero without hedging. Do not enumerate values
-for a PII-classified dimension; surface the unresolved mismatch instead.
+For a non-PII filtered dimension, probe stored values by querying the same
+measure grouped by that dimension with no filters, so it shows the full stored
+domain. If the exact requested value exists, a zero under the combined filters
+is genuine: report 0 plainly, without hedging or refusing. If a value could
+belong to multiple candidate dimensions, probe each candidate with no filters
+before reporting it missing or asking which dimension; use it without asking
+if it exists in exactly one. Clarify only if it exists in several dimensions
+with different meanings, or in none. Use stored values verbatim: a phrase
+matching one stored value as a whole is one value; never split it on `&`,
+`and`, or `/` unless the stored domain shows separate values that the question
+means. Never add an unrequested filter or exclusion. Keep rollup/total rows
+such as `ALL` and label them as rollups in the answer. If no exact stored value
+exists, report the mismatch rather than a zero; never invent encodings. Do not
+enumerate values for a PII-classified dimension; surface the unresolved
+mismatch instead.
 """
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
