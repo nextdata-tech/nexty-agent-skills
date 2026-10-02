@@ -93,6 +93,83 @@ def test_rows_equal_matching_rows_correct():
     assert s.metadata["verdict"] == "PASS"
 
 
+def test_rows_equal_projects_extra_column_that_preserves_gold_row_keys():
+    gold = [
+        {"product_name": "ALL", "enrolled_patients": 3},
+        {"product_name": "ALPHAVIR", "enrolled_patients": 2},
+        {"product_name": "ALPHAVIR SC", "enrolled_patients": 1},
+        {"product_name": "BETAMAB", "enrolled_patients": 1},
+    ]
+    projected_rows = [
+        {**row, "region_name": "NE Gulf Coast"} for row in gold
+    ]
+    st = _state(
+        calls=[
+            (
+                {"measures": ["enrolled_patients"]},
+                {"compiled_sql": "SELECT 99", "rows": [{"n": 99}]},
+            ),
+            (
+                {"measures": ["enrolled_patients"], "group_by": ["product_name", "region_name"]},
+                {"compiled_sql": "SELECT grouped results", "rows": projected_rows},
+            ),
+        ],
+        final=(
+            "Gulf Coast totals by product: ALL 3, ALPHAVIR 2, "
+            "ALPHAVIR SC 1, BETAMAB 1."
+        ),
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == CORRECT
+    assert s.metadata["verdict"] == "PASS"
+    assert s.metadata["graded_call_index"] == 1
+    assert s.metadata["selection"] == "answer-anchored"
+    assert s.metadata["projected_out"] == ["region_name"]
+
+
+def test_rows_equal_projection_fails_when_extra_column_splits_gold_key():
+    gold = [{"product_name": "ALPHAVIR", "enrolled_patients": 2}]
+    split = [
+        {"product_name": "ALPHAVIR", "enrolled_patients": 2, "region_name": "East"},
+        {"product_name": "ALPHAVIR", "enrolled_patients": 2, "region_name": "West"},
+    ]
+    st = _state(
+        calls=[
+            (
+                {"measures": ["enrolled_patients"]},
+                {"compiled_sql": "SELECT split rows", "rows": split},
+            )
+        ],
+        final="There are 2 enrolled patients.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == INCORRECT
+    assert s.metadata["verdict"] == "FAIL"
+    assert s.metadata["projection_split"] == ["region_name"]
+
+
+def test_rows_equal_noncovering_superset_fails_on_arity():
+    gold = [{"product_name": "P", "enrolled_patients": 1}]
+    got = [{"product_name": "P", "region_name": "East", "total": 1}]
+    st = _state(
+        calls=[({"measures": ["enrolled_patients"]}, {"compiled_sql": "s", "rows": got})]
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == INCORRECT
+    assert s.metadata["verdict"] == "FAIL"
+    assert "projected_out" not in s.metadata
+    assert "projection_split" not in s.metadata
+
+
+def test_rows_equal_keeps_equal_arity_aliases_name_blind():
+    gold = [{"region": "east", "num_subjects": 16.0}]
+    aliased = [{"region": "east", "subject_count": 16.0}]
+    st = _state(calls=[({"measures": ["subject_count"]}, {"rows": aliased})])
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == CORRECT
+    assert s.metadata["verdict"] == "PASS"
+
+
 def test_rows_equal_swapped_two_measures_fails():
     """THE load-bearing case: two numeric measures swapped must FAIL.
 

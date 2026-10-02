@@ -138,13 +138,14 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
     call, selection, tied_call_indexes = tx.answer_call_selection_details()
     actual_rows = call.rows if call is not None else None
 
-    verdict = scoring.score_one(
+    verdict, projection_info = scoring.score_one(
         {
             "rows": actual_rows,
             "abstained": not tx.made_query or call is None,
             "errored": False,
         },
         _gold_record(state, gold_rows),
+        return_projection_info=True,
     )
     value = CORRECT if verdict == "PASS" else INCORRECT
     metadata: dict[str, Any] = {
@@ -157,6 +158,7 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
         ),
         "selection": selection,
     }
+    metadata.update(projection_info)
     if selection == "answer-anchored-tie":
         metadata["tied_call_indexes"] = tied_call_indexes
     # Carry the agent's verbalized confidence (if any) alongside the 0/1

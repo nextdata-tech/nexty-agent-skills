@@ -36,6 +36,7 @@ from ._ex_core import score as _score
 
 score_one = _score.score_one
 rows_equal_name_aware = _score.rows_equal_name_aware
+project_extra_columns = _score.project_extra_columns
 _norm_rowset = _score._norm_rowset
 matches_compiler = _score.matches_compiler
 fanout_of = _score.fanout_of
@@ -44,6 +45,7 @@ distinct_results = _score.distinct_results
 __all__ = [
     "score_one",
     "rows_equal_name_aware",
+    "project_extra_columns",
     "_norm_rowset",
     "matches_compiler",
     "fanout_of",

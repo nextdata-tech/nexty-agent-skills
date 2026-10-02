@@ -241,6 +241,14 @@ wheel and renders from it outside the checkout. Build the wheel directly
 text-to-SQL PoC never drift on what "PASS" means — including the name-aware
 guard that FAILs two numeric measures swapped.
 
+When the graded result contains every gold column plus extra columns, EX
+projects onto the gold columns before comparing. The projection is accepted
+only if the extra columns preserve the gold row keys: if an extra grouping
+column varies and splits one projected key into multiple rows, the score is
+FAIL and the split is recorded as `projection_split`. Successful projections
+are recorded in score metadata as `projected_out`. Other column shapes retain
+the vendored name-blind row comparison.
+
 `rows_equal` and the compiled-SQL scorers grade the successful query whose
 numeric results best match the final answer. Answer anchoring ignores prose
 suffix forms such as `1.4k`, `$1.2M`, and `1.2e6`. Calls rank by the share of
