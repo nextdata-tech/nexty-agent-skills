@@ -27,7 +27,8 @@ source_answers:
   history: The file contains monthly snapshots from December through March, and its opaque person token stays stable when a person appears in another month.
   period: December 2023 is the opening baseline; the monthly report covers January through March 2024.
 source_answer_terms:
-  period: [baseline month, reporting period, report period, December]
+  # Agents also name the opening month as "the 2023-12 baseline".
+  period: [baseline month, reporting period, report period, December, baseline, 2023-12]
 decision_answers:
   B6-suppression-N:
     terms: [small-group, suppression]
