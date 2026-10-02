@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.54.14
+  version: 0.54.15
 ---
 
 # nxd data product query
@@ -341,6 +341,7 @@ first three as a discover→select→run protocol, not free-form SQL:
      value for the fan-out filter, group by the filter dimension, or query the
      metrics separately. Never drop the filter to make the query compile.
    - **Resolve empty and zero results.** For empty/zero results, follow [reference/troubleshooting.md](reference/troubleshooting.md). Probe each non-PII candidate dimension grouped by it, with no filters on other dimensions; for large domains filter only it with `ILIKE '%token%'`.
+     **Stored values in `describe_model`.** A dimension opted into stored values carries `values` (most frequent first, at most 25) and `values_complete`. With `values_complete: true` the list is exhaustive: if the wanted value is absent, report the mismatch directly with no probe, and map to a listed value only on an exact or plausible encoding match (abbreviation, case); otherwise the value does not exist. With `values_complete: false` the list is encoding examples only (case, codes): if the wanted value is not listed, run the stored-values probe before concluding it does not exist. With `values_omitted` set, behave as if no list was returned and use the probe. With no `values` field, use the probe as below. Never enumerate a PII-classified dimension.
      If the requested value is not stored exactly but one stored value plausibly matches it (abbreviation, case, partial label), retry with that stored value verbatim and name it in the echo. Report mismatch only if none plausibly matches; never invent encodings.
      An exact value present with zero under combined filters is genuine; report 0 plainly. Keep rollup/total rows such as `ALL`; report them labelled as rollups, never add them to member rows or rank them as members. Never enumerate PII.
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly

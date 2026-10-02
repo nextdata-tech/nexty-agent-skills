@@ -142,6 +142,21 @@ def test_prompt_keeps_skill_sourced_scope_and_zero_probe_rules():
         assert needle in prompt
 
 
+def test_prompt_carries_the_stored_values_completeness_rule():
+    prompt = skill_prompt()
+    for needle in (
+        "values_complete true means the list is exhaustive",
+        "reported as a mismatch with no probe",
+        "values_complete false means the list is encoding examples only",
+        "values_omitted set, or no values field: probe",
+        "Never enumerate a PII dimension",
+        "With `values_complete: true` the list is exhaustive",
+        "With `values_complete: false` the list is encoding examples only",
+        "With `values_omitted` set, behave as if no list was returned",
+    ):
+        assert needle in prompt
+
+
 def test_prompt_has_no_links_into_the_skill_tree():
     assert "](" not in skill_prompt()
 

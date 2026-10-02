@@ -70,6 +70,8 @@ the skill says to ask or clarify, do not execute; finish with the ambiguity, the
 real candidate concepts, and the clarification needed. Write the round-trip echo in your reply before calling run_semantic_query. Follow the intent and filter rules in the nxd-semantic-query-intent and nxd-query-data-product skills.
 
 Follow the zero-result and stored-value rules in the query skill; a genuine zero (exact value present, zero under the combined filters) is reported plainly, not refused.
+
+Stored values in describe_model: values_complete true means the list is exhaustive, so an absent value is reported as a mismatch with no probe (map only on an exact or plausible encoding match). values_complete false means the list is encoding examples only, so probe before concluding the value does not exist. values_omitted set, or no values field: probe. Never enumerate a PII dimension.
 """
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
