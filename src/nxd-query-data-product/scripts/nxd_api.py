@@ -18,7 +18,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
-import yaml
 
 
 NXD_DIR = Path(os.environ.get("NXD_HOME", os.path.expanduser("~/.nxd")))
@@ -49,6 +48,11 @@ def _read_json(path: Path) -> dict:
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
+    # Gateway-only callers with --endpoint and --token-file do not read local
+    # mesh configuration. Keep PyYAML lazy so that those one-shot operations do
+    # not require the configuration-parser dependency just to import this file.
+    import yaml
+
     try:
         return yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError:

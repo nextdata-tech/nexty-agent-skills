@@ -58,8 +58,8 @@ against the seeded fixtures — the correct path returns 275, the trap returns 1
 ## Task for the agent
 
 A business analyst asks you three questions, in turn. Answer each one using the
-semantic MCP tools available in your session, following the skill's Step 6f
-intent gate.
+semantic MCP tools available in your session, following the installed
+`nxd-query-data-product` skill's Step 6f intent gate.
 
 > **Q1:** "How many calls did we make last month?"
 >

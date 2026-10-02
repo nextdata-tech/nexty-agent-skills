@@ -25,6 +25,12 @@ separate entry points. **This README documents the first one only.**
 A sixth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
 customer-facing form lives under `evals/private/cross-dp-joins/`.
 
+Scenarios marked with `fixtures/mcp.json` exercise the installed
+`nxd-query-data-product` discovery path against a local authenticated gateway:
+`find_mesh.py` reads a per-cell isolated `NXD_HOME`, then the shipped gateway
+scripts list and call function/hash-namespaced tools forwarded to the semantic
+fixture server. See [`evals/mcp/README.md`](mcp/README.md).
+
 ## What runs in CI vs. what only runs locally
 
 Nothing in the scenario suite runs automatically on a pull request. Agent runs
@@ -44,7 +50,7 @@ There are three ways the suite runs, and only one of them is unconditional:
 | | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 21 `ci_skip` | every runnable scenario (28 of 49; the 21 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 22 `ci_skip` | every runnable scenario (28 of 50; the 22 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. the 12 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
@@ -116,7 +122,7 @@ one is responsible when a change ships unmeasured:
   scenarios whose `checks.json` names a changed skill (computed by
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
-- **The 21 `ci_skip` scenarios never run automatically**, so the skills they
+- **The 22 `ci_skip` scenarios never run automatically**, so the skills they
   cover are unguarded. `nxd-query-data-product` is covered *only* by skipped
   scenarios and `nxd-analyze-mesh` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
@@ -218,7 +224,7 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 23 of 49 public scenarios use this today
+Only 23 of 50 public scenarios use this today
 (`authenticated-api-source-build`, `coauthor-executable-policy-readback`,
 `coauthor-supplied-rubric`, `derive-models-from-questions`,
 `dp-static-artifact-lifecycle`, `desktop-custom-contracts`,
@@ -571,7 +577,7 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Twenty-one scenarios are currently skipped:
+Twenty-two scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
@@ -588,6 +594,7 @@ Twenty-one scenarios are currently skipped:
 | `pharma-mesh-query-hard` | same |
 | `pharma-mesh-query-loop` | same |
 | `semantic-intent-validation` | same |
+| `semantic-filter-coverage` | requires the operator-deployed local mesh DP and `EVAL_MESH_TOKEN` |
 | `coauthor-executable-policy-readback` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
 | `job-loop-approval-status` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
 | `incremental-transform-state` | scripts a follow-up turn and a three-run stateful checker; the PR gate runs `codex`, which cannot drive multi-turn |
@@ -824,7 +831,7 @@ the diff since the previous tag can span the whole pack — and this is the one 
 whose result is published as the version's evidence, so it should not be scoped
 by a heuristic.
 
-"Runnable" excludes the 21 `ci_skip` scenarios. It has to: `run.py` does not read
+"Runnable" excludes the 22 `ci_skip` scenarios. It has to: `run.py` does not read
 `ci_skip` (only `affected_scenarios.py` does), so a bare `--suite public` would
 run the scenarios that need a live desktop supervisor or a semantic MCP server,
 they would all ERROR, and since none of them are in the baseline

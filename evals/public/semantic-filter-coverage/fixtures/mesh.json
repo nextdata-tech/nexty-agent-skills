@@ -1,0 +1,6 @@
+{
+  "mesh": "local",
+  "dp": "eval-provider-enrollment",
+  "api_url": "https://nxd.nxd.local/api",
+  "app_url": "https://nxd.nxd.local/app"
+}

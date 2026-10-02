@@ -44,17 +44,20 @@ masked views.
 
 ## How run.py drives it (production-faithful)
 
-The `nxd-query-data-product` skill discovers DP MCP endpoints exactly as in
-production — `nxd mcp health --format json` → Streamable-HTTP MCP → tool calls.
-So the harness:
-
-1. Starts `semantic_server.py --http` on a free port, serving the tools at the
-   proxy URL shape (`/<dp>/rpcs/<port>/mcp`).
-2. Puts a fake `nxd` (`fake_nxd.py`) on the agent's PATH; `nxd mcp health` returns
-   a `data_products` row pointing at that running server.
-3. Runs the agent — the skill's shipped `mcp_gateway.py` / `mcp_call.py` toolchain
-   discovers and calls the genuine tools **unchanged**.
-4. Tears the server down after the cell.
+For each `fixtures/mcp.json` cell, `run.py` starts `semantic_server.py --http`
+and the stdlib-only `fake_mesh_gateway.py`. The gateway serves `/dp/mcp/`,
+requires `X-Nextdata-Token`, lists fixture tools with the gateway's
+`<function>__<hash>` wire names and DP/port provenance, and forwards calls to
+the semantic server. The runner creates a random
+per-cell PAT and an isolated temporary `NXD_HOME` containing the same
+`meshes.json`, `config.yaml`, and `tokens.json` format used by the local-mesh
+mode. The installed `nxd-query-data-product` scripts discover that mesh with
+`find_mesh.py`, then use the normal `gateway_tools.py` / `mcp_call.py` path.
+The PAT is stored with owner-only permissions, omitted from the agent's
+environment, redacted from artifacts, and deleted with the temporary home when
+the cell ends. Loopback HTTP is enabled only for this runner process and only
+for `127.0.0.1` and `::1` with `NXD_MCP_ALLOW_HTTP_LOCALHOST=1`; remote HTTP
+endpoints continue to upgrade to HTTPS.
 
 ## Credentials
 
@@ -193,4 +196,5 @@ from the published artifact, never a public index.
 - `registry_from_fixture.py` — `semantic.json` → genuine `SemanticRegistry` + lowercased PII map.
 - `executor.py` — `GovernedExecutor` (ported from the t2sql PoC; masked per-principal views, SELECT/WITH-only, LIMIT cap).
 - `seed.py` / `snowflake_conn.py` — fixture loader + env-only connection.
-- `fake_nxd.py` — minimal `nxd` CLI stub (`mcp health`, `whoami`).
+- `fake_mesh_gateway.py` — authenticated, one-DP Streamable-HTTP gateway proxy
+  used by the semantic fixture cells.

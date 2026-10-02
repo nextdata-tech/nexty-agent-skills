@@ -65,9 +65,15 @@ def normalise_endpoint(endpoint: str) -> str:
 
     ``nxd mcp health`` reports endpoints as ``http://``; the proxy speaks
     HTTPS only. The path must end with ``/`` for the proxy to route MCP
-    correctly."""
+    correctly. The eval runner may explicitly allow plain HTTP for loopback
+    stand-ins; remote HTTP endpoints are still upgraded to HTTPS."""
     if endpoint.startswith("http://"):
-        endpoint = "https://" + endpoint[len("http://"):]
+        from urllib.parse import urlsplit
+
+        host = (urlsplit(endpoint).hostname or "").lower()
+        loopback_opt_in = os.environ.get("NXD_MCP_ALLOW_HTTP_LOCALHOST") == "1"
+        if not (loopback_opt_in and host in {"127.0.0.1", "::1"}):
+            endpoint = "https://" + endpoint[len("http://"):]
     if not endpoint.endswith("/"):
         endpoint += "/"
     return endpoint

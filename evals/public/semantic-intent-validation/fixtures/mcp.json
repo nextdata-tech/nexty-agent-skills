@@ -1,5 +1,5 @@
 {
-  "comment": "Opt-in marker: this scenario needs the live semantic MCP server. run.py starts evals/mcp/semantic_server.py over Streamable-HTTP pointed at this fixtures dir, and puts a fake `nxd` on PATH so the query skill's `nxd mcp health` discovers it. Without this the agent can only Read catalog.json and fabricate tool output. dp/rpc_port shape the proxy URL the skill parses: /<dp>/rpcs/<rpc_port>/mcp.",
+  "comment": "Opt-in marker: run.py starts semantic_server.py plus an authenticated local mesh gateway, then writes an isolated NXD_HOME so the installed query skill discovers and calls these fixture tools through its normal gateway path. Without this the agent can only Read catalog.json and fabricate tool output. dp/rpc_port shape the fixture server URL: /<dp>/rpcs/<rpc_port>/mcp.",
   "tools": ["list_models", "describe_model", "run_semantic_query"],
   "dp": "semantic-demo",
   "rpc_port": "mcp-api"
