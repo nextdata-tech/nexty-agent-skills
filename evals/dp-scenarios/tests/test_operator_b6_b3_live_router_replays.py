@@ -748,6 +748,60 @@ ROUTER8_CHOICES = json.loads(
     (ROOT / "tests/fixtures/operator-b6-router8-choice-replay.json").read_text()
 )
 
+ROUTER9_CLARIFICATION = json.loads(
+    (ROOT / "tests/fixtures/operator-b6-router9-clarification-replay.json").read_text()
+)
+
+
+def test_router9_intervening_period_ask_invalidates_suppression_clarification() -> None:
+    first, baseline, suppression = (
+        ROUTER9_CLARIFICATION[str(turn)] for turn in range(1, 4)
+    )
+    choices = {
+        first: _choice("decision:B6-suppression-N", "decision_request"),
+        baseline: _choice("source:period", "source_question"),
+        suppression: _choice("decision:B6-suppression-N", "decision_request"),
+    }
+    result, transport = _run(
+        HEADCOUNT, [first, baseline, suppression, suppression], "stub_llm",
+        router=_router_for(choices),
+    )
+
+    assert all(turn.match.routed_by == "llm" for turn in result.turns[:4])
+    assert not any(turn.match.router_fallback for turn in result.turns[:4])
+    assert transport.message_texts[1] == "Yes."
+    assert transport.message_texts[2] == PERIOD
+    assert result.turns[1].match.rule_id == "source.answer.period"
+    # Failed before the fix: router9 delivered the declared answer here,
+    # consuming the clarification even though the next ask was about baseline.
+    # A scheduled scenario event may append its separate analyst instruction.
+    assert transport.message_texts[3].splitlines()[0] == "Yes."
+    assert SUPPRESSION not in transport.message_texts[3]
+    assert result.turns[2].match.rule_id == "persona.decision_request"
+    assert result.turns[3].match.rule_id == "decision.answer.B6-suppression-N"
+    assert transport.message_texts[4].startswith(SUPPRESSION)
+    assert result.turns[3].delivered_decision_id is None
+    assert result.turns[4].delivered_decision_id == "B6-suppression-N"
+
+
+def test_router9_immediate_suppression_reask_delivers_answer_without_reclarifying() -> None:
+    first, suppression = (ROUTER9_CLARIFICATION[str(turn)] for turn in (1, 3))
+    choices = {
+        message: _choice("decision:B6-suppression-N", "decision_request")
+        for message in (first, suppression)
+    }
+    result, transport = _run(
+        HEADCOUNT, [first, suppression], "stub_llm", router=_router_for(choices),
+    )
+
+    assert all(turn.match.routed_by == "llm" for turn in result.turns[:2])
+    assert not any(turn.match.router_fallback for turn in result.turns[:2])
+    assert transport.message_texts[1] == "Yes."
+    assert transport.message_texts[2].startswith(SUPPRESSION)
+    assert transport.message_texts[1:].count("Yes.") == 1
+    assert result.turns[1].match.rule_id == "decision.answer.B6-suppression-N"
+    assert result.turns[2].delivered_decision_id == "B6-suppression-N"
+
 
 @pytest.mark.parametrize("mode", ("scripted", "stub_llm"))
 @pytest.mark.parametrize("turn", range(5, 12))

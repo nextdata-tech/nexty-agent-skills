@@ -1611,6 +1611,7 @@ class OperatorEngine:
         # advance this state (a fixed beat or failed driver may displace it).
         clarified_decision_ids: set[str] = set()
         pending_clarification_id: str | None = None
+        transmitted_clarification_id: str | None = None
         # Compound asks can name more than one declared answer. Keep the
         # secondary choices until a later slot can deliver them; a primary
         # decision and its clarification keep priority.
@@ -2621,6 +2622,7 @@ class OperatorEngine:
                 and (not authorable or driver_fallback_transmitted or driver_conveyed)
             ):
                 clarified_decision_ids.add(pending_clarification_id)
+                transmitted_clarification_id = pending_clarification_id
                 pending_clarification_id = None
             delivered_decision_id = (
                 next_match.decision_id
@@ -2829,6 +2831,14 @@ class OperatorEngine:
                                 router_fallback=True,
                                 router_failure_reason=router_failure,
                             )
+
+            # A transmitted clarification only counts if the immediately
+            # following routed ask selects that same decision. An unrelated
+            # topic requires a fresh persona clarification on the next ask.
+            if transmitted_clarification_id is not None:
+                if match.decision_id != transmitted_clarification_id:
+                    clarified_decision_ids.discard(transmitted_clarification_id)
+                transmitted_clarification_id = None
 
             # The opt-in first response asks the persona to clarify. The
             # answer remains selected but is not marked delivered and does
