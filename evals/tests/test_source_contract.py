@@ -877,7 +877,12 @@ def test_suppression_keeps_below_grain_rows_in_memory() -> None:
     generator = flat("nxd-generate-data-product", "SKILL.md")
     assert "never land rows below that grain (such as a person-level roster)" in generator
     assert "nothing landed can recount a suppressed value" in generator
-    assert "except a below-grain source under an approved suppression rule" in generator
+    # Router10: a below-grain export left under data/ failed
+    # struct.base_models_vs_data_dirs; the passing build used source/ plus
+    # companion-files and NXD_TRANSFORM_ROOT.
+    assert "a below-grain source under an approved suppression rule lives outside `data/`" in generator
+    assert "declare the root in the root-level `companion-files` manifest" in generator
+    assert "fails `struct.base_models_vs_data_dirs`" in generator
     assert "lineage only" not in generator
     blueprint = flat("nxd-run-job-loop", "reference", "dp-blueprint.md")
     assert "lands nothing below the suppressed grain" in blueprint

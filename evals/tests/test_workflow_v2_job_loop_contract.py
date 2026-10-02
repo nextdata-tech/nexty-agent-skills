@@ -979,3 +979,14 @@ def test_blocking_disclosure_questions_offer_no_accept_all_shortcut() -> None:
     assert "leaves every one of them open" in blueprint
     skill = " ".join((root / "SKILL.md").read_text(encoding="utf-8").split())
     assert "never offer an accept-all-recommendations shortcut for disclosure, suppression or baseline questions" in skill
+
+
+def test_post_publication_advisory_notes_do_not_reopen_approved_decisions() -> None:
+    # Live B6 router10: every scored gate passed, but after publication the
+    # agent turned two advisory review notes (stricter suppression variants)
+    # into "not ready to circulate" questions and ran out of turns waiting.
+    root = Path(__file__).resolve().parents[2] / "src" / "nxd-run-job-loop"
+    text = " ".join((root / "reference" / "workflow-v2.md").read_text(encoding="utf-8").split())
+    assert "After publication, report advisory claims as notes." in text
+    assert "A stricter alternative to an approved Decision is an optional change you may offer, not an open question" in text
+    assert "do not end the turn waiting on it" in text
