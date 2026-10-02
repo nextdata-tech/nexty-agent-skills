@@ -339,15 +339,9 @@ first three as a discover→select→run protocol, not free-form SQL:
      and use exact `=` when possible. Depending on the refusal, use one `=`
      value for the fan-out filter, group by the filter dimension, or query the
      metrics separately. Never drop the filter to make the query compile.
-   - **Resolve empty and zero results.** If a filtered query returns no rows,
-     has an empty grouped result, `SUM` returns `NULL`, or a grand-total `COUNT`
-     returns 0, check for a value mismatch. For a non-PII dimension,
-     probe its stored values by querying the same measure grouped by that
-     dimension with no filters; see the full-domain, candidate-dimension, exact-value, and
-     zero-result rules in the semantic-intent skill. Never enumerate PII
-     values. Never add an unrequested filter or exclusion; keep rollup/total
-     rows such as `ALL` and label them as rollups. See
-     [reference/troubleshooting.md](reference/troubleshooting.md).
+   - **Resolve empty and zero results.** For empty/zero results, follow [reference/troubleshooting.md](reference/troubleshooting.md). Probe each non-PII candidate dimension grouped by it, with no filters on other dimensions; for large domains filter only it with `ILIKE '%token%'`.
+     If the requested value is not stored exactly but one stored value plausibly matches it (abbreviation, case, partial label), retry with that stored value verbatim and name it in the echo. Report mismatch only if none plausibly matches; never invent encodings.
+     An exact value present with zero under combined filters is genuine; report 0 plainly. Keep rollup/total rows such as `ALL`; report them labelled as rollups, never add them to member rows or rank them as members. Never enumerate PII.
 4. **Grain-safe navigation.** Because each `describe_model` response is exactly
    one grain, grain boundaries are visible before you query. Combining measures
    from **join-reachable** models in ONE `run_semantic_query` call is safe — the

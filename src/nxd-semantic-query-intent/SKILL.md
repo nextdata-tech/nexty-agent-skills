@@ -27,18 +27,20 @@ The gate validates intent-to-selection mapping before governed execution:
    population) must be honored. Use a filter when a catalog dimension's
    description expresses it; when a metric definition already encodes it (for
    example, a partner-sourced metric), selecting that metric satisfies the
-   constraint without a filter. Similar-looking dimension values alone do not
-   establish the meaning. Use stored values verbatim: if the question phrase
-   matches one stored value as a whole, treat it as one value; never split on
+   constraint without a filter. A value found in exactly one candidate
+   dimension resolves which dimension holds it; descriptions still decide
+   whether that dimension means what the question asks. Use stored values
+   verbatim: if the question phrase matches one stored value as a whole, treat
+   it as one value; never split on
    `&`, `and`, or `/` unless the stored domain shows separate values that the
    question means. A requested BREAKDOWN (such as "by product" or "per month")
    maps to a grouped dimension. A comparison of named values (such as
    "Psychiatry vs Neurology") needs a filter restricting to those values and
    grouping by that dimension; grouping never substitutes for filtering on a
    named value. Add a missing filter only when the question asks for it and a
-   dimension description expresses the constraint. Never add an unrequested
-   filter, exclusion, or rollup removal; retain rollup/total rows and label
-   them as rollups. Return `likely-wrong` and abstain or clarify only when no
+   dimension description expresses the constraint, then re-run the critic.
+   Never add an unrequested filter or exclusion. Return `likely-wrong` and
+   abstain or clarify only when no
    metric or dimension can express the constraint.
 3. Show a plain-language round-trip echo assembled from the selected concepts'
    descriptions, including applicable PII or governance notes.
