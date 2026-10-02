@@ -864,29 +864,34 @@ def test_review_grades_presentation_gaps_as_low() -> None:
     assert "A review of a repaired capture applies the same bar" in text
 
 
-def test_suppression_keeps_below_grain_models_out_of_the_query_catalog() -> None:
+def test_suppression_keeps_below_grain_rows_in_memory() -> None:
     # Live B6 router5: the landed person-level roster carried a row-count
     # metric, so a reviewer recounted every suppressed department-month (HIGH).
-    # The agent then recommended deferring that HIGH, and four review rounds
-    # re-raised it under new IDs without publishing.
+    # Router6 kept the roster as unqueryable lineage and the reviewer still
+    # blocked on direct table access; router7 read it in memory and the
+    # capture passed. Router7's fresh review then re-raised the user's
+    # "keep as approved" suppression ruling under a new finding ID.
     def flat(*parts: str) -> str:
         return " ".join((REPO_ROOT / "src").joinpath(*parts).read_text(encoding="utf-8").split())
 
     generator = flat("nxd-generate-data-product", "SKILL.md")
-    assert "a landed model below that grain (such as a person-level roster) is lineage only" in generator
-    assert "no dimension, join, metric or `semantic_view`" in generator
-    assert "no query can recount a suppressed value" in generator
+    assert "never land rows below that grain (such as a person-level roster)" in generator
+    assert "nothing landed can recount a suppressed value" in generator
+    assert "except a below-grain source under an approved suppression rule" in generator
+    assert "lineage only" not in generator
     blueprint = flat("nxd-run-job-loop", "reference", "dp-blueprint.md")
-    assert "every landed model below the suppressed grain" in blueprint
+    assert "lands nothing below the suppressed grain" in blueprint
     review = flat("nxd-review-closure", "SKILL.md")
-    assert "is approved lineage: grade it against that Decision" in review
-    assert "A metric or view that recounts a suppressed value is `HIGH`." in review
+    assert "queryable or not, lets a reader recount a suppressed value through direct table access: that is `HIGH`." in review
+    assert "including the user's rulings on earlier findings" in review
+    assert "is not re-raised as `HIGH` or `MEDIUM` under a new ID" in review
     relay = flat("nxd-generate-data-product", "reference", "adversarial-review.md")
     assert "Never recommend deferring or accepting an accepted `HIGH` finding: recommend the fix." in relay
-    assert "without recommending deferral" in relay
+    assert "including \"keep as approved\", into the blueprint's Decisions" in relay
     assert "A `MEDIUM` trade-off may be offered as a genuine choice." in relay
     loop = flat("nxd-run-job-loop", "reference", "workflow-v2.md")
     assert "Never recommend deferring an accepted `HIGH` finding; recommend its fix" in loop
+    assert "write each user ruling on them into the blueprint's Decisions" in loop
 
 
 def test_pending_review_round_is_closed_before_reset() -> None:

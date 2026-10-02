@@ -195,9 +195,9 @@ does not resolve either choice. Ask each of these questions on its own, with
 its options, so the reply must name the choice. Never offer a shortcut such as
 "reply yes to use my recommendations" for them: a bare "yes", "sure" or "ok"
 leaves every one of them open, and you re-ask, naming the first open one. Once a suppression rule is approved, the
-blueprint lists every landed model below the suppressed grain (for example a
-person-level roster) as lineage only: no semantic roles, metrics or views, so
-no query can recount a suppressed value.
+Models section lands nothing below the suppressed grain (for example a
+person-level roster): those rows are read in memory by the transform, so
+nothing landed can recount a suppressed value.
 
 Constraints attached to approval — for example, "approved, but keep this field
 as a declared enum" — belong in the prepared blueprint and an executable
