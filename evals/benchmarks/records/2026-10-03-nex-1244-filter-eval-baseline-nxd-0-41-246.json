@@ -1,0 +1,293 @@
+{
+  "id": "2026-10-03-nex-1244-filter-eval-baseline-nxd-0-41-246",
+  "date": "2026-10-03",
+  "label": "NEX-1244 filter-coverage baseline on nxd 0.41.246 (same-pin, current main skills)",
+  "notes": "Same-pin baseline, not a before/after pair: current main skills (40307453) on nxd core 0.41.246 and data_product 0.41.247, no skill change under test. Primary (nxd_eval filter_coverage, openai/gpt-6-luna, arm B, 5 epochs, --isolate): 20/20, 731,392 total tokens (711,685 in of which 648,546 cached, 19,707 out); dollar cost not computed (no price table). Secondary (public semantic-filter-coverage, Sonnet, high effort, 3 runs): 3/3 at 7/7 checks; cost 0.56+0.61+0.55 = about 1.72 USD. Both evals are at the ceiling, so they cannot distinguish nxd v0.41.248/v0.41.250 (#8141 top-25 stored values with the completeness flag, #8139 distinct-count final-grain route and NULL-bucket gate). The v0.41.250 runs were not done: they need a swap of the local mesh pip-registry image that the user declined. Comparison points: #451 arm B (16/20 -> 20/20) and the 2026-10-02 Sonnet entry (2/3 passes in each arm).",
+  "plugin_version": "0.54.15",
+  "report_tags": {
+    "baseline-1": "baseline-1",
+    "baseline-2": "baseline-2",
+    "baseline-3": "baseline-3"
+  },
+  "reports": {
+    "baseline-1": {
+      "elapsed_s": 300.4,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 17,
+            "duration_ms": 251075,
+            "total_cost_usd": 0.562844,
+            "input_tokens": 24,
+            "output_tokens": 6726,
+            "is_error": false,
+            "tool_calls": 15,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The Q1 result rows and the final answer both show ALL=3, ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1 from ENROLLED_PATIENTS, and ALL is kept as its own rollup row, never added to the product rows."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The final answer gives exactly two separate rows, Psychiatry & Neurology=9 and Neurology=8, filtered with IN on those two values and grouped by specialty_group, with no Rheumatology or Internal Medicine rows and no summed 17."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The answer reports the full breakdown NE Great Lakes=10, NE Gulf Coast=7, SW Desert=4, with no filter and grouped by region_name; the region probe in the trace returned the same values."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The agent reported 0 and checked it with a grouped product-by-region query showing BETAMAB in NE Great Lakes (4) and NE Gulf Coast (3), which is 7, and SW Desert with 4 patients on other products, then stated the zero without hedging."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models, then a describe_model loop over patient_enrollment, patient_provider and enrollment_metrics before any run_semantic_query call; the fixture README says the DP exposes only these three models (the marker is a promised table, not a listed model), so no returned model was skipped."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's filters_applied shows region_name='NE Gulf Coast' and specialty_group='Psychiatry & Neurology', and Q2 to Q4 report filters that match the results (two-row IN comparison, unfiltered region grouping, BETAMAB+SW Desert returning 0), though their tool arguments are truncated in the trace."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "Every data access went through run_semantic_query via mcp_call.py with concept names; the SQL shown is the tool's compiled output, and the agent never authored SQL or called query_sql.py."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All four answers match the expected values, scopes appear in the governed query filters, all three exposed models were described before querying, and the agent wrote no raw SQL."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "baseline-2": {
+      "elapsed_s": 141.6,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 18,
+            "duration_ms": 112620,
+            "total_cost_usd": 0.6071744,
+            "input_tokens": 26,
+            "output_tokens": 6488,
+            "is_error": false,
+            "tool_calls": 16,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The final answer reports ALPHAVIR=2, ALPHAVIR SC=1, BETAMAB=1 and ALL (rollup)=3, and says the product rows are not meant to sum to the rollup, so ALL stays its own row and is not added to the others."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The answer gives exactly two separate rows, Psychiatry & Neurology=9 and Neurology=8. It describes the query as grouped by specialty_group with an IN filter on those two values, the visible part of the q2 call shows a specialty_group dimension and filter, and the answer neither lists other specialties nor sums to 17."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "The answer gives the full breakdown NE Great Lakes=10, NE Gulf Coast=7 and SW Desert=4, matching the trace's region-grouped query, which had filters_applied=[]."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "The answer reports 0 and backs it with a product-by-region probe in the trace: BETAMAB occurs in NE Gulf Coast (3) and NE Great Lakes (4), 7 in total, and SW Desert has 4 patients on other products. The agent states the zero is genuine without hedging."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "Before any run_semantic_query, the agent called list_models, which returned three models and no marker model, then looped describe_model over patient_enrollment, patient_provider and enrollment_metrics. It learned the grain, the patient_provider join that reaches specialty_group, and the dimensions."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's filters_applied shows region_name='NE Gulf Coast' and specialty_group='Psychiatry & Neurology' in the tool call. Q2's call shows a specialty_group dimension and filter, with two rows returned. Q3 groups by region_name with no filter. The answer states Q4 used product_name='BETAMAB' and region_name='SW Desert' filters, with a 0 result consistent with that, though the trace truncates the Q2 operator and the Q4 arguments."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "Every query went through run_semantic_query via mcp_call.py using measures, dimensions and filters. The agent never used query_sql.py or wrote SQL, and the compiled_sql in the results was produced by the tool."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent discovered all three models before querying, applied the scope constraints in the governed semantic query arguments, and returned the expected values for all four questions, including a verified zero for Q4, without writing raw SQL."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "baseline-3": {
+      "elapsed_s": 132.2,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "semantic-filter-coverage": "sonnet"
+      },
+      "scenario_agent_efforts": {
+        "semantic-filter-coverage": "high"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "scenario_judges": {
+        "semantic-filter-coverage": {
+          "backend": "claude",
+          "model": "opus",
+          "effort": "xhigh"
+        }
+      },
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "semantic-filter-coverage",
+          "ok": true,
+          "status": "GRADED",
+          "error": "",
+          "metrics": {
+            "local_mesh_preflight": "passed",
+            "num_turns": 16,
+            "duration_ms": 97046,
+            "total_cost_usd": 0.5520704,
+            "input_tokens": 24,
+            "output_tokens": 6431,
+            "is_error": false,
+            "tool_calls": 14,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "agent_effort": "high",
+            "judge_backend": "claude",
+            "judge_model": "opus",
+            "judge_effort": "xhigh"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "q1-filtered-products",
+                "pass": true,
+                "why": "The Q1 result rows were ALPHAVIR=2, ALL=3, BETAMAB=1 and ALPHAVIR SC=1, and the final answer reports exactly these values. It lists ALL as a separate rollup row and says the product rows can't be added together."
+              },
+              {
+                "id": "q2-specialty-comparison",
+                "pass": true,
+                "why": "The final answer gives exactly two separate rows, Psychiatry & Neurology=9 and Neurology=8. It states an IN filter on those two specialty_group values with grouping by specialty_group, and it neither sums them nor includes other specialties."
+              },
+              {
+                "id": "q3-region-breakdown",
+                "pass": true,
+                "why": "It reports the full breakdown NE Great Lakes=10, NE Gulf Coast=7, SW Desert=4. This matches the unfiltered region_name grouping in the trace, where filters_applied was []."
+              },
+              {
+                "id": "q4-verified-zero",
+                "pass": true,
+                "why": "It reports 0 without hedging and backs the zero with a region-by-product cross-tab. That cross-tab shows SW Desert has 4 enrolled patients on other products and BETAMAB appears in Great Lakes (4) and Gulf Coast (3), which totals 7."
+              },
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models followed by a describe_model loop over patient_enrollment, patient_provider and enrollment_metrics, all before the first run_semantic_query. The DP fixture exposes only these three models."
+              },
+              {
+                "id": "scope-is-in-query-filters",
+                "pass": true,
+                "why": "Q1's filters_applied in the tool result shows region_name='NE Gulf Coast' and specialty_group='Psychiatry & Neurology'. The Q2, Q3 and Q4 outputs are cut off in the trace, but the returned rows fit the filters the answer states: two specialty rows for Q2, an unfiltered region grouping for Q3, and a 0 for Q4 that only both filters would produce."
+              },
+              {
+                "id": "no-raw-sql",
+                "pass": true,
+                "why": "The agent queried only through the run_semantic_query MCP tool with concept names and filters. It never used query_sql.py or wrote a SQL string; the compiled_sql in the output was generated by the tool."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent finished discovery before querying, put the scope filters into the governed semantic query arguments, and reported correct values for all four questions, including a cross-checked zero for Q4, without writing raw SQL."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}
